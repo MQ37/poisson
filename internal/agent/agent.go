@@ -1,0 +1,523 @@
+// Package agent implements the Poisson agent loop (SPEC §17): ingest → build
+// context → stream → dispatch tools → compact if needed → commit.
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+
+	"poisson/internal/config"
+	"poisson/internal/project"
+	"poisson/internal/provider"
+	"poisson/internal/store"
+	"poisson/internal/tools"
+)
+
+// Output event type constants used by the TUI package.
+const (
+	OutputText       = "text"
+	OutputToolStart  = "tool_start"
+	OutputToolResult = "tool_result"
+	OutputStatus     = "status"
+	OutputApproval   = "approval"
+	OutputError      = "error"
+	OutputCompacting = "compacting"
+	OutputDone       = "done"
+)
+
+// OutputEvent is a serialized terminal rendering event. The TUI goroutine
+// drains these from the agent's outputChan and renders them.
+type OutputEvent struct {
+	Type              string          // text | tool_start | tool_result | status | approval | error | compacting
+	Text              string          // text | error | compacting
+	ToolName          string          // tool_start | tool_result
+	ToolInput         json.RawMessage // tool_start
+	ToolResultContent string          // tool_result
+	ToolError         string          // tool_result
+	ContextPct        float64         // status
+	ContextTokens     int             // status
+	ContextWindow     int             // status
+	Cost              float64         // status
+	Model             string          // status
+}
+
+// Agent runs the turn loop for a single session.
+type Agent struct {
+	store      *store.Store
+	provider   provider.Provider
+	tools      *tools.Registry
+	config     *config.Config
+	sessionID  string
+	outputChan chan OutputEvent
+	approvalFn func(command, description, workdir string) bool
+
+	// pendingResults holds the text of tool results appended in the current
+	// iteration, used by ShouldCompact to estimate new tokens.
+	pendingResults []string
+}
+
+// NewAgent creates an Agent ready to process prompts for the given session.
+func NewAgent(
+	s *store.Store,
+	p provider.Provider,
+	t *tools.Registry,
+	cfg *config.Config,
+	sessionID string,
+	outputChan chan OutputEvent,
+	approvalFn func(command, description, workdir string) bool,
+) *Agent {
+	return &Agent{
+		store:      s,
+		provider:   p,
+		tools:      t,
+		config:     cfg,
+		sessionID:  sessionID,
+		outputChan: outputChan,
+		approvalFn: approvalFn,
+	}
+}
+
+// --- Session management accessors (for TUI slash commands) ---
+
+// Store returns the underlying store (for session/message queries).
+func (a *Agent) Store() *store.Store { return a.store }
+
+// SessionID returns the current session ID.
+func (a *Agent) SessionID() string { return a.sessionID }
+
+// SwitchSession changes the active session.
+func (a *Agent) SwitchSession(sessionID string) { a.sessionID = sessionID }
+
+// SetProvider swaps the provider (for /model).
+func (a *Agent) SetProvider(p provider.Provider) { a.provider = p }
+
+// SetConfig swaps the config (for /reload).
+func (a *Agent) SetConfig(cfg *config.Config) { a.config = cfg }
+
+// Provider returns the current provider.
+func (a *Agent) Provider() provider.Provider { return a.provider }
+
+// Config returns the current config.
+func (a *Agent) Config() *config.Config { return a.config }
+
+// effort is the thinking effort level ("" | "low" | "medium" | "high" | "xhigh" | "max").
+var effortLevel string
+
+// SetEffort sets the thinking effort for subsequent requests.
+func (a *Agent) SetEffort(level string) { effortLevel = level }
+
+// Effort returns the current thinking effort level.
+func (a *Agent) Effort() string { return effortLevel }
+
+// Prompt appends the user message to the store and runs the turn loop.
+func (a *Agent) Prompt(userInput string) error {
+	// INGEST: append user message.
+	content, err := contentBlocksToJSON([]provider.ContentBlock{
+		{Type: "text", Text: userInput},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal user content: %w", err)
+	}
+	if err := a.store.AppendMessage(&store.Message{
+		SessionID: a.sessionID,
+		Role:      "user",
+		Content:   content,
+	}); err != nil {
+		return fmt.Errorf("append user message: %w", err)
+	}
+
+	return a.runTurn()
+}
+
+// runTurn executes the turn loop: build → stream → collect tools → dispatch →
+// append results → check compaction → repeat until no tool calls.
+func (a *Agent) runTurn() error {
+	ctx := context.Background()
+
+	for {
+		// BUILD
+		req, err := a.buildRequest()
+		if err != nil {
+			return fmt.Errorf("build request: %w", err)
+		}
+
+		// CALL
+		ch, err := a.provider.Stream(ctx, req)
+		if err != nil {
+			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Provider error: %v", err)})
+			return fmt.Errorf("stream: %w", err)
+		}
+
+		// Drain the stream channel.
+		var textBuilder strings.Builder
+		var toolCalls []provider.ToolCall
+		var usage *provider.Usage
+
+		for ev := range ch {
+			switch ev.Type {
+			case provider.EventTextDelta:
+				textBuilder.WriteString(ev.Text)
+				a.sendEvent(OutputEvent{Type: OutputText, Text: ev.Text})
+
+			case provider.EventToolUseStart:
+				if ev.ToolCall != nil {
+					toolCalls = append(toolCalls, *ev.ToolCall)
+				}
+
+			case provider.EventToolUseDelta:
+				a.updateToolCall(toolCalls, ev.ToolCall)
+
+			case provider.EventToolUseStop:
+				a.updateToolCall(toolCalls, ev.ToolCall)
+
+			case provider.EventDone:
+				usage = ev.Usage
+
+			case provider.EventError:
+				a.sendEvent(OutputEvent{Type: OutputError, Text: ev.Error.Error()})
+				return fmt.Errorf("stream error: %w", ev.Error)
+			}
+		}
+
+		// COMMIT: record api_call (exact usage + cost).
+		var apiCallID string
+		if usage != nil {
+			id, err := a.recordAPICall(usage)
+			if err != nil {
+				log.Printf("warning: record api call: %v", err)
+			} else {
+				apiCallID = id
+			}
+		}
+
+		// COMMIT: append assistant message.
+		assistantBlocks := buildAssistantBlocks(textBuilder.String(), toolCalls)
+		assistantContent, err := contentBlocksToJSON(assistantBlocks)
+		if err != nil {
+			return fmt.Errorf("marshal assistant content: %w", err)
+		}
+		msg := &store.Message{
+			SessionID: a.sessionID,
+			Role:      "assistant",
+			Content:   assistantContent,
+		}
+		if apiCallID != "" {
+			msg.APICallID = &apiCallID
+		}
+		if err := a.store.AppendMessage(msg); err != nil {
+			return fmt.Errorf("append assistant message: %w", err)
+		}
+
+		// Update status bar.
+		a.UpdateStatus()
+
+		// If the model didn't call any tools, the turn is done.
+		if len(toolCalls) == 0 {
+			a.sendEvent(OutputEvent{Type: OutputDone})
+			break
+		}
+
+		// TOOLS: notify TUI of tool starts.
+		for _, tc := range toolCalls {
+			a.sendEvent(OutputEvent{
+				Type:      OutputToolStart,
+				ToolName:  tc.Name,
+				ToolInput: tc.Input,
+			})
+		}
+
+		// Dispatch all tool calls concurrently.
+		a.pendingResults = nil
+		results, execErr := a.tools.ExecuteParallel(ctx, toolCalls)
+		if execErr != nil {
+			return fmt.Errorf("execute tools: %w", execErr)
+		}
+
+		// Append tool_result messages and notify TUI.
+		for i, result := range results {
+			resultText := result.Content
+			if result.Error != "" {
+				resultText = "Error: " + result.Error
+			}
+
+			toolContent, err := contentBlocksToJSON([]provider.ContentBlock{
+				{
+					Type:       "tool_result",
+					ToolCallID: toolCalls[i].ID,
+					ToolResult: resultText,
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("marshal tool result: %w", err)
+			}
+			if err := a.store.AppendMessage(&store.Message{
+				SessionID: a.sessionID,
+				Role:      "tool",
+				Content:   toolContent,
+			}); err != nil {
+				return fmt.Errorf("append tool result message: %w", err)
+			}
+
+			a.pendingResults = append(a.pendingResults, resultText)
+
+			a.sendEvent(OutputEvent{
+				Type:              OutputToolResult,
+				ToolName:          toolCalls[i].Name,
+				ToolResultContent: result.Content,
+				ToolError:         result.Error,
+			})
+		}
+
+		// CHECK COMPACTION (stub — Phase 11 will implement full compaction).
+		if a.shouldCompact() {
+			a.sendEvent(OutputEvent{Type: OutputCompacting, Text: "Compacting context..."})
+			a.compact()
+		}
+
+		// Loop: re-stream with updated context (tool results now in store).
+	}
+
+	return nil
+}
+
+// buildRequest assembles a provider.Request from the store: active messages,
+// system prompt, compaction summary (if set), and tool definitions.
+func (a *Agent) buildRequest() (*provider.Request, error) {
+	// Get session.
+	sess, err := a.store.GetSession(a.sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get session: %w", err)
+	}
+
+	// Get active messages (deleted_at IS NULL AND compacted = 0).
+	msgs, err := a.store.GetMessages(a.sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get messages: %w", err)
+	}
+
+	// Convert store messages to provider messages.
+	providerMsgs := make([]provider.Message, 0, len(msgs))
+	for _, m := range msgs {
+		pm, err := messageToProvider(m)
+		if err != nil {
+			return nil, fmt.Errorf("convert message %s: %w", m.ID, err)
+		}
+		providerMsgs = append(providerMsgs, pm)
+	}
+
+	// Build system prompt with AGENTS.md + skills.
+	agentDir := config.ConfigDir()
+	contextFiles := project.LoadProjectContextFiles(sess.Cwd, agentDir)
+	toolNames := make([]string, 0)
+	if a.tools != nil {
+		for _, td := range a.tools.Definitions() {
+			toolNames = append(toolNames, td.Name)
+		}
+	}
+	sysPrompt := project.BuildSystemPrompt(project.BuildSystemPromptOptions{
+		Cwd:          sess.Cwd,
+		ToolNames:    toolNames,
+		ContextFiles: contextFiles,
+	})
+
+	var systemBlocks []provider.SystemBlock
+	systemBlocks = append(systemBlocks, provider.SystemBlock{
+		Text: sysPrompt,
+	})
+	if sess.CompactionSummary != nil && *sess.CompactionSummary != "" {
+		systemBlocks = append(systemBlocks, provider.SystemBlock{
+			Text: *sess.CompactionSummary,
+		})
+	}
+
+	// Tool definitions.
+	var toolDefs []provider.ToolDef
+	if a.tools != nil {
+		toolDefs = a.tools.Definitions()
+	}
+
+	return &provider.Request{
+		Model:    sess.Model,
+		System:   systemBlocks,
+		Messages: providerMsgs,
+		Tools:    toolDefs,
+		Effort:   effortLevel,
+	}, nil
+}
+
+// --- Helpers ----------------------------------------------------------
+
+// contentBlockJSON is the JSON representation of a ContentBlock for store
+// persistence. Field names use snake_case to match the store's FTS extractor.
+type contentBlockJSON struct {
+	Type       string          `json:"type"`
+	Text       string          `json:"text,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolName   string          `json:"tool_name,omitempty"`
+	ToolInput  json.RawMessage `json:"tool_input,omitempty"`
+	ToolResult string          `json:"tool_result,omitempty"`
+}
+
+// contentBlocksToJSON serializes a slice of ContentBlocks into a JSON string
+// suitable for the store's content column. An empty slice produces "[]".
+func contentBlocksToJSON(blocks []provider.ContentBlock) (string, error) {
+	if blocks == nil {
+		blocks = []provider.ContentBlock{}
+	}
+	out := make([]contentBlockJSON, len(blocks))
+	for i, b := range blocks {
+		out[i] = contentBlockJSON{
+			Type:       b.Type,
+			Text:       b.Text,
+			ToolCallID: b.ToolCallID,
+			ToolName:   b.ToolName,
+			ToolInput:  b.ToolInput,
+			ToolResult: b.ToolResult,
+		}
+	}
+	data, err := json.Marshal(out)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// messageToProvider converts a store.Message to a provider.Message by parsing
+// the content JSON into ContentBlocks. If the content is not valid JSON it
+// falls back to a single text block with the raw content.
+func messageToProvider(msg store.Message) (provider.Message, error) {
+	var blocks []contentBlockJSON
+	if err := json.Unmarshal([]byte(msg.Content), &blocks); err != nil {
+		return provider.Message{
+			Role:    msg.Role,
+			Content: []provider.ContentBlock{{Type: "text", Text: msg.Content}},
+		}, nil
+	}
+	content := make([]provider.ContentBlock, len(blocks))
+	for i, b := range blocks {
+		content[i] = provider.ContentBlock{
+			Type:       b.Type,
+			Text:       b.Text,
+			ToolCallID: b.ToolCallID,
+			ToolName:   b.ToolName,
+			ToolInput:  b.ToolInput,
+			ToolResult: b.ToolResult,
+		}
+	}
+	return provider.Message{
+		Role:    msg.Role,
+		Content: content,
+	}, nil
+}
+
+// buildAssistantBlocks assembles the content blocks for the assistant message
+// from the streamed text and collected tool calls.
+func buildAssistantBlocks(text string, toolCalls []provider.ToolCall) []provider.ContentBlock {
+	var blocks []provider.ContentBlock
+	if text != "" {
+		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: text})
+	}
+	for _, tc := range toolCalls {
+		input := tc.Input
+		if len(input) == 0 {
+			input = json.RawMessage("{}")
+		}
+		blocks = append(blocks, provider.ContentBlock{
+			Type:       "tool_use",
+			ToolCallID: tc.ID,
+			ToolName:   tc.Name,
+			ToolInput:  input,
+		})
+	}
+	return blocks
+}
+
+// updateToolCall updates a tool call in the list by matching ID. If the ID
+// is empty or no match is found, the last entry is updated as a fallback.
+func (a *Agent) updateToolCall(toolCalls []provider.ToolCall, updated *provider.ToolCall) {
+	if updated == nil || len(toolCalls) == 0 {
+		return
+	}
+	if updated.ID != "" {
+		for i := range toolCalls {
+			if toolCalls[i].ID == updated.ID {
+				toolCalls[i] = *updated
+				return
+			}
+		}
+	}
+	// Fallback: update the last entry.
+	toolCalls[len(toolCalls)-1] = *updated
+}
+
+// recordAPICall records a row in the api_calls table with exact usage and
+// computed cost, and returns the generated ID.
+func (a *Agent) recordAPICall(usage *provider.Usage) (string, error) {
+	model := a.currentModel()
+	providerID := a.provider.ID()
+
+	// Extract cache tokens if the usage is an AnthropicUsage (not possible
+	// with the current *Usage field type, but handle gracefully for future).
+	cacheRead, cacheWrite := 0, 0
+
+	cost := a.store.ComputeCost(providerID, model,
+		usage.InputTokens, usage.OutputTokens, cacheRead, cacheWrite)
+
+	seq := a.nextAPICallSeq()
+
+	call := &store.APICall{
+		SessionID:        a.sessionID,
+		Seq:              seq,
+		Model:            model,
+		InputTokens:      usage.InputTokens,
+		OutputTokens:     usage.OutputTokens,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
+		Cost:             cost,
+	}
+	if err := a.store.RecordAPICall(call); err != nil {
+		return "", err
+	}
+	return call.ID, nil
+}
+
+// nextAPICallSeq returns the next sequence number for api_calls in this
+// session (max(seq) + 1, or 1 if no rows yet).
+func (a *Agent) nextAPICallSeq() int {
+	var ms int
+	row := a.store.DB().QueryRow(
+		`SELECT COALESCE(MAX(seq), 0) FROM api_calls WHERE session_id = ?`,
+		a.sessionID)
+	if err := row.Scan(&ms); err != nil {
+		return 1
+	}
+	return ms + 1
+}
+
+// currentModel returns the model from the session, falling back to config.
+func (a *Agent) currentModel() string {
+	sess, err := a.store.GetSession(a.sessionID)
+	if err != nil || sess == nil {
+		switch a.provider.ID() {
+		case "ollama":
+			return a.config.Ollama.Model
+		case "anthropic":
+			return a.config.Anthropic.Model
+		case "xai":
+			return a.config.XAI.Model
+		}
+		return ""
+	}
+	return sess.Model
+}
+
+// sendEvent sends an OutputEvent to the output channel. If the channel is nil
+// (no TUI attached), the event is silently dropped.
+func (a *Agent) sendEvent(ev OutputEvent) {
+	if a.outputChan != nil {
+		a.outputChan <- ev
+	}
+}

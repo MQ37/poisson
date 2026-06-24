@@ -1,0 +1,484 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"poisson/internal/config"
+	"poisson/internal/provider"
+	"poisson/internal/store"
+	"poisson/internal/tools"
+)
+
+// --- Test helpers ----------------------------------------------------
+
+func newTestStore(t *testing.T) *store.Store {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := s.SeedPricing(); err != nil {
+		t.Fatalf("seed pricing: %v", err)
+	}
+	return s
+}
+
+func newTestSession(t *testing.T, s *store.Store, model string) string {
+	t.Helper()
+	id := "test-session-" + strings.ReplaceAll(t.Name(), "/", "-")
+	err := s.CreateSession(&store.Session{
+		ID:       id,
+		Cwd:      ".",
+		Provider: "fake",
+		Model:    model,
+	})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	return id
+}
+
+func newTestConfig() *config.Config {
+	return &config.Config{
+		Provider:   config.ProviderConfig{Default: "fake"},
+		Compaction: config.CompactionConfig{Threshold: 0.8},
+	}
+}
+
+func newTestRegistry(cwd string) *tools.Registry {
+	reg := tools.NewRegistry()
+	reg.Register(tools.NewReadTool(cwd))
+	reg.Register(tools.NewLsTool(cwd))
+	reg.Register(tools.NewBashTool(cwd, true, nil)) // sandbox=true
+	return reg
+}
+
+func newFakeProvider() *provider.FakeProvider {
+	return provider.NewFakeProvider("fake", []provider.Model{
+		{ID: "test-model", Name: "Test", ContextWindow: 8192},
+	})
+}
+
+func drainEvents(ch chan OutputEvent) *[]OutputEvent {
+	events := &[]OutputEvent{}
+	go func() {
+		for ev := range ch {
+			*events = append(*events, ev)
+		}
+	}()
+	return events
+}
+
+// --- Tests -----------------------------------------------------------
+
+func TestEstimateTokens(t *testing.T) {
+	a := &Agent{config: newTestConfig()}
+	tests := []struct {
+		text     string
+		expected int
+	}{
+		{"", 0},
+		{"abc", 0},
+		{"abcde", 1},
+		{"abcdefgh", 2},
+		{"hello world!", 3},
+	}
+	for _, tt := range tests {
+		got := a.EstimateTokens(tt.text)
+		if got != tt.expected {
+			t.Errorf("EstimateTokens(%q) = %d, want %d", tt.text, got, tt.expected)
+		}
+	}
+}
+
+func TestBuildRequest(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cwd := t.TempDir()
+	reg := newTestRegistry(cwd)
+	cfg := newTestConfig()
+	agent := NewAgent(s, newFakeProvider(), reg, cfg, sessionID, nil, nil)
+
+	userContent, _ := contentBlocksToJSON([]provider.ContentBlock{
+		{Type: "text", Text: "Hello, Poisson!"},
+	})
+	if err := s.AppendMessage(&store.Message{
+		SessionID: sessionID, Role: "user", Content: userContent,
+	}); err != nil {
+		t.Fatalf("append user: %v", err)
+	}
+
+	asstContent, _ := contentBlocksToJSON([]provider.ContentBlock{
+		{Type: "text", Text: "Hi there!"},
+	})
+	if err := s.AppendMessage(&store.Message{
+		SessionID: sessionID, Role: "assistant", Content: asstContent,
+	}); err != nil {
+		t.Fatalf("append assistant: %v", err)
+	}
+
+	req, err := agent.buildRequest()
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if req.Model != "test-model" {
+		t.Errorf("Model = %q, want %q", req.Model, "test-model")
+	}
+	if len(req.System) < 1 {
+		t.Fatalf("expected at least 1 system block, got %d", len(req.System))
+	}
+	if len(req.Messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(req.Messages))
+	}
+	if req.Messages[0].Role != "user" || req.Messages[0].Content[0].Text != "Hello, Poisson!" {
+		t.Errorf("Messages[0] mismatch: %+v", req.Messages[0])
+	}
+	if req.Messages[1].Role != "assistant" || req.Messages[1].Content[0].Text != "Hi there!" {
+		t.Errorf("Messages[1] mismatch: %+v", req.Messages[1])
+	}
+	if len(req.Tools) == 0 {
+		t.Fatal("expected tool definitions, got 0")
+	}
+}
+
+func TestBuildRequestWithCompactionSummary(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	reg := newTestRegistry(t.TempDir())
+	cfg := newTestConfig()
+	agent := NewAgent(s, newFakeProvider(), reg, cfg, sessionID, nil, nil)
+
+	summary := "Previous conversation was about X."
+	if err := s.SetCompactionSummary(sessionID, summary); err != nil {
+		t.Fatalf("set compaction summary: %v", err)
+	}
+
+	userContent, _ := contentBlocksToJSON([]provider.ContentBlock{
+		{Type: "text", Text: "Continue."},
+	})
+	if err := s.AppendMessage(&store.Message{
+		SessionID: sessionID, Role: "user", Content: userContent,
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	req, err := agent.buildRequest()
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if len(req.System) != 2 {
+		t.Fatalf("expected 2 system blocks, got %d", len(req.System))
+	}
+	if req.System[1].Text != summary {
+		t.Errorf("System[1] = %q, want %q", req.System[1].Text, summary)
+	}
+}
+
+func TestShouldCompact(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cfg := newTestConfig()
+	cfg.Compaction.Threshold = 0.01
+	agent := NewAgent(s, newFakeProvider(), nil, cfg, sessionID, nil, nil)
+
+	if err := s.RecordAPICall(&store.APICall{
+		SessionID: sessionID, Seq: 1, Model: "test-model",
+		InputTokens: 100, OutputTokens: 10,
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+
+	if !agent.ShouldCompact() {
+		t.Errorf("ShouldCompact() = false, want true (100 > 0.01 * 8192)")
+	}
+
+	cfg.Compaction.Threshold = 0.8
+	if agent.ShouldCompact() {
+		t.Errorf("ShouldCompact() with 0.8 = true, want false")
+	}
+}
+
+func TestShouldCompactWithPendingResults(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cfg := newTestConfig()
+	cfg.Compaction.Threshold = 0.1
+	agent := NewAgent(s, newFakeProvider(), nil, cfg, sessionID, nil, nil)
+
+	if err := s.RecordAPICall(&store.APICall{
+		SessionID: sessionID, Seq: 1, Model: "test-model",
+		InputTokens: 500, OutputTokens: 10,
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+
+	if agent.ShouldCompact() {
+		t.Errorf("ShouldCompact() = true, want false (500 < 819.2)")
+	}
+
+	agent.pendingResults = []string{strings.Repeat("x", 2000)}
+	if !agent.ShouldCompact() {
+		t.Errorf("ShouldCompact() = false, want true (500 + 500 > 819.2)")
+	}
+}
+
+func TestContentBlocksJSON(t *testing.T) {
+	textJSON, err := contentBlocksToJSON([]provider.ContentBlock{
+		{Type: "text", Text: "hello"},
+	})
+	if err != nil {
+		t.Fatalf("text: %v", err)
+	}
+	if !strings.Contains(textJSON, `"text":"hello"`) {
+		t.Errorf("missing text: %s", textJSON)
+	}
+
+	tuJSON, err := contentBlocksToJSON([]provider.ContentBlock{
+		{Type: "tool_use", ToolCallID: "call_1", ToolName: "bash", ToolInput: json.RawMessage(`{"command":"ls"}`)},
+	})
+	if err != nil {
+		t.Fatalf("tool_use: %v", err)
+	}
+	if !strings.Contains(tuJSON, `"tool_call_id":"call_1"`) {
+		t.Errorf("missing tool_call_id: %s", tuJSON)
+	}
+
+	trJSON, err := contentBlocksToJSON([]provider.ContentBlock{
+		{Type: "tool_result", ToolCallID: "call_1", ToolResult: "output here"},
+	})
+	if err != nil {
+		t.Fatalf("tool_result: %v", err)
+	}
+	if !strings.Contains(trJSON, `"tool_result":"output here"`) {
+		t.Errorf("missing tool_result: %s", trJSON)
+	}
+
+	msg := store.Message{Role: "user", Content: textJSON}
+	pm, err := messageToProvider(msg)
+	if err != nil {
+		t.Fatalf("messageToProvider: %v", err)
+	}
+	if pm.Role != "user" || len(pm.Content) != 1 || pm.Content[0].Text != "hello" {
+		t.Errorf("round-trip mismatch: %+v", pm)
+	}
+}
+
+// --- Mocked agent loop tests (no real API calls) ---------------------
+
+func TestAgentLoopTextResponse(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cwd := t.TempDir()
+	reg := newTestRegistry(cwd)
+	cfg := newTestConfig()
+	p := newFakeProvider()
+	p.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("hello from mock", &provider.Usage{InputTokens: 12, OutputTokens: 8}),
+	})
+
+	ch := make(chan OutputEvent, 256)
+	drainEvents(ch)
+	agent := NewAgent(s, p, reg, cfg, sessionID, ch, nil)
+
+	if err := agent.Prompt("say hello"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(ch)
+
+	msgs, err := s.GetMessages(sessionID)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) < 2 {
+		t.Fatalf("expected at least 2 messages, got %d", len(msgs))
+	}
+	if msgs[0].Role != "user" {
+		t.Errorf("msgs[0].Role = %q, want user", msgs[0].Role)
+	}
+	if msgs[1].Role != "assistant" {
+		t.Errorf("msgs[1].Role = %q, want assistant", msgs[1].Role)
+	}
+
+	// Verify api_call recorded.
+	lastCall, err := s.GetLastAPICall(sessionID)
+	if err != nil {
+		t.Fatalf("GetLastAPICall: %v", err)
+	}
+	if lastCall.InputTokens != 12 || lastCall.OutputTokens != 8 {
+		t.Errorf("usage = in:%d out:%d, want in:12 out:8", lastCall.InputTokens, lastCall.OutputTokens)
+	}
+
+	// Verify assistant message has api_call_id.
+	if msgs[1].APICallID == nil || *msgs[1].APICallID == "" {
+		t.Error("assistant message should have api_call_id")
+	}
+}
+
+func TestAgentLoopWithToolCall(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cwd := t.TempDir()
+	// Create a file for the read tool.
+	testFile := filepath.Join(cwd, "hello.txt")
+	if err := os.WriteFile(testFile, []byte("Hello from file!"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	reg := newTestRegistry(cwd)
+	cfg := newTestConfig()
+	p := newFakeProvider()
+	first, second := provider.FakeToolCallResponse("read",
+		map[string]interface{}{"path": testFile},
+		"The file contains: Hello from file!")
+	p.SetResponses([][]provider.StreamEvent{first, second})
+
+	ch := make(chan OutputEvent, 256)
+	drainEvents(ch)
+	agent := NewAgent(s, p, reg, cfg, sessionID, ch, nil)
+
+	if err := agent.Prompt("read hello.txt and tell me its contents"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(ch)
+
+	msgs, err := s.GetMessages(sessionID)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	t.Logf("got %d messages", len(msgs))
+	for i, m := range msgs {
+		t.Logf("  msg[%d]: role=%s, len=%d", i, m.Role, len(m.Content))
+	}
+
+	// Expect: user, assistant(tool_use), tool(result), assistant(text).
+	if len(msgs) < 4 {
+		t.Fatalf("expected at least 4 messages, got %d", len(msgs))
+	}
+	if msgs[0].Role != "user" {
+		t.Errorf("msgs[0].Role = %q, want user", msgs[0].Role)
+	}
+	if msgs[1].Role != "assistant" {
+		t.Errorf("msgs[1].Role = %q, want assistant", msgs[1].Role)
+	}
+	if msgs[2].Role != "tool" {
+		t.Errorf("msgs[2].Role = %q, want tool", msgs[2].Role)
+	}
+	if msgs[3].Role != "assistant" {
+		t.Errorf("msgs[3].Role = %q, want assistant", msgs[3].Role)
+	}
+
+	// Verify tool result content.
+	var toolBlocks []contentBlockJSON
+	if err := json.Unmarshal([]byte(msgs[2].Content), &toolBlocks); err != nil {
+		t.Fatalf("parse tool content: %v", err)
+	}
+	hasResult := false
+	for _, b := range toolBlocks {
+		if b.Type == "tool_result" && strings.Contains(b.ToolResult, "Hello from file!") {
+			hasResult = true
+		}
+	}
+	if !hasResult {
+		t.Errorf("tool result doesn't contain file content: %s", msgs[2].Content)
+	}
+
+	// Verify two api_calls (one per Stream call).
+	if p.CallCount() != 2 {
+		t.Errorf("CallCount = %d, want 2", p.CallCount())
+	}
+}
+
+func TestAgentLoopError(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	reg := newTestRegistry(t.TempDir())
+	cfg := newTestConfig()
+	p := newFakeProvider()
+	p.SetResponses([][]provider.StreamEvent{
+		provider.FakeErrorResponse(errors.New("mock provider failure")),
+	})
+
+	ch := make(chan OutputEvent, 256)
+	drainEvents(ch)
+	agent := NewAgent(s, p, reg, cfg, sessionID, ch, nil)
+
+	err := agent.Prompt("test")
+	if err == nil {
+		t.Fatal("expected error from Prompt with error provider")
+	}
+	if !strings.Contains(err.Error(), "mock provider failure") {
+		t.Errorf("error = %q, want it to contain 'mock provider failure'", err.Error())
+	}
+
+	// User message should still be stored.
+	msgs, _ := s.GetMessages(sessionID)
+	if len(msgs) != 1 || msgs[0].Role != "user" {
+		t.Errorf("expected 1 user message, got %d messages", len(msgs))
+	}
+}
+
+func TestBuildRequestEmptyMessages(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	reg := newTestRegistry(t.TempDir())
+	cfg := newTestConfig()
+	agent := NewAgent(s, newFakeProvider(), reg, cfg, sessionID, nil, nil)
+
+	req, err := agent.buildRequest()
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if len(req.Messages) != 0 {
+		t.Errorf("expected 0 messages, got %d", len(req.Messages))
+	}
+	if len(req.System) != 1 {
+		t.Errorf("expected 1 system block, got %d", len(req.System))
+	}
+}
+
+func TestContextWindow(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cfg := newTestConfig()
+	agent := NewAgent(s, newFakeProvider(), nil, cfg, sessionID, nil, nil)
+
+	cw := agent.ContextWindow()
+	if cw != 8192 {
+		t.Errorf("ContextWindow() = %d, want 8192", cw)
+	}
+}
+
+func TestPromptStoresUserMessage(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	reg := newTestRegistry(t.TempDir())
+	cfg := newTestConfig()
+	p := newFakeProvider()
+	p.SetResponses([][]provider.StreamEvent{
+		provider.FakeErrorResponse(errors.New("connection refused")),
+	})
+	agent := NewAgent(s, p, reg, cfg, sessionID, nil, nil)
+
+	_ = agent.Prompt("hello")
+
+	msgs, _ := s.GetMessages(sessionID)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 user message, got %d", len(msgs))
+	}
+	if msgs[0].Role != "user" {
+		t.Errorf("msgs[0].Role = %q, want user", msgs[0].Role)
+	}
+}
+
+var _ = context.Background
