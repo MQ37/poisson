@@ -759,3 +759,59 @@ func TestRunningCtrlCCancelsThenExits(t *testing.T) {
 		t.Fatalf("second poll = %v, want errQuit", err)
 	}
 }
+
+func TestApproveAllowDeny(t *testing.T) {
+	for _, tc := range []struct {
+		key  byte
+		want bool
+	}{{'a', true}, {'y', true}, {'d', false}, {'n', false}, {3, false}} {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("pipe: %v", err)
+		}
+		oldStdin := os.Stdin
+		os.Stdin = r
+		tui := newTestTUI()
+		tui.fd = int(r.Fd())
+		if _, err := w.Write([]byte{tc.key}); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		got := tui.Approve("rm -rf x", "danger")
+		os.Stdin = oldStdin
+		r.Close()
+		w.Close()
+		if got != tc.want {
+			t.Errorf("key %q: Approve = %v, want %v", tc.key, got, tc.want)
+		}
+	}
+}
+
+// TestApproveOnNonblockingFd reproduces the original bug: the Ctrl+C poller
+// left stdin nonblocking, so the approval's blocking read returned EAGAIN and
+// auto-denied. Approve must restore blocking mode and read the keypress.
+func TestApproveOnNonblockingFd(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+	oldStdin := os.Stdin
+	os.Stdin = r
+	defer func() { os.Stdin = oldStdin }()
+
+	tui := newTestTUI()
+	tui.fd = int(r.Fd())
+	tui.pollerActive.Store(true)
+	if err := syscall.SetNonblock(tui.fd, true); err != nil {
+		t.Fatalf("set nonblock: %v", err)
+	}
+	defer syscall.SetNonblock(tui.fd, false)
+
+	if _, err := w.Write([]byte{'a'}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !tui.Approve("rm -rf x", "danger") {
+		t.Fatal("expected allow on nonblocking fd (regression)")
+	}
+}

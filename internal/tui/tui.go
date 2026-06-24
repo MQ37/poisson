@@ -12,6 +12,8 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -36,6 +38,13 @@ type TUI struct {
 	pasteBuf []byte
 
 	lastCtrlC time.Time
+
+	// Approval coordination. While an approval prompt is active it owns stdin
+	// exclusively (blocking mode); the Ctrl+C poller skips reading. pollerActive
+	// is true only while drainOutput runs its nonblocking poll loop.
+	approvalMu   sync.Mutex
+	approving    atomic.Bool
+	pollerActive atomic.Bool
 
 	// writer is where all rendered output is written. Defaults to os.Stdout.
 	writer io.Writer
@@ -397,7 +406,11 @@ func (t *TUI) drainOutput(promptDone <-chan error, cancel context.CancelFunc) er
 	var ticker *time.Ticker
 	if cancel != nil {
 		if err := syscall.SetNonblock(t.fd, true); err == nil {
-			defer syscall.SetNonblock(t.fd, false)
+			t.pollerActive.Store(true)
+			defer func() {
+				t.pollerActive.Store(false)
+				syscall.SetNonblock(t.fd, false)
+			}()
 			ticker = time.NewTicker(50 * time.Millisecond)
 			tick = ticker.C
 			defer ticker.Stop()
@@ -422,6 +435,10 @@ func (t *TUI) drainOutput(promptDone <-chan error, cancel context.CancelFunc) er
 			}
 			return err
 		case <-tick:
+			// An active approval prompt owns stdin; don't steal its keypress.
+			if t.approving.Load() {
+				continue
+			}
 			var err error
 			cancelled, err = t.pollRunningCtrlC(cancel, cancelled)
 			if err != nil {
@@ -429,6 +446,43 @@ func (t *TUI) drainOutput(promptDone <-chan error, cancel context.CancelFunc) er
 			}
 		}
 	}
+}
+
+// Approve renders an approval prompt for a dangerous bash command and reads a
+// single keypress. It takes stdin exclusively in blocking mode for the
+// duration so the Ctrl+C poller (which runs stdin nonblocking) cannot steal
+// the keypress. 'a'/'y' allow; anything else (incl. Ctrl+C) denies.
+func (t *TUI) Approve(command, description string) bool {
+	t.approvalMu.Lock()
+	defer t.approvalMu.Unlock()
+
+	t.approving.Store(true)
+	defer t.approving.Store(false)
+
+	if t.pollerActive.Load() {
+		syscall.SetNonblock(t.fd, false)
+		defer syscall.SetNonblock(t.fd, true)
+	}
+
+	t.writeString("\r\n\x1b[33m⚠ approval required\x1b[0m\r\n  $ " + command + "\r\n")
+	if description != "" {
+		t.writeString("  " + description + "\r\n")
+	}
+	t.writeString("  [a]llow  [d]eny: ")
+
+	buf := make([]byte, 1)
+	n, err := os.Stdin.Read(buf)
+	if err != nil || n == 0 {
+		t.writeString("\r\n")
+		return false
+	}
+	allowed := buf[0] == 'a' || buf[0] == 'A' || buf[0] == 'y' || buf[0] == 'Y'
+	if allowed {
+		t.writeString("allow\r\n")
+	} else {
+		t.writeString("deny\r\n")
+	}
+	return allowed
 }
 
 func (t *TUI) drainBufferedOutput() error {
