@@ -5,11 +5,15 @@
 package tui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"regexp"
 	"strings"
+	"syscall"
+	"time"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -30,6 +34,8 @@ type TUI struct {
 	// Bracketed-paste accumulation across reads.
 	pasting  bool
 	pasteBuf []byte
+
+	lastCtrlC time.Time
 
 	// writer is where all rendered output is written. Defaults to os.Stdout.
 	writer io.Writer
@@ -112,8 +118,7 @@ func (t *TUI) feed(data []byte) error {
 		b := data[i]
 		switch {
 		case b == 3: // Ctrl+C
-			t.writeString("\r\n")
-			return errQuit
+			return t.handleIdleCtrlC()
 
 		case b == 13 || b == 10: // Enter / Ctrl+M / Ctrl+J
 			if dirty {
@@ -355,14 +360,24 @@ func (t *TUI) processInput(input string) error {
 	// finishes).
 	if t.agent != nil {
 		t.writeString("  ⠋ thinking...\r\n")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		promptDone := make(chan error, 1)
 		go func() {
-			promptDone <- t.agent.Prompt(expanded)
+			promptDone <- t.agent.PromptWithContext(ctx, expanded)
 		}()
-		t.drainOutput(promptDone)
+		if err := t.drainOutput(promptDone, cancel); err != nil {
+			if err == errQuit {
+				return err
+			}
+			if !errors.Is(err, context.Canceled) {
+				t.writeString("error: " + err.Error() + "\r\n")
+			}
+			return nil
+		}
 		select {
 		case err := <-promptDone:
-			if err != nil {
+			if err != nil && !errors.Is(err, context.Canceled) {
 				t.writeString("error: " + err.Error() + "\r\n")
 			}
 		default:
@@ -371,44 +386,97 @@ func (t *TUI) processInput(input string) error {
 	return nil
 }
 
-// drainOutput reads OutputEvents from the channel until a "done" event is
-// received (or promptDone signals that agent.Prompt has returned). Each event
-// is rendered.
-func (t *TUI) drainOutput(promptDone <-chan error) {
+// drainOutput reads OutputEvents until the prompt finishes. If cancel is not
+// nil, Ctrl+C cancels the running prompt; a second Ctrl+C exits the CLI.
+func (t *TUI) drainOutput(promptDone <-chan error, cancel context.CancelFunc) error {
 	if t.outputChan == nil {
-		<-promptDone // wait for the goroutine
-		return
+		return <-promptDone
 	}
+
+	var tick <-chan time.Time
+	var ticker *time.Ticker
+	if cancel != nil {
+		if err := syscall.SetNonblock(t.fd, true); err == nil {
+			defer syscall.SetNonblock(t.fd, false)
+			ticker = time.NewTicker(50 * time.Millisecond)
+			tick = ticker.C
+			defer ticker.Stop()
+		}
+	}
+
+	cancelled := false
 	for {
 		select {
 		case ev, ok := <-t.outputChan:
 			if !ok {
-				<-promptDone
-				return
+				return <-promptDone
 			}
 			if ev.Type == agent.OutputDone {
 				t.writeString("\r\n")
-				return
+				return nil
 			}
 			t.renderEvent(ev)
-		case <-promptDone:
-			// Prompt returned; drain any remaining buffered events.
-			for {
-				select {
-				case ev, ok := <-t.outputChan:
-					if !ok {
-						return
-					}
-					if ev.Type == agent.OutputDone {
-						t.writeString("\r\n")
-						return
-					}
-					t.renderEvent(ev)
-				default:
-					return
-				}
+		case err := <-promptDone:
+			if drainErr := t.drainBufferedOutput(); drainErr != nil {
+				return drainErr
+			}
+			return err
+		case <-tick:
+			var err error
+			cancelled, err = t.pollRunningCtrlC(cancel, cancelled)
+			if err != nil {
+				return err
 			}
 		}
+	}
+}
+
+func (t *TUI) drainBufferedOutput() error {
+	for {
+		select {
+		case ev, ok := <-t.outputChan:
+			if !ok {
+				return nil
+			}
+			if ev.Type == agent.OutputDone {
+				t.writeString("\r\n")
+				return nil
+			}
+			t.renderEvent(ev)
+		default:
+			return nil
+		}
+	}
+}
+
+func (t *TUI) pollRunningCtrlC(cancel context.CancelFunc, cancelled bool) (bool, error) {
+	buf := make([]byte, 64)
+	for {
+		n, err := syscall.Read(t.fd, buf)
+		if n > 0 {
+			for _, b := range buf[:n] {
+				if b != 3 {
+					continue
+				}
+				if cancelled {
+					t.writeString("\r\n")
+					return cancelled, errQuit
+				}
+				cancel()
+				cancelled = true
+				t.writeString("\r\n  cancelled — Ctrl+C again to exit\r\n")
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if err == syscall.EAGAIN || err == syscall.EWOULDBLOCK {
+			return cancelled, nil
+		}
+		if err == syscall.EINTR {
+			continue
+		}
+		return cancelled, nil
 	}
 }
 
@@ -532,23 +600,111 @@ func (t *TUI) handleSlashCommand(cmd string) error {
 // tell Run to exit. Run checks for it after processInput.
 var errQuit = fmt.Errorf("quit")
 
-// printPrompt writes the "poisson> " prompt.
-func (t *TUI) printPrompt() {
-	t.writeString("poisson> ")
+const ctrlCExitWindow = 2 * time.Second
+
+func (t *TUI) handleIdleCtrlC() error {
+	if t.input != "" {
+		t.input = ""
+		t.cursorPos = 0
+		t.lastCtrlC = time.Time{}
+		t.refreshLine()
+		return nil
+	}
+	now := time.Now()
+	if !t.lastCtrlC.IsZero() && now.Sub(t.lastCtrlC) <= ctrlCExitWindow {
+		t.writeString("\r\n")
+		return errQuit
+	}
+	t.lastCtrlC = now
+	t.writeString("\r\nCtrl+C again to exit\r\n")
+	t.printPrompt()
+	return nil
 }
 
-// refreshLine redraws the current input line (used after edits).
+const promptText = "poisson> "
+
+// printPrompt writes the prompt.
+func (t *TUI) printPrompt() {
+	t.writeString(promptText)
+}
+
+// refreshLine redraws the current input line. It never prints past the terminal
+// width; wrapped prompts cannot be reliably cleared with a one-line editor.
 func (t *TUI) refreshLine() {
-	// Clear from cursor to end of line, move to line start, reprint prompt + input
+	maxCols := t.inputViewportCols()
+	visible, cursorCol := visibleInput(t.input, t.cursorPos, maxCols)
+
 	t.writeString("\x1b[2K\r")
-	t.writeString("poisson> ")
-	t.writeString(t.input)
-	// Move cursor back to the right position
-	if t.cursorPos < len(t.input) {
-		back := len(t.input) - t.cursorPos
+	t.writeString(promptText)
+	t.writeString(visible)
+	if back := runeCount(visible) - cursorCol; back > 0 {
 		t.writeString(fmt.Sprintf("\x1b[%dD", back))
 	}
 }
+
+func (t *TUI) inputViewportCols() int {
+	width, _, err := term.GetSize(t.fd)
+	if err != nil || width <= len(promptText)+2 {
+		width = 80
+	}
+	cols := width - len(promptText) - 1 // keep one column free to avoid autowrap
+	if cols < 1 {
+		return 1
+	}
+	return cols
+}
+
+func visibleInput(input string, cursorPos, maxCols int) (string, int) {
+	if maxCols <= 0 {
+		return "", 0
+	}
+	if cursorPos < 0 {
+		cursorPos = 0
+	}
+	if cursorPos > len(input) {
+		cursorPos = len(input)
+	}
+
+	runes := []rune(input)
+	cursorRune := len([]rune(input[:cursorPos]))
+	for i, r := range runes {
+		switch {
+		case r == '\n' || r == '\r':
+			runes[i] = '↵'
+		case r == '\t':
+			runes[i] = ' '
+		case r < 32 || r == 127:
+			runes[i] = '?'
+		}
+	}
+	if len(runes) <= maxCols {
+		return string(runes), cursorRune
+	}
+	if maxCols == 1 {
+		if cursorRune == 0 {
+			return "…", 0
+		}
+		return "…", 1
+	}
+
+	slots := maxCols - 1
+	if cursorRune <= slots {
+		end := slots
+		if end > len(runes) {
+			end = len(runes)
+		}
+		return string(runes[:end]) + "…", cursorRune
+	}
+
+	start := cursorRune - slots
+	end := start + slots
+	if end > len(runes) {
+		end = len(runes)
+	}
+	return "…" + string(runes[start:end]), 1 + cursorRune - start
+}
+
+func runeCount(s string) int { return len([]rune(s)) }
 
 func (t *TUI) insertChar(r rune) {
 	s := string(r)

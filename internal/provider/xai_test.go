@@ -33,7 +33,7 @@ func TestXAIModels(t *testing.T) {
 func TestXAIBuildRequest(t *testing.T) {
 	p := NewXAIProvider(auth.AuthStore{}, config.DefaultConfig())
 	req := &Request{
-		Model:  "grok-3",
+		Model:  "grok-build",
 		System: []SystemBlock{{Text: "You are helpful."}},
 		Messages: []Message{
 			{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hello"}}},
@@ -44,11 +44,14 @@ func TestXAIBuildRequest(t *testing.T) {
 		MaxTokens: 100,
 	}
 	xaiReq := p.buildRequest(req)
-	if xaiReq.Model != "grok-3" {
+	if xaiReq.Model != "grok-build" {
 		t.Errorf("model = %q", xaiReq.Model)
 	}
 	if !xaiReq.Stream {
 		t.Error("should be streaming")
+	}
+	if xaiReq.StreamOptions == nil || !xaiReq.StreamOptions.IncludeUsage {
+		t.Error("stream_options.include_usage must be enabled for xAI token accounting")
 	}
 	// System should be first message.
 	if len(xaiReq.Messages) < 2 {
@@ -121,6 +124,56 @@ func TestXAISSEParseText(t *testing.T) {
 	}
 }
 
+func TestXAISSEParseReasoningTokens(t *testing.T) {
+	p := NewXAIProvider(
+		auth.AuthStore{"xai": {Type: "oauth", Access: "tok", Expires: 9999999999999}},
+		config.DefaultConfig(),
+	)
+
+	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":131,\"completion_tokens\":3,\"completion_tokens_details\":{\"reasoning_tokens\":762},\"total_tokens\":896}}\n\ndata: [DONE]\n\n"
+
+	ch := make(chan StreamEvent, 64)
+	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+
+	var done *Usage
+	for ev := range ch {
+		if ev.Type == EventDone {
+			done = ev.Usage
+		}
+	}
+	if done == nil {
+		t.Fatal("no done event")
+	}
+	if done.InputTokens != 131 || done.OutputTokens != 765 {
+		t.Errorf("usage = %+v, want input=131 output=765", done)
+	}
+}
+
+func TestXAISSEParseUsageOnlyChunk(t *testing.T) {
+	p := NewXAIProvider(
+		auth.AuthStore{"xai": {Type: "oauth", Access: "tok", Expires: 9999999999999}},
+		config.DefaultConfig(),
+	)
+
+	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"completion_tokens_details\":{\"reasoning_tokens\":8},\"total_tokens\":20}}\n\ndata: [DONE]\n\n"
+
+	ch := make(chan StreamEvent, 64)
+	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+
+	var done *Usage
+	for ev := range ch {
+		if ev.Type == EventDone {
+			done = ev.Usage
+		}
+	}
+	if done == nil {
+		t.Fatal("no done event")
+	}
+	if done.InputTokens != 10 || done.OutputTokens != 10 {
+		t.Errorf("usage = %+v, want input=10 output=10", done)
+	}
+}
+
 func TestXAISSEParseToolCall(t *testing.T) {
 	p := NewXAIProvider(
 		auth.AuthStore{"xai": {Type: "oauth", Access: "tok", Expires: 9999999999999}},
@@ -165,7 +218,7 @@ func TestXAISSEParseToolCall(t *testing.T) {
 
 func TestXAINoCredentials(t *testing.T) {
 	p := NewXAIProvider(auth.AuthStore{}, config.DefaultConfig())
-	_, err := p.Stream(context.Background(), &Request{Model: "grok-3"})
+	_, err := p.Stream(context.Background(), &Request{Model: "grok-build"})
 	if err == nil {
 		t.Fatal("expected error with no credentials")
 	}

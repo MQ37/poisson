@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"poisson/internal/agent"
@@ -441,7 +442,9 @@ func TestDrainOutput(t *testing.T) {
 
 	promptDone := make(chan error, 1)
 	promptDone <- nil
-	tui.drainOutput(promptDone)
+	if err := tui.drainOutput(promptDone, nil); err != nil {
+		t.Fatalf("drainOutput: %v", err)
+	}
 
 	out := tui.output()
 	if !strings.Contains(out, "Hello world") {
@@ -641,5 +644,118 @@ func TestToolResultPreviewBashUsesStdout(t *testing.T) {
 	got := toolResultPreview("bash", `{"stdout":"hello\nworld","stderr":"","exitCode":0}`)
 	if got != "hello world" {
 		t.Fatalf("bash preview = %q", got)
+	}
+}
+
+func TestVisibleInputShort(t *testing.T) {
+	visible, cursor := visibleInput("hello", len("hello"), 10)
+	if visible != "hello" || cursor != 5 {
+		t.Fatalf("visible=%q cursor=%d, want hello/5", visible, cursor)
+	}
+}
+
+func TestVisibleInputLongAtEnd(t *testing.T) {
+	visible, cursor := visibleInput("abcdefghijklmnopqrstuvwxyz", len("abcdefghijklmnopqrstuvwxyz"), 10)
+	if visible != "…rstuvwxyz" {
+		t.Fatalf("visible=%q, want ellipsis + tail", visible)
+	}
+	if cursor != 10 {
+		t.Fatalf("cursor=%d, want 10", cursor)
+	}
+}
+
+func TestVisibleInputLongNearStart(t *testing.T) {
+	visible, cursor := visibleInput("abcdefghijklmnopqrstuvwxyz", 3, 10)
+	if visible != "abcdefghi…" {
+		t.Fatalf("visible=%q, want head + ellipsis", visible)
+	}
+	if cursor != 3 {
+		t.Fatalf("cursor=%d, want 3", cursor)
+	}
+}
+
+func TestVisibleInputSanitizesNewlines(t *testing.T) {
+	visible, _ := visibleInput("hello\nworld", len("hello\n"), 20)
+	if visible != "hello↵world" {
+		t.Fatalf("visible=%q, want newline marker", visible)
+	}
+}
+
+func TestRefreshLineDoesNotPrintPastViewport(t *testing.T) {
+	tui := newTestTUI()
+	tui.input = strings.Repeat("x", 200)
+	tui.cursorPos = len(tui.input)
+	tui.refreshLine()
+	out := tui.output()
+	if strings.Contains(out, strings.Repeat("x", 100)) {
+		t.Fatalf("refresh printed unbounded input: %q", out)
+	}
+	if !strings.Contains(out, "…") {
+		t.Fatalf("refresh missing ellipsis: %q", out)
+	}
+}
+
+func TestIdleCtrlCClearsInput(t *testing.T) {
+	tui := newTestTUI()
+	if err := tui.feed([]byte("hello")); err != nil {
+		t.Fatalf("feed: %v", err)
+	}
+	if err := tui.feed([]byte{3}); err != nil {
+		t.Fatalf("ctrl-c: %v", err)
+	}
+	if tui.input != "" || tui.cursorPos != 0 {
+		t.Fatalf("input=%q cursor=%d, want cleared", tui.input, tui.cursorPos)
+	}
+}
+
+func TestIdleCtrlCRequiresSecondPressToExit(t *testing.T) {
+	tui := newTestTUI()
+	if err := tui.feed([]byte{3}); err != nil {
+		t.Fatalf("first ctrl-c returned %v, want nil", err)
+	}
+	if !strings.Contains(tui.output(), "Ctrl+C again to exit") {
+		t.Fatalf("missing exit warning: %q", tui.output())
+	}
+	if err := tui.feed([]byte{3}); err != errQuit {
+		t.Fatalf("second ctrl-c = %v, want errQuit", err)
+	}
+}
+
+func TestRunningCtrlCCancelsThenExits(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	defer r.Close()
+	defer w.Close()
+	tui := newTestTUI()
+	tui.fd = int(r.Fd())
+	if err := syscall.SetNonblock(tui.fd, true); err != nil {
+		t.Fatalf("set nonblock: %v", err)
+	}
+	defer syscall.SetNonblock(tui.fd, false)
+
+	cancelled := false
+	cancel := func() { cancelled = true }
+	if _, err := w.Write([]byte{3}); err != nil {
+		t.Fatalf("write ctrl-c: %v", err)
+	}
+	wasCancelled, err := tui.pollRunningCtrlC(cancel, false)
+	if err != nil {
+		t.Fatalf("first poll: %v", err)
+	}
+	if !wasCancelled || !cancelled {
+		t.Fatalf("cancelled state = %v/%v, want true/true", wasCancelled, cancelled)
+	}
+	if !strings.Contains(tui.output(), "cancelled") {
+		t.Fatalf("missing cancelled message: %q", tui.output())
+	}
+
+	if _, err := w.Write([]byte{3}); err != nil {
+		t.Fatalf("write second ctrl-c: %v", err)
+	}
+	_, err = tui.pollRunningCtrlC(cancel, true)
+	if err != errQuit {
+		t.Fatalf("second poll = %v, want errQuit", err)
 	}
 }

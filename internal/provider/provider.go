@@ -76,13 +76,22 @@ type Message struct {
 //   - text:        Text
 //   - tool_use:    ToolCallID, ToolName, ToolInput (json.RawMessage)
 //   - tool_result: ToolCallID, ToolResult
+//   - thinking:    Thinking, ThinkingSignature, Redacted (Anthropic extended thinking)
 type ContentBlock struct {
-	Type       string          // text | tool_use | tool_result
+	Type       string          // text | tool_use | tool_result | thinking
 	Text       string          // text blocks
 	ToolCallID string          // tool_use + tool_result
 	ToolName   string          // tool_use
 	ToolInput  json.RawMessage // tool_use
 	ToolResult string          // tool_result
+
+	// Anthropic extended-thinking fields (Type == "thinking"). Thinking holds
+	// the reasoning text; ThinkingSignature is the opaque signature that must
+	// be replayed verbatim; Redacted marks a redacted_thinking block whose
+	// ThinkingSignature carries the encrypted payload.
+	Thinking          string
+	ThinkingSignature string
+	Redacted          bool
 }
 
 // StreamEventType identifies the kind of a StreamEvent.
@@ -93,6 +102,9 @@ const (
 	EventToolUseStart
 	EventToolUseDelta
 	EventToolUseStop
+	EventThinkingDelta     // Text carries a thinking text delta
+	EventThinkingSignature // Text carries a thinking signature delta
+	EventThinkingRedacted  // Text carries the opaque redacted_thinking payload
 	EventDone
 	EventError
 )

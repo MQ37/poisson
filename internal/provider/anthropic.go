@@ -115,7 +115,12 @@ type anthropicRequest struct {
 	MaxTokens   int                `json:"max_tokens"`
 	Stream      bool               `json:"stream"`
 	Temperature *float64           `json:"temperature,omitempty"`
-	Effort      string             `json:"effort,omitempty"`
+	Thinking    *anthropicThinking `json:"thinking,omitempty"`
+}
+
+type anthropicThinking struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
 }
 
 type anthropicMessage struct {
@@ -130,7 +135,10 @@ type anthropicContentBlock struct {
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"` // for tool_result
+	Content   json.RawMessage `json:"content,omitempty"`   // for tool_result
+	Thinking  string          `json:"thinking,omitempty"`  // for thinking
+	Signature string          `json:"signature,omitempty"` // for thinking
+	Data      string          `json:"data,omitempty"`      // for redacted_thinking
 }
 
 type anthropicSystem struct {
@@ -145,6 +153,23 @@ type anthropicTool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+func anthropicThinkingBudget(effort string) int {
+	switch effort {
+	case "low":
+		return 1024
+	case "medium":
+		return 2048
+	case "high":
+		return 4096
+	case "xhigh":
+		return 8192
+	case "max":
+		return 16384
+	default:
+		return 0
+	}
+}
+
 // buildAnthropicRequest converts a Poisson Request to the Anthropic API format.
 func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) anthropicRequest {
 	ar := anthropicRequest{
@@ -152,10 +177,16 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 		MaxTokens:   req.MaxTokens,
 		Stream:      true,
 		Temperature: req.Temperature,
-		Effort:      req.Effort,
 	}
 	if ar.MaxTokens == 0 {
 		ar.MaxTokens = 4096
+	}
+	if budget := anthropicThinkingBudget(req.Effort); budget > 0 {
+		ar.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: budget}
+		ar.Temperature = nil
+		if ar.MaxTokens <= budget {
+			ar.MaxTokens = budget + 1024
+		}
 	}
 
 	// System blocks.
@@ -167,11 +198,60 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 		ar.System = append(ar.System, as)
 	}
 
-	// Messages.
-	for _, msg := range req.Messages {
+	// Messages. The Anthropic API only accepts "user" and "assistant" roles;
+	// tool results are sent as tool_result content blocks inside a user message.
+	// Consecutive tool results are coalesced into one user message so roles
+	// keep alternating (required when the model made parallel tool calls).
+	for i := 0; i < len(req.Messages); i++ {
+		msg := req.Messages[i]
+
+		if msg.Role == "tool" {
+			var blocks []anthropicContentBlock
+			for j := i; j < len(req.Messages) && req.Messages[j].Role == "tool"; j++ {
+				for _, cb := range req.Messages[j].Content {
+					if cb.Type != "tool_result" {
+						continue
+					}
+					resultContent, _ := json.Marshal(cb.ToolResult)
+					blocks = append(blocks, anthropicContentBlock{
+						Type: "tool_result", ToolUseID: cb.ToolCallID, Content: resultContent,
+					})
+				}
+				i = j
+			}
+			ar.Messages = append(ar.Messages, anthropicMessage{Role: "user", Content: blocks})
+			continue
+		}
+
+		// Thinking blocks may only be replayed when thinking is enabled for this
+		// request; sending them otherwise is rejected, and dropping them while
+		// thinking is enabled is also rejected for assistant turns with tool_use.
+		thinkingEnabled := ar.Thinking != nil
+
 		am := anthropicMessage{Role: msg.Role}
 		for _, cb := range msg.Content {
 			switch cb.Type {
+			case "thinking":
+				if !thinkingEnabled {
+					continue
+				}
+				if cb.Redacted {
+					am.Content = append(am.Content, anthropicContentBlock{
+						Type: "redacted_thinking", Data: cb.ThinkingSignature,
+					})
+					continue
+				}
+				if cb.ThinkingSignature == "" {
+					// No signature (e.g. aborted stream) — Anthropic rejects an
+					// unsigned thinking block, so degrade it to plain text.
+					if cb.Thinking != "" {
+						am.Content = append(am.Content, anthropicContentBlock{Type: "text", Text: cb.Thinking})
+					}
+					continue
+				}
+				am.Content = append(am.Content, anthropicContentBlock{
+					Type: "thinking", Thinking: cb.Thinking, Signature: cb.ThinkingSignature,
+				})
 			case "text":
 				am.Content = append(am.Content, anthropicContentBlock{
 					Type: "text", Text: cb.Text,
@@ -282,10 +362,12 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 					Type string `json:"type"`
 					ID   string `json:"id"`
 					Name string `json:"name"`
+					Data string `json:"data"`
 				} `json:"content_block"`
 			}
 			json.Unmarshal([]byte(data), &block)
-			if block.ContentBlock.Type == "tool_use" {
+			switch block.ContentBlock.Type {
+			case "tool_use":
 				currentToolCall = &ToolCall{
 					ID:   block.ContentBlock.ID,
 					Name: block.ContentBlock.Name,
@@ -295,6 +377,12 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 				case <-ctx.Done():
 					return
 				case ch <- StreamEvent{Type: EventToolUseStart, ToolCall: currentToolCall}:
+				}
+			case "redacted_thinking":
+				select {
+				case <-ctx.Done():
+					return
+				case ch <- StreamEvent{Type: EventThinkingRedacted, Text: block.ContentBlock.Data}:
 				}
 			}
 
@@ -307,6 +395,12 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 					PartialJSON string `json:"partial_json"`
 				} `json:"delta"`
 			}
+			var sigDelta struct {
+				Delta struct {
+					Thinking  string `json:"thinking"`
+					Signature string `json:"signature"`
+				} `json:"delta"`
+			}
 			json.Unmarshal([]byte(data), &delta)
 			switch delta.Delta.Type {
 			case "text_delta":
@@ -314,6 +408,20 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 				case <-ctx.Done():
 					return
 				case ch <- StreamEvent{Type: EventTextDelta, Text: delta.Delta.Text}:
+				}
+			case "thinking_delta":
+				json.Unmarshal([]byte(data), &sigDelta)
+				select {
+				case <-ctx.Done():
+					return
+				case ch <- StreamEvent{Type: EventThinkingDelta, Text: sigDelta.Delta.Thinking}:
+				}
+			case "signature_delta":
+				json.Unmarshal([]byte(data), &sigDelta)
+				select {
+				case <-ctx.Done():
+					return
+				case ch <- StreamEvent{Type: EventThinkingSignature, Text: sigDelta.Delta.Signature}:
 				}
 			case "input_json_delta":
 				if currentToolCall != nil {

@@ -88,12 +88,12 @@ func TestOpenIdempotent(t *testing.T) {
 	if err := s2.SeedPricing(); err != nil {
 		t.Fatalf("SeedPricing 2: %v", err)
 	}
-	p, err := s2.GetPricing("anthropic", "claude-sonnet-4-20250514")
+	p, err := s2.GetPricing("anthropic", "claude-opus-4-8")
 	if err != nil {
 		t.Fatalf("GetPricing: %v", err)
 	}
-	if p.InputPerMTok != 3.0 {
-		t.Fatalf("input per mtok = %v, want 3.0", p.InputPerMTok)
+	if p.InputPerMTok != 5.0 {
+		t.Fatalf("input per mtok = %v, want 5.0", p.InputPerMTok)
 	}
 }
 
@@ -525,40 +525,22 @@ func TestPricing(t *testing.T) {
 		t.Fatalf("SeedPricing: %v", err)
 	}
 
-	// Exact match.
-	p, err := s.GetPricing("anthropic", "claude-sonnet-4-20250514")
+	// Anthropic exact match.
+	p, err := s.GetPricing("anthropic", "claude-opus-4-8")
 	if err != nil {
-		t.Fatalf("GetPricing exact: %v", err)
+		t.Fatalf("GetPricing anthropic: %v", err)
 	}
-	if p.InputPerMTok != 3.0 || p.OutputPerMTok != 15.0 || p.CacheReadPerMTok != 0.3 || p.CacheWritePerMTok != 3.75 {
-		t.Fatalf("sonnet pricing = %+v", p)
-	}
-
-	// Wildcard match: claude-opus-4-20250514 matches "claude-opus-4-*".
-	p, err = s.GetPricing("anthropic", "claude-opus-4-20250514")
-	if err != nil {
-		t.Fatalf("GetPricing opus wildcard: %v", err)
-	}
-	if p.InputPerMTok != 15.0 || p.OutputPerMTok != 75.0 {
+	if p.InputPerMTok != 5.0 || p.OutputPerMTok != 25.0 || p.CacheReadPerMTok != 0.5 || p.CacheWritePerMTok != 3.0 {
 		t.Fatalf("opus pricing = %+v", p)
 	}
 
-	// Wildcard match: claude-haiku-3.5-20241022 matches "claude-haiku-3.5-*".
-	p, err = s.GetPricing("anthropic", "claude-haiku-3.5-20241022")
+	// xAI exact match.
+	p, err = s.GetPricing("xai", "grok-build")
 	if err != nil {
-		t.Fatalf("GetPricing haiku wildcard: %v", err)
+		t.Fatalf("GetPricing grok-build: %v", err)
 	}
-	if p.InputPerMTok != 0.8 || p.OutputPerMTok != 4.0 {
-		t.Fatalf("haiku pricing = %+v", p)
-	}
-
-	// xai wildcard.
-	p, err = s.GetPricing("xai", "grok-3-mini")
-	if err != nil {
-		t.Fatalf("GetPricing grok wildcard: %v", err)
-	}
-	if p.InputPerMTok != 5.0 || p.OutputPerMTok != 15.0 {
-		t.Fatalf("grok pricing = %+v", p)
+	if p.InputPerMTok != 1.0 || p.OutputPerMTok != 2.0 {
+		t.Fatalf("grok-build pricing = %+v", p)
 	}
 
 	// ollama fallback "*".
@@ -583,19 +565,21 @@ func TestComputeCost(t *testing.T) {
 		t.Fatalf("SeedPricing: %v", err)
 	}
 
-	// claude-sonnet-4-20250514: 3.0 input, 15.0 output, 0.3 cache read, 3.75 cache write
-	// 1M input + 1M output = 3.0 + 15.0 = 18.0
-	cost := s.ComputeCost("anthropic", "claude-sonnet-4-20250514", 1_000_000, 1_000_000, 0, 0)
-	if !approxEqual(cost, 18.0, 1e-9) {
-		t.Fatalf("cost = %v, want 18.0", cost)
+	// claude-opus-4-8: 5 input, 25 output, 0.5 cache read, 3 cache write.
+	cost := s.ComputeCost("anthropic", "claude-opus-4-8", 1_000_000, 1_000_000, 0, 0)
+	if !approxEqual(cost, 30.0, 1e-9) {
+		t.Fatalf("cost = %v, want 30.0", cost)
 	}
 
-	// 500K input + 200K output + 100K cache read + 50K cache write
-	// = 0.5*3 + 0.2*15 + 0.1*0.3 + 0.05*3.75
-	// = 1.5 + 3.0 + 0.03 + 0.1875 = 4.7175
-	cost = s.ComputeCost("anthropic", "claude-sonnet-4-20250514", 500_000, 200_000, 100_000, 50_000)
-	if !approxEqual(cost, 4.7175, 1e-9) {
-		t.Fatalf("cost = %v, want 4.7175", cost)
+	cost = s.ComputeCost("anthropic", "claude-opus-4-8", 500_000, 200_000, 100_000, 50_000)
+	if !approxEqual(cost, 7.7, 1e-9) {
+		t.Fatalf("cost = %v, want 7.7", cost)
+	}
+
+	// grok-build: 1 input, 2 output.
+	cost = s.ComputeCost("xai", "grok-build", 1_000_000, 1_000_000, 0, 0)
+	if !approxEqual(cost, 3.0, 1e-9) {
+		t.Fatalf("xai cost = %v, want 3.0", cost)
 	}
 
 	// ollama → 0.
@@ -650,3 +634,22 @@ func approxEqual(a, b, tol float64) bool {
 
 // Ensure fmt is used (sanity prints if needed).
 var _ = fmt.Sprintf
+
+func TestNewSessionIDUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 1000; i++ {
+		id := NewSessionID()
+		if len(id) < 3 || id[:2] != "s-" {
+			t.Fatalf("id %q missing s- prefix", id)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate id %q", id)
+		}
+		seen[id] = true
+	}
+	// IDs must differ in their displayed prefix, not just the tail.
+	a, b := NewSessionID(), NewSessionID()
+	if a[:6] == b[:6] {
+		t.Fatalf("short prefixes collide: %q vs %q", a, b)
+	}
+}

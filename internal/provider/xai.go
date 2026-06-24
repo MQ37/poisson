@@ -109,12 +109,17 @@ func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry i
 
 // xaiRequest is the OpenAI-compatible request body.
 type xaiRequest struct {
-	Model       string       `json:"model"`
-	Messages    []xaiMessage `json:"messages"`
-	Tools       []xaiTool    `json:"tools,omitempty"`
-	MaxTokens   int          `json:"max_tokens,omitempty"`
-	Stream      bool         `json:"stream"`
-	Temperature *float64     `json:"temperature,omitempty"`
+	Model         string            `json:"model"`
+	Messages      []xaiMessage      `json:"messages"`
+	Tools         []xaiTool         `json:"tools,omitempty"`
+	MaxTokens     int               `json:"max_tokens,omitempty"`
+	Stream        bool              `json:"stream"`
+	StreamOptions *xaiStreamOptions `json:"stream_options,omitempty"`
+	Temperature   *float64          `json:"temperature,omitempty"`
+}
+
+type xaiStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type xaiMessage struct {
@@ -154,10 +159,11 @@ func emptyStrPtr() *string    { v := ""; return &v }
 // Every message MUST have a content field (even if empty) or xAI returns 422.
 func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 	ar := xaiRequest{
-		Model:       req.Model,
-		Stream:      true,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
+		Model:         req.Model,
+		Stream:        true,
+		StreamOptions: &xaiStreamOptions{IncludeUsage: true},
+		MaxTokens:     req.MaxTokens,
+		Temperature:   req.Temperature,
 	}
 	if ar.MaxTokens == 0 {
 		ar.MaxTokens = 4096
@@ -230,6 +236,26 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 	return ar
 }
 
+type xaiAPIUsage struct {
+	PromptTokens            int `json:"prompt_tokens"`
+	CompletionTokens        int `json:"completion_tokens"`
+	TotalTokens             int `json:"total_tokens"`
+	CompletionTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+}
+
+func convertXAIUsage(u *xaiAPIUsage) *Usage {
+	if u == nil {
+		return nil
+	}
+	output := u.CompletionTokens + u.CompletionTokensDetails.ReasoningTokens
+	if totalOutput := u.TotalTokens - u.PromptTokens; totalOutput > output {
+		output = totalOutput
+	}
+	return &Usage{InputTokens: u.PromptTokens, OutputTokens: output}
+}
+
 // pumpSSE reads the OpenAI-compatible SSE stream and converts to StreamEvents.
 func (p *XAIProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<- StreamEvent) {
 	defer close(ch)
@@ -241,6 +267,17 @@ func (p *XAIProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<-
 	var currentToolID string
 	var currentToolName string
 	var toolInputBuf bytes.Buffer
+	finishSeen := false
+	doneSent := false
+	sendDone := func(usage *Usage) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case ch <- StreamEvent{Type: EventDone, Usage: usage}:
+			doneSent = true
+			return true
+		}
+	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -253,6 +290,9 @@ func (p *XAIProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<-
 
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
+			if finishSeen && !doneSent {
+				sendDone(&Usage{})
+			}
 			return
 		}
 
@@ -271,26 +311,17 @@ func (p *XAIProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<-
 				} `json:"delta"`
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
-			Usage *struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-			} `json:"usage"`
+			Usage *xaiAPIUsage `json:"usage"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
 		}
 
-		// Usage-only chunk (some providers send usage in a final chunk with no choices).
+		// xAI sends final usage as a separate chunk when stream_options.include_usage=true.
 		if len(chunk.Choices) == 0 {
-			if chunk.Usage != nil {
-				select {
-				case <-ctx.Done():
-					return
-				case ch <- StreamEvent{Type: EventDone, Usage: &Usage{
-					InputTokens:  chunk.Usage.PromptTokens,
-					OutputTokens: chunk.Usage.CompletionTokens,
-				}}:
-				}
+			if usage := convertXAIUsage(chunk.Usage); usage != nil {
+				sendDone(usage)
+				return
 			}
 			continue
 		}
@@ -339,6 +370,7 @@ func (p *XAIProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<-
 
 		// Finish reason.
 		if chunk.Choices[0].FinishReason != nil {
+			finishSeen = true
 			if currentToolID != "" {
 				select {
 				case <-ctx.Done():
@@ -352,21 +384,9 @@ func (p *XAIProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<-
 				currentToolID = ""
 				toolInputBuf.Reset()
 			}
-			if chunk.Usage != nil {
-				select {
-				case <-ctx.Done():
-					return
-				case ch <- StreamEvent{Type: EventDone, Usage: &Usage{
-					InputTokens:  chunk.Usage.PromptTokens,
-					OutputTokens: chunk.Usage.CompletionTokens,
-				}}:
-				}
-			} else {
-				select {
-				case <-ctx.Done():
-					return
-				case ch <- StreamEvent{Type: EventDone, Usage: &Usage{}}:
-				}
+			if usage := convertXAIUsage(chunk.Usage); usage != nil {
+				sendDone(usage)
+				return
 			}
 		}
 	}

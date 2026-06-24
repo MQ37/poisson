@@ -482,3 +482,85 @@ func TestPromptStoresUserMessage(t *testing.T) {
 }
 
 var _ = context.Background
+
+type blockingProvider struct {
+	started chan struct{}
+}
+
+func (p *blockingProvider) ID() string { return "fake" }
+func (p *blockingProvider) Models() ([]provider.Model, error) {
+	return []provider.Model{{ID: "test-model", ContextWindow: 8192}}, nil
+}
+func (p *blockingProvider) Stream(ctx context.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+	ch := make(chan provider.StreamEvent)
+	close(p.started)
+	go func() {
+		defer close(ch)
+		<-ctx.Done()
+	}()
+	return ch, nil
+}
+
+func TestPromptWithContextCancelsStream(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	p := &blockingProvider{started: make(chan struct{})}
+	a := NewAgent(s, p, newTestRegistry(t.TempDir()), newTestConfig(), sessionID, make(chan OutputEvent, 16), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.PromptWithContext(ctx, "hello") }()
+
+	select {
+	case <-p.started:
+	case <-time.After(time.Second):
+		t.Fatal("provider stream did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("PromptWithContext error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PromptWithContext did not return after cancel")
+	}
+}
+
+func TestThinkingBlocksRoundTripThroughStore(t *testing.T) {
+	// buildAssistantBlocks should put thinking first, and the store JSON
+	// round-trip must preserve thinking text + signature + redacted flag.
+	redacted := []provider.ContentBlock{{Type: "thinking", Redacted: true, ThinkingSignature: "ENC"}}
+	blocks := buildAssistantBlocks("reasoning", "SIG", redacted, "the answer",
+		[]provider.ToolCall{{ID: "t1", Name: "read", Input: json.RawMessage(`{"path":"a"}`)}})
+
+	// Order: redacted thinking, thinking, text, tool_use.
+	if blocks[0].Type != "thinking" || !blocks[0].Redacted || blocks[0].ThinkingSignature != "ENC" {
+		t.Fatalf("blocks[0] = %+v, want redacted thinking", blocks[0])
+	}
+	if blocks[1].Type != "thinking" || blocks[1].Thinking != "reasoning" || blocks[1].ThinkingSignature != "SIG" {
+		t.Fatalf("blocks[1] = %+v, want signed thinking", blocks[1])
+	}
+	if blocks[2].Type != "text" || blocks[3].Type != "tool_use" {
+		t.Fatalf("unexpected block order: %+v", blocks)
+	}
+
+	js, err := contentBlocksToJSON(blocks)
+	if err != nil {
+		t.Fatalf("contentBlocksToJSON: %v", err)
+	}
+	msg, err := messageToProvider(store.Message{Role: "assistant", Content: js})
+	if err != nil {
+		t.Fatalf("messageToProvider: %v", err)
+	}
+	if len(msg.Content) != 4 {
+		t.Fatalf("round-trip lost blocks: %d", len(msg.Content))
+	}
+	if msg.Content[1].Thinking != "reasoning" || msg.Content[1].ThinkingSignature != "SIG" {
+		t.Fatalf("thinking not preserved: %+v", msg.Content[1])
+	}
+	if !msg.Content[0].Redacted || msg.Content[0].ThinkingSignature != "ENC" {
+		t.Fatalf("redacted thinking not preserved: %+v", msg.Content[0])
+	}
+}

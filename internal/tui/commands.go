@@ -12,16 +12,11 @@ import (
 	"poisson/internal/store"
 )
 
-// generateID produces a short unique ID for sessions.
-func generateID() string {
-	return fmt.Sprintf("%d", time.Now().UnixNano())
-}
-
 // --- /new ---
 
 func (t *TUI) cmdNew() error {
 	s := t.agent.Store()
-	id := generateID()
+	id := store.NewSessionID()
 	cwd, _ := os.Getwd()
 	prov := t.agent.Provider().ID()
 	model := t.agent.Config().Provider.Default
@@ -87,7 +82,7 @@ func (t *TUI) cmdSessions() error {
 			marker = ">"
 		}
 		b.WriteString(fmt.Sprintf("%s %s  %s  %d msgs  %s/%s\r\n",
-			marker, shortID(sess.ID), date, msgCount, sess.Provider, sess.Model))
+			marker, sess.ID, date, msgCount, sess.Provider, sess.Model))
 	}
 	t.writeString(b.String())
 	return nil
@@ -135,7 +130,7 @@ func (t *TUI) cmdFork(args []string) error {
 	fmt.Sscanf(args[0], "%d", &upToSeq)
 
 	// Create the new session.
-	newID := generateID()
+	newID := store.NewSessionID()
 	sess, err := s.GetSession(srcID)
 	if err != nil {
 		t.writeString("error: cannot get current session\r\n")
@@ -186,7 +181,7 @@ func (t *TUI) forkFromLatest() error {
 	}
 
 	lastSeq := msgs[len(msgs)-1].Seq
-	newID := generateID()
+	newID := store.NewSessionID()
 	sess, _ := s.GetSession(srcID)
 	s.CreateSession(&store.Session{
 		ID:        newID,

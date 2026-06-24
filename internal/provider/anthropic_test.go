@@ -343,3 +343,178 @@ func TestAnthropicAPIKeyHeaders(t *testing.T) {
 		t.Errorf("Authorization should be empty for API key auth, got %q", req.Header.Get("Authorization"))
 	}
 }
+
+func TestAnthropicEffortMapsToThinking(t *testing.T) {
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+
+	// No effort: no thinking block, no top-level effort field.
+	plain := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8", MaxTokens: 100}, false)
+	if plain.Thinking != nil {
+		t.Fatalf("expected no thinking block when effort empty")
+	}
+	body, _ := json.Marshal(plain)
+	if strings.Contains(string(body), "\"effort\"") {
+		t.Fatalf("request must not contain top-level effort field: %s", body)
+	}
+
+	// xhigh effort: thinking enabled, max_tokens raised above budget.
+	hi := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8", MaxTokens: 100, Effort: "xhigh"}, false)
+	if hi.Thinking == nil || hi.Thinking.Type != "enabled" {
+		t.Fatalf("expected thinking enabled for xhigh")
+	}
+	if hi.Thinking.BudgetTokens <= 0 || hi.MaxTokens <= hi.Thinking.BudgetTokens {
+		t.Fatalf("max_tokens (%d) must exceed thinking budget (%d)", hi.MaxTokens, hi.Thinking.BudgetTokens)
+	}
+}
+
+func TestAnthropicToolResultsBecomeUserMessage(t *testing.T) {
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+
+	req := &Request{
+		Model: "claude-opus-4-8",
+		Messages: []Message{
+			{Role: "user", Content: []ContentBlock{{Type: "text", Text: "do it"}}},
+			{Role: "assistant", Content: []ContentBlock{
+				{Type: "tool_use", ToolCallID: "t1", ToolName: "read", ToolInput: json.RawMessage(`{"path":"a"}`)},
+				{Type: "tool_use", ToolCallID: "t2", ToolName: "read", ToolInput: json.RawMessage(`{"path":"b"}`)},
+			}},
+			// Two parallel tool results stored as separate "tool" messages.
+			{Role: "tool", Content: []ContentBlock{{Type: "tool_result", ToolCallID: "t1", ToolResult: "A"}}},
+			{Role: "tool", Content: []ContentBlock{{Type: "tool_result", ToolCallID: "t2", ToolResult: "B"}}},
+		},
+	}
+
+	ar := p.buildAnthropicRequest(req, false)
+	for _, m := range ar.Messages {
+		if m.Role != "user" && m.Role != "assistant" {
+			t.Fatalf("invalid role %q (Anthropic allows only user/assistant)", m.Role)
+		}
+	}
+	// Expect: user, assistant, user(coalesced tool_results).
+	if len(ar.Messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(ar.Messages))
+	}
+	last := ar.Messages[2]
+	if last.Role != "user" {
+		t.Fatalf("tool results must be in a user message, got %q", last.Role)
+	}
+	if len(last.Content) != 2 {
+		t.Fatalf("expected 2 coalesced tool_result blocks, got %d", len(last.Content))
+	}
+	for _, b := range last.Content {
+		if b.Type != "tool_result" || b.ToolUseID == "" {
+			t.Fatalf("bad tool_result block: %+v", b)
+		}
+	}
+}
+
+func TestAnthropicSSEParsesThinking(t *testing.T) {
+	sse := "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"let me reason\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"SIG123\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+	ch := make(chan StreamEvent, 64)
+	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+
+	var thinking, sig string
+	for ev := range ch {
+		switch ev.Type {
+		case EventThinkingDelta:
+			thinking += ev.Text
+		case EventThinkingSignature:
+			sig += ev.Text
+		}
+	}
+	if thinking != "let me reason" {
+		t.Fatalf("thinking = %q", thinking)
+	}
+	if sig != "SIG123" {
+		t.Fatalf("signature = %q", sig)
+	}
+}
+
+func TestAnthropicSSEParsesRedactedThinking(t *testing.T) {
+	sse := "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"ENCRYPTED\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+	ch := make(chan StreamEvent, 8)
+	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+
+	var redacted string
+	for ev := range ch {
+		if ev.Type == EventThinkingRedacted {
+			redacted = ev.Text
+		}
+	}
+	if redacted != "ENCRYPTED" {
+		t.Fatalf("redacted payload = %q", redacted)
+	}
+}
+
+func TestAnthropicReplaysThinkingFirstWhenEnabled(t *testing.T) {
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+	req := &Request{
+		Model:  "claude-opus-4-8",
+		Effort: "high",
+		Messages: []Message{
+			{Role: "user", Content: []ContentBlock{{Type: "text", Text: "go"}}},
+			{Role: "assistant", Content: []ContentBlock{
+				{Type: "thinking", Thinking: "reason", ThinkingSignature: "SIG"},
+				{Type: "tool_use", ToolCallID: "t1", ToolName: "read", ToolInput: json.RawMessage(`{}`)},
+			}},
+			{Role: "tool", Content: []ContentBlock{{Type: "tool_result", ToolCallID: "t1", ToolResult: "ok"}}},
+		},
+	}
+	ar := p.buildAnthropicRequest(req, false)
+	asst := ar.Messages[1]
+	if asst.Content[0].Type != "thinking" || asst.Content[0].Signature != "SIG" {
+		t.Fatalf("first assistant block must be signed thinking, got %+v", asst.Content[0])
+	}
+	if asst.Content[1].Type != "tool_use" {
+		t.Fatalf("tool_use must follow thinking, got %q", asst.Content[1].Type)
+	}
+}
+
+func TestAnthropicOmitsThinkingWhenDisabled(t *testing.T) {
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+	req := &Request{
+		Model: "claude-opus-4-8", // no effort → thinking disabled
+		Messages: []Message{
+			{Role: "assistant", Content: []ContentBlock{
+				{Type: "thinking", Thinking: "reason", ThinkingSignature: "SIG"},
+				{Type: "text", Text: "answer"},
+			}},
+		},
+	}
+	ar := p.buildAnthropicRequest(req, false)
+	for _, b := range ar.Messages[0].Content {
+		if b.Type == "thinking" {
+			t.Fatalf("thinking block must be omitted when thinking disabled")
+		}
+	}
+}
+
+func TestAnthropicUnsignedThinkingDegradesToText(t *testing.T) {
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+	req := &Request{
+		Model:  "claude-opus-4-8",
+		Effort: "high",
+		Messages: []Message{
+			{Role: "assistant", Content: []ContentBlock{
+				{Type: "thinking", Thinking: "partial reasoning", ThinkingSignature: ""},
+				{Type: "text", Text: "answer"},
+			}},
+		},
+	}
+	ar := p.buildAnthropicRequest(req, false)
+	b := ar.Messages[0].Content[0]
+	if b.Type != "text" || b.Text != "partial reasoning" {
+		t.Fatalf("unsigned thinking should degrade to text, got %+v", b)
+	}
+}

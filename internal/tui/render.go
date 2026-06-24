@@ -25,6 +25,10 @@ func renderEventString(ev agent.OutputEvent) string {
 	case agent.OutputText:
 		return terminalText(ev.Text)
 
+	case agent.OutputThinking:
+		// Dimmed reasoning text.
+		return "\x1b[2m" + terminalText(ev.Text) + "\x1b[0m"
+
 	case agent.OutputToolStart:
 		var b strings.Builder
 		b.WriteString("\r\n  [")

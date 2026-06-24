@@ -18,17 +18,15 @@ type Pricing struct {
 // into the model_pricing table on first run; config overrides take
 // precedence (applied by callers of SeedPricing that pass overrides).
 //
-// Wildcard model keys ("claude-opus-4-*", "grok-3-*") are stored verbatim
-// and matched by prefix at lookup time when an exact match is not found.
+// Wildcard model keys (for example "*") are stored verbatim and matched by
+// prefix at lookup time when an exact match is not found.
 var builtInPricing = []struct {
 	Provider string
 	Model    string
 	Pricing
 }{
-	{"anthropic", "claude-sonnet-4-20250514", Pricing{3.0, 15.0, 0.3, 3.75}},
-	{"anthropic", "claude-opus-4-*", Pricing{15.0, 75.0, 1.5, 18.75}},
-	{"anthropic", "claude-haiku-3.5-*", Pricing{0.8, 4.0, 0.08, 1.0}},
-	{"xai", "grok-3-*", Pricing{5.0, 15.0, 0, 0}},
+	{"anthropic", "claude-opus-4-8", Pricing{5.0, 25.0, 0.5, 3.0}},
+	{"xai", "grok-build", Pricing{1.0, 2.0, 0, 0}},
 	{"ollama", "*", Pricing{0, 0, 0, 0}},
 }
 

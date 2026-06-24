@@ -1,11 +1,33 @@
 package store
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
 )
+
+// NewSessionID returns a short, collision-resistant session ID such as
+// "s-a3f9c1d2". Timestamp-based IDs were unusable because they share their
+// high-order digits, so any short display prefix looked identical.
+func NewSessionID() string {
+	return "s-" + randomHex(4)
+}
+
+// NewSubagentID returns a short subagent session ID such as "sub-a3f9c1d2".
+func NewSubagentID() string {
+	return "sub-" + randomHex(4)
+}
+
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
+	return hex.EncodeToString(b)
+}
 
 // Session represents a row in the sessions table.
 type Session struct {

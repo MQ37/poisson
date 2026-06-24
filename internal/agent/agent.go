@@ -19,6 +19,7 @@ import (
 // Output event type constants used by the TUI package.
 const (
 	OutputText       = "text"
+	OutputThinking   = "thinking"
 	OutputToolStart  = "tool_start"
 	OutputToolResult = "tool_result"
 	OutputStatus     = "status"
@@ -114,6 +115,11 @@ func (a *Agent) Effort() string { return effortLevel }
 
 // Prompt appends the user message to the store and runs the turn loop.
 func (a *Agent) Prompt(userInput string) error {
+	return a.PromptWithContext(context.Background(), userInput)
+}
+
+// PromptWithContext is Prompt with cancellation support.
+func (a *Agent) PromptWithContext(ctx context.Context, userInput string) error {
 	// INGEST: append user message.
 	content, err := contentBlocksToJSON([]provider.ContentBlock{
 		{Type: "text", Text: userInput},
@@ -129,15 +135,16 @@ func (a *Agent) Prompt(userInput string) error {
 		return fmt.Errorf("append user message: %w", err)
 	}
 
-	return a.runTurn()
+	return a.runTurn(ctx)
 }
 
 // runTurn executes the turn loop: build → stream → collect tools → dispatch →
 // append results → check compaction → repeat until no tool calls.
-func (a *Agent) runTurn() error {
-	ctx := context.Background()
-
+func (a *Agent) runTurn(ctx context.Context) error {
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		// BUILD
 		req, err := a.buildRequest()
 		if err != nil {
@@ -153,6 +160,9 @@ func (a *Agent) runTurn() error {
 
 		// Drain the stream channel.
 		var textBuilder strings.Builder
+		var thinkingBuilder strings.Builder
+		var thinkingSig strings.Builder
+		var redactedThinking []provider.ContentBlock
 		var toolCalls []provider.ToolCall
 		var usage *provider.Usage
 
@@ -161,6 +171,18 @@ func (a *Agent) runTurn() error {
 			case provider.EventTextDelta:
 				textBuilder.WriteString(ev.Text)
 				a.sendEvent(OutputEvent{Type: OutputText, Text: ev.Text})
+
+			case provider.EventThinkingDelta:
+				thinkingBuilder.WriteString(ev.Text)
+				a.sendEvent(OutputEvent{Type: OutputThinking, Text: ev.Text})
+
+			case provider.EventThinkingSignature:
+				thinkingSig.WriteString(ev.Text)
+
+			case provider.EventThinkingRedacted:
+				redactedThinking = append(redactedThinking, provider.ContentBlock{
+					Type: "thinking", Redacted: true, ThinkingSignature: ev.Text,
+				})
 
 			case provider.EventToolUseStart:
 				if ev.ToolCall != nil {
@@ -182,6 +204,10 @@ func (a *Agent) runTurn() error {
 			}
 		}
 
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		// COMMIT: record api_call (exact usage + cost).
 		var apiCallID string
 		if usage != nil {
@@ -194,7 +220,9 @@ func (a *Agent) runTurn() error {
 		}
 
 		// COMMIT: append assistant message.
-		assistantBlocks := buildAssistantBlocks(textBuilder.String(), toolCalls)
+		assistantBlocks := buildAssistantBlocks(
+			thinkingBuilder.String(), thinkingSig.String(), redactedThinking,
+			textBuilder.String(), toolCalls)
 		assistantContent, err := contentBlocksToJSON(assistantBlocks)
 		if err != nil {
 			return fmt.Errorf("marshal assistant content: %w", err)
@@ -234,6 +262,9 @@ func (a *Agent) runTurn() error {
 		results, execErr := a.tools.ExecuteParallel(ctx, toolCalls)
 		if execErr != nil {
 			return fmt.Errorf("execute tools: %w", execErr)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		// Append tool_result messages and notify TUI.
@@ -353,12 +384,15 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 // contentBlockJSON is the JSON representation of a ContentBlock for store
 // persistence. Field names use snake_case to match the store's FTS extractor.
 type contentBlockJSON struct {
-	Type       string          `json:"type"`
-	Text       string          `json:"text,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	ToolName   string          `json:"tool_name,omitempty"`
-	ToolInput  json.RawMessage `json:"tool_input,omitempty"`
-	ToolResult string          `json:"tool_result,omitempty"`
+	Type              string          `json:"type"`
+	Text              string          `json:"text,omitempty"`
+	ToolCallID        string          `json:"tool_call_id,omitempty"`
+	ToolName          string          `json:"tool_name,omitempty"`
+	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
+	ToolResult        string          `json:"tool_result,omitempty"`
+	Thinking          string          `json:"thinking,omitempty"`
+	ThinkingSignature string          `json:"thinking_signature,omitempty"`
+	Redacted          bool            `json:"redacted,omitempty"`
 }
 
 // contentBlocksToJSON serializes a slice of ContentBlocks into a JSON string
@@ -370,12 +404,15 @@ func contentBlocksToJSON(blocks []provider.ContentBlock) (string, error) {
 	out := make([]contentBlockJSON, len(blocks))
 	for i, b := range blocks {
 		out[i] = contentBlockJSON{
-			Type:       b.Type,
-			Text:       b.Text,
-			ToolCallID: b.ToolCallID,
-			ToolName:   b.ToolName,
-			ToolInput:  b.ToolInput,
-			ToolResult: b.ToolResult,
+			Type:              b.Type,
+			Text:              b.Text,
+			ToolCallID:        b.ToolCallID,
+			ToolName:          b.ToolName,
+			ToolInput:         b.ToolInput,
+			ToolResult:        b.ToolResult,
+			Thinking:          b.Thinking,
+			ThinkingSignature: b.ThinkingSignature,
+			Redacted:          b.Redacted,
 		}
 	}
 	data, err := json.Marshal(out)
@@ -399,12 +436,15 @@ func messageToProvider(msg store.Message) (provider.Message, error) {
 	content := make([]provider.ContentBlock, len(blocks))
 	for i, b := range blocks {
 		content[i] = provider.ContentBlock{
-			Type:       b.Type,
-			Text:       b.Text,
-			ToolCallID: b.ToolCallID,
-			ToolName:   b.ToolName,
-			ToolInput:  b.ToolInput,
-			ToolResult: b.ToolResult,
+			Type:              b.Type,
+			Text:              b.Text,
+			ToolCallID:        b.ToolCallID,
+			ToolName:          b.ToolName,
+			ToolInput:         b.ToolInput,
+			ToolResult:        b.ToolResult,
+			Thinking:          b.Thinking,
+			ThinkingSignature: b.ThinkingSignature,
+			Redacted:          b.Redacted,
 		}
 	}
 	return provider.Message{
@@ -415,8 +455,15 @@ func messageToProvider(msg store.Message) (provider.Message, error) {
 
 // buildAssistantBlocks assembles the content blocks for the assistant message
 // from the streamed text and collected tool calls.
-func buildAssistantBlocks(text string, toolCalls []provider.ToolCall) []provider.ContentBlock {
+func buildAssistantBlocks(thinking, thinkingSig string, redacted []provider.ContentBlock, text string, toolCalls []provider.ToolCall) []provider.ContentBlock {
 	var blocks []provider.ContentBlock
+	// Thinking blocks must precede text and tool_use (Anthropic ordering).
+	blocks = append(blocks, redacted...)
+	if thinking != "" {
+		blocks = append(blocks, provider.ContentBlock{
+			Type: "thinking", Thinking: thinking, ThinkingSignature: thinkingSig,
+		})
+	}
 	if text != "" {
 		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: text})
 	}
