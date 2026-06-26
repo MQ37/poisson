@@ -269,7 +269,9 @@ func decodeKittyKeys(data []byte) []byte {
 				continue
 			}
 			if code, mods, final, n := parseKittyKey(data[i:]); n > 0 && final == 'u' {
-				if b, ok := kittyToBytes(code, mods); ok {
+				if b, ok := kittyToLegacyCSI(code, mods); ok {
+					out = append(out, b...)
+				} else if b, ok := kittyToBytes(code, mods); ok {
 					out = append(out, b...)
 				}
 				i += n
@@ -317,6 +319,10 @@ func kittyToBytes(code, mods int) ([]byte, bool) {
 	}
 	if ctrl && ((code >= 'a' && code <= 'z') || (code >= 'A' && code <= 'Z')) {
 		return []byte{byte(code) & 0x1f}, true
+	}
+	// Kitty functional keys live in the PUA range — never treat as text.
+	if code >= 57344 && code < 63744 {
+		return nil, false
 	}
 	if !ctrl && code >= 32 && code != 127 {
 		return []byte(string(rune(code))), true

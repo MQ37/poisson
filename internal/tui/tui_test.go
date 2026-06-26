@@ -1101,6 +1101,24 @@ func TestV2NavigateHistory(t *testing.T) {
 	}
 }
 
+func TestV2KittyPageKeysScrollBack(t *testing.T) {
+	tui := newTUIv2(nil, "s-abc", nil)
+	tui.rows = 20
+	tui.cols = 80
+	tui.scrollRows = 5
+	for i := 0; i < 20; i++ {
+		tui.scroll.appendRaw(styleSystem, "line")
+	}
+	kittyPageUp := []byte{27, '[', '5', '7', '3', '5', '4', 'u'}
+	if delta, ok := parseScrollInputRaw(kittyPageUp, tui.scrollRows); !ok || delta != 5 {
+		t.Fatalf("parseScrollInputRaw page up = %d %v", delta, ok)
+	}
+	tui.handleScrollDelta(5)
+	if tui.scroll.scrollOffset == 0 {
+		t.Fatal("kitty PageUp did not scroll")
+	}
+}
+
 func TestV2PageKeysScrollBack(t *testing.T) {
 	tui := newTUIv2(nil, "s-abc", nil)
 	tui.rows = 20
@@ -1312,6 +1330,9 @@ func TestDecodeKittyKeys(t *testing.T) {
 		{"kitty ctrl+c", []byte{27, '[', '9', '9', ';', '5', 'u'}, []byte{3}},
 		{"kitty ctrl+d", []byte{27, '[', '1', '0', '0', ';', '5', 'u'}, []byte{4}},
 		{"arrow up passes through", []byte{27, '[', 'A'}, []byte{27, '[', 'A'}},
+		{"kitty arrow up", []byte{27, '[', '5', '7', '3', '5', '2', 'u'}, []byte{27, '[', 'A'}},
+		{"kitty page up", []byte{27, '[', '5', '7', '3', '5', '4', 'u'}, []byte{27, '[', '5', '~'}},
+		{"kitty page down", []byte{27, '[', '5', '7', '3', '5', '5', 'u'}, []byte{27, '[', '6', '~'}},
 		{"shift+arrow dropped-as-csi passes through", []byte{27, '[', '1', ';', '2', 'A'}, []byte{27, '[', '1', ';', '2', 'A'}},
 		{"text then kitty backspace", append([]byte("ab"), 27, '[', '1', '2', '7', 'u'), []byte{'a', 'b', 127}},
 	}

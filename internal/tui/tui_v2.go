@@ -57,7 +57,8 @@ type tuiV2 struct {
 	draftSaved string // restore on arrow-down past newest
 
 	// Completion dropdown (slash commands, @file paths).
-	completion *completion
+	completion           *completion
+	lastCompletionRows   int // scroll rows last painted by the dropdown
 
 	// Approval coordination. The input goroutine is the sole stdin reader;
 	// when approval is pending it routes the answer through this channel
@@ -212,6 +213,10 @@ func (t *tuiV2) Run() error {
 				}
 				continue
 			}
+			if delta, ok := parseScrollInputRaw(buf[:n], t.scrollRows); ok {
+				t.handleScrollDelta(delta)
+				continue
+			}
 			quit, err := t.feed(decodeKittyKeys(buf[:n]))
 			if err != nil {
 				t.appendError(err)
@@ -267,25 +272,16 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 	}
 
 	// Scrollback navigation — works even while the agent is running.
-	if delta, ok := parseScrollInput(data, t.scrollRows); ok {
-		if delta > 0 {
-			t.scroll.scrollUp(delta)
-		} else {
-			t.scroll.scrollDown(-delta)
-		}
-		t.scroll.clampScrollOffset(t.scrollRows, t.cols)
-		t.markScrollDirty()
+	if delta, ok := parseScrollInputRaw(data, t.scrollRows); ok {
+		t.scrollByDelta(delta)
 		return false, nil
 	}
 	if isArrowUp(data) && t.editorAtScrollTop() {
-		t.scroll.scrollUp(1)
-		t.scroll.clampScrollOffset(t.scrollRows, t.cols)
-		t.markScrollDirty()
+		t.scrollByDelta(1)
 		return false, nil
 	}
 	if isArrowDown(data) && t.scroll.scrollOffset > 0 && t.editorAtScrollBottom() {
-		t.scroll.scrollDown(1)
-		t.markScrollDirty()
+		t.scrollByDelta(-1)
 		return false, nil
 	}
 
@@ -869,6 +865,23 @@ func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc i
 func (t *tuiV2) renderHintLine() string {
 	hint := "Enter submit · PgUp/PgDn scroll · ↑ at top scrolls back · wheel · Ctrl+P/N history"
 	return dim + hint + reset
+}
+
+// scrollByDelta scrolls the scrollback viewport. Caller must hold t.mu.
+func (t *tuiV2) scrollByDelta(delta int) {
+	if delta > 0 {
+		t.scroll.scrollUp(delta)
+	} else if delta < 0 {
+		t.scroll.scrollDown(-delta)
+	}
+	t.scroll.clampScrollOffset(t.scrollRows, t.cols)
+	t.markScrollDirty()
+}
+
+func (t *tuiV2) handleScrollDelta(delta int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.scrollByDelta(delta)
 }
 
 func (t *tuiV2) editorAtScrollTop() bool {

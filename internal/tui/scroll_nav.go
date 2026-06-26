@@ -9,10 +9,10 @@ func parseScrollInput(data []byte, viewHeight int) (delta int, ok bool) {
 	if n, ok := parseMouseWheel(data); ok {
 		return n, true
 	}
-	if indexOf(data, []byte("\x1b[5~")) >= 0 { // PageUp
+	if isPageUp(data) {
 		return viewHeight, true
 	}
-	if indexOf(data, []byte("\x1b[6~")) >= 0 { // PageDown
+	if isPageDown(data) {
 		return -viewHeight, true
 	}
 	// Shift+arrow (common terminal encoding).
@@ -60,14 +60,38 @@ func parseMouseWheel(data []byte) (delta int, ok bool) {
 	}
 }
 
+func isPageUp(data []byte) bool {
+	return indexOf(data, []byte("\x1b[5~")) >= 0 ||
+		indexOf(data, []byte("\x1b[5;")) >= 0
+}
+
+func isPageDown(data []byte) bool {
+	return indexOf(data, []byte("\x1b[6~")) >= 0 ||
+		indexOf(data, []byte("\x1b[6;")) >= 0
+}
+
 // isArrowUp reports a plain Up-arrow CSI sequence (no shift modifier).
 func isArrowUp(data []byte) bool {
-	return indexOf(data, []byte("\x1b[A")) >= 0 ||
-		indexOf(data, []byte("\x1bOA")) >= 0
+	for _, seq := range [][]byte{
+		[]byte("\x1b[A"), []byte("\x1bOA"),
+		[]byte("\x1b[1;1A"), []byte("\x1b[1A"),
+	} {
+		if indexOf(data, seq) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // isArrowDown reports a plain Down-arrow CSI sequence.
 func isArrowDown(data []byte) bool {
-	return indexOf(data, []byte("\x1b[B")) >= 0 ||
-		indexOf(data, []byte("\x1bOB")) >= 0
+	for _, seq := range [][]byte{
+		[]byte("\x1b[B"), []byte("\x1bOB"),
+		[]byte("\x1b[1;1B"), []byte("\x1b[1B"),
+	} {
+		if indexOf(data, seq) >= 0 {
+			return true
+		}
+	}
+	return false
 }

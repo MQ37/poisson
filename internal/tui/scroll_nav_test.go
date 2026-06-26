@@ -39,6 +39,13 @@ func TestParseScrollInputPageKeys(t *testing.T) {
 	}
 }
 
+func TestParseScrollInputRawKittyPageUp(t *testing.T) {
+	raw := []byte{27, '[', '5', '7', '3', '5', '4', 'u'}
+	if d, ok := parseScrollInputRaw(raw, 12); !ok || d != 12 {
+		t.Fatalf("delta=%d ok=%v", d, ok)
+	}
+}
+
 func TestParseMouseWheel(t *testing.T) {
 	if d, ok := parseMouseWheel([]byte("\x1b[<64;10;20M")); !ok || d != 3 {
 		t.Fatalf("wheel up = %d %v", d, ok)

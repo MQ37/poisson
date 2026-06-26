@@ -135,13 +135,7 @@ func (t *tuiV2) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only [
 		b.WriteString(cup(startRow+i, 1))
 		b.WriteString(clearLine())
 		if i < len(lay.visible) {
-			text := lay.visible[i].Text
-			if strings.Contains(stripANSI(text), toolWorkingMarker) {
-				text = animateToolLine(text, t.renderFrame)
-			} else if strings.Contains(stripANSI(text), toolCardSpinnerSlot) {
-				text = animateSpinnerInLine(text, t.renderFrame)
-			}
-			b.WriteString(truncateToWidth(text, t.cols))
+			b.WriteString(truncateToWidth(t.formatScrollLine(lay.visible[i].Text), t.cols))
 		}
 	}
 }
@@ -198,25 +192,68 @@ func (t *tuiV2) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 func (t *tuiV2) paintCompletionOverlay(b *strings.Builder, lay layoutSnapshot) {
 	c := t.completion
 	if c == nil || c.empty() {
+		if t.lastCompletionRows > 0 {
+			t.paintCompletionZone(b, lay, nil, t.lastCompletionRows)
+			t.lastCompletionRows = 0
+		}
 		return
 	}
+	lines := completionLines(t, c)
+	t.paintCompletionZone(b, lay, lines, len(lines))
+	t.lastCompletionRows = len(lines)
+}
+
+// completionLines returns the completion dropdown rows to paint (capped to scrollback).
+func completionLines(t *tuiV2, c *completion) []string {
 	lines := strings.Split(strings.TrimRight(t.renderCompletion(c), "\n"), "\n")
 	if len(lines) > t.scrollRows {
 		lines = append(lines[:1], lines[len(lines)-(t.scrollRows-1):]...)
 	}
-	anchor := t.scrollRows - len(lines) + 1
+	return lines
+}
+
+// paintCompletionZone clears the union of the previous and current overlay
+// heights, restores scrollback where the dropdown no longer covers, and paints
+// the dropdown lines at the bottom of the scroll region.
+func (t *tuiV2) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, lines []string, lineCount int) {
+	zone := lineCount
+	if t.lastCompletionRows > zone {
+		zone = t.lastCompletionRows
+	}
+	if zone < 1 {
+		return
+	}
+	clearStart := t.scrollRows - zone + 1
+	if clearStart < 1 {
+		clearStart = 1
+	}
+	anchor := t.scrollRows - lineCount + 1
 	if anchor < 1 {
 		anchor = 1
 	}
-	for i, line := range lines {
-		row := anchor + i
-		if row > t.scrollRows {
-			break
-		}
+	for row := clearStart; row <= t.scrollRows; row++ {
 		b.WriteString(cup(row, 1))
 		b.WriteString(clearLine())
-		b.WriteString(truncateToWidth(line, t.cols))
+		if lines != nil {
+			if idx := row - anchor; idx >= 0 && idx < len(lines) {
+				b.WriteString(truncateToWidth(lines[idx], t.cols))
+				continue
+			}
+		}
+		if vi := row - 1; vi >= 0 && vi < len(lay.visible) {
+			b.WriteString(truncateToWidth(t.formatScrollLine(lay.visible[vi].Text), t.cols))
+		}
 	}
+}
+
+func (t *tuiV2) formatScrollLine(text string) string {
+	if strings.Contains(stripANSI(text), toolWorkingMarker) {
+		return animateToolLine(text, t.renderFrame)
+	}
+	if strings.Contains(stripANSI(text), toolCardSpinnerSlot) {
+		return animateSpinnerInLine(text, t.renderFrame)
+	}
+	return text
 }
 
 func (t *tuiV2) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
