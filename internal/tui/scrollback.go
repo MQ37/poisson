@@ -40,6 +40,9 @@ type scrollback struct {
 	// values mean "user scrolled up by N rows".
 	scrollTop  int
 	totalAdded int // ever-appended counter (for status display)
+	// lastStreamWrapCount tracks wrapped rows for the tail logical line so
+	// streamViewportDirty can repaint only changed viewport rows.
+	lastStreamWrapCount int
 }
 
 func newScrollback(max int) *scrollback {
@@ -76,9 +79,12 @@ func (s *scrollback) append(line StyledLine) {
 	if streamingStyles[line.Style] && len(s.lines) > 0 && s.lines[len(s.lines)-1].Style == line.Style {
 		s.lines[len(s.lines)-1].Text += sanitizeControls(parts[0])
 		start = 1
+	} else {
+		s.lastStreamWrapCount = 0
 	}
 	for i := start; i < len(parts); i++ {
 		s.lines = append(s.lines, StyledLine{Style: line.Style, Text: sanitizeControls(parts[i])})
+		s.lastStreamWrapCount = 0
 	}
 	s.totalAdded++
 	s.trim()
@@ -88,11 +94,43 @@ func (s *scrollback) append(line StyledLine) {
 // or \n). Used for /commands and tool-result output. Long logical lines are
 // wrapped at render time.
 func (s *scrollback) appendRaw(style LineStyle, text string) {
+	s.lastStreamWrapCount = 0
 	for _, ln := range splitLines(stripANSI(text)) {
 		s.lines = append(s.lines, StyledLine{Style: style, Text: sanitizeControls(ln)})
 		s.totalAdded++
 	}
 	s.trim()
+}
+
+// streamViewportDirty returns 0-based row indices within the scrollback viewport
+// that need repainting after a streaming append. Returns nil when the user has
+// scrolled up and the streaming tail is off-screen.
+func (s *scrollback) streamViewportDirty(height, width int) []int {
+	if height < 1 || width < 1 || len(s.lines) == 0 || s.scrollTop > 0 {
+		return nil
+	}
+	newCount := len(wrapLine(s.lines[len(s.lines)-1].Text, width))
+	prev := s.lastStreamWrapCount
+	grew := newCount > prev
+	s.lastStreamWrapCount = newCount
+
+	wrapped, _ := wrapAll(s.lines, width)
+	viewStart := len(wrapped) - height
+	if viewStart < 0 {
+		viewStart = 0
+	}
+	viewLen := len(wrapped) - viewStart
+	if viewLen < 1 {
+		return nil
+	}
+	if prev == 0 || grew {
+		rows := make([]int, viewLen)
+		for i := range rows {
+			rows[i] = i
+		}
+		return rows
+	}
+	return []int{viewLen - 1}
 }
 
 // sanitizeControls makes one logical line safe to render: tabs expand to

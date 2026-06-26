@@ -9,18 +9,27 @@ import (
 // StatusSnapshot is the data rendered in the 2-line status bar at the bottom
 // of the split-screen TUI. It is updated from OutputStatus events.
 type StatusSnapshot struct {
-	SessionID     string
-	Cwd           string
-	Branch        string
-	Model         string
-	Effort        string
-	ContextPct    float64
-	ContextTokens int
-	ContextWindow int
-	Cost          float64
-	CallCount     int
-	Thinking      bool // spinner state while a prompt is streaming
-	Hint          string
+	SessionID      string
+	Cwd            string
+	Branch         string
+	Model          string
+	Effort         string
+	ContextPct     float64
+	ContextTokens  int
+	ContextWindow  int
+	OutputTokens   int
+	CacheRead      int
+	CacheWrite     int
+	Cost           float64
+	CallCount      int
+	ToolCalls      int
+	ToolErrors     int
+	Thinking       bool
+	SpinnerFrame   int
+	WarnContext    bool
+	Hint           string
+	ShowTokens     bool
+	ShowCost       bool
 }
 
 // Render returns the two status lines joined with a "\n" separator. The
@@ -44,40 +53,88 @@ func (s StatusSnapshot) Render(width int) string {
 
 func (s StatusSnapshot) renderLeft(width int) string {
 	cwd := shortenPath(s.Cwd, 30)
-	if s.Branch != "" {
-		return fmt.Sprintf(" %s %s%s@%s%s %s", s.SessionID[:min6(len(s.SessionID))],
-			fgBlue, cwd, s.Branch, reset, cwdLabel())
+	id := s.SessionID
+	if len(id) > 6 {
+		id = id[:6]
 	}
-	return fmt.Sprintf(" %s %s%s%s", s.SessionID[:min6(len(s.SessionID))], fgBlue, cwd, reset)
+	if s.Branch != "" {
+		return fmt.Sprintf(" %s %s%s@%s%s", id, fgBlue, cwd, s.Branch, reset)
+	}
+	return fmt.Sprintf(" %s %s%s%s", id, fgBlue, cwd, reset)
 }
 
 func (s StatusSnapshot) renderRight(width int) string {
 	spinner := " "
 	if s.Thinking {
-		spinner = "⠋"
+		spinner = spinnerChar(s.SpinnerFrame)
 	}
-	return fmt.Sprintf("%s %s%s%s", spinner, fgMagenta, s.Model, reset)
+	model := s.Model
+	if s.Effort != "" {
+		model = s.Effort + " · " + model
+	}
+	return fmt.Sprintf("%s %s%s%s", spinner, fgMagenta, model, reset)
 }
 
 func (s StatusSnapshot) renderBottom(width int) string {
-	// Bottom row: token usage + cost + context %.
 	var b strings.Builder
 	b.WriteString(" ")
-	b.WriteString(fgCyan)
-	b.WriteString("↑in ")
-	b.WriteString(reset)
-	b.WriteString(formatNum(s.ContextTokens))
-	b.WriteString("  ")
-	b.WriteString(fgYellow)
-	b.WriteString("$")
-	b.WriteString(reset)
-	costStr := fmt.Sprintf("%.4f", s.Cost)
-	b.WriteString(costStr)
-	b.WriteString("  ")
+
+	if s.ShowTokens {
+		b.WriteString(fgCyan)
+		b.WriteString("↑")
+		b.WriteString(reset)
+		b.WriteString(formatNum(s.ContextTokens))
+		b.WriteString(" ")
+		b.WriteString(fgGreen)
+		b.WriteString("↓")
+		b.WriteString(reset)
+		b.WriteString(formatNum(s.OutputTokens))
+		if s.CacheRead > 0 || s.CacheWrite > 0 {
+			b.WriteString(" ")
+			b.WriteString(fgGray)
+			b.WriteString("R⌫")
+			b.WriteString(reset)
+			b.WriteString(formatNum(s.CacheRead))
+			b.WriteString(" ")
+			b.WriteString(fgGray)
+			b.WriteString("W✎")
+			b.WriteString(reset)
+			b.WriteString(formatNum(s.CacheWrite))
+		}
+		b.WriteString("  ")
+	}
+
+	if s.ShowCost {
+		b.WriteString(fgYellow)
+		b.WriteString("$")
+		b.WriteString(reset)
+		b.WriteString(fmt.Sprintf("%.4f", s.Cost))
+		b.WriteString("  ")
+	}
+
 	b.WriteString(fgGray)
-	pctStr := fmt.Sprintf("%.1f%%", s.ContextPct)
-	b.WriteString(pctStr)
+	b.WriteString(fmt.Sprintf("%.1f%%", s.ContextPct))
+	if s.WarnContext {
+		b.WriteString(" ⚠")
+	}
 	b.WriteString(reset)
+
+	if s.ToolCalls > 0 || s.ToolErrors > 0 {
+		b.WriteString("  ")
+		b.WriteString(dim)
+		if s.ToolErrors > 0 {
+			b.WriteString(fmt.Sprintf("%d tools (%d err)", s.ToolCalls, s.ToolErrors))
+		} else {
+			b.WriteString(fmt.Sprintf("%d tools", s.ToolCalls))
+		}
+		b.WriteString(reset)
+	} else if s.CallCount > 0 {
+		b.WriteString("  ")
+		b.WriteString(dim)
+		b.WriteString(fmt.Sprintf("%d calls", s.CallCount))
+		b.WriteString(reset)
+	}
+
 	if s.Hint != "" {
 		b.WriteString("  ")
 		b.WriteString(dim)
@@ -111,7 +168,6 @@ func shortenPath(p string, n int) string {
 }
 
 func homeDir() string {
-	// Avoid os.UserHomeDir() to keep this pure for tests.
 	for _, env := range []string{"HOME", "USERPROFILE"} {
 		if v := getenv(env); v != "" {
 			return v

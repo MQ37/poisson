@@ -39,7 +39,7 @@ func (h v2CmdHost) SessionID() string      { return h.t.sessionID }
 func (h v2CmdHost) SetSessionID(id string) { h.t.sessionID = id; h.t.status.SessionID = id }
 func (h v2CmdHost) Out(style LineStyle, s string) {
 	h.t.scroll.appendRaw(style, s)
-	h.t.dirty.Store(true)
+	h.t.markScrollDirty()
 }
 
 // cmdNew creates a new session and switches the agent to it.

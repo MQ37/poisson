@@ -39,7 +39,12 @@ type tuiV2 struct {
 	scroll *scrollback
 	editor *editor
 	status StatusSnapshot
-	dirty  atomic.Bool
+	dirty  dirtyTracker
+
+	renderFrame    int
+	activeTools    int
+	lastInputRows  int
+	activeOverlay  overlay
 
 	// Lifecycle.
 	stopped atomic.Bool
@@ -81,9 +86,17 @@ func newTUIv2(a *agent.Agent, sessionID string, outputChan chan agent.OutputEven
 		editor:         newEditor(),
 		history:        []string{},
 		histIdx:        -1,
-		status:         StatusSnapshot{SessionID: sessionID, Cwd: cwdOf(), Model: modelLabel(a)},
+		status: StatusSnapshot{
+			SessionID:  sessionID,
+			Cwd:        cwdOf(),
+			Model:      modelLabel(a),
+			ShowTokens: true,
+			ShowCost:   true,
+		},
+		dirty:          newDirtyTracker(),
 		inputRows:      3,
 		statusRows:     2,
+		lastInputRows:  3,
 		done:           make(chan struct{}),
 		approvalAnswer: make(chan bool),
 	}
@@ -139,9 +152,10 @@ func (t *tuiV2) Run() error {
 	stop := make(chan struct{})
 
 	// Initial paint before starting goroutines so wrapWidth is set.
-	t.render()
+	t.dirty.markFull()
+	t.paint(t.dirty.consume())
 
-	// Render goroutine: 30fps redraw on dirty.
+	// Render goroutine: 30fps redraw on dirty; animates spinners while busy.
 	renderDone := make(chan struct{})
 	go func() {
 		defer func() {
@@ -157,8 +171,16 @@ func (t *tuiV2) Run() error {
 			case <-stop:
 				return
 			case <-tick.C:
-				if t.dirty.Swap(false) {
-					t.render()
+				t.mu.Lock()
+				animate := needsSpinner(t.status.Thinking, t.activeTools)
+				t.mu.Unlock()
+				if animate {
+					t.renderFrame++
+					t.markSpinnerTick()
+				}
+				snap := t.dirty.consume()
+				if snap.any() {
+					t.paint(snap)
 				}
 			}
 		}
@@ -183,14 +205,10 @@ func (t *tuiV2) Run() error {
 			// This avoids the race where Approve and the input goroutine
 			// both read from stdin.
 			if t.approving.Load() {
-				allowed := false
-				for _, b := range buf[:n] {
-					if b == 'a' || b == 'A' || b == 'y' || b == 'Y' {
-						allowed = true
-						break
-					}
+				allowed, ok := approvalKeyAllowed(buf[:n])
+				if ok {
+					t.approvalAnswer <- allowed
 				}
-				t.approvalAnswer <- allowed
 				continue
 			}
 			quit, err := t.feed(decodeKittyKeys(buf[:n]))
@@ -216,8 +234,10 @@ func (t *tuiV2) Run() error {
 				t.output = nil
 				continue
 			}
+			t.mu.Lock()
 			t.handleEvent(ev)
-			t.dirty.Store(true)
+			t.markAfterEvent(ev)
+			t.mu.Unlock()
 		}
 	}
 }
@@ -248,7 +268,7 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 				cancel()
 				t.lastCtrlC = time.Now()
 				t.status.Hint = "cancelled — Ctrl+C again to exit"
-				t.dirty.Store(true)
+				t.dirty.markStatus()
 			}
 		}
 		return false, nil
@@ -264,12 +284,12 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 	// Scrollback navigation.
 	if indexOf(data, []byte("\x1b[5~")) >= 0 { // PageUp
 		t.scroll.scrollUp(t.scrollRows, t.scrollRows)
-		t.dirty.Store(true)
+		t.markScrollDirty()
 		return false, nil
 	}
 	if indexOf(data, []byte("\x1b[6~")) >= 0 { // PageDown
 		t.scroll.scrollDown(t.scrollRows)
-		t.dirty.Store(true)
+		t.markScrollDirty()
 		return false, nil
 	}
 
@@ -279,7 +299,7 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 	for _, b := range data {
 		if b == 9 {
 			t.handleTab()
-			t.dirty.Store(true)
+			t.markInputDirty()
 		}
 	}
 
@@ -287,7 +307,7 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 	if !t.completion.empty() && t.completion.idx >= 0 && containsSubmitKey(data) {
 		t.applyCompletion(t.completion.cands[t.completion.idx])
 		t.completion = nil
-		t.dirty.Store(true)
+		t.markInputDirty()
 		return false, nil
 	}
 
@@ -296,7 +316,7 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		if b == 27 {
 			if t.completion != nil && !t.completion.empty() && !hasCSI(data) {
 				t.completion = nil
-				t.dirty.Store(true)
+				t.markInputDirty()
 				return false, nil
 			}
 		}
@@ -309,11 +329,11 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 				switch data[i+2] {
 				case 'A':
 					t.completion.cycle(-1)
-					t.dirty.Store(true)
+					t.markInputDirty()
 					return false, nil
 				case 'B':
 					t.completion.cycle(+1)
-					t.dirty.Store(true)
+					t.markInputDirty()
 					return false, nil
 				}
 			}
@@ -325,7 +345,7 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		if t.editor.text() != "" {
 			t.editor.setText("")
 			t.completion = nil
-			t.dirty.Store(true)
+			t.markInputDirty()
 		} else {
 			now := time.Now()
 			if !t.lastCtrlC.IsZero() && now.Sub(t.lastCtrlC) <= 2*time.Second {
@@ -333,7 +353,7 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 			}
 			t.lastCtrlC = now
 			t.status.Hint = "Ctrl+C again to exit"
-			t.dirty.Store(true)
+			t.dirty.markStatus()
 		}
 		return false, nil
 	}
@@ -343,12 +363,12 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		for _, b := range data {
 			if b == 16 {
 				t.navigateHistory(-1)
-				t.dirty.Store(true)
+				t.markInputDirty()
 				return false, nil
 			}
 			if b == 14 {
 				t.navigateHistory(1)
-				t.dirty.Store(true)
+				t.markInputDirty()
 				return false, nil
 			}
 		}
@@ -370,14 +390,14 @@ func (t *tuiV2) processEditor(data []byte) (bool, error) {
 			return false, nil
 		}
 		t.refreshCompletion()
-		t.dirty.Store(true)
+		t.markInputDirty()
 		return false, nil
 	}
 	if quit {
 		return true, nil
 	}
 	t.refreshCompletion()
-	t.dirty.Store(true)
+	t.markInputDirty()
 	return false, nil
 }
 
@@ -577,7 +597,8 @@ func (t *tuiV2) submit(text string) error {
 	// loop drains output events.
 	t.status.Thinking = true
 	t.status.Hint = ""
-	t.dirty.Store(true)
+	t.markScrollDirty()
+	t.dirty.markStatus()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelMu.Lock()
@@ -592,7 +613,7 @@ func (t *tuiV2) submit(text string) error {
 			cancel()
 			t.mu.Lock()
 			t.status.Thinking = false
-			t.dirty.Store(true)
+			t.dirty.markStatus()
 			t.mu.Unlock()
 			if r := recover(); r != nil {
 				t.mu.Lock()
@@ -607,9 +628,8 @@ func (t *tuiV2) submit(text string) error {
 	return nil
 }
 
+// handleEvent appends agent output to the scrollback. Caller must hold t.mu.
 func (t *tuiV2) handleEvent(ev agent.OutputEvent) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	switch ev.Type {
 	case agent.OutputText:
 		t.scroll.append(StyledLine{Style: styleAssistant, Text: ev.Text})
@@ -617,7 +637,8 @@ func (t *tuiV2) handleEvent(ev agent.OutputEvent) {
 		t.scroll.append(StyledLine{Style: styleThinking, Text: ev.Text})
 	case agent.OutputToolStart:
 		var b strings.Builder
-		b.WriteString(fmt.Sprintf("\n  [%s] %s\n  ⠋ working...", ev.ToolName, toolInputPreview(ev.ToolName, ev.ToolInput)))
+		b.WriteString(fmt.Sprintf("\n  [%s] %s\n  %s working...", ev.ToolName,
+			toolInputPreview(ev.ToolName, ev.ToolInput), spinnerChar(t.renderFrame)))
 		t.scroll.appendRaw(styleToolStart, b.String())
 	case agent.OutputToolResult:
 		var b strings.Builder
@@ -628,17 +649,13 @@ func (t *tuiV2) handleEvent(ev agent.OutputEvent) {
 		}
 		t.scroll.appendRaw(styleToolResult, b.String())
 	case agent.OutputApproval:
-		t.scroll.appendRaw(styleApproval, fmt.Sprintf("\n  ⚠ approval needed for: %s", ev.ToolName))
+		// Approval UI is shown via activeOverlay in Approve().
 	case agent.OutputError:
 		t.scroll.appendRaw(styleError, "error: "+ev.Text)
 	case agent.OutputCompacting:
 		t.scroll.appendRaw(styleCompacting, "  compacting context...")
 	case agent.OutputStatus:
-		t.status.ContextPct = ev.ContextPct
-		t.status.ContextTokens = ev.ContextTokens
-		t.status.ContextWindow = ev.ContextWindow
-		t.status.Cost = ev.Cost
-		t.status.Model = ev.Model
+		// applied in markAfterEvent
 	}
 }
 
@@ -652,32 +669,26 @@ func (t *tuiV2) Approve(command, description string) bool {
 	t.approving.Store(true)
 	defer t.approving.Store(false)
 
-	// Render the prompt into the scrollback so the user sees it persistently.
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("\n⚠ approval required\n  $ %s\n", command))
-	if description != "" {
-		b.WriteString("  " + description + "\n")
-	}
-	b.WriteString("  [a]llow  [d]eny: ")
 	t.mu.Lock()
-	t.scroll.appendRaw(styleApproval, b.String())
-	t.dirty.Store(true)
+	t.activeOverlay = newApprovalOverlay(command, description)
+	t.dirty.markFull()
 	t.mu.Unlock()
-	t.render()
+	t.paint(t.dirty.consume())
 
 	var allowed bool
 	select {
 	case allowed = <-t.approvalAnswer:
 	case <-t.done:
+		t.mu.Lock()
+		t.activeOverlay = nil
+		t.mu.Unlock()
 		return false
 	}
+
 	t.mu.Lock()
-	if allowed {
-		t.scroll.appendRaw(styleSystem, "  allow")
-	} else {
-		t.scroll.appendRaw(styleSystem, "  deny")
-	}
-	t.dirty.Store(true)
+	t.activeOverlay = nil
+	t.scroll.appendRaw(styleSystem, formatApprovalResult(allowed))
+	t.markScrollDirty()
 	t.mu.Unlock()
 	return allowed
 }
@@ -746,7 +757,7 @@ func (t *tuiV2) installResize() {
 					return
 				}
 				t.recomputeLayout()
-				t.dirty.Store(true)
+				t.markFullDirty()
 				if t.done != nil {
 					select {
 					case <-t.done:
@@ -757,133 +768,6 @@ func (t *tuiV2) installResize() {
 			}
 		}
 	}()
-}
-
-// --- Rendering ---
-
-func (t *tuiV2) render() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	// Keep the status bar's model label in sync with the agent (it can change
-	// via /model between prompts, when no OutputStatus event fires).
-	t.status.Model = modelLabel(t.agent)
-
-	wrapWidth := t.cols - 1
-	if wrapWidth < 1 {
-		wrapWidth = 1
-	}
-	t.editor.wrapWidth = wrapWidth
-	wantedInput := t.inputHeight(wrapWidth)
-	t.inputRows = wantedInput
-	t.scrollRows = t.rows - t.inputRows - t.statusRows
-	if t.scrollRows < 3 {
-		t.scrollRows = 3
-	}
-	inputTop := t.scrollRows + 1
-
-	var b strings.Builder
-
-	// Scrollback region: rows 1..scrollRows.
-	visible := t.scroll.visible(t.scrollRows, t.cols)
-	startRow := 1
-	for i, line := range visible {
-		b.WriteString(cup(startRow+i, 1))
-		b.WriteString(clearLine())
-		b.WriteString(truncateToWidth(line.Text, t.cols))
-	}
-	for i := len(visible); i < t.scrollRows; i++ {
-		b.WriteString(cup(startRow+i, 1))
-		b.WriteString(clearLine())
-	}
-
-	// Header row: model + effort + session.
-	b.WriteString(cup(inputTop, 1))
-	b.WriteString(clearLine())
-	if header := t.renderInputHeader(); header != "" {
-		b.WriteString(header)
-	} else {
-		// No header content; still draw the separator directly below.
-	}
-
-	// Thin separator between header and body.
-	b.WriteString(cup(inputTop+1, 1))
-	b.WriteString(clearLine())
-	b.WriteString(dim + strings.Repeat("─", t.cols) + reset)
-
-	// Body rows: wrapped input lines. If the input is taller than the visible
-	// body, scroll vertically so the cursor row stays on screen.
-	bodyRows := t.inputRows - 3
-	if bodyRows < 1 {
-		bodyRows = 1
-	}
-	t.editor.wrapWidth = wrapWidth
-	screenLines := wrapLines(t.editor.lines, wrapWidth)
-	sr, sc := screenCursor(t.editor, wrapWidth)
-	firstRow := 0
-	if sr >= bodyRows {
-		firstRow = sr - bodyRows + 1
-	}
-	for i := 0; i < bodyRows; i++ {
-		lineIdx := firstRow + i
-		b.WriteString(cup(inputTop+2+i, 1))
-		b.WriteString(clearLine())
-		if lineIdx < len(screenLines) {
-			b.WriteString(t.renderInputScreenRow(lineIdx, screenLines, sr, sc))
-		}
-	}
-	hintRow := inputTop + 2 + bodyRows
-	b.WriteString(cup(hintRow, 1))
-	b.WriteString(clearLine())
-	b.WriteString(t.renderHintLine())
-	for r := hintRow + 1; r <= t.rows-t.statusRows; r++ {
-		b.WriteString(cup(r, 1))
-		b.WriteString(clearLine())
-	}
-
-	// Completion dropdown overlays the bottom of the scrollback region. Never
-	// draw more rows than the scrollback has, or it clobbers the input/status.
-	if c := t.completion; c != nil && !c.empty() {
-		lines := strings.Split(strings.TrimRight(t.renderCompletion(c), "\n"), "\n")
-		if len(lines) > t.scrollRows {
-			// Keep the header + the last (scrollRows-1) candidate rows.
-			lines = append(lines[:1], lines[len(lines)-(t.scrollRows-1):]...)
-		}
-		anchor := t.scrollRows - len(lines) + 1
-		if anchor < 1 {
-			anchor = 1
-		}
-		for i, line := range lines {
-			row := anchor + i
-			if row > t.scrollRows {
-				break
-			}
-			b.WriteString(cup(row, 1))
-			b.WriteString(clearLine())
-			b.WriteString(truncateToWidth(line, t.cols))
-		}
-	}
-
-	// Status region: bottom statusRows rows.
-	statusTop := t.rows - t.statusRows + 1
-	b.WriteString(cup(statusTop, 1))
-	b.WriteString(clearLine())
-	b.WriteString(t.status.Render(t.cols))
-	b.WriteString(cup(statusTop+t.statusRows, 1))
-	b.WriteString(clearLine())
-
-	// Cursor placement for the input editor (account for vertical input scroll).
-	bodyStart := inputTop + 2
-	visRow := sr - firstRow
-	if visRow < 0 {
-		visRow = 0
-	}
-	if visRow >= bodyRows {
-		visRow = bodyRows - 1
-	}
-	b.WriteString(cup(bodyStart+visRow, 2+sc))
-
-	t.writeRaw(b.String())
 }
 
 func (t *tuiV2) renderCompletion(c *completion) string {
@@ -974,7 +858,7 @@ func (t *tuiV2) renderHintLine() string {
 // t.mu (e.g. feed/submit/processEditor, which run under the lock).
 func (t *tuiV2) appendErrorLocked(err error) {
 	t.scroll.appendRaw(styleError, "error: "+err.Error())
-	t.dirty.Store(true)
+	t.markScrollDirty()
 }
 
 // appendError writes an error to the scrollback, taking t.mu. Call only when
@@ -1002,11 +886,11 @@ func (t *tuiV2) handleSlash(cmd string) error {
 		return errQuitSentinel
 	case "/clear":
 		t.scroll = newScrollback(8192)
-		t.dirty.Store(true)
+		t.markFullDirty()
 		return nil
 	case "/help", "/h", "/?":
 		t.scroll.appendRaw(styleSystem, renderHelp())
-		t.dirty.Store(true)
+		t.markScrollDirty()
 		return nil
 	case "/new":
 		return cmdNew(h)
@@ -1023,7 +907,7 @@ func (t *tuiV2) handleSlash(cmd string) error {
 		return cmdUndo(h)
 	case "/compact":
 		t.scroll.appendRaw(styleSystem, "/compact — manual compaction not yet available (auto-compaction handles this)")
-		t.dirty.Store(true)
+		t.markScrollDirty()
 		return nil
 	case "/model":
 		return cmdModel(h, parts[1:])
@@ -1041,7 +925,7 @@ func (t *tuiV2) handleSlash(cmd string) error {
 		return nil
 	default:
 		t.scroll.appendRaw(styleSystem, "unknown command: "+parts[0]+" (type /help)")
-		t.dirty.Store(true)
+		t.markScrollDirty()
 		return nil
 	}
 }

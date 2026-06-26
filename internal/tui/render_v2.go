@@ -1,0 +1,334 @@
+package tui
+
+import (
+	"strings"
+
+	"poisson/internal/agent"
+)
+
+const toolWorkingMarker = " working..."
+
+// layoutSnapshot is the geometry computed once per paint pass.
+type layoutSnapshot struct {
+	wrapWidth int
+	inputTop  int
+	bodyRows  int
+	bodyStart int
+	hintRow   int
+	statusTop int
+	firstRow  int
+	sr        int
+	sc        int
+	screenLines []string
+	visible   []StyledLine
+}
+
+func (t *tuiV2) prepareLayout() layoutSnapshot {
+	wrapWidth := t.cols - 1
+	if wrapWidth < 1 {
+		wrapWidth = 1
+	}
+	t.editor.wrapWidth = wrapWidth
+	wantedInput := t.inputHeight(wrapWidth)
+	if wantedInput != t.lastInputRows {
+		t.lastInputRows = wantedInput
+		t.dirty.markFull()
+	}
+	t.inputRows = wantedInput
+	t.scrollRows = t.rows - t.inputRows - t.statusRows
+	if t.scrollRows < 3 {
+		t.scrollRows = 3
+	}
+	inputTop := t.scrollRows + 1
+	bodyRows := t.inputRows - 3
+	if bodyRows < 1 {
+		bodyRows = 1
+	}
+	screenLines := wrapLines(t.editor.lines, wrapWidth)
+	sr, sc := screenCursor(t.editor, wrapWidth)
+	firstRow := 0
+	if sr >= bodyRows {
+		firstRow = sr - bodyRows + 1
+	}
+	return layoutSnapshot{
+		wrapWidth:     wrapWidth,
+		inputTop:      inputTop,
+		bodyRows:      bodyRows,
+		bodyStart:     inputTop + 2,
+		hintRow:       inputTop + 2 + bodyRows,
+		statusTop:     t.rows - t.statusRows + 1,
+		firstRow:      firstRow,
+		sr:            sr,
+		sc:            sc,
+		screenLines:   screenLines,
+		visible:       t.scroll.visible(t.scrollRows, t.cols),
+	}
+}
+
+func (t *tuiV2) paint(snap dirtySnapshot) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.status.Model = modelLabel(t.agent)
+	if t.status.Branch == "" {
+		t.status.Branch = gitBranch(t.status.Cwd)
+	}
+	t.status.SpinnerFrame = t.renderFrame
+
+	lay := t.prepareLayout()
+	if snap.full {
+		t.paintFull(lay)
+	} else {
+		t.paintPartial(snap, lay)
+	}
+}
+
+func (t *tuiV2) paintFull(lay layoutSnapshot) {
+	var b strings.Builder
+	t.paintScrollRegion(&b, lay, nil)
+	t.paintInputRegion(&b, lay)
+	t.paintCompletionOverlay(&b, lay)
+	t.paintOverlay(&b, lay)
+	t.paintStatusRegion(&b, lay)
+	t.paintCursor(&b, lay)
+	t.writeRaw(b.String())
+}
+
+func (t *tuiV2) paintPartial(snap dirtySnapshot, lay layoutSnapshot) {
+	var b strings.Builder
+	if len(snap.scroll) > 0 {
+		t.paintScrollRegion(&b, lay, snap.scroll)
+	}
+	if snap.input || snap.overlay {
+		t.paintInputRegion(&b, lay)
+		t.paintCompletionOverlay(&b, lay)
+	}
+	if snap.overlay && t.activeOverlay != nil {
+		t.paintOverlay(&b, lay)
+	}
+	if snap.status {
+		t.paintStatusRegion(&b, lay)
+	}
+	if snap.cursor || snap.input || len(snap.scroll) > 0 || snap.status || snap.overlay {
+		t.paintCursor(&b, lay)
+	}
+	if b.Len() > 0 {
+		t.writeRaw(b.String())
+	}
+}
+
+func (t *tuiV2) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []int) {
+	startRow := 1
+	paintAll := only == nil
+	onlySet := map[int]struct{}{}
+	if !paintAll {
+		for _, r := range only {
+			onlySet[r] = struct{}{}
+		}
+	}
+	for i := 0; i < t.scrollRows; i++ {
+		if !paintAll {
+			if _, ok := onlySet[i]; !ok {
+				continue
+			}
+		}
+		b.WriteString(cup(startRow+i, 1))
+		b.WriteString(clearLine())
+		if i < len(lay.visible) {
+			text := lay.visible[i].Text
+			if strings.Contains(stripANSI(text), toolWorkingMarker) {
+				text = animateToolLine(text, t.renderFrame)
+			}
+			b.WriteString(truncateToWidth(text, t.cols))
+		}
+	}
+}
+
+func animateToolLine(text string, frame int) string {
+	plain := stripANSI(text)
+	i := strings.LastIndex(plain, toolWorkingMarker)
+	if i <= 0 {
+		return text
+	}
+	spin := spinnerChar(frame)
+	// Preserve ANSI prefix from original text before the spinner rune.
+	prefixPlain := plain[:i]
+	if !strings.HasSuffix(prefixPlain, " ") && i > 0 {
+		return text
+	}
+	// Rebuild: keep style prefix, swap spinner char before marker.
+	styleEnd := len(text) - len(plain)
+	head := text[:styleEnd]
+	rest := plain[i:]
+	return head + spin + rest
+}
+
+func (t *tuiV2) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
+	b.WriteString(cup(lay.inputTop, 1))
+	b.WriteString(clearLine())
+	if header := t.renderInputHeader(); header != "" {
+		b.WriteString(header)
+	}
+
+	b.WriteString(cup(lay.inputTop+1, 1))
+	b.WriteString(clearLine())
+	b.WriteString(dim + strings.Repeat("─", t.cols) + reset)
+
+	for i := 0; i < lay.bodyRows; i++ {
+		lineIdx := lay.firstRow + i
+		b.WriteString(cup(lay.inputTop+2+i, 1))
+		b.WriteString(clearLine())
+		if lineIdx < len(lay.screenLines) {
+			b.WriteString(t.renderInputScreenRow(lineIdx, lay.screenLines, lay.sr, lay.sc))
+		}
+	}
+
+	b.WriteString(cup(lay.hintRow, 1))
+	b.WriteString(clearLine())
+	b.WriteString(t.renderHintLine())
+
+	for r := lay.hintRow + 1; r <= t.rows-t.statusRows; r++ {
+		b.WriteString(cup(r, 1))
+		b.WriteString(clearLine())
+	}
+}
+
+func (t *tuiV2) paintCompletionOverlay(b *strings.Builder, lay layoutSnapshot) {
+	c := t.completion
+	if c == nil || c.empty() {
+		return
+	}
+	lines := strings.Split(strings.TrimRight(t.renderCompletion(c), "\n"), "\n")
+	if len(lines) > t.scrollRows {
+		lines = append(lines[:1], lines[len(lines)-(t.scrollRows-1):]...)
+	}
+	anchor := t.scrollRows - len(lines) + 1
+	if anchor < 1 {
+		anchor = 1
+	}
+	for i, line := range lines {
+		row := anchor + i
+		if row > t.scrollRows {
+			break
+		}
+		b.WriteString(cup(row, 1))
+		b.WriteString(clearLine())
+		b.WriteString(truncateToWidth(line, t.cols))
+	}
+}
+
+func (t *tuiV2) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
+	if t.activeOverlay == nil {
+		return
+	}
+	anchor, lines := t.activeOverlay.render(t.scrollRows, t.cols)
+	for i, line := range lines {
+		row := anchor + i
+		if row < 1 || row > t.scrollRows {
+			continue
+		}
+		b.WriteString(cup(row, 1))
+		b.WriteString(clearLine())
+		b.WriteString(truncateToWidth(line, t.cols))
+	}
+}
+
+func (t *tuiV2) paintStatusRegion(b *strings.Builder, lay layoutSnapshot) {
+	b.WriteString(cup(lay.statusTop, 1))
+	b.WriteString(clearLine())
+	b.WriteString(t.status.Render(t.cols))
+	b.WriteString(cup(lay.statusTop+t.statusRows, 1))
+	b.WriteString(clearLine())
+}
+
+func (t *tuiV2) paintCursor(b *strings.Builder, lay layoutSnapshot) {
+	visRow := lay.sr - lay.firstRow
+	if visRow < 0 {
+		visRow = 0
+	}
+	if visRow >= lay.bodyRows {
+		visRow = lay.bodyRows - 1
+	}
+	b.WriteString(cup(lay.bodyStart+visRow, 2+lay.sc))
+}
+
+func (t *tuiV2) toolSpinnerRows(lay layoutSnapshot) []int {
+	var rows []int
+	for i, ln := range lay.visible {
+		if strings.Contains(stripANSI(ln.Text), toolWorkingMarker) {
+			rows = append(rows, i)
+		}
+	}
+	return rows
+}
+
+func (t *tuiV2) markAfterEvent(ev agent.OutputEvent) {
+	wrapWidth := t.cols - 1
+	if wrapWidth < 1 {
+		wrapWidth = 1
+	}
+	switch ev.Type {
+	case agent.OutputText, agent.OutputThinking:
+		if rows := t.scroll.streamViewportDirty(t.scrollRows, wrapWidth); len(rows) > 0 {
+			t.dirty.markScrollRows(rows...)
+		}
+	case agent.OutputStatus:
+		t.applyStatus(ev)
+		t.dirty.markStatus()
+	case agent.OutputToolStart:
+		t.activeTools++
+		t.dirty.markScrollAll(t.scrollRows)
+	case agent.OutputToolResult:
+		if t.activeTools > 0 {
+			t.activeTools--
+		}
+		t.dirty.markScrollAll(t.scrollRows)
+	default:
+		t.dirty.markScrollAll(t.scrollRows)
+	}
+}
+
+func (t *tuiV2) applyStatus(ev agent.OutputEvent) {
+	t.status.ContextPct = ev.ContextPct
+	t.status.ContextTokens = ev.ContextTokens
+	t.status.ContextWindow = ev.ContextWindow
+	t.status.Cost = ev.Cost
+	t.status.Model = ev.Model
+	t.status.OutputTokens = ev.OutputTokens
+	t.status.CacheRead = ev.CacheReadTokens
+	t.status.CacheWrite = ev.CacheWriteTokens
+	t.status.CallCount = ev.CallCount
+	t.status.ToolCalls = ev.ToolCalls
+	t.status.ToolErrors = ev.ToolErrors
+	t.status.Effort = ev.Effort
+	t.status.WarnContext = ev.ContextPct > 75.0
+}
+
+func (t *tuiV2) markScrollDirty() {
+	h := t.scrollRows
+	if h < 1 {
+		h = 1
+	}
+	t.dirty.markScrollAll(h)
+}
+
+func (t *tuiV2) markFullDirty() {
+	t.dirty.markFull()
+}
+
+func (t *tuiV2) markInputDirty() {
+	t.dirty.markInput()
+}
+
+func (t *tuiV2) markSpinnerTick() {
+	t.mu.Lock()
+	lay := t.prepareLayout()
+	rows := t.toolSpinnerRows(lay)
+	t.mu.Unlock()
+	if len(rows) > 0 {
+		t.dirty.markScrollRows(rows...)
+	} else {
+		t.dirty.markStatus()
+	}
+}
+

@@ -108,16 +108,23 @@ func (a *Agent) ContextWindow() int {
 func (a *Agent) UpdateStatus() {
 	used, total := a.ContextTokens()
 	pct := a.ContextPercent()
-	cost, _ := a.store.GetSessionCost(a.sessionID)
+	breakdown, _ := a.store.GetSessionTokenBreakdown(a.sessionID)
 	model := a.currentModel()
 
 	a.sendEvent(OutputEvent{
-		Type:          OutputStatus,
-		ContextPct:    pct,
-		ContextTokens: used,
-		ContextWindow: total,
-		Cost:          cost,
-		Model:         model,
+		Type:             OutputStatus,
+		ContextPct:       pct,
+		ContextTokens:    used,
+		ContextWindow:    total,
+		Cost:             breakdown.TotalCost,
+		Model:            model,
+		OutputTokens:     breakdown.OutputTokens,
+		CacheReadTokens:  breakdown.CacheReadTokens,
+		CacheWriteTokens: breakdown.CacheWriteTokens,
+		CallCount:        breakdown.CallCount,
+		ToolCalls:        a.sessionToolCalls,
+		ToolErrors:       a.sessionToolErrors,
+		Effort:           a.effort,
 	})
 }
 

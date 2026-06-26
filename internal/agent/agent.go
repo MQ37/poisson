@@ -45,6 +45,13 @@ type OutputEvent struct {
 	ContextWindow     int             // status
 	Cost              float64         // status
 	Model             string          // status
+	OutputTokens      int             // status
+	CacheReadTokens   int             // status
+	CacheWriteTokens  int             // status
+	CallCount         int             // status
+	ToolCalls         int             // status
+	ToolErrors        int             // status
+	Effort            string          // status
 }
 
 // Agent runs the turn loop for a single session.
@@ -58,6 +65,10 @@ type Agent struct {
 	approvalFn func(command, description, workdir string) bool
 	model      string
 	effort     string
+
+	// session tool counters for the status bar (reset on SwitchSession).
+	sessionToolCalls  int
+	sessionToolErrors int
 
 	// pendingResults holds the text of tool results appended in the current
 	// iteration, used by ShouldCompact to estimate new tokens.
@@ -95,7 +106,11 @@ func (a *Agent) Store() *store.Store { return a.store }
 func (a *Agent) SessionID() string { return a.sessionID }
 
 // SwitchSession changes the active session.
-func (a *Agent) SwitchSession(sessionID string) { a.sessionID = sessionID }
+func (a *Agent) SwitchSession(sessionID string) {
+	a.sessionID = sessionID
+	a.sessionToolCalls = 0
+	a.sessionToolErrors = 0
+}
 
 // SetProvider swaps the provider and persists it on the active session.
 func (a *Agent) SetProvider(p provider.Provider) {
@@ -367,6 +382,11 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			}
 
 			a.pendingResults = append(a.pendingResults, resultText)
+
+			a.sessionToolCalls++
+			if result.Error != "" {
+				a.sessionToolErrors++
+			}
 
 			a.sendEvent(OutputEvent{
 				Type:              OutputToolResult,

@@ -65,7 +65,10 @@ func TestStatusRenderUsesCRLF(t *testing.T) {
 		Model:         "ollama/glm-5.2:cloud",
 		ContextPct:    12.5,
 		ContextTokens: 1234,
+		OutputTokens:  56,
 		Cost:          0.0012,
+		ShowTokens:    true,
+		ShowCost:      true,
 	}
 	out := s.Render(80)
 	if !strings.Contains(out, "\r\n") {
@@ -125,6 +128,24 @@ func TestScrollbackNoEmbeddedNewline(t *testing.T) {
 		if strings.Contains(ln.Text, "\n") || strings.Contains(ln.Text, "\r") {
 			t.Errorf("line %d still contains a newline: %q", i, ln.Text)
 		}
+	}
+}
+
+func TestScrollbackStreamViewportDirtyPinned(t *testing.T) {
+	s := newScrollback(1024)
+	s.append(StyledLine{Style: styleAssistant, Text: "hello"})
+	rows := s.streamViewportDirty(10, 40)
+	if len(rows) != 1 || rows[0] != 0 {
+		t.Fatalf("first chunk dirty rows = %v, want [0]", rows)
+	}
+	s.append(StyledLine{Style: styleAssistant, Text: " world"})
+	rows = s.streamViewportDirty(10, 40)
+	if len(rows) != 1 || rows[0] != 0 {
+		t.Fatalf("merge dirty rows = %v, want [0]", rows)
+	}
+	s.scrollTop = 5
+	if got := s.streamViewportDirty(10, 40); got != nil {
+		t.Fatalf("scrolled up should not dirty viewport, got %v", got)
 	}
 }
 
