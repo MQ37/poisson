@@ -167,6 +167,25 @@ func TestSessionCRUD(t *testing.T) {
 	}
 }
 
+func TestListSessionsOrdersByUpdatedAt(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "old")
+	mustCreateSession(t, s, "recent")
+	if _, err := s.db.Exec(`UPDATE sessions SET created_at = 1, updated_at = 100 WHERE id = 'old'`); err != nil {
+		t.Fatalf("update old: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE sessions SET created_at = 2, updated_at = 200 WHERE id = 'recent'`); err != nil {
+		t.Fatalf("update recent: %v", err)
+	}
+	list, err := s.ListSessions(10, 0)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(list) < 2 || list[0].ID != "recent" {
+		t.Fatalf("session order = %+v, want recent first", list)
+	}
+}
+
 func TestSessionCompactionSummary(t *testing.T) {
 	s := newTestStore(t)
 	mustCreateSession(t, s, "sc")
@@ -452,7 +471,91 @@ func TestSearchFiltersSoftDeleted(t *testing.T) {
 	}
 }
 
+func TestSearchFiltersCompacted(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "compact-search")
+	if err := s.AppendMessage(&Message{SessionID: "compact-search", Role: "user", Content: textContent("compactterm old")}); err != nil {
+		t.Fatalf("AppendMessage old: %v", err)
+	}
+	if err := s.AppendMessage(&Message{SessionID: "compact-search", Role: "user", Content: textContent("compactterm new")}); err != nil {
+		t.Fatalf("AppendMessage new: %v", err)
+	}
+	if err := s.MarkCompacted("compact-search", 1); err != nil {
+		t.Fatalf("MarkCompacted: %v", err)
+	}
+	res, err := s.Search("compactterm", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("expected 1 active result, got %d", len(res))
+	}
+	var content string
+	if err := s.db.QueryRow(`SELECT content FROM messages WHERE id = ?`, res[0].MessageID).Scan(&content); err != nil {
+		t.Fatalf("query result: %v", err)
+	}
+	if !contains(content, "new") {
+		t.Fatalf("search returned compacted/old message: %s", content)
+	}
+}
+
 // ---------- API calls ----------
+
+func TestAPICallMigrationMarksMinimaxZeroInputUnknown(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mustCreateSession(t, s, "minimax-old")
+	if err := s.RecordAPICall(&APICall{SessionID: "minimax-old", Seq: 1, Model: "minimax-m3:cloud", OutputTokens: 62}); err != nil {
+		t.Fatalf("RecordAPICall: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE api_calls SET input_tokens_known = 1 WHERE session_id = 'minimax-old'`); err != nil {
+		t.Fatalf("force known: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	last, err := s.GetLastAPICall("minimax-old")
+	if err != nil {
+		t.Fatalf("GetLastAPICall: %v", err)
+	}
+	if !last.InputTokensUnknown {
+		t.Fatalf("minimax zero input row was not marked unknown: %+v", last)
+	}
+}
+
+func TestAPICallUnknownInputTokens(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "unknown-input")
+	if err := s.RecordAPICall(&APICall{SessionID: "unknown-input", Seq: 1, Model: "minimax-m3:cloud", InputTokensUnknown: true, OutputTokens: 62}); err != nil {
+		t.Fatalf("RecordAPICall unknown: %v", err)
+	}
+	if err := s.RecordAPICall(&APICall{SessionID: "unknown-input", Seq: 2, Model: "glm-5.2:cloud", InputTokens: 18, OutputTokens: 5}); err != nil {
+		t.Fatalf("RecordAPICall known: %v", err)
+	}
+	last, err := s.GetLastAPICall("unknown-input")
+	if err != nil {
+		t.Fatalf("GetLastAPICall: %v", err)
+	}
+	if last.InputTokensUnknown {
+		t.Fatalf("last call should have known input: %+v", last)
+	}
+	tb, err := s.GetSessionTokenBreakdown("unknown-input")
+	if err != nil {
+		t.Fatalf("GetSessionTokenBreakdown: %v", err)
+	}
+	if tb.InputTokens != 18 || tb.InputUnknownCalls != 1 || tb.OutputTokens != 67 || tb.CallCount != 2 {
+		t.Fatalf("breakdown = %+v", tb)
+	}
+}
 
 func TestAPICalls(t *testing.T) {
 	s := newTestStore(t)

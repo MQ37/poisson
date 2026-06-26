@@ -67,15 +67,13 @@ func (a *Agent) compact() error {
 	}
 
 	toSummarize := msgs[:summarizeCount]
-	keepCount := len(msgs) - summarizeCount
-	_ = keepCount
 
 	// 3. Build summarization request.
 	summarizationMsgs := make([]provider.Message, 0, len(toSummarize)+1)
 	for _, m := range toSummarize {
 		pm, err := messageToProvider(m)
 		if err != nil {
-			continue
+			return fmt.Errorf("convert message %s: %w", m.ID, err)
 		}
 		summarizationMsgs = append(summarizationMsgs, pm)
 	}
@@ -142,28 +140,34 @@ func (a *Agent) compact() error {
 	if usage != nil {
 		providerID := a.provider.ID()
 		cost := a.store.ComputeCost(providerID, compactionModel,
-			usage.InputTokens, usage.OutputTokens, 0, 0)
+			usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
 		call := &store.APICall{
-			ID:           generateID(),
-			SessionID:    a.sessionID,
-			Seq:          a.nextAPICallSeq(),
-			Model:        compactionModel,
-			InputTokens:  usage.InputTokens,
-			OutputTokens: usage.OutputTokens,
-			Cost:         cost,
-			CreatedAt:    time.Now().UnixMilli(),
+			SessionID:          a.sessionID,
+			Seq:                a.nextAPICallSeq(),
+			Model:              compactionModel,
+			InputTokens:        usage.InputTokens,
+			InputTokensUnknown: usage.InputTokensUnknown,
+			OutputTokens:       usage.OutputTokens,
+			CacheReadTokens:    usage.CacheReadTokens,
+			CacheWriteTokens:   usage.CacheWriteTokens,
+			Cost:               cost,
+			CreatedAt:          time.Now().Unix(),
 		}
-		a.store.RecordAPICall(call)
+		if err := a.store.RecordAPICall(call); err != nil {
+			return fmt.Errorf("record compaction api call: %w", err)
+		}
 	}
 
 	// 8. Record compaction row.
-	a.store.RecordCompaction(&store.Compaction{
+	if err := a.store.RecordCompaction(&store.Compaction{
 		SessionID:    a.sessionID,
 		MessageID:    nil, // nullable after undo
 		Summary:      summaryText,
 		TokensBefore: estimatedTokens,
-		CreatedAt:    time.Now().UnixMilli(),
-	})
+		CreatedAt:    time.Now().Unix(),
+	}); err != nil {
+		return fmt.Errorf("record compaction: %w", err)
+	}
 
 	// 9. Clear pending results.
 	a.pendingResults = nil
@@ -174,9 +178,4 @@ func (a *Agent) compact() error {
 // shouldCompact checks if compaction should trigger.
 func (a *Agent) shouldCompact() bool {
 	return a.ShouldCompact()
-}
-
-// generateID produces a timestamp-based ID.
-func generateID() string {
-	return fmt.Sprintf("call-%d", time.Now().UnixNano())
 }

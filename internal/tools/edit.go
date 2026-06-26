@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -66,28 +67,54 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 
 	path := resolvePath(t.cwd, in.Path)
 
+	info, err := os.Stat(path)
+	if err != nil {
+		return ToolResult{Error: "cannot stat file: " + err.Error()}, nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ToolResult{Error: "cannot read file: " + err.Error()}, nil
 	}
-	content := string(data)
+	original := string(data)
 
-	// Apply each edit, verifying uniqueness.
+	type replacement struct {
+		start int
+		end   int
+		text  string
+		idx   int
+	}
+	repls := make([]replacement, 0, len(in.Edits))
 	for i, e := range in.Edits {
 		if e.OldText == "" {
 			return ToolResult{Error: fmt.Sprintf("edit %d: oldText is empty", i)}, nil
 		}
-		count := strings.Count(content, e.OldText)
+		count := strings.Count(original, e.OldText)
 		if count == 0 {
 			return ToolResult{Error: fmt.Sprintf("edit %d: oldText not found in file", i)}, nil
 		}
 		if count > 1 {
 			return ToolResult{Error: fmt.Sprintf("edit %d: oldText is not unique (%d matches)", i, count)}, nil
 		}
-		content = strings.Replace(content, e.OldText, e.NewText, 1)
+		start := strings.Index(original, e.OldText)
+		repls = append(repls, replacement{start: start, end: start + len(e.OldText), text: e.NewText, idx: i})
+	}
+	sort.Slice(repls, func(i, j int) bool { return repls[i].start < repls[j].start })
+	for i := 1; i < len(repls); i++ {
+		if repls[i].start < repls[i-1].end {
+			return ToolResult{Error: fmt.Sprintf("edit %d overlaps edit %d", repls[i].idx, repls[i-1].idx)}, nil
+		}
 	}
 
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	var b strings.Builder
+	pos := 0
+	for _, r := range repls {
+		b.WriteString(original[pos:r.start])
+		b.WriteString(r.text)
+		pos = r.end
+	}
+	b.WriteString(original[pos:])
+
+	if err := os.WriteFile(path, []byte(b.String()), info.Mode().Perm()); err != nil {
 		return ToolResult{Error: "cannot write file: " + err.Error()}, nil
 	}
 

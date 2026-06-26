@@ -314,8 +314,14 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
-	var currentToolCall *ToolCall
-	toolInputBuffers := make(map[string]*bytes.Buffer)
+	toolCalls := make(map[int]*ToolCall)
+	toolInputBuffers := make(map[int]*bytes.Buffer)
+
+	// Anthropic reports input/cache tokens only in message_start; the final
+	// message_delta carries output_tokens. Capture the former here and combine
+	// at EventDone, otherwise input/cache tokens are recorded as 0 (breaking
+	// cost, context %%, and auto-compaction).
+	var startInput, startCacheRead, startCacheWrite int
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -352,8 +358,9 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 				} `json:"message"`
 			}
 			json.Unmarshal([]byte(data), &msg)
-			// We'll send usage with the done event, but store it.
-			// For now, emit nothing — usage comes with message_delta.
+			startInput = msg.Message.Usage.InputTokens
+			startCacheRead = msg.Message.Usage.CacheReadTokens
+			startCacheWrite = msg.Message.Usage.CacheWriteTokens
 
 		case "content_block_start":
 			var block struct {
@@ -368,15 +375,16 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 			json.Unmarshal([]byte(data), &block)
 			switch block.ContentBlock.Type {
 			case "tool_use":
-				currentToolCall = &ToolCall{
+				call := &ToolCall{
 					ID:   block.ContentBlock.ID,
 					Name: block.ContentBlock.Name,
 				}
-				toolInputBuffers[block.ContentBlock.ID] = &bytes.Buffer{}
+				toolCalls[block.Index] = call
+				toolInputBuffers[block.Index] = &bytes.Buffer{}
 				select {
 				case <-ctx.Done():
 					return
-				case ch <- StreamEvent{Type: EventToolUseStart, ToolCall: currentToolCall}:
+				case ch <- StreamEvent{Type: EventToolUseStart, ToolCall: call}:
 				}
 			case "redacted_thinking":
 				select {
@@ -424,25 +432,28 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 				case ch <- StreamEvent{Type: EventThinkingSignature, Text: sigDelta.Delta.Signature}:
 				}
 			case "input_json_delta":
-				if currentToolCall != nil {
-					if buf, ok := toolInputBuffers[currentToolCall.ID]; ok {
-						buf.WriteString(delta.Delta.PartialJSON)
-					}
+				if buf, ok := toolInputBuffers[delta.Index]; ok {
+					buf.WriteString(delta.Delta.PartialJSON)
 				}
 			}
 
 		case "content_block_stop":
-			if currentToolCall != nil {
-				if buf, ok := toolInputBuffers[currentToolCall.ID]; ok {
-					currentToolCall.Input = json.RawMessage(buf.Bytes())
-					delete(toolInputBuffers, currentToolCall.ID)
+			var stop struct {
+				Index int `json:"index"`
+			}
+			json.Unmarshal([]byte(data), &stop)
+			call := toolCalls[stop.Index]
+			if call != nil {
+				if buf, ok := toolInputBuffers[stop.Index]; ok {
+					call.Input = json.RawMessage(buf.Bytes())
+					delete(toolInputBuffers, stop.Index)
 				}
+				delete(toolCalls, stop.Index)
 				select {
 				case <-ctx.Done():
 					return
-				case ch <- StreamEvent{Type: EventToolUseStop, ToolCall: currentToolCall}:
+				case ch <- StreamEvent{Type: EventToolUseStop, ToolCall: call}:
 				}
-				currentToolCall = nil
 			}
 
 		case "message_delta":
@@ -455,18 +466,29 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 				} `json:"usage"`
 			}
 			json.Unmarshal([]byte(data), &msgDelta)
-			usage := &AnthropicUsage{
-				Usage: Usage{
-					InputTokens:  msgDelta.Usage.InputTokens,
-					OutputTokens: msgDelta.Usage.OutputTokens,
-				},
-				CacheReadTokens:  msgDelta.Usage.CacheReadTokens,
-				CacheWriteTokens: msgDelta.Usage.CacheWriteTokens,
+			// Combine message_start input/cache tokens with message_delta output.
+			inTok := msgDelta.Usage.InputTokens
+			if inTok == 0 {
+				inTok = startInput
+			}
+			cacheRead := msgDelta.Usage.CacheReadTokens
+			if cacheRead == 0 {
+				cacheRead = startCacheRead
+			}
+			cacheWrite := msgDelta.Usage.CacheWriteTokens
+			if cacheWrite == 0 {
+				cacheWrite = startCacheWrite
+			}
+			usage := &Usage{
+				InputTokens:      inTok,
+				OutputTokens:     msgDelta.Usage.OutputTokens,
+				CacheReadTokens:  cacheRead,
+				CacheWriteTokens: cacheWrite,
 			}
 			select {
 			case <-ctx.Done():
 				return
-			case ch <- StreamEvent{Type: EventDone, Usage: &usage.Usage}:
+			case ch <- StreamEvent{Type: EventDone, Usage: usage}:
 			}
 
 		case "message_stop":

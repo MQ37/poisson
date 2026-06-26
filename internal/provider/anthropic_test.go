@@ -219,6 +219,48 @@ func TestAnthropicStreamText(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamMergesStartAndDeltaUsage(t *testing.T) {
+	// Anthropic reports input/cache tokens in message_start, while
+	// message_delta often only contains output_tokens. Dropping message_start
+	// makes cost/context/compaction accounting read as zero input tokens.
+	sseResponse := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":123,\"output_tokens\":0,\"cache_read_input_tokens\":7,\"cache_creation_input_tokens\":11}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":9}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+	server := newFakeSSEServer(sseResponse)
+	defer server.Close()
+
+	cfg := &config.Config{Stealth: config.DefaultStealthConfig()}
+	authStore := auth.AuthStore{
+		"anthropic": {Type: "api_key", Key: "test-key"},
+	}
+	p := NewAnthropicProvider(authStore, cfg)
+	p.baseURL = server.URL
+
+	ch, err := p.Stream(context.Background(), &Request{
+		Model:     "claude-sonnet-4-20250514",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
+		MaxTokens: 100,
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	var done *Usage
+	for ev := range ch {
+		switch ev.Type {
+		case EventDone:
+			done = ev.Usage
+		case EventError:
+			t.Fatalf("error: %v", ev.Error)
+		}
+	}
+	if done == nil {
+		t.Fatal("no done event")
+	}
+	if done.InputTokens != 123 || done.OutputTokens != 9 || done.CacheReadTokens != 7 || done.CacheWriteTokens != 11 {
+		t.Fatalf("usage = %+v, want input=123 output=9 cache_read=7 cache_write=11", done)
+	}
+}
+
 func TestAnthropicStreamToolCall(t *testing.T) {
 	sseResponse := "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"read\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"main.go\\\"}\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":20,\"output_tokens\":10}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 
@@ -269,6 +311,74 @@ func TestAnthropicStreamToolCall(t *testing.T) {
 	}
 	if done == nil || done.InputTokens != 20 || done.OutputTokens != 10 {
 		t.Errorf("usage mismatch: %+v", done)
+	}
+}
+
+func TestAnthropicStreamInterleavedToolCalls(t *testing.T) {
+	sseResponse := `event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"read"}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_2","name":"write"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"b"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":".txt\"}"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":".txt\"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","usage":{"input_tokens":20,"output_tokens":10}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+`
+
+	server := newFakeSSEServer(sseResponse)
+	defer server.Close()
+
+	cfg := &config.Config{Stealth: config.DefaultStealthConfig()}
+	authStore := auth.AuthStore{"anthropic": {Type: "api_key", Key: "test-key"}}
+	p := NewAnthropicProvider(authStore, cfg)
+	p.baseURL = server.URL
+
+	ch, err := p.Stream(context.Background(), &Request{
+		Model:     "claude-sonnet-4-20250514",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "do tools"}}}},
+		MaxTokens: 100,
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	got := map[string]string{}
+	for ev := range ch {
+		switch ev.Type {
+		case EventToolUseStop:
+			var input map[string]string
+			if err := json.Unmarshal(ev.ToolCall.Input, &input); err != nil {
+				t.Fatalf("tool input %s: %v (%s)", ev.ToolCall.ID, err, ev.ToolCall.Input)
+			}
+			got[ev.ToolCall.ID] = input["path"]
+		case EventError:
+			t.Fatalf("error: %v", ev.Error)
+		}
+	}
+	if got["toolu_1"] != "a.txt" || got["toolu_2"] != "b.txt" {
+		t.Fatalf("tool inputs = %#v, want toolu_1=a.txt toolu_2=b.txt", got)
 	}
 }
 

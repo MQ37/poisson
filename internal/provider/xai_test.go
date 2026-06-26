@@ -216,6 +216,45 @@ func TestXAISSEParseToolCall(t *testing.T) {
 	}
 }
 
+func TestXAISSEParseInterleavedToolCalls(t *testing.T) {
+	p := NewXAIProvider(
+		auth.AuthStore{"xai": {Type: "oauth", Access: "tok", Expires: 9999999999999}},
+		config.DefaultConfig(),
+	)
+
+	sse := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":""}},{"index":1,"id":"call_2","type":"function","function":{"name":"write","arguments":""}}]},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"a"}},{"index":1,"function":{"arguments":"{\"path\":\"b"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":".txt\"}"}},{"index":1,"function":{"arguments":".txt\"}"}}]},"finish_reason":null}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":20,"completion_tokens":10}}
+
+data: [DONE]
+
+`
+
+	ch := make(chan StreamEvent, 64)
+	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+
+	got := map[string]string{}
+	for ev := range ch {
+		switch ev.Type {
+		case EventToolUseStop:
+			var input map[string]string
+			if err := json.Unmarshal(ev.ToolCall.Input, &input); err != nil {
+				t.Fatalf("tool input %s: %v (%s)", ev.ToolCall.ID, err, ev.ToolCall.Input)
+			}
+			got[ev.ToolCall.ID] = input["path"]
+		case EventError:
+			t.Fatalf("error: %v", ev.Error)
+		}
+	}
+	if got["call_1"] != "a.txt" || got["call_2"] != "b.txt" {
+		t.Fatalf("tool inputs = %#v, want call_1=a.txt call_2=b.txt", got)
+	}
+}
+
 func TestXAINoCredentials(t *testing.T) {
 	p := NewXAIProvider(auth.AuthStore{}, config.DefaultConfig())
 	_, err := p.Stream(context.Background(), &Request{Model: "grok-build"})
@@ -270,6 +309,18 @@ func TestXAIBuildRequestContentField(t *testing.T) {
 	}
 	if len(asst.ToolCalls) != 1 {
 		t.Errorf("assistant should have 1 tool call, got %d", len(asst.ToolCalls))
+	}
+	toolMessages := 0
+	for _, m := range xaiReq.Messages {
+		if m.Role == "tool" {
+			toolMessages++
+			if m.ToolCallID == "" {
+				t.Fatalf("tool message missing tool_call_id: %+v", m)
+			}
+		}
+	}
+	if toolMessages != 1 {
+		t.Fatalf("tool messages = %d, want 1: %+v", toolMessages, xaiReq.Messages)
 	}
 }
 

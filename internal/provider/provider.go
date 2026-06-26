@@ -127,19 +127,19 @@ type StreamEvent struct {
 }
 
 // Usage holds exact token counts reported by the provider for one API call.
+// Cache fields are zero for providers that do not expose prompt caching.
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
+	InputTokens        int
+	OutputTokens       int
+	CacheReadTokens    int
+	CacheWriteTokens   int
+	InputTokensUnknown bool
 }
 
-// AnthropicUsage extends Usage with Anthropic prompt-caching fields. Only the
-// Anthropic provider returns *AnthropicUsage (as a *Usage); other providers
-// return a plain *Usage. Callers can type-assert to *AnthropicUsage to access
-// the caching fields.
+// AnthropicUsage is kept for tests/compatibility; Usage now carries cache
+// fields directly so callers do not need type assertions.
 type AnthropicUsage struct {
 	Usage
-	CacheReadTokens  int
-	CacheWriteTokens int
 }
 
 // Tool is the interface every Poisson tool implements.

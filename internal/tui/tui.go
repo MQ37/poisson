@@ -72,10 +72,17 @@ func NewTUI(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent)
 // and dispatches: Enter submits input (→ agent.Prompt → drain outputChan),
 // ↑/↓ navigates history, Tab completes slash commands, Ctrl+J inserts a
 // newline, Ctrl+C exits.
-func (t *TUI) Run() error {
+func (t *TUI) Run() (TUIv2Handle, error) {
+	if os.Getenv("POISSON_TUI") != "classic" {
+		v2 := newTUIv2(t.agent, t.sessionID, t.outputChan)
+		if t.outputChan == nil {
+			v2.output = nil
+		}
+		return v2, v2.Run()
+	}
 	oldState, err := term.MakeRaw(t.fd)
 	if err != nil {
-		return fmt.Errorf("enter raw mode: %w", err)
+		return nil, fmt.Errorf("enter raw mode: %w", err)
 	}
 	t.oldState = oldState
 	t.writeString("\x1b[?2004h") // enable bracketed paste mode
@@ -90,13 +97,13 @@ func (t *TUI) Run() error {
 	for {
 		n, err := os.Stdin.Read(buf)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := t.feed(buf[:n]); err != nil {
 			if err == errQuit {
-				return nil
+				return nil, nil
 			}
-			return err
+			return nil, err
 		}
 	}
 }
@@ -161,7 +168,15 @@ func (t *TUI) feed(data []byte) error {
 
 		case b == 9: // Tab
 			if strings.HasPrefix(t.input, "/") {
-				completed := t.slashComplete(t.input)
+				completed := t.tabComplete(t.input)
+				if completed != t.input {
+					t.input = completed
+					t.cursorPos = len(t.input)
+					t.refreshLine()
+					dirty = false
+				}
+			} else if strings.Contains(t.input, "@") {
+				completed := t.tabComplete(t.input)
 				if completed != t.input {
 					t.input = completed
 					t.cursorPos = len(t.input)
@@ -558,32 +573,37 @@ func (t *TUI) navigateHistory(dir int) {
 	t.cursorPos = len(t.input)
 }
 
-// slashComplete does prefix completion for slash commands.
-func (t *TUI) slashComplete(input string) string {
-	commands := []string{
-		"/quit", "/clear", "/help", "/new", "/resume", "/sessions",
-		"/search", "/fork", "/undo", "/compact", "/model", "/effort", "/models", "/providers", "/reload", "/cost",
-	}
-	space := strings.IndexByte(input, ' ')
-	if space >= 0 {
-		return input // only complete the command token
-	}
-	var matches []string
-	for _, c := range commands {
-		if strings.HasPrefix(c, input) {
-			matches = append(matches, c)
+// tabComplete does prefix completion for slash commands and @file references.
+// On the first call it expands to the longest common prefix; on a second
+// consecutive Tab call it cycles through candidates (numeric suffix appended).
+func (t *TUI) tabComplete(input string) string {
+	cwd, _ := os.Getwd()
+	if strings.HasPrefix(strings.TrimSpace(input), "/") {
+		if space := strings.IndexByte(input, ' '); space >= 0 {
+			return input
 		}
-	}
-	if len(matches) == 1 {
-		return matches[0] + " "
-	}
-	if len(matches) > 1 {
-		// find longest common prefix
-		lcp := matches[0]
-		for _, m := range matches[1:] {
-			lcp = commonPrefix(lcp, m)
+		cands := matchSlash(input)
+		if len(cands) == 1 {
+			return cands[0] + " "
 		}
-		return lcp
+		if len(cands) > 1 {
+			if lcp := commonPrefixCands(cands); len(lcp) > len(input) {
+				return lcp
+			}
+		}
+		return input
+	}
+	if atIdx := strings.LastIndexByte(input, '@'); atIdx >= 0 {
+		body := input[atIdx:]
+		cands := matchAtFile("@"+body, cwd)
+		if len(cands) == 1 {
+			return input[:atIdx] + cands[0]
+		}
+		if len(cands) > 1 {
+			if lcp := commonPrefixCands(cands); len(lcp) > len(body)+1 {
+				return input[:atIdx] + lcp
+			}
+		}
 	}
 	return input
 }
@@ -607,6 +627,7 @@ func (t *TUI) handleSlashCommand(cmd string) error {
 	if len(parts) == 0 {
 		return nil
 	}
+	h := tuiCmdHost{t}
 	switch parts[0] {
 	case "/quit", "/q":
 		t.writeString("bye.\r\n")
@@ -618,32 +639,35 @@ func (t *TUI) handleSlashCommand(cmd string) error {
 		t.writeString(renderHelp())
 		return nil
 	case "/new":
-		return t.cmdNew()
+		return cmdNew(h)
 	case "/resume", "/r":
-		return t.cmdResume(parts[1:])
+		return cmdResume(h, parts[1:])
 	case "/sessions":
-		return t.cmdSessions()
+		cmdSessions(h)
+		return nil
 	case "/search":
-		return t.cmdSearch(parts[1:])
+		return cmdSearch(h, parts[1:])
 	case "/fork":
-		return t.cmdFork(parts[1:])
+		return cmdFork(h, parts[1:])
 	case "/undo":
-		return t.cmdUndo()
+		return cmdUndo(h)
 	case "/compact":
 		t.writeString("/compact — manual compaction not yet available (auto-compaction handles this)\r\n")
 		return nil
 	case "/model":
-		return t.cmdModel(parts[1:])
+		return cmdModel(h, parts[1:])
 	case "/providers":
-		return t.cmdProviders()
+		cmdProviders(h)
+		return nil
 	case "/effort":
-		return t.cmdEffort(parts[1:])
+		return cmdEffort(h, parts[1:])
 	case "/models":
-		return t.cmdModels()
+		return cmdModels(h)
 	case "/reload":
-		return t.cmdReload()
+		return cmdReload(h)
 	case "/cost":
-		return t.cmdCost()
+		cmdCost(h)
+		return nil
 	default:
 		t.writeString("unknown command: " + parts[0] + " (type /help)\r\n")
 		return nil

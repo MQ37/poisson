@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,9 +115,7 @@ func TestTypes(t *testing.T) {
 	}
 
 	au := &AnthropicUsage{
-		Usage:            Usage{InputTokens: 10, OutputTokens: 5},
-		CacheReadTokens:  3,
-		CacheWriteTokens: 1,
+		Usage: Usage{InputTokens: 10, OutputTokens: 5, CacheReadTokens: 3, CacheWriteTokens: 1},
 	}
 	var _ *Usage = &au.Usage
 	if au.InputTokens != 10 || au.OutputTokens != 5 || au.CacheReadTokens != 3 || au.CacheWriteTokens != 1 {
@@ -127,7 +128,192 @@ func TestTypes(t *testing.T) {
 	}
 }
 
+func TestOllamaModelsUsesModelAsFallbackID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"models":[{"model":"fallback-model","details":{"context_length":12345}}]}`))
+	}))
+	defer server.Close()
+
+	p := NewOllamaProvider(server.URL, "")
+	models, err := p.Models()
+	if err != nil {
+		t.Fatalf("Models: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("models = %d", len(models))
+	}
+	if models[0].ID != "fallback-model" || models[0].Name != "fallback-model" {
+		t.Fatalf("model = %+v, want fallback-model id/name", models[0])
+	}
+	if models[0].ContextWindow != 12345 {
+		t.Fatalf("context = %d, want 12345", models[0].ContextWindow)
+	}
+}
+
 // --- FakeProvider tests (no real API calls) ---------------------------
+
+func TestOllamaBuildRequestUsesOpenAIEndpointFields(t *testing.T) {
+	p := NewOllamaProvider("http://localhost:11434", "glm-5.2:cloud")
+	temp := 0.4
+	req := &Request{
+		Model:       "minimax-m3:cloud",
+		MaxTokens:   512,
+		Temperature: &temp,
+		Effort:      "xhigh",
+		Messages: []Message{
+			{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}},
+		},
+	}
+	body := p.buildOllamaRequest(req)
+	if !body.Stream || body.StreamOptions == nil || !body.StreamOptions.IncludeUsage {
+		t.Fatalf("stream options = %+v, want include_usage", body.StreamOptions)
+	}
+	if body.MaxTokens != 512 {
+		t.Fatalf("max_tokens = %d", body.MaxTokens)
+	}
+	if body.ReasoningEffort != "high" {
+		t.Fatalf("reasoning_effort = %q, want high", body.ReasoningEffort)
+	}
+	if len(body.Messages) != 1 || body.Messages[0].Content == nil || *body.Messages[0].Content != "hi" {
+		t.Fatalf("messages = %+v", body.Messages)
+	}
+}
+
+func TestOllamaStreamUsesV1ChatCompletions(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	p := NewOllamaProvider(server.URL, "test")
+	ch, err := p.Stream(context.Background(), &Request{
+		Model:    "test",
+		Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	var text string
+	var done *Usage
+	for ev := range ch {
+		switch ev.Type {
+		case EventTextDelta:
+			text += ev.Text
+		case EventDone:
+			done = ev.Usage
+		case EventError:
+			t.Fatalf("error: %v", ev.Error)
+		}
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Fatalf("path = %q, want /v1/chat/completions", gotPath)
+	}
+	if gotBody["stream"] != true {
+		t.Fatalf("body stream = %v", gotBody["stream"])
+	}
+	opts, _ := gotBody["stream_options"].(map[string]any)
+	if opts == nil || opts["include_usage"] != true {
+		t.Fatalf("stream_options = %v", gotBody["stream_options"])
+	}
+	if text != "ok" {
+		t.Fatalf("text = %q", text)
+	}
+	if done == nil || done.InputTokens != 9 || done.OutputTokens != 2 || done.InputTokensUnknown {
+		t.Fatalf("usage = %+v", done)
+	}
+}
+
+func TestOllamaUsageFallsBackToRequestEstimateWhenPromptZero(t *testing.T) {
+	p := NewOllamaProvider("http://localhost:11434", "test")
+	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":62}}\n\n" +
+		"data: [DONE]\n\n"
+	ch := make(chan StreamEvent, 16)
+	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, 42)
+
+	var done *Usage
+	for ev := range ch {
+		if ev.Type == EventDone {
+			done = ev.Usage
+		}
+	}
+	if done == nil {
+		t.Fatal("missing done")
+	}
+	if !done.InputTokensUnknown || done.InputTokens != 42 || done.OutputTokens != 62 {
+		t.Fatalf("usage = %+v, want estimated input=42 output=62", done)
+	}
+}
+
+func TestEstimateOllamaRequestTokens(t *testing.T) {
+	req := &Request{
+		System: []SystemBlock{{Text: strings.Repeat("a", 40)}},
+		Messages: []Message{
+			{Role: "user", Content: []ContentBlock{{Type: "text", Text: strings.Repeat("b", 40)}}},
+		},
+	}
+	if got := estimateOllamaRequestTokens(req); got != 20 {
+		t.Fatalf("estimate = %d, want 20", got)
+	}
+}
+
+func TestOllamaUsageFromOpenAIUsageChunk(t *testing.T) {
+	p := NewOllamaProvider("http://localhost:11434", "test")
+	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":177,\"completion_tokens\":46}}\n\n" +
+		"data: [DONE]\n\n"
+	ch := make(chan StreamEvent, 16)
+	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, 0)
+
+	var done *Usage
+	for ev := range ch {
+		if ev.Type == EventDone {
+			done = ev.Usage
+		}
+	}
+	if done == nil {
+		t.Fatal("missing done")
+	}
+	if done.InputTokensUnknown || done.InputTokens != 177 || done.OutputTokens != 46 {
+		t.Fatalf("usage = %+v, want input=177 output=46", done)
+	}
+}
+
+func TestOllamaToolCallGetsSyntheticID(t *testing.T) {
+	p := NewOllamaProvider("http://localhost:11434", "test")
+	sse := "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":2,\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"main.go\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n" +
+		"data: [DONE]\n\n"
+	ch := make(chan StreamEvent, 16)
+	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, 0)
+
+	var start *ToolCall
+	var stop *ToolCall
+	for ev := range ch {
+		switch ev.Type {
+		case EventToolUseStart:
+			start = ev.ToolCall
+		case EventToolUseStop:
+			stop = ev.ToolCall
+		case EventError:
+			t.Fatalf("error: %v", ev.Error)
+		}
+	}
+	if start == nil || start.ID != "idx_2" {
+		t.Fatalf("start = %+v, want synthetic id idx_2", start)
+	}
+	if stop == nil || stop.ID != "idx_2" {
+		t.Fatalf("stop = %+v, want synthetic id idx_2", stop)
+	}
+}
 
 func TestFakeProviderTextResponse(t *testing.T) {
 	p := NewFakeProvider("fake", []Model{{ID: "test-model", Name: "Test", ContextWindow: 8192}})

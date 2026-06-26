@@ -14,9 +14,8 @@ type SearchResult struct {
 }
 
 // Search runs an FTS5 MATCH query against messages_fts, joins back to the
-// messages table to filter out soft-deleted (deleted_at IS NULL) rows, and
-// returns results ordered by relevance (rank). The snippet is the FTS5
-// highlight around the matched terms.
+// messages table to filter out inactive rows, and returns results ordered by
+// relevance (rank). The snippet is the FTS5 highlight around the matched terms.
 func (s *Store) Search(query string, limit int) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 20
@@ -27,7 +26,7 @@ func (s *Store) Search(query string, limit int) ([]SearchResult, error) {
 		        fts.rank
 		 FROM messages_fts fts
 		 JOIN messages m ON m.id = fts.message_id
-		 WHERE messages_fts MATCH ? AND m.deleted_at IS NULL
+		 WHERE messages_fts MATCH ? AND m.deleted_at IS NULL AND m.compacted = 0
 		 ORDER BY fts.rank
 		 LIMIT ?`, query, limit)
 	if err != nil {

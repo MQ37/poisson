@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS api_calls (
     seq                 INTEGER NOT NULL,
     model               TEXT NOT NULL,
     input_tokens        INTEGER NOT NULL,
+    input_tokens_known  INTEGER NOT NULL DEFAULT 1,
     output_tokens       INTEGER NOT NULL,
     cache_read_tokens   INTEGER DEFAULT 0,
     cache_write_tokens  INTEGER DEFAULT 0,
@@ -118,8 +119,46 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if err := ensureAPICallsColumns(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	return &Store{db: db}, nil
+}
+
+func ensureAPICallsColumns(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(api_calls)`)
+	if err != nil {
+		return fmt.Errorf("inspect api_calls schema: %w", err)
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var dflt any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan api_calls schema: %w", err)
+		}
+		seen[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read api_calls schema: %w", err)
+	}
+	if !seen["input_tokens_known"] {
+		if _, err := db.Exec(`ALTER TABLE api_calls ADD COLUMN input_tokens_known INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return fmt.Errorf("migrate api_calls.input_tokens_known: %w", err)
+		}
+	}
+	if _, err := db.Exec(`UPDATE api_calls
+		SET input_tokens_known = 0
+		WHERE input_tokens = 0 AND output_tokens > 0 AND input_tokens_known = 1`); err != nil {
+		return fmt.Errorf("migrate zero-input api_calls: %w", err)
+	}
+	return nil
 }
 
 // Close closes the underlying database connection.

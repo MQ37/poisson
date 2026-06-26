@@ -75,6 +75,26 @@ func TestWrite_CreatesParentDirs(t *testing.T) {
 	}
 }
 
+func TestWrite_PreservesExistingMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(path, []byte("old"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	w := NewWriteTool(dir)
+	res, _ := w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "script.sh", "content": "new"}))
+	if res.Error != "" {
+		t.Fatalf("write error: %s", res.Error)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("mode = %v, want 0755", info.Mode().Perm())
+	}
+}
+
 func TestRead_OffsetLimit(t *testing.T) {
 	dir := t.TempDir()
 	w := NewWriteTool(dir)
@@ -198,6 +218,55 @@ func TestEdit_MissingFails(t *testing.T) {
 	}
 }
 
+func TestEdit_MultipleEditsUseOriginalFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\ngamma\n"), 0o755); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	e := NewEditTool(dir)
+
+	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"path": "f.txt",
+		"edits": []map[string]string{
+			{"oldText": "alpha", "newText": "ALPHA"},
+			{"oldText": "gamma", "newText": "GAMMA"},
+		},
+	}))
+	if res.Error != "" {
+		t.Fatalf("edit error: %s", res.Error)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "ALPHA\nbeta\nGAMMA\n" {
+		t.Fatalf("content = %q", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("mode = %v, want 0755", info.Mode().Perm())
+	}
+}
+
+func TestEdit_OverlappingEditsFail(t *testing.T) {
+	dir := t.TempDir()
+	w := NewWriteTool(dir)
+	e := NewEditTool(dir)
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "abcdef\n"}))
+
+	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"path": "f.txt",
+		"edits": []map[string]string{
+			{"oldText": "abc", "newText": "ABC"},
+			{"oldText": "bc", "newText": "BC"},
+		},
+	}))
+	if res.Error == "" || !strings.Contains(res.Error, "overlaps") {
+		t.Fatalf("expected overlap error, got %q", res.Error)
+	}
+}
+
 func TestSearch(t *testing.T) {
 	dir := t.TempDir()
 	w := NewWriteTool(dir)
@@ -225,6 +294,39 @@ func TestSearch(t *testing.T) {
 	}
 	if strings.Contains(res.Content, "c.txt") {
 		t.Errorf("c.txt should not match glob *.go: %q", res.Content)
+	}
+}
+
+func TestSearch_MaxResultsIsGlobal(t *testing.T) {
+	dir := t.TempDir()
+	w := NewWriteTool(dir)
+	s := NewSearchTool(dir)
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "a.txt", "content": "hit\nhit\nhit\n"}))
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "b.txt", "content": "hit\nhit\nhit\n"}))
+
+	res, _ := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern":     "hit",
+		"path":        ".",
+		"max_results": 2,
+	}))
+	if res.Error != "" {
+		t.Fatalf("search error: %s", res.Error)
+	}
+	lines := strings.Split(strings.TrimSpace(res.Content), "\n")
+	if len(lines) != 3 || !strings.Contains(lines[2], "truncated at 2") {
+		t.Fatalf("content = %q, want 2 matches plus truncation", res.Content)
+	}
+}
+
+func TestSearch_InvalidRegexReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	s := NewSearchTool(dir)
+	res, _ := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern": "[",
+		"path":    ".",
+	}))
+	if res.Error == "" {
+		t.Fatalf("expected regex error, got content %q", res.Content)
 	}
 }
 
@@ -346,6 +448,43 @@ func TestBashTool_SafeCommand(t *testing.T) {
 	}
 	if out.ExitCode != 0 {
 		t.Errorf("exit code = %d, want 0", out.ExitCode)
+	}
+}
+
+func TestBashTool_SanitizesOutput(t *testing.T) {
+	dir := t.TempDir()
+	b := NewBashTool(dir, true, nil)
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command": `printf '\033[31mred\033[0m\0done'`,
+	}))
+	if res.Error != "" {
+		t.Fatalf("bash error: %s", res.Error)
+	}
+	var out bashOutput
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Stdout != "reddone" {
+		t.Fatalf("stdout = %q, want sanitized text", out.Stdout)
+	}
+}
+
+func TestBashTool_WorkdirErrorInStderr(t *testing.T) {
+	dir := t.TempDir()
+	b := NewBashTool(dir, true, nil)
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command": "pwd",
+		"workdir": "missing",
+	}))
+	if res.Error != "" {
+		t.Fatalf("bash error: %s", res.Error)
+	}
+	var out bashOutput
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ExitCode != -1 || out.Stderr == "" {
+		t.Fatalf("output = %+v, want exit -1 with stderr", out)
 	}
 }
 
@@ -622,6 +761,18 @@ func TestRegistry_ExecuteTrimsLargeOutput(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, "tool output truncated") {
 		t.Fatalf("missing truncation marker: %q", res.Content[len(res.Content)-80:])
+	}
+}
+
+func TestRegistry_ExecuteSanitizesControls(t *testing.T) {
+	r := NewRegistry()
+	r.Register(staticTool{name: "ansi", result: ToolResult{Content: "ok\x1b[31mred\x1b[0m\x00done"}})
+	res, err := r.Execute(context.Background(), "ansi", nil)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Content != "okreddone" {
+		t.Fatalf("content = %q, want sanitized text", res.Content)
 	}
 }
 

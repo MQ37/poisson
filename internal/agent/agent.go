@@ -5,9 +5,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"poisson/internal/config"
 	"poisson/internal/project"
@@ -54,6 +56,8 @@ type Agent struct {
 	sessionID  string
 	outputChan chan OutputEvent
 	approvalFn func(command, description, workdir string) bool
+	model      string
+	effort     string
 
 	// pendingResults holds the text of tool results appended in the current
 	// iteration, used by ShouldCompact to estimate new tokens.
@@ -78,6 +82,7 @@ func NewAgent(
 		sessionID:  sessionID,
 		outputChan: outputChan,
 		approvalFn: approvalFn,
+		model:      defaultModel(p, cfg),
 	}
 }
 
@@ -92,8 +97,29 @@ func (a *Agent) SessionID() string { return a.sessionID }
 // SwitchSession changes the active session.
 func (a *Agent) SwitchSession(sessionID string) { a.sessionID = sessionID }
 
-// SetProvider swaps the provider (for /model).
-func (a *Agent) SetProvider(p provider.Provider) { a.provider = p }
+// SetProvider swaps the provider and persists it on the active session.
+func (a *Agent) SetProvider(p provider.Provider) {
+	a.provider = p
+	sess, err := a.store.GetSession(a.sessionID)
+	if err != nil {
+		return
+	}
+	sess.Provider = p.ID()
+	sess.UpdatedAt = time.Now().Unix()
+	_ = a.store.UpdateSession(sess)
+}
+
+// SetModel updates the session's model name and persists it.
+func (a *Agent) SetModel(model string) {
+	a.model = model
+	sess, err := a.store.GetSession(a.sessionID)
+	if err != nil {
+		return
+	}
+	sess.Model = model
+	sess.UpdatedAt = time.Now().Unix()
+	_ = a.store.UpdateSession(sess)
+}
 
 // SetConfig swaps the config (for /reload).
 func (a *Agent) SetConfig(cfg *config.Config) { a.config = cfg }
@@ -104,14 +130,36 @@ func (a *Agent) Provider() provider.Provider { return a.provider }
 // Config returns the current config.
 func (a *Agent) Config() *config.Config { return a.config }
 
-// effort is the thinking effort level ("" | "low" | "medium" | "high" | "xhigh" | "max").
-var effortLevel string
-
 // SetEffort sets the thinking effort for subsequent requests.
-func (a *Agent) SetEffort(level string) { effortLevel = level }
+func (a *Agent) SetEffort(level string) { a.effort = level }
+
+// Model returns the current model name.
+func (a *Agent) Model() string {
+	if a.model != "" {
+		return a.model
+	}
+	return defaultModel(a.provider, a.config)
+}
+
+// defaultModel returns the configured default for a given provider.
+func defaultModel(p provider.Provider, cfg *config.Config) string {
+	if cfg == nil || p == nil {
+		return ""
+	}
+	switch p.ID() {
+	case "ollama":
+		return cfg.Ollama.Model
+	case "anthropic":
+		return cfg.Anthropic.Model
+	case "xai":
+		return cfg.XAI.Model
+	default:
+		return ""
+	}
+}
 
 // Effort returns the current thinking effort level.
-func (a *Agent) Effort() string { return effortLevel }
+func (a *Agent) Effort() string { return a.effort }
 
 // Prompt appends the user message to the store and runs the turn loop.
 func (a *Agent) Prompt(userInput string) error {
@@ -125,17 +173,26 @@ func (a *Agent) PromptWithContext(ctx context.Context, userInput string) error {
 		{Type: "text", Text: userInput},
 	})
 	if err != nil {
+		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})
+		a.sendEvent(OutputEvent{Type: OutputDone})
 		return fmt.Errorf("marshal user content: %w", err)
 	}
-	if err := a.store.AppendMessage(&store.Message{
+	userMsg := &store.Message{
 		SessionID: a.sessionID,
 		Role:      "user",
 		Content:   content,
-	}); err != nil {
+	}
+	if err := a.store.AppendMessage(userMsg); err != nil {
+		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Store error: %v", err)})
+		a.sendEvent(OutputEvent{Type: OutputDone})
 		return fmt.Errorf("append user message: %w", err)
 	}
 
-	return a.runTurn(ctx)
+	err = a.runTurn(ctx)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		_ = a.store.SoftDeleteMessages(a.sessionID, userMsg.Seq)
+	}
+	return err
 }
 
 // runTurn executes the turn loop: build → stream → collect tools → dispatch →
@@ -143,11 +200,14 @@ func (a *Agent) PromptWithContext(ctx context.Context, userInput string) error {
 func (a *Agent) runTurn(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
+			a.sendEvent(OutputEvent{Type: OutputDone})
 			return err
 		}
 		// BUILD
 		req, err := a.buildRequest()
 		if err != nil {
+			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Build error: %v", err)})
+			a.sendEvent(OutputEvent{Type: OutputDone})
 			return fmt.Errorf("build request: %w", err)
 		}
 
@@ -155,6 +215,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		ch, err := a.provider.Stream(ctx, req)
 		if err != nil {
 			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Provider error: %v", err)})
+			a.sendEvent(OutputEvent{Type: OutputDone})
 			return fmt.Errorf("stream: %w", err)
 		}
 
@@ -200,11 +261,13 @@ func (a *Agent) runTurn(ctx context.Context) error {
 
 			case provider.EventError:
 				a.sendEvent(OutputEvent{Type: OutputError, Text: ev.Error.Error()})
+				a.sendEvent(OutputEvent{Type: OutputDone})
 				return fmt.Errorf("stream error: %w", ev.Error)
 			}
 		}
 
 		if err := ctx.Err(); err != nil {
+			a.sendEvent(OutputEvent{Type: OutputDone})
 			return err
 		}
 
@@ -225,6 +288,8 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			textBuilder.String(), toolCalls)
 		assistantContent, err := contentBlocksToJSON(assistantBlocks)
 		if err != nil {
+			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})
+			a.sendEvent(OutputEvent{Type: OutputDone})
 			return fmt.Errorf("marshal assistant content: %w", err)
 		}
 		msg := &store.Message{
@@ -236,6 +301,8 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			msg.APICallID = &apiCallID
 		}
 		if err := a.store.AppendMessage(msg); err != nil {
+			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Store error: %v", err)})
+			a.sendEvent(OutputEvent{Type: OutputDone})
 			return fmt.Errorf("append assistant message: %w", err)
 		}
 
@@ -261,9 +328,12 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		a.pendingResults = nil
 		results, execErr := a.tools.ExecuteParallel(ctx, toolCalls)
 		if execErr != nil {
+			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Tool error: %v", execErr)})
+			a.sendEvent(OutputEvent{Type: OutputDone})
 			return fmt.Errorf("execute tools: %w", execErr)
 		}
 		if err := ctx.Err(); err != nil {
+			a.sendEvent(OutputEvent{Type: OutputDone})
 			return err
 		}
 
@@ -282,6 +352,8 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				},
 			})
 			if err != nil {
+				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})
+				a.sendEvent(OutputEvent{Type: OutputDone})
 				return fmt.Errorf("marshal tool result: %w", err)
 			}
 			if err := a.store.AppendMessage(&store.Message{
@@ -289,6 +361,8 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				Role:      "tool",
 				Content:   toolContent,
 			}); err != nil {
+				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Store error: %v", err)})
+				a.sendEvent(OutputEvent{Type: OutputDone})
 				return fmt.Errorf("append tool result message: %w", err)
 			}
 
@@ -304,8 +378,9 @@ func (a *Agent) runTurn(ctx context.Context) error {
 
 		// CHECK COMPACTION (stub — Phase 11 will implement full compaction).
 		if a.shouldCompact() {
-			a.sendEvent(OutputEvent{Type: OutputCompacting, Text: "Compacting context..."})
-			a.compact()
+			if err := a.compact(); err != nil {
+				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Compaction error: %v", err)})
+			}
 		}
 
 		// Loop: re-stream with updated context (tool results now in store).
@@ -375,7 +450,7 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 		System:   systemBlocks,
 		Messages: providerMsgs,
 		Tools:    toolDefs,
-		Effort:   effortLevel,
+		Effort:   a.effort,
 	}, nil
 }
 
@@ -506,9 +581,7 @@ func (a *Agent) recordAPICall(usage *provider.Usage) (string, error) {
 	model := a.currentModel()
 	providerID := a.provider.ID()
 
-	// Extract cache tokens if the usage is an AnthropicUsage (not possible
-	// with the current *Usage field type, but handle gracefully for future).
-	cacheRead, cacheWrite := 0, 0
+	cacheRead, cacheWrite := usage.CacheReadTokens, usage.CacheWriteTokens
 
 	cost := a.store.ComputeCost(providerID, model,
 		usage.InputTokens, usage.OutputTokens, cacheRead, cacheWrite)
@@ -516,14 +589,15 @@ func (a *Agent) recordAPICall(usage *provider.Usage) (string, error) {
 	seq := a.nextAPICallSeq()
 
 	call := &store.APICall{
-		SessionID:        a.sessionID,
-		Seq:              seq,
-		Model:            model,
-		InputTokens:      usage.InputTokens,
-		OutputTokens:     usage.OutputTokens,
-		CacheReadTokens:  cacheRead,
-		CacheWriteTokens: cacheWrite,
-		Cost:             cost,
+		SessionID:          a.sessionID,
+		Seq:                seq,
+		Model:              model,
+		InputTokens:        usage.InputTokens,
+		InputTokensUnknown: usage.InputTokensUnknown,
+		OutputTokens:       usage.OutputTokens,
+		CacheReadTokens:    cacheRead,
+		CacheWriteTokens:   cacheWrite,
+		Cost:               cost,
 	}
 	if err := a.store.RecordAPICall(call); err != nil {
 		return "", err

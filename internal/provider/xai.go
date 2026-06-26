@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"poisson/internal/auth"
@@ -179,6 +180,20 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 
 	// Messages.
 	for _, msg := range req.Messages {
+		if msg.Role == "tool" {
+			for _, cb := range msg.Content {
+				if cb.Type != "tool_result" {
+					continue
+				}
+				ar.Messages = append(ar.Messages, xaiMessage{
+					Role:       "tool",
+					Content:    strPtr(cb.ToolResult),
+					ToolCallID: cb.ToolCallID,
+				})
+			}
+			continue
+		}
+
 		var textParts []string
 		var toolCalls []xaiToolCall
 
@@ -195,14 +210,6 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 						Arguments: string(cb.ToolInput),
 					},
 				})
-			case "tool_result":
-				// Tool result is its own message with role "tool".
-				ar.Messages = append(ar.Messages, xaiMessage{
-					Role:       "tool",
-					Content:    strPtr(cb.ToolResult),
-					ToolCallID: cb.ToolCallID,
-				})
-				continue
 			}
 		}
 
@@ -264,9 +271,8 @@ func (p *XAIProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<-
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
-	var currentToolID string
-	var currentToolName string
-	var toolInputBuf bytes.Buffer
+	toolCalls := make(map[int]*ToolCall)
+	toolInputBuffers := make(map[int]*bytes.Buffer)
 	finishSeen := false
 	doneSent := false
 	sendDone := func(usage *Usage) bool {
@@ -301,6 +307,7 @@ func (p *XAIProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<-
 				Delta struct {
 					Content   string `json:"content"`
 					ToolCalls []struct {
+						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Type     string `json:"type"`
 						Function struct {
@@ -339,50 +346,49 @@ func (p *XAIProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<-
 
 		// Tool calls.
 		for _, tc := range delta.ToolCalls {
+			idx := tc.Index
 			if tc.ID != "" {
-				if currentToolID != "" {
-					select {
-					case <-ctx.Done():
-						return
-					case ch <- StreamEvent{Type: EventToolUseStop, ToolCall: &ToolCall{
-						ID:    currentToolID,
-						Name:  currentToolName,
-						Input: json.RawMessage(toolInputBuf.Bytes()),
-					}}:
-					}
-					toolInputBuf.Reset()
-				}
-				currentToolID = tc.ID
-				currentToolName = tc.Function.Name
+				call := &ToolCall{ID: tc.ID, Name: tc.Function.Name}
+				toolCalls[idx] = call
+				toolInputBuffers[idx] = &bytes.Buffer{}
 				select {
 				case <-ctx.Done():
 					return
-				case ch <- StreamEvent{Type: EventToolUseStart, ToolCall: &ToolCall{
-					ID:   tc.ID,
-					Name: tc.Function.Name,
-				}}:
+				case ch <- StreamEvent{Type: EventToolUseStart, ToolCall: call}:
 				}
 			}
 			if tc.Function.Arguments != "" {
-				toolInputBuf.WriteString(tc.Function.Arguments)
+				buf := toolInputBuffers[idx]
+				if buf == nil {
+					buf = &bytes.Buffer{}
+					toolInputBuffers[idx] = buf
+				}
+				buf.WriteString(tc.Function.Arguments)
 			}
 		}
 
 		// Finish reason.
 		if chunk.Choices[0].FinishReason != nil {
 			finishSeen = true
-			if currentToolID != "" {
-				select {
-				case <-ctx.Done():
-					return
-				case ch <- StreamEvent{Type: EventToolUseStop, ToolCall: &ToolCall{
-					ID:    currentToolID,
-					Name:  currentToolName,
-					Input: json.RawMessage(toolInputBuf.Bytes()),
-				}}:
+			if len(toolCalls) > 0 {
+				idxs := make([]int, 0, len(toolCalls))
+				for idx := range toolCalls {
+					idxs = append(idxs, idx)
 				}
-				currentToolID = ""
-				toolInputBuf.Reset()
+				sort.Ints(idxs)
+				for _, idx := range idxs {
+					call := toolCalls[idx]
+					if buf := toolInputBuffers[idx]; buf != nil {
+						call.Input = json.RawMessage(buf.Bytes())
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case ch <- StreamEvent{Type: EventToolUseStop, ToolCall: call}:
+					}
+				}
+				toolCalls = make(map[int]*ToolCall)
+				toolInputBuffers = make(map[int]*bytes.Buffer)
 			}
 			if usage := convertXAIUsage(chunk.Usage); usage != nil {
 				sendDone(usage)

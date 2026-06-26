@@ -69,6 +69,32 @@ func newFakeProvider() *provider.FakeProvider {
 	})
 }
 
+func TestDefaultModelUsesProviderModelConfig(t *testing.T) {
+	cfg := &config.Config{
+		Provider:  config.ProviderConfig{Default: "anthropic"},
+		Anthropic: config.AnthropicConfig{Model: "claude-test"},
+		XAI:       config.XAIConfig{Model: "grok-test"},
+		Ollama:    config.OllamaConfig{Model: "ollama-test"},
+	}
+
+	cases := []struct {
+		providerID string
+		want       string
+	}{
+		{providerID: "anthropic", want: "claude-test"},
+		{providerID: "xai", want: "grok-test"},
+		{providerID: "ollama", want: "ollama-test"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.providerID, func(t *testing.T) {
+			p := provider.NewFakeProvider(tc.providerID, nil)
+			if got := defaultModel(p, cfg); got != tc.want {
+				t.Fatalf("defaultModel(%s) = %q, want %q", tc.providerID, got, tc.want)
+			}
+		})
+	}
+}
+
 func drainEvents(ch chan OutputEvent) *[]OutputEvent {
 	events := &[]OutputEvent{}
 	go func() {
@@ -501,6 +527,21 @@ func (p *blockingProvider) Stream(ctx context.Context, req *provider.Request) (<
 	return ch, nil
 }
 
+type blockingTool struct {
+	started chan struct{}
+}
+
+func (t blockingTool) Name() string        { return "wait" }
+func (t blockingTool) Description() string { return "wait until cancelled" }
+func (t blockingTool) Schema() json.RawMessage {
+	return json.RawMessage(`{"type":"object"}`)
+}
+func (t blockingTool) Execute(ctx context.Context, input json.RawMessage) (provider.ToolResult, error) {
+	close(t.started)
+	<-ctx.Done()
+	return provider.ToolResult{}, ctx.Err()
+}
+
 func TestPromptWithContextCancelsStream(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
@@ -525,6 +566,71 @@ func TestPromptWithContextCancelsStream(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("PromptWithContext did not return after cancel")
+	}
+	msgs, err := s.GetMessages(sessionID)
+	if err != nil {
+		t.Fatalf("get messages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("cancelled prompt left %d active messages", len(msgs))
+	}
+}
+
+func TestPromptWithContextCancelsToolTurnCleanly(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	reg := tools.NewRegistry()
+	started := make(chan struct{})
+	reg.Register(blockingTool{started: started})
+
+	p := newFakeProvider()
+	first, _ := provider.FakeToolCallResponse("wait", map[string]string{"x": "y"}, "done")
+	p.SetResponses([][]provider.StreamEvent{first})
+	a := NewAgent(s, p, reg, newTestConfig(), sessionID, make(chan OutputEvent, 64), nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.PromptWithContext(ctx, "use tool") }()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("tool did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("PromptWithContext error = %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PromptWithContext did not return after tool cancel")
+	}
+	msgs, err := s.GetMessages(sessionID)
+	if err != nil {
+		t.Fatalf("get messages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("cancelled tool turn left active messages: %+v", msgs)
+	}
+}
+
+func TestEffortIsPerAgent(t *testing.T) {
+	s := newTestStore(t)
+	s1 := newTestSession(t, s, "test-model")
+	s2 := s1 + "-2"
+	if err := s.CreateSession(&store.Session{ID: s2, Cwd: ".", Provider: "fake", Model: "test-model"}); err != nil {
+		t.Fatalf("create second session: %v", err)
+	}
+	a1 := NewAgent(s, newFakeProvider(), nil, newTestConfig(), s1, nil, nil)
+	a2 := NewAgent(s, newFakeProvider(), nil, newTestConfig(), s2, nil, nil)
+	a1.SetEffort("high")
+	if a1.Effort() != "high" {
+		t.Fatalf("a1 effort = %q", a1.Effort())
+	}
+	if a2.Effort() != "" {
+		t.Fatalf("a2 effort leaked = %q", a2.Effort())
 	}
 }
 

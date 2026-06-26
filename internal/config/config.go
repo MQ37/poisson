@@ -151,10 +151,10 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 
 # Default provider + model
 [provider]
-# default = "anthropic"          # anthropic | ollama | xai
+# default = "ollama"             # anthropic | ollama | xai
 
 [anthropic]
-# model = "claude-sonnet-4-6"
+# model = "claude-opus-4-8"
 # If auth.json has OAuth tokens for anthropic, stealth mode is active.
 # Otherwise set an API key here or in auth.json.
 # api_key = "sk-ant-..."

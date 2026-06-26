@@ -55,7 +55,11 @@ func (t *WriteTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 		}
 	}
 
-	if err := os.WriteFile(path, []byte(in.Content), 0o644); err != nil {
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := os.WriteFile(path, []byte(in.Content), mode); err != nil {
 		return ToolResult{Error: "cannot write file: " + err.Error()}, nil
 	}
 

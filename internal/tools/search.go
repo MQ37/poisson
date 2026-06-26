@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -100,12 +101,15 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 	if err != nil {
 		return ToolResult{Error: "cannot start rg: " + err.Error()}, nil
 	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		return ToolResult{Error: "cannot start rg: " + err.Error()}, nil
 	}
 
 	var b strings.Builder
 	count := 0
+	truncated := false
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 	for scanner.Scan() {
@@ -125,12 +129,24 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 		text := strings.TrimRight(m.Data.Lines.Text, "\n")
 		b.WriteString(fmt.Sprintf("%s:%d: %s\n", filePath, m.Data.LineNumber, text))
 		count++
+		if count >= maxResults {
+			truncated = true
+			break
+		}
 	}
-
-	_ = cmd.Wait()
+	if truncated && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	waitErr := cmd.Wait()
 
 	if count == 0 {
+		if waitErr != nil && strings.TrimSpace(stderr.String()) != "" {
+			return ToolResult{Error: strings.TrimSpace(stderr.String())}, nil
+		}
 		return ToolResult{Content: "no matches found"}, nil
+	}
+	if truncated {
+		b.WriteString(fmt.Sprintf("... (truncated at %d matches)\n", maxResults))
 	}
 	return ToolResult{Content: b.String()}, nil
 }

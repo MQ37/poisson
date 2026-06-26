@@ -89,8 +89,8 @@ func (s *Store) GetSession(id string) (*Session, error) {
 	return sess, nil
 }
 
-// ListSessions returns sessions newest-first (by created_at desc, then id),
-// paginated by limit/offset.
+// ListSessions returns recently-used sessions first (updated_at desc), paginated
+// by limit/offset.
 func (s *Store) ListSessions(limit, offset int) ([]Session, error) {
 	if limit <= 0 {
 		limit = 50
@@ -98,7 +98,7 @@ func (s *Store) ListSessions(limit, offset int) ([]Session, error) {
 	rows, err := s.db.Query(
 		`SELECT id, parent_id, fork_point, is_subagent, title,
 		        compaction_summary, created_at, updated_at, cwd, provider, model
-		 FROM sessions ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`,
+		 FROM sessions ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT ? OFFSET ?`,
 		limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)

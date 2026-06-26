@@ -120,14 +120,16 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
-			// Context deadline or other error.
 			exitCode = -1
+			if stderr.Len() == 0 {
+				stderr.WriteString(err.Error())
+			}
 		}
 	}
 
 	out := bashOutput{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
+		Stdout:   sanitizeToolText(stdout.String()),
+		Stderr:   sanitizeToolText(stderr.String()),
 		ExitCode: exitCode,
 	}
 	data, _ := json.Marshal(out)

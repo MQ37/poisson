@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,7 +76,9 @@ func loginXAIDeviceCode() (*AuthEntry, error) {
 		}
 
 		if resp.StatusCode == 200 {
-			return parseXAITokenResponse(resp.Body)
+			entry, parseErr := parseXAITokenResponse(resp.Body)
+			resp.Body.Close()
+			return entry, parseErr
 		}
 
 		var errResp struct {
@@ -143,5 +144,3 @@ func parseXAITokenResponse(body io.Reader) (*AuthEntry, error) {
 		Expires: nowMillis() + int64(tokenResp.ExpiresIn)*1000 - 5*60*1000,
 	}, nil
 }
-
-var _ = context.Background
