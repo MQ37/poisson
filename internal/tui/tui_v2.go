@@ -43,6 +43,8 @@ type tuiV2 struct {
 
 	renderFrame    int
 	activeTools    int
+	nextToolID     int64
+	toolStartedAt  time.Time
 	lastInputRows  int
 	activeOverlay  overlay
 
@@ -358,6 +360,16 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		return false, nil
 	}
 
+	// Ctrl+T toggles collapse on the nearest thinking block in view.
+	for _, b := range data {
+		if b == 20 {
+			if t.scroll.toggleThinkingInView(t.scrollRows, t.cols) {
+				t.markScrollDirty()
+			}
+			return false, nil
+		}
+	}
+
 	// History navigation (Ctrl+P / Ctrl+N) when no completion dropdown is open.
 	if t.completion.empty() {
 		for _, b := range data {
@@ -632,22 +644,23 @@ func (t *tuiV2) submit(text string) error {
 func (t *tuiV2) handleEvent(ev agent.OutputEvent) {
 	switch ev.Type {
 	case agent.OutputText:
+		t.scroll.finalizeThinking()
 		t.scroll.append(StyledLine{Style: styleAssistant, Text: ev.Text})
 	case agent.OutputThinking:
 		t.scroll.append(StyledLine{Style: styleThinking, Text: ev.Text})
 	case agent.OutputToolStart:
-		var b strings.Builder
-		b.WriteString(fmt.Sprintf("\n  [%s] %s\n  %s working...", ev.ToolName,
-			toolInputPreview(ev.ToolName, ev.ToolInput), spinnerChar(t.renderFrame)))
-		t.scroll.appendRaw(styleToolStart, b.String())
+		t.scroll.finalizeThinking()
+		id := t.nextToolID
+		t.nextToolID++
+		t.toolStartedAt = time.Now()
+		t.scroll.appendToolCall(id, ev.ToolName, ev.ToolInput)
 	case agent.OutputToolResult:
-		var b strings.Builder
-		if ev.ToolError != "" {
-			b.WriteString(fmt.Sprintf("  ✗ %s", previewText(ev.ToolError, 400)))
-		} else {
-			b.WriteString(fmt.Sprintf("  ✓ %s", toolResultPreview(ev.ToolName, ev.ToolResultContent)))
+		var dur int64
+		if !t.toolStartedAt.IsZero() {
+			dur = time.Since(t.toolStartedAt).Milliseconds()
 		}
-		t.scroll.appendRaw(styleToolResult, b.String())
+		t.scroll.completeToolCall(ev.ToolResultContent, ev.ToolError, dur)
+		t.toolStartedAt = time.Time{}
 	case agent.OutputApproval:
 		// Approval UI is shown via activeOverlay in Approve().
 	case agent.OutputError:

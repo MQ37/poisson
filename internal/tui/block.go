@@ -1,5 +1,7 @@
 package tui
 
+import "time"
+
 // BlockKind categorizes a scrollback document block.
 type BlockKind uint8
 
@@ -18,10 +20,16 @@ const (
 
 // BlockMeta holds optional metadata for rich rendering (tool cards, collapse, etc.).
 type BlockMeta struct {
-	ToolName  string
-	ToolID    int64
-	Collapsed bool
-	Streaming bool // true while assistant/thinking chunk stream is in flight
+	ToolName   string
+	ToolID     int64
+	ToolInput  []byte
+	ToolResult string
+	ToolError  string
+	ToolDone   bool
+	Collapsed  bool
+	Streaming  bool // true while assistant/thinking/tool stream is in flight
+	StartedAt  time.Time
+	DurationMs int64
 }
 
 // Block is one logical document unit in the scrollback.
@@ -124,12 +132,18 @@ func (b *Block) layoutPlain(width int) []ScreenRow {
 	if b.cacheWidth == width && b.cachedRows != nil {
 		return b.cachedRows
 	}
-	prefix := kindStylePrefix(b.kind)
-	var chunks []string
+	var rows []ScreenRow
 	switch b.kind {
-	case blockAssistant, blockThinking:
-		chunks = renderMarkdown(b.raw, width, prefix)
+	case blockAssistant:
+		chunks := layoutRichMarkdown(b.raw, width, kindStylePrefix(b.kind))
+		rows = screenRowsFromChunks(b.id, chunks)
+	case blockThinking:
+		rows = layoutThinking(b, width, 0)
+	case blockToolCall:
+		rows = layoutToolCard(b, width, 0)
 	default:
+		prefix := kindStylePrefix(b.kind)
+		var chunks []string
 		for i, chunk := range wrapLine(b.raw, width) {
 			p := prefix
 			if i > 0 {
@@ -137,15 +151,17 @@ func (b *Block) layoutPlain(width int) []ScreenRow {
 			}
 			chunks = append(chunks, p+chunk+reset)
 		}
-	}
-	rows := make([]ScreenRow, len(chunks))
-	for i, chunk := range chunks {
-		rows[i] = ScreenRow{
-			Text: chunk,
-			Tag:  RowTag{BlockID: b.id, RowIdx: i},
-		}
+		rows = screenRowsFromChunks(b.id, chunks)
 	}
 	b.cacheWidth = width
 	b.cachedRows = rows
+	return rows
+}
+
+func screenRowsFromChunks(id int64, chunks []string) []ScreenRow {
+	rows := make([]ScreenRow, len(chunks))
+	for i, chunk := range chunks {
+		rows[i] = ScreenRow{Text: chunk, Tag: RowTag{BlockID: id, RowIdx: i}}
+	}
 	return rows
 }

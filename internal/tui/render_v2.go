@@ -138,6 +138,8 @@ func (t *tuiV2) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only [
 			text := lay.visible[i].Text
 			if strings.Contains(stripANSI(text), toolWorkingMarker) {
 				text = animateToolLine(text, t.renderFrame)
+			} else if strings.Contains(stripANSI(text), toolCardSpinnerSlot) {
+				text = animateSpinnerInLine(text, t.renderFrame)
 			}
 			b.WriteString(truncateToWidth(text, t.cols))
 		}
@@ -253,8 +255,21 @@ func (t *tuiV2) paintCursor(b *strings.Builder, lay layoutSnapshot) {
 }
 
 func (t *tuiV2) toolSpinnerRows(lay layoutSnapshot) []int {
+	seen := map[int]struct{}{}
 	var rows []int
+	for _, i := range thinkingSpinnerRows(lay.visible) {
+		seen[i] = struct{}{}
+		rows = append(rows, i)
+	}
+	for _, i := range toolCardSpinnerRows(lay.visible) {
+		if _, ok := seen[i]; !ok {
+			rows = append(rows, i)
+		}
+	}
 	for i, ln := range lay.visible {
+		if _, ok := seen[i]; ok {
+			continue
+		}
 		if strings.Contains(stripANSI(ln.Text), toolWorkingMarker) {
 			rows = append(rows, i)
 		}
@@ -284,6 +299,7 @@ func (t *tuiV2) markAfterEvent(ev agent.OutputEvent) {
 		}
 		t.dirty.markScrollAll(t.scrollRows)
 	case agent.OutputDone:
+		t.scroll.finalizeThinking()
 		t.activeTools = 0
 		t.dirty.markStatus()
 		t.dirty.markScrollAll(t.scrollRows)

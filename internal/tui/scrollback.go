@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -76,8 +77,16 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 		s.lastStreamWrapCount = 0
 	}
 	for i := start; i < len(parts); i++ {
-		s.blocks = append(s.blocks, s.newBlock(kind, sanitizeControls(parts[i])))
+		b := s.newBlock(kind, sanitizeControls(parts[i]))
+		if kind == blockThinking {
+			b.meta.Streaming = true
+			b.meta.StartedAt = time.Now()
+		}
+		s.blocks = append(s.blocks, b)
 		s.lastStreamWrapCount = 0
+	}
+	if kind == blockThinking {
+		s.markThinkingStreaming()
 	}
 	s.totalAdded++
 	s.trim()
