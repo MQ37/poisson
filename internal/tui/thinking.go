@@ -98,32 +98,9 @@ func (s *scrollback) toggleThinkingInView(height, width int) bool {
 	if height < 1 || width < 1 || len(s.blocks) == 0 {
 		return false
 	}
-	wrapped, cumulative := s.layoutAll(width)
+	wrapped, start, end := s.viewportRange(height, width)
 	if len(wrapped) == 0 {
 		return false
-	}
-	end := len(wrapped)
-	start := end - height
-	if start < 0 {
-		start = 0
-	}
-	if s.scrollTop > 0 {
-		logicalEnd := len(cumulative)
-		target := logicalEnd - s.scrollTop
-		if target < 0 {
-			target = 0
-		}
-		wrappedEnd := 0
-		if target < len(cumulative) {
-			wrappedEnd = cumulative[target]
-		} else {
-			wrappedEnd = len(wrapped)
-		}
-		end = wrappedEnd
-		start = end - height
-		if start < 0 {
-			start = 0
-		}
 	}
 	seen := map[int64]struct{}{}
 	for i := end - 1; i >= start; i-- {

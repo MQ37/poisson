@@ -1112,14 +1112,14 @@ func TestV2PageKeysScrollBack(t *testing.T) {
 	if quit, err := tui.feed([]byte("\x1b[5~")); quit || err != nil {
 		t.Fatalf("PageUp feed quit=%v err=%v", quit, err)
 	}
-	if tui.scroll.scrollTop == 0 {
+	if tui.scroll.scrollOffset == 0 {
 		t.Fatal("PageUp did not scroll up")
 	}
 	if quit, err := tui.feed([]byte("\x1b[6~")); quit || err != nil {
 		t.Fatalf("PageDown feed quit=%v err=%v", quit, err)
 	}
-	if tui.scroll.scrollTop != 0 {
-		t.Fatalf("PageDown scrollTop = %d, want 0", tui.scroll.scrollTop)
+	if tui.scroll.scrollOffset != 0 {
+		t.Fatalf("PageDown scrollOffset = %d, want 0", tui.scroll.scrollOffset)
 	}
 }
 

@@ -48,7 +48,7 @@ func TestScrollbackVisibleNoPanicOnOverflow(t *testing.T) {
 		s.append(StyledLine{Style: styleAssistant, Text: "x"})
 	}
 	// Scroll way up past the trim point.
-	s.scrollTop = 100
+	s.scrollOffset = 100
 	rows := s.visible(5, 20)
 	// Should return safely (possibly empty) without panicking.
 	if len(rows) > 5 {
@@ -150,7 +150,7 @@ func TestScrollbackStreamViewportDirtyPinned(t *testing.T) {
 	if len(rows) != 1 || rows[0] != 0 {
 		t.Fatalf("merge dirty rows = %v, want [0]", rows)
 	}
-	s.scrollTop = 5
+	s.scrollOffset = 5
 	if got := s.streamViewportDirty(10, 40); got != nil {
 		t.Fatalf("scrolled up should not dirty viewport, got %v", got)
 	}

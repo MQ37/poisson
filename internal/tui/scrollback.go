@@ -34,7 +34,7 @@ type StyledLine struct {
 type scrollback struct {
 	blocks   []Block
 	maxLines int // max logical blocks (name kept for compat)
-	scrollTop  int
+	scrollOffset int // screen rows scrolled up from bottom; 0 = live tail
 	totalAdded int
 	lastStreamWrapCount int
 	nextID     int64
@@ -113,7 +113,7 @@ func (s *scrollback) appendRaw(style LineStyle, text string) {
 }
 
 func (s *scrollback) streamViewportDirty(height, width int) []int {
-	if height < 1 || width < 1 || len(s.blocks) == 0 || s.scrollTop > 0 {
+	if height < 1 || width < 1 || len(s.blocks) == 0 || s.scrollOffset > 0 {
 		return nil
 	}
 	newCount := len(wrapLine(s.blocks[len(s.blocks)-1].raw, width))
@@ -162,15 +162,6 @@ func (s *scrollback) trim() {
 	if len(s.blocks) > s.maxLines {
 		drop := len(s.blocks) - s.maxLines
 		s.blocks = s.blocks[drop:]
-		if s.scrollTop > 0 {
-			s.scrollTop -= drop
-			if s.scrollTop < 0 {
-				s.scrollTop = 0
-			}
-		}
-	}
-	if s.scrollTop > len(s.blocks) {
-		s.scrollTop = len(s.blocks)
 	}
 }
 
@@ -187,59 +178,73 @@ func (s *scrollback) layoutAll(width int) ([]ScreenRow, []int) {
 	return out, cumulative
 }
 
-// visible returns screen rows in the current viewport.
-func (s *scrollback) visible(height, width int) []ScreenRow {
+func (s *scrollback) clampScrollOffset(height, width int) {
+	if height < 1 {
+		height = 1
+	}
+	wrapped, _ := s.layoutAll(width)
+	max := len(wrapped) - height
+	if max < 0 {
+		max = 0
+	}
+	if s.scrollOffset > max {
+		s.scrollOffset = max
+	}
+	if s.scrollOffset < 0 {
+		s.scrollOffset = 0
+	}
+}
+
+// viewportRange returns laid-out rows and the [start,end) slice for the viewport.
+func (s *scrollback) viewportRange(height, width int) ([]ScreenRow, int, int) {
 	if height < 1 || width < 1 || len(s.blocks) == 0 {
-		return nil
+		return nil, 0, 0
 	}
-	wrapped, cumulative := s.layoutAll(width)
+	wrapped, _ := s.layoutAll(width)
 	if len(wrapped) == 0 {
-		return nil
+		return nil, 0, 0
 	}
-	end := len(wrapped)
+	s.clampScrollOffset(height, width)
+	end := len(wrapped) - s.scrollOffset
 	start := end - height
 	if start < 0 {
 		start = 0
 	}
-	if s.scrollTop > 0 {
-		logicalEnd := len(cumulative)
-		target := logicalEnd - s.scrollTop
-		if target < 0 {
-			target = 0
-		}
-		wrappedEnd := 0
-		if target < len(cumulative) {
-			wrappedEnd = cumulative[target]
-		} else {
-			wrappedEnd = len(wrapped)
-		}
-		end = wrappedEnd
-		start = end - height
-		if start < 0 {
-			start = 0
-		}
+	if end > len(wrapped) {
+		end = len(wrapped)
+	}
+	return wrapped, start, end
+}
+
+// visible returns screen rows in the current viewport.
+func (s *scrollback) visible(height, width int) []ScreenRow {
+	wrapped, start, end := s.viewportRange(height, width)
+	if len(wrapped) == 0 {
+		return nil
 	}
 	return wrapped[start:end]
 }
 
-func (s *scrollback) pinned() bool { return s.scrollTop == 0 }
+func (s *scrollback) pinned() bool { return s.scrollOffset == 0 }
 
-func (s *scrollback) scrollUp(n, height int) {
-	if s.scrollTop+n > len(s.blocks) {
-		s.scrollTop = len(s.blocks)
-	} else {
-		s.scrollTop += n
+func (s *scrollback) scrollUp(n int) {
+	if n < 1 {
+		n = 1
 	}
+	s.scrollOffset += n
 }
 
 func (s *scrollback) scrollDown(n int) {
-	s.scrollTop -= n
-	if s.scrollTop < 0 {
-		s.scrollTop = 0
+	if n < 1 {
+		n = 1
+	}
+	s.scrollOffset -= n
+	if s.scrollOffset < 0 {
+		s.scrollOffset = 0
 	}
 }
 
-func (s *scrollback) scrollToBottom() { s.scrollTop = 0 }
+func (s *scrollback) scrollToBottom() { s.scrollOffset = 0 }
 
 // blockCount returns the number of logical blocks (for tests).
 func (s *scrollback) blockCount() int { return len(s.blocks) }

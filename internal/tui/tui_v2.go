@@ -138,14 +138,14 @@ func (t *tuiV2) Run() error {
 	t.recomputeLayout()
 
 	// Wire terminal mode.
-	t.writeRaw(altScreenOn + hideCursor + bracketedOn + kittyKbOn)
+	t.writeRaw(altScreenOn + hideCursor + bracketedOn + kittyKbOn + mouseOn)
 	t.installResize()
 
 	// Restore terminal on any exit path — including panic — so the user's
 	// shell isn't left in raw alt-screen with kitty keyboard enabled.
 	defer func() {
 		t.stopped.Store(true)
-		t.writeRaw(kittyKbOff + bracketedOff + showCursor + altScreenOff)
+		t.writeRaw(mouseOff + kittyKbOff + bracketedOff + showCursor + altScreenOff)
 		_ = term.Restore(t.fd, t.oldState)
 	}()
 
@@ -259,7 +259,37 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		t.editor.wrapWidth = w
 	}
 
-	// While a prompt is running, only Ctrl+C is meaningful.
+	// If mid-paste or starting a bracketed paste, bypass all key interception
+	// (Tab/Enter/Esc/arrows) so pasted bytes don't trigger completions or
+	// submissions. The editor handles paste accumulation.
+	if t.editor.paste || (len(data) >= 6 && data[0] == 27 && data[1] == '[' && data[2] == '2' && data[3] == '0' && data[4] == '0' && data[5] == '~') {
+		return t.processEditor(data)
+	}
+
+	// Scrollback navigation — works even while the agent is running.
+	if delta, ok := parseScrollInput(data, t.scrollRows); ok {
+		if delta > 0 {
+			t.scroll.scrollUp(delta)
+		} else {
+			t.scroll.scrollDown(-delta)
+		}
+		t.scroll.clampScrollOffset(t.scrollRows, t.cols)
+		t.markScrollDirty()
+		return false, nil
+	}
+	if isArrowUp(data) && t.editorAtScrollTop() {
+		t.scroll.scrollUp(1)
+		t.scroll.clampScrollOffset(t.scrollRows, t.cols)
+		t.markScrollDirty()
+		return false, nil
+	}
+	if isArrowDown(data) && t.scroll.scrollOffset > 0 && t.editorAtScrollBottom() {
+		t.scroll.scrollDown(1)
+		t.markScrollDirty()
+		return false, nil
+	}
+
+	// While a prompt is running, only Ctrl+C is meaningful for editor input.
 	if t.running() {
 		if containsCtrlC(data) {
 			t.cancelMu.Lock()
@@ -272,25 +302,6 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 				t.dirty.markStatus()
 			}
 		}
-		return false, nil
-	}
-
-	// If mid-paste or starting a bracketed paste, bypass all key interception
-	// (Tab/Enter/Esc/arrows) so pasted bytes don't trigger completions or
-	// submissions. The editor handles paste accumulation.
-	if t.editor.paste || (len(data) >= 6 && data[0] == 27 && data[1] == '[' && data[2] == '2' && data[3] == '0' && data[4] == '0' && data[5] == '~') {
-		return t.processEditor(data)
-	}
-
-	// Scrollback navigation.
-	if indexOf(data, []byte("\x1b[5~")) >= 0 { // PageUp
-		t.scroll.scrollUp(t.scrollRows, t.scrollRows)
-		t.markScrollDirty()
-		return false, nil
-	}
-	if indexOf(data, []byte("\x1b[6~")) >= 0 { // PageDown
-		t.scroll.scrollDown(t.scrollRows)
-		t.markScrollDirty()
 		return false, nil
 	}
 
@@ -856,8 +867,25 @@ func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc i
 }
 
 func (t *tuiV2) renderHintLine() string {
-	hint := "Enter submit · Shift+Enter newline · ↑/↓ move · Ctrl+P/N history · Ctrl+D exit"
+	hint := "Enter submit · PgUp/PgDn scroll · ↑ at top scrolls back · wheel · Ctrl+P/N history"
 	return dim + hint + reset
+}
+
+func (t *tuiV2) editorAtScrollTop() bool {
+	if t.editor.row != 0 {
+		return false
+	}
+	sr, _ := screenCursor(t.editor, t.editor.wrapWidth)
+	return sr == 0
+}
+
+func (t *tuiV2) editorAtScrollBottom() bool {
+	if t.editor.row != len(t.editor.lines)-1 {
+		return false
+	}
+	sr, _ := screenCursor(t.editor, t.editor.wrapWidth)
+	last := totalVisualLines(t.editor, t.editor.wrapWidth) - 1
+	return sr >= last
 }
 
 // appendErrorLocked writes an error to the scrollback. The caller MUST hold
