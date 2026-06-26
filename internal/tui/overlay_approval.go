@@ -100,7 +100,7 @@ func approvalKeyAllowed(data []byte) (allowed, ok bool) {
 		switch b {
 		case 'a', 'A', 'y', 'Y', '\r':
 			return true, true
-		case 'd', 'D', 'n', 'N', 27: // Esc
+		case 'd', 'D', 'n', 'N', 3, 27: // Ctrl+C, Esc
 			return false, true
 		}
 	}

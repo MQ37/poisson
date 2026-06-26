@@ -72,17 +72,26 @@ func NewTUI(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent)
 // and dispatches: Enter submits input (→ agent.Prompt → drain outputChan),
 // ↑/↓ navigates history, Tab completes slash commands, Ctrl+J inserts a
 // newline, Ctrl+C exits.
-func (t *TUI) Run() (TUIv2Handle, error) {
+// Run starts the REPL. If onReady is non-nil it is called with the live
+// Approver (v2 or classic *TUI) before the session blocks, so approval
+// callbacks wired into the agent can reach the running TUI.
+func (t *TUI) Run(onReady func(Approver)) error {
 	if os.Getenv("POISSON_TUI") != "classic" {
 		v2 := newTUIv2(t.agent, t.sessionID, t.outputChan)
 		if t.outputChan == nil {
 			v2.output = nil
 		}
-		return v2, v2.Run()
+		if onReady != nil {
+			onReady(v2)
+		}
+		return v2.Run()
+	}
+	if onReady != nil {
+		onReady(t)
 	}
 	oldState, err := term.MakeRaw(t.fd)
 	if err != nil {
-		return nil, fmt.Errorf("enter raw mode: %w", err)
+		return fmt.Errorf("enter raw mode: %w", err)
 	}
 	t.oldState = oldState
 	t.writeString("\x1b[?2004h") // enable bracketed paste mode
@@ -97,13 +106,13 @@ func (t *TUI) Run() (TUIv2Handle, error) {
 	for {
 		n, err := os.Stdin.Read(buf)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if err := t.feed(buf[:n]); err != nil {
 			if err == errQuit {
-				return nil, nil
+				return nil
 			}
-			return nil, err
+			return err
 		}
 	}
 }

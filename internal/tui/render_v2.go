@@ -103,7 +103,7 @@ func (t *tuiV2) paintPartial(snap dirtySnapshot, lay layoutSnapshot) {
 		t.paintInputRegion(&b, lay)
 		t.paintCompletionOverlay(&b, lay)
 	}
-	if snap.overlay && t.activeOverlay != nil {
+	if t.activeOverlay != nil {
 		t.paintOverlay(&b, lay)
 	}
 	if snap.status {
@@ -283,6 +283,9 @@ func (t *tuiV2) markAfterEvent(ev agent.OutputEvent) {
 			t.activeTools--
 		}
 		t.dirty.markScrollAll(t.scrollRows)
+	case agent.OutputDone:
+		t.activeTools = 0
+		t.dirty.markStatus()
 	default:
 		t.dirty.markScrollAll(t.scrollRows)
 	}
@@ -310,6 +313,9 @@ func (t *tuiV2) markScrollDirty() {
 		h = 1
 	}
 	t.dirty.markScrollAll(h)
+	if t.activeOverlay != nil {
+		t.dirty.markOverlay()
+	}
 }
 
 func (t *tuiV2) markFullDirty() {
@@ -327,6 +333,9 @@ func (t *tuiV2) markSpinnerTick() {
 	t.mu.Unlock()
 	if len(rows) > 0 {
 		t.dirty.markScrollRows(rows...)
+		if t.activeOverlay != nil {
+			t.dirty.markOverlay()
+		}
 	} else {
 		t.dirty.markStatus()
 	}

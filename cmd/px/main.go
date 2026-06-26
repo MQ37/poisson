@@ -137,10 +137,10 @@ func runREPL() {
 	// Approval callback for dangerous bash commands. It delegates to the TUI
 	// (set below) so the prompt owns stdin exclusively in blocking mode; the
 	// terminal runs raw with a nonblocking Ctrl+C poller otherwise.
-	var replTUIv2 tui.TUIv2Handle
+	var approveUI tui.Approver
 	approvalFn := func(command, description, workdir string) bool {
-		if replTUIv2 != nil {
-			return replTUIv2.Approve(command, description)
+		if approveUI != nil {
+			return approveUI.Approve(command, description)
 		}
 		return false
 	}
@@ -188,8 +188,7 @@ func runREPL() {
 
 	// Run TUI.
 	t := tui.NewTUI(a, sessionID, outputChan)
-	var runErr error
-	replTUIv2, runErr = t.Run()
+	runErr := t.Run(func(a tui.Approver) { approveUI = a })
 	if runErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
 	}
