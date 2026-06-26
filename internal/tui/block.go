@@ -116,8 +116,7 @@ func (b *Block) invalidateLayout() {
 	b.cachedRows = nil
 }
 
-// layoutPlain renders a block as hard-wrapped plain text with kind styling.
-// Used until markdown/tool-card renderers take over per-kind layout.
+// layoutPlain renders a block to screen rows with per-kind styling.
 func (b *Block) layoutPlain(width int) []ScreenRow {
 	if width < 1 {
 		width = 1
@@ -126,11 +125,23 @@ func (b *Block) layoutPlain(width int) []ScreenRow {
 		return b.cachedRows
 	}
 	prefix := kindStylePrefix(b.kind)
-	chunks := wrapLine(b.raw, width)
+	var chunks []string
+	switch b.kind {
+	case blockAssistant, blockThinking:
+		chunks = renderMarkdown(b.raw, width, prefix)
+	default:
+		for i, chunk := range wrapLine(b.raw, width) {
+			p := prefix
+			if i > 0 {
+				p = ""
+			}
+			chunks = append(chunks, p+chunk+reset)
+		}
+	}
 	rows := make([]ScreenRow, len(chunks))
 	for i, chunk := range chunks {
 		rows[i] = ScreenRow{
-			Text: prefix + chunk + reset,
+			Text: chunk,
 			Tag:  RowTag{BlockID: b.id, RowIdx: i},
 		}
 	}
