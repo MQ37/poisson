@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const toolCardSpinnerSlot = "◌" // replaced at paint time with animated spinner
@@ -105,6 +106,7 @@ func (s *scrollback) appendToolCall(id int64, name string, input []byte) {
 		ToolID:    id,
 		ToolInput: append([]byte(nil), input...),
 		Streaming: true,
+		StartedAt: time.Now(),
 	}
 	s.blocks = append(s.blocks, b)
 	s.totalAdded++
@@ -112,9 +114,11 @@ func (s *scrollback) appendToolCall(id int64, name string, input []byte) {
 	s.trim()
 }
 
-// completeToolCall attaches a result to the last open tool card.
+// completeToolCall attaches a result to the oldest open tool card (FIFO).
+// Agent emits tool starts then results in start order; LIFO pairing mis-associates
+// parallel tool results.
 func (s *scrollback) completeToolCall(result, err string, durationMs int64) {
-	for i := len(s.blocks) - 1; i >= 0; i-- {
+	for i := range s.blocks {
 		if s.blocks[i].kind != blockToolCall || s.blocks[i].meta.ToolDone {
 			continue
 		}
@@ -123,7 +127,11 @@ func (s *scrollback) completeToolCall(result, err string, durationMs int64) {
 		b.meta.ToolDone = true
 		b.meta.ToolResult = result
 		b.meta.ToolError = err
-		b.meta.DurationMs = durationMs
+		if durationMs > 0 {
+			b.meta.DurationMs = durationMs
+		} else if !b.meta.StartedAt.IsZero() {
+			b.meta.DurationMs = time.Since(b.meta.StartedAt).Milliseconds()
+		}
 		b.invalidateLayout()
 		return
 	}

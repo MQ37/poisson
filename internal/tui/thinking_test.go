@@ -33,6 +33,18 @@ func TestThinkingFinalizeCollapses(t *testing.T) {
 	}
 }
 
+func TestThinkingFinalizeMultilineSingleBlock(t *testing.T) {
+	s := newScrollback(1024)
+	s.appendBlock(blockThinking, "line1\nline2")
+	s.finalizeThinking()
+	if s.blockCount() != 1 {
+		t.Fatalf("blocks = %d", s.blockCount())
+	}
+	if s.blocks[0].meta.Streaming || !s.blocks[0].meta.Collapsed {
+		t.Fatalf("meta = %+v", s.blocks[0].meta)
+	}
+}
+
 func TestThinkingToggleInView(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendBlock(blockThinking, "long thought")

@@ -107,26 +107,34 @@ func TestScrollbackSplitsNewlines(t *testing.T) {
 
 func TestScrollbackStreamingNewlines(t *testing.T) {
 	s := newScrollback(1024)
-	// Streamed assistant text arriving in chunks that span newlines.
+	// Streamed assistant text arriving in chunks that span newlines stays one block.
 	s.append(StyledLine{Style: styleAssistant, Text: "Hel"})
 	s.append(StyledLine{Style: styleAssistant, Text: "lo\nWor"})
 	s.append(StyledLine{Style: styleAssistant, Text: "ld"})
-	if s.blockCount() != 2 {
-		t.Fatalf("expected 2 blocks, got %d", s.blockCount())
+	if s.blockCount() != 1 {
+		t.Fatalf("expected 1 block, got %d", s.blockCount())
 	}
-	if s.blockRaw(0) != "Hello" || s.blockRaw(1) != "World" {
-		t.Errorf("blocks = %q / %q", s.blockRaw(0), s.blockRaw(1))
+	if s.blockRaw(0) != "Hello\nWorld" {
+		t.Errorf("block = %q", s.blockRaw(0))
 	}
 }
 
-func TestScrollbackNoEmbeddedNewline(t *testing.T) {
+func TestScrollbackStreamingPreservesCodeFence(t *testing.T) {
 	s := newScrollback(1024)
-	s.append(StyledLine{Style: styleAssistant, Text: "a\nb\nc"})
-	for i := 0; i < s.blockCount(); i++ {
-		raw := s.blockRaw(i)
-		if strings.Contains(raw, "\n") || strings.Contains(raw, "\r") {
-			t.Errorf("block %d still contains a newline: %q", i, raw)
+	s.append(StyledLine{Style: styleAssistant, Text: "text"})
+	s.append(StyledLine{Style: styleAssistant, Text: "\n```go\nmain()\n```"})
+	if s.blockCount() != 1 {
+		t.Fatalf("expected 1 block, got %d", s.blockCount())
+	}
+	lines := layoutRichMarkdown(s.blockRaw(0), 40, "")
+	foundBox := false
+	for _, ln := range lines {
+		if strings.Contains(stripANSI(ln), "╭") {
+			foundBox = true
 		}
+	}
+	if !foundBox {
+		t.Fatal("expected code fence box in layout")
 	}
 }
 

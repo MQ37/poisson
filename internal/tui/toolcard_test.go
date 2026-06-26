@@ -46,6 +46,23 @@ func TestToolCardComplete(t *testing.T) {
 	}
 }
 
+func TestToolCardParallelPairingFIFO(t *testing.T) {
+	s := newScrollback(1024)
+	s.appendToolCall(0, "read", toolInputJSON("read", map[string]string{"path": "a.go"}))
+	s.appendToolCall(1, "bash", toolInputJSON("bash", map[string]string{"command": "ls"}))
+	s.completeToolCall("READ_OUT", "", 0)
+	if s.blocks[0].meta.ToolDone != true || s.blocks[0].meta.ToolResult != "READ_OUT" {
+		t.Fatalf("block0 = %+v", s.blocks[0].meta)
+	}
+	if s.blocks[1].meta.ToolDone {
+		t.Fatalf("block1 should still be open: %+v", s.blocks[1].meta)
+	}
+	s.completeToolCall("BASH_OUT", "", 0)
+	if s.blocks[1].meta.ToolResult != "BASH_OUT" {
+		t.Fatalf("block1 = %+v", s.blocks[1].meta)
+	}
+}
+
 func TestToolCardError(t *testing.T) {
 	b := Block{
 		id:   3,

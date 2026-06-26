@@ -60,21 +60,20 @@ func layoutThinking(b *Block, width int, _ int) []ScreenRow {
 	return rows
 }
 
-// finalizeThinking marks the tail thinking block complete and collapsed.
+// finalizeThinking marks all in-flight thinking blocks complete and collapsed.
 func (s *scrollback) finalizeThinking() {
-	if len(s.blocks) == 0 {
-		return
+	for i := range s.blocks {
+		b := &s.blocks[i]
+		if b.kind != blockThinking || !b.meta.Streaming {
+			continue
+		}
+		b.meta.Streaming = false
+		b.meta.Collapsed = true
+		if !b.meta.StartedAt.IsZero() {
+			b.meta.DurationMs = time.Since(b.meta.StartedAt).Milliseconds()
+		}
+		b.invalidateLayout()
 	}
-	tail := &s.blocks[len(s.blocks)-1]
-	if tail.kind != blockThinking || !tail.meta.Streaming {
-		return
-	}
-	tail.meta.Streaming = false
-	tail.meta.Collapsed = true
-	if !tail.meta.StartedAt.IsZero() {
-		tail.meta.DurationMs = time.Since(tail.meta.StartedAt).Milliseconds()
-	}
-	tail.invalidateLayout()
 }
 
 // markThinkingStreaming sets streaming state on the tail thinking block.

@@ -44,7 +44,6 @@ type tuiV2 struct {
 	renderFrame    int
 	activeTools    int
 	nextToolID     int64
-	toolStartedAt  time.Time
 	lastInputRows  int
 	activeOverlay  overlay
 
@@ -652,15 +651,9 @@ func (t *tuiV2) handleEvent(ev agent.OutputEvent) {
 		t.scroll.finalizeThinking()
 		id := t.nextToolID
 		t.nextToolID++
-		t.toolStartedAt = time.Now()
 		t.scroll.appendToolCall(id, ev.ToolName, ev.ToolInput)
 	case agent.OutputToolResult:
-		var dur int64
-		if !t.toolStartedAt.IsZero() {
-			dur = time.Since(t.toolStartedAt).Milliseconds()
-		}
-		t.scroll.completeToolCall(ev.ToolResultContent, ev.ToolError, dur)
-		t.toolStartedAt = time.Time{}
+		t.scroll.completeToolCall(ev.ToolResultContent, ev.ToolError, 0)
 	case agent.OutputApproval:
 		// Approval UI is shown via activeOverlay in Approve().
 	case agent.OutputError:

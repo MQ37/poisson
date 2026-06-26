@@ -53,8 +53,9 @@ func (s *scrollback) newBlock(kind BlockKind, raw string) Block {
 	return Block{id: id, kind: kind, raw: raw}
 }
 
-// appendBlock adds or merges a block. Streaming kinds merge into the tail block
-// of the same kind when no newline split occurs in the first fragment.
+// appendBlock adds or merges a block. Streaming kinds (assistant/thinking) merge
+// the full chunk into the tail block of the same kind, preserving embedded
+// newlines so markdown code fences stay intact across streamed chunks.
 func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 	text := stripANSI(raw)
 	text = strings.ReplaceAll(text, "\r\n", "\n")
@@ -62,31 +63,37 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 	if text == "" && streamingKinds[kind] {
 		return
 	}
-	parts := strings.Split(text, "\n")
-	start := 0
-	if streamingKinds[kind] && len(s.blocks) > 0 {
-		tail := &s.blocks[len(s.blocks)-1]
-		if tail.kind == kind {
-			tail.raw += sanitizeControls(parts[0])
-			tail.invalidateLayout()
-			start = 1
-		} else {
-			s.lastStreamWrapCount = 0
+	if streamingKinds[kind] {
+		if len(s.blocks) > 0 {
+			tail := &s.blocks[len(s.blocks)-1]
+			if tail.kind == kind {
+				tail.raw += sanitizeControls(text)
+				tail.invalidateLayout()
+				if kind == blockThinking {
+					s.markThinkingStreaming()
+				}
+				s.totalAdded++
+				s.trim()
+				return
+			}
 		}
-	} else {
 		s.lastStreamWrapCount = 0
-	}
-	for i := start; i < len(parts); i++ {
-		b := s.newBlock(kind, sanitizeControls(parts[i]))
+		b := s.newBlock(kind, sanitizeControls(text))
 		if kind == blockThinking {
 			b.meta.Streaming = true
 			b.meta.StartedAt = time.Now()
 		}
 		s.blocks = append(s.blocks, b)
-		s.lastStreamWrapCount = 0
+		if kind == blockThinking {
+			s.markThinkingStreaming()
+		}
+		s.totalAdded++
+		s.trim()
+		return
 	}
-	if kind == blockThinking {
-		s.markThinkingStreaming()
+	s.lastStreamWrapCount = 0
+	for _, part := range strings.Split(text, "\n") {
+		s.blocks = append(s.blocks, s.newBlock(kind, sanitizeControls(part)))
 	}
 	s.totalAdded++
 	s.trim()
