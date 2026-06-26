@@ -6,7 +6,7 @@ import (
 )
 
 // LineStyle categorizes a scrollback line so we can color-code it cheaply
-// without reparsing the text each render.
+// without reparsing the text each render. Kept for commands.go compatibility.
 type LineStyle uint8
 
 const (
@@ -22,99 +22,90 @@ const (
 	styleStatus                      // status bar
 )
 
-// StyledLine is one logical row in the scrollback. Text is the visible text
-// WITHOUT ANSI codes; style is applied at render time.
+// StyledLine is the legacy append unit; converted to Block internally.
 type StyledLine struct {
 	Style LineStyle
-	Text  string // visible text only (no ANSI)
+	Text  string
 }
 
-// scrollback is an append-only ring of styled logical lines. Logical lines are
-// wrapped to the terminal width lazily in visible(). This keeps streamed
-// assistant text on a single logical line instead of creating one scrollback
-// row per SSE chunk.
+// scrollback is an append-only ring of document blocks. Blocks are laid out
+// to screen rows lazily with per-block caching.
 type scrollback struct {
-	lines    []StyledLine // logical, unwrapped lines
-	maxLines int
-	// viewport: scrollTop == 0 means "pinned to bottom" (live mode). Positive
-	// values mean "user scrolled up by N rows".
+	blocks   []Block
+	maxLines int // max logical blocks (name kept for compat)
 	scrollTop  int
-	totalAdded int // ever-appended counter (for status display)
-	// lastStreamWrapCount tracks wrapped rows for the tail logical line so
-	// streamViewportDirty can repaint only changed viewport rows.
+	totalAdded int
 	lastStreamWrapCount int
+	nextID     int64
 }
 
 func newScrollback(max int) *scrollback {
 	if max < 1024 {
 		max = 1024
 	}
-	return &scrollback{lines: make([]StyledLine, 0, 256), maxLines: max}
+	return &scrollback{blocks: make([]Block, 0, 256), maxLines: max, nextID: 1}
 }
 
-// streamingStyles are the line styles that should merge with the previous
-// line when appended consecutively. Assistant text and thinking are streamed
-// one SSE chunk at a time; without merging each chunk would appear on its own
-// scrollback row.
-var streamingStyles = map[LineStyle]bool{
-	styleAssistant: true,
-	styleThinking:  true,
+func (s *scrollback) newBlock(kind BlockKind, raw string) Block {
+	id := s.nextID
+	s.nextID++
+	return Block{id: id, kind: kind, raw: raw}
 }
 
-// append adds a styled logical line. Consecutive streaming lines of the same
-// style have their text merged into a single logical line.
-// append adds styled text to the scrollback. The text may contain newlines;
-// each line becomes its own logical scrollback row. For streaming styles
-// (assistant text, thinking), the first fragment is merged into the previous
-// row so a multi-chunk stream stays on one logical line until a real newline.
-func (s *scrollback) append(line StyledLine) {
-	text := stripANSI(line.Text)
+// appendBlock adds or merges a block. Streaming kinds merge into the tail block
+// of the same kind when no newline split occurs in the first fragment.
+func (s *scrollback) appendBlock(kind BlockKind, raw string) {
+	text := stripANSI(raw)
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
-	if text == "" && streamingStyles[line.Style] {
+	if text == "" && streamingKinds[kind] {
 		return
 	}
 	parts := strings.Split(text, "\n")
 	start := 0
-	if streamingStyles[line.Style] && len(s.lines) > 0 && s.lines[len(s.lines)-1].Style == line.Style {
-		s.lines[len(s.lines)-1].Text += sanitizeControls(parts[0])
-		start = 1
+	if streamingKinds[kind] && len(s.blocks) > 0 {
+		tail := &s.blocks[len(s.blocks)-1]
+		if tail.kind == kind {
+			tail.raw += sanitizeControls(parts[0])
+			tail.invalidateLayout()
+			start = 1
+		} else {
+			s.lastStreamWrapCount = 0
+		}
 	} else {
 		s.lastStreamWrapCount = 0
 	}
 	for i := start; i < len(parts); i++ {
-		s.lines = append(s.lines, StyledLine{Style: line.Style, Text: sanitizeControls(parts[i])})
+		s.blocks = append(s.blocks, s.newBlock(kind, sanitizeControls(parts[i])))
 		s.lastStreamWrapCount = 0
 	}
 	s.totalAdded++
 	s.trim()
 }
 
-// appendRaw appends pre-split text (multiple lines already separated by \r\n
-// or \n). Used for /commands and tool-result output. Long logical lines are
-// wrapped at render time.
+func (s *scrollback) append(line StyledLine) {
+	s.appendBlock(styleToKind(line.Style), line.Text)
+}
+
 func (s *scrollback) appendRaw(style LineStyle, text string) {
 	s.lastStreamWrapCount = 0
 	for _, ln := range splitLines(stripANSI(text)) {
-		s.lines = append(s.lines, StyledLine{Style: style, Text: sanitizeControls(ln)})
+		s.blocks = append(s.blocks, s.newBlock(styleToKind(style), sanitizeControls(ln)))
 		s.totalAdded++
 	}
 	s.trim()
 }
 
-// streamViewportDirty returns 0-based row indices within the scrollback viewport
-// that need repainting after a streaming append. Returns nil when the user has
-// scrolled up and the streaming tail is off-screen.
 func (s *scrollback) streamViewportDirty(height, width int) []int {
-	if height < 1 || width < 1 || len(s.lines) == 0 || s.scrollTop > 0 {
+	if height < 1 || width < 1 || len(s.blocks) == 0 || s.scrollTop > 0 {
 		return nil
 	}
-	newCount := len(wrapLine(s.lines[len(s.lines)-1].Text, width))
+	newCount := len(wrapLine(s.blocks[len(s.blocks)-1].raw, width))
 	prev := s.lastStreamWrapCount
 	grew := newCount > prev
 	s.lastStreamWrapCount = newCount
 
-	wrapped, _ := wrapAll(s.lines, width)
+	wrapped, _ := s.layoutAll(width)
 	viewStart := len(wrapped) - height
 	if viewStart < 0 {
 		viewStart = 0
@@ -133,9 +124,6 @@ func (s *scrollback) streamViewportDirty(height, width int) []int {
 	return []int{viewLen - 1}
 }
 
-// sanitizeControls makes one logical line safe to render: tabs expand to
-// spaces and other C0 control bytes (which would move the terminal cursor)
-// are dropped. The caller must have already split on '\n'.
 func sanitizeControls(s string) string {
 	if !strings.ContainsAny(s, "\t\x00\x01\x02\x03\x04\x05\x06\a\b\v\f\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f") {
 		return s
@@ -147,7 +135,6 @@ func sanitizeControls(s string) string {
 		case r == '\t':
 			b.WriteString("    ")
 		case r < 0x20 || r == 0x7f:
-			// drop other C0 controls / DEL
 		default:
 			b.WriteRune(r)
 		}
@@ -156,10 +143,9 @@ func sanitizeControls(s string) string {
 }
 
 func (s *scrollback) trim() {
-	if len(s.lines) > s.maxLines {
-		drop := len(s.lines) - s.maxLines
-		s.lines = s.lines[drop:]
-		// If user had scrolled up, the floor shifts: clamp.
+	if len(s.blocks) > s.maxLines {
+		drop := len(s.blocks) - s.maxLines
+		s.blocks = s.blocks[drop:]
 		if s.scrollTop > 0 {
 			s.scrollTop -= drop
 			if s.scrollTop < 0 {
@@ -167,19 +153,30 @@ func (s *scrollback) trim() {
 			}
 		}
 	}
-	if s.scrollTop > len(s.lines) {
-		s.scrollTop = len(s.lines)
+	if s.scrollTop > len(s.blocks) {
+		s.scrollTop = len(s.blocks)
 	}
 }
 
-// visible returns the slice of screen rows currently in the viewport. It wraps
-// logical lines to width and honors scrollTop so the user can scroll back.
-func (s *scrollback) visible(height, width int) []StyledLine {
-	if height < 1 || width < 1 || len(s.lines) == 0 {
+// layoutAll lays out every block at width and returns flat screen rows plus
+// cumulative[i] = wrapped row count for blocks[0:i).
+func (s *scrollback) layoutAll(width int) ([]ScreenRow, []int) {
+	cumulative := make([]int, len(s.blocks)+1)
+	var out []ScreenRow
+	for i := range s.blocks {
+		rows := s.blocks[i].layoutPlain(width)
+		out = append(out, rows...)
+		cumulative[i+1] = len(out)
+	}
+	return out, cumulative
+}
+
+// visible returns screen rows in the current viewport.
+func (s *scrollback) visible(height, width int) []ScreenRow {
+	if height < 1 || width < 1 || len(s.blocks) == 0 {
 		return nil
 	}
-	// Wrap all logical lines to width, counting screen rows.
-	wrapped, cumulative := wrapAll(s.lines, width)
+	wrapped, cumulative := s.layoutAll(width)
 	if len(wrapped) == 0 {
 		return nil
 	}
@@ -189,9 +186,6 @@ func (s *scrollback) visible(height, width int) []StyledLine {
 		start = 0
 	}
 	if s.scrollTop > 0 {
-		// scrollTop is logical-line rows. Convert to wrapped rows by finding
-		// the wrapped row index that corresponds to scrolling up that many
-		// logical lines from the bottom.
 		logicalEnd := len(cumulative)
 		target := logicalEnd - s.scrollTop
 		if target < 0 {
@@ -212,21 +206,34 @@ func (s *scrollback) visible(height, width int) []StyledLine {
 	return wrapped[start:end]
 }
 
-// wrapAll wraps every logical line to width and returns the flat list of
-// screen rows. cumulative[i] is the number of wrapped rows consumed by lines
-// [0:i), so the caller can map a logical-line scroll offset to a wrapped row.
-func wrapAll(lines []StyledLine, width int) ([]StyledLine, []int) {
-	cumulative := make([]int, len(lines)+1)
-	var out []StyledLine
-	for i, ln := range lines {
-		chunks := wrapLine(ln.Text, width)
-		prefix := stylePrefix(ln.Style)
-		for _, chunk := range chunks {
-			out = append(out, StyledLine{Style: ln.Style, Text: prefix + chunk + reset})
-		}
-		cumulative[i+1] = cumulative[i] + len(chunks)
+func (s *scrollback) pinned() bool { return s.scrollTop == 0 }
+
+func (s *scrollback) scrollUp(n, height int) {
+	if s.scrollTop+n > len(s.blocks) {
+		s.scrollTop = len(s.blocks)
+	} else {
+		s.scrollTop += n
 	}
-	return out, cumulative
+}
+
+func (s *scrollback) scrollDown(n int) {
+	s.scrollTop -= n
+	if s.scrollTop < 0 {
+		s.scrollTop = 0
+	}
+}
+
+func (s *scrollback) scrollToBottom() { s.scrollTop = 0 }
+
+// blockCount returns the number of logical blocks (for tests).
+func (s *scrollback) blockCount() int { return len(s.blocks) }
+
+// blockRaw returns the raw text of block i (for tests).
+func (s *scrollback) blockRaw(i int) string {
+	if i < 0 || i >= len(s.blocks) {
+		return ""
+	}
+	return s.blocks[i].raw
 }
 
 // wrapLine hard-wraps a single logical line to width runes per chunk.
@@ -251,26 +258,6 @@ func wrapLine(text string, width int) []string {
 	}
 	return out
 }
-
-func (s *scrollback) pinned() bool { return s.scrollTop == 0 }
-
-func (s *scrollback) scrollUp(n, height int) {
-	// scrollTop counts logical lines. We can't scroll beyond the top.
-	if s.scrollTop+n > len(s.lines) {
-		s.scrollTop = len(s.lines)
-	} else {
-		s.scrollTop += n
-	}
-}
-
-func (s *scrollback) scrollDown(n int) {
-	s.scrollTop -= n
-	if s.scrollTop < 0 {
-		s.scrollTop = 0
-	}
-}
-
-func (s *scrollback) scrollToBottom() { s.scrollTop = 0 }
 
 // stylePrefix returns the ANSI prefix for a given line style.
 func stylePrefix(st LineStyle) string {
@@ -299,7 +286,6 @@ func stylePrefix(st LineStyle) string {
 	return ""
 }
 
-// splitLines splits on \r\n or \n. Empty lines preserved.
 func splitLines(s string) []string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	if s == "" {
@@ -308,13 +294,11 @@ func splitLines(s string) []string {
 	return strings.Split(s, "\n")
 }
 
-// stripANSI removes ANSI escape sequences for width measurement and storage.
 func stripANSI(s string) string {
 	var b strings.Builder
 	i := 0
 	for i < len(s) {
 		if s[i] == 0x1b {
-			// Skip ESC + [ + params (digits, semicolons) + final byte (0x40-0x7e).
 			i++
 			if i < len(s) && s[i] == '[' {
 				i++
@@ -322,11 +306,11 @@ func stripANSI(s string) string {
 					i++
 				}
 				if i < len(s) {
-					i++ // consume final byte
+					i++
 				}
 				continue
 			}
-			if i < len(s) && s[i] == ']' { // OSC: ESC ] ... BEL or ESC \
+			if i < len(s) && s[i] == ']' {
 				i++
 				for i < len(s) && s[i] != 0x07 {
 					if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '\\' {
@@ -340,7 +324,6 @@ func stripANSI(s string) string {
 				}
 				continue
 			}
-			// Other ESC: skip 1 byte.
 			i++
 			continue
 		}
@@ -350,11 +333,8 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
-// visibleWidth returns the display width of a string in runes (no CJK width).
 func visibleWidth(s string) int { return utf8.RuneCountInString(stripANSI(s)) }
 
-// truncateToWidth truncates a (possibly ANSI-bearing) string to fit in
-// `width` visible columns, appending "…" if cut. Used by status bar.
 func truncateToWidth(s string, width int) string {
 	if width <= 0 {
 		return ""

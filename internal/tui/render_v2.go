@@ -20,7 +20,7 @@ type layoutSnapshot struct {
 	sr        int
 	sc        int
 	screenLines []string
-	visible   []StyledLine
+	visible   []ScreenRow
 }
 
 func (t *tuiV2) prepareLayout() layoutSnapshot {

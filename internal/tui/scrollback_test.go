@@ -9,23 +9,21 @@ func TestScrollbackMergesStreamingAssistantLines(t *testing.T) {
 	s := newScrollback(1024)
 	s.append(StyledLine{Style: styleAssistant, Text: "Hello, "})
 	s.append(StyledLine{Style: styleAssistant, Text: "world!"})
-	if len(s.lines) != 1 {
-		t.Fatalf("expected 1 logical line, got %d", len(s.lines))
+	if s.blockCount() != 1 {
+		t.Fatalf("expected 1 block, got %d", s.blockCount())
 	}
-	if s.lines[0].Text != "Hello, world!" {
-		t.Errorf("merged text = %q", s.lines[0].Text)
+	if s.blockRaw(0) != "Hello, world!" {
+		t.Errorf("merged text = %q", s.blockRaw(0))
 	}
 
-	// A tool result breaks the stream and starts a new line.
 	s.appendRaw(styleToolResult, "done")
-	if len(s.lines) != 2 {
-		t.Fatalf("expected 2 logical lines after tool result, got %d", len(s.lines))
+	if s.blockCount() != 2 {
+		t.Fatalf("expected 2 blocks after tool result, got %d", s.blockCount())
 	}
 
-	// New assistant text after tool result starts a new line.
 	s.append(StyledLine{Style: styleAssistant, Text: "Next"})
-	if len(s.lines) != 3 {
-		t.Fatalf("expected 3 logical lines, got %d", len(s.lines))
+	if s.blockCount() != 3 {
+		t.Fatalf("expected 3 blocks, got %d", s.blockCount())
 	}
 }
 
@@ -99,11 +97,11 @@ func TestScrollbackSplitsNewlines(t *testing.T) {
 	s := newScrollback(1024)
 	// Non-streaming multiline (user echo) must become separate rows.
 	s.append(StyledLine{Style: styleUser, Text: "AAA\nBBB\nCCC"})
-	if len(s.lines) != 3 {
-		t.Fatalf("expected 3 logical lines, got %d: %#v", len(s.lines), s.lines)
+	if s.blockCount() != 3 {
+		t.Fatalf("expected 3 blocks, got %d", s.blockCount())
 	}
-	if s.lines[0].Text != "AAA" || s.lines[1].Text != "BBB" || s.lines[2].Text != "CCC" {
-		t.Errorf("lines = %q/%q/%q", s.lines[0].Text, s.lines[1].Text, s.lines[2].Text)
+	if s.blockRaw(0) != "AAA" || s.blockRaw(1) != "BBB" || s.blockRaw(2) != "CCC" {
+		t.Errorf("blocks = %q/%q/%q", s.blockRaw(0), s.blockRaw(1), s.blockRaw(2))
 	}
 }
 
@@ -113,20 +111,21 @@ func TestScrollbackStreamingNewlines(t *testing.T) {
 	s.append(StyledLine{Style: styleAssistant, Text: "Hel"})
 	s.append(StyledLine{Style: styleAssistant, Text: "lo\nWor"})
 	s.append(StyledLine{Style: styleAssistant, Text: "ld"})
-	if len(s.lines) != 2 {
-		t.Fatalf("expected 2 logical lines, got %d: %#v", len(s.lines), s.lines)
+	if s.blockCount() != 2 {
+		t.Fatalf("expected 2 blocks, got %d", s.blockCount())
 	}
-	if s.lines[0].Text != "Hello" || s.lines[1].Text != "World" {
-		t.Errorf("lines = %q / %q", s.lines[0].Text, s.lines[1].Text)
+	if s.blockRaw(0) != "Hello" || s.blockRaw(1) != "World" {
+		t.Errorf("blocks = %q / %q", s.blockRaw(0), s.blockRaw(1))
 	}
 }
 
 func TestScrollbackNoEmbeddedNewline(t *testing.T) {
 	s := newScrollback(1024)
 	s.append(StyledLine{Style: styleAssistant, Text: "a\nb\nc"})
-	for i, ln := range s.lines {
-		if strings.Contains(ln.Text, "\n") || strings.Contains(ln.Text, "\r") {
-			t.Errorf("line %d still contains a newline: %q", i, ln.Text)
+	for i := 0; i < s.blockCount(); i++ {
+		raw := s.blockRaw(i)
+		if strings.Contains(raw, "\n") || strings.Contains(raw, "\r") {
+			t.Errorf("block %d still contains a newline: %q", i, raw)
 		}
 	}
 }
@@ -152,10 +151,10 @@ func TestScrollbackStreamViewportDirtyPinned(t *testing.T) {
 func TestScrollbackSanitizesControls(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendRaw(styleSystem, "a\tb\x1bc\x7fd")
-	if len(s.lines) != 1 {
-		t.Fatalf("expected 1 line, got %d", len(s.lines))
+	if s.blockCount() != 1 {
+		t.Fatalf("expected 1 block, got %d", s.blockCount())
 	}
-	if got := s.lines[0].Text; got != "a    bd" {
-		t.Fatalf("sanitized line = %q, want %q", got, "a    bd")
+	if got := s.blockRaw(0); got != "a    bd" {
+		t.Fatalf("sanitized block = %q, want %q", got, "a    bd")
 	}
 }
