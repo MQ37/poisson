@@ -205,7 +205,7 @@ func (t *tuiV2) Run() error {
 			// This avoids the race where Approve and the input goroutine
 			// both read from stdin.
 			if t.approving.Load() {
-				allowed, ok := approvalKeyAllowed(buf[:n])
+				allowed, ok := approvalKeyAllowed(decodeKittyKeys(buf[:n]))
 				if ok {
 					t.approvalAnswer <- allowed
 				}

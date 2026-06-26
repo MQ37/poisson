@@ -286,6 +286,7 @@ func (t *tuiV2) markAfterEvent(ev agent.OutputEvent) {
 	case agent.OutputDone:
 		t.activeTools = 0
 		t.dirty.markStatus()
+		t.dirty.markScrollAll(t.scrollRows)
 	default:
 		t.dirty.markScrollAll(t.scrollRows)
 	}

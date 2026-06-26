@@ -25,6 +25,15 @@ func TestApprovalKeyAllowed(t *testing.T) {
 	}
 }
 
+func TestApprovalKeyAllowedKittyEnter(t *testing.T) {
+	// Kitty plain Enter → ESC[13u → decodeKittyKeys → \r → allow
+	data := decodeKittyKeys([]byte{27, '[', '1', '3', 'u'})
+	allowed, ok := approvalKeyAllowed(data)
+	if !ok || !allowed {
+		t.Fatalf("kitty Enter: allowed=%v ok=%v, want true true; data=%q", allowed, ok, data)
+	}
+}
+
 func TestApprovalOverlayRenderFits(t *testing.T) {
 	o := newApprovalOverlay("rm -rf ./build", "dangerous")
 	anchor, lines := o.render(20, 80)

@@ -388,35 +388,14 @@ func runChildMode() {
 	// Set up provider (always ollama in child mode).
 	prov := provider.NewOllamaProvider(cfg.Ollama.BaseURL, cfg.Ollama.Model)
 
-	// Set up tools — restricted set.
-	reg := tools.NewRegistry()
 	sandbox := os.Getenv("POISSON_SANDBOX") == "1"
-	for _, name := range strings.Split(toolsList, ",") {
-		name = strings.TrimSpace(name)
-		switch name {
-		case "read":
-			reg.Register(tools.NewReadTool(cwd))
-		case "write":
-			reg.Register(tools.NewWriteTool(cwd))
-		case "edit":
-			reg.Register(tools.NewEditTool(cwd))
-		case "bash":
-			reg.Register(tools.NewBashTool(cwd, sandbox, nil))
-		case "search":
-			reg.Register(tools.NewSearchTool(cwd))
-		case "ls":
-			reg.Register(tools.NewLsTool(cwd))
-		case "glob":
-			reg.Register(tools.NewGlobTool(cwd))
-		}
-	}
 
-	// Approval: write to stdout, read from stdin.
+	// Approval: write to stdout, read from stdin. Must be defined before tool
+	// registration so bash gets the callback (not nil).
 	approvalFn := func(command, description, workdir string) bool {
 		if sandbox {
 			return true
 		}
-		// Write approval request to stdout.
 		writeChildEvent(map[string]interface{}{
 			"type":        "approval_request",
 			"command":     command,
@@ -424,7 +403,6 @@ func runChildMode() {
 			"cwd":         workdir,
 			"agent":       os.Getenv("POISSON_SUBAGENT_NAME"),
 		})
-		// Read response from stdin.
 		scanner := bufioNewScanner(os.Stdin)
 		if scanner.Scan() {
 			var resp struct {
@@ -436,6 +414,28 @@ func runChildMode() {
 			}
 		}
 		return false
+	}
+
+	// Set up tools — restricted set.
+	reg := tools.NewRegistry()
+	for _, name := range strings.Split(toolsList, ",") {
+		name = strings.TrimSpace(name)
+		switch name {
+		case "read":
+			reg.Register(tools.NewReadTool(cwd))
+		case "write":
+			reg.Register(tools.NewWriteTool(cwd))
+		case "edit":
+			reg.Register(tools.NewEditTool(cwd))
+		case "bash":
+			reg.Register(tools.NewBashTool(cwd, sandbox, approvalFn))
+		case "search":
+			reg.Register(tools.NewSearchTool(cwd))
+		case "ls":
+			reg.Register(tools.NewLsTool(cwd))
+		case "glob":
+			reg.Register(tools.NewGlobTool(cwd))
+		}
 	}
 
 	// Run agent with a nil outputChan (we write events ourselves).
