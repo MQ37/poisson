@@ -6,7 +6,7 @@ import (
 )
 
 func TestPaintPartialScrollRepaintsCompletion(t *testing.T) {
-	tui := newTUIv2(nil, "s-abc", nil)
+	tui := newTUI(nil, "s-abc", nil)
 	tui.cols = 40
 	tui.rows = 12
 	tui.scrollRows = 8

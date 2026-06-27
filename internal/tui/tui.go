@@ -1,7 +1,3 @@
-// Package tui implements the Poisson streaming readline REPL. It runs in raw
-// terminal mode, reads keys one at a time, and renders agent output events
-// (streaming text, tool calls, status bar) inline. All terminal writes go
-// through a single writer to avoid interleaved output.
 package tui
 
 import (
@@ -10,564 +6,870 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
+	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
 	"golang.org/x/term"
 	"poisson/internal/agent"
 )
 
-// TUI is the interactive readline REPL. It owns the raw-mode terminal,
-// the input line editor, history, and the rendering of agent output events.
+// contentWidth is the safe scrollback line width. Writing exactly cols runes at
+// column 1 makes many terminals auto-wrap, so scroll content stays cols-1.
+func (t *TUI) contentWidth() int {
+	w := t.cols - 1
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
+// TUI is the split-screen alt-screen REPL.
 type TUI struct {
-	outputChan chan agent.OutputEvent
+	agent     *agent.Agent
+	sessionID string
+	output    chan agent.OutputEvent
+	writer    io.Writer
+	fd        int
+	oldState  *term.State
+
+	// Layout state, recomputed on resize.
+	mu         sync.Mutex
+	rows       int // total terminal rows
+	cols       int // total terminal cols
+	headerRows int // Grok-style top strip (cwd · tokens · time)
+	scrollRows int // rows allotted to scrollback
+	inputRows  int // rows for multi-line input
+	statusRows int // legacy; 0 (status moved to headerRows)
+
+	// Region content.
+	scroll *scrollback
+	editor *editor
+	status StatusSnapshot
+	dirty  dirtyTracker
+
+	renderFrame    int
+	activeTools    int
+	nextToolID     int64
+	lastInputRows  int
+	activeOverlay  overlay
+
+	// Lifecycle.
+	stopped atomic.Bool
+	done    chan struct{} // closed by input goroutine when it exits
+
+	// History.
 	history    []string
 	histIdx    int
-	input      string
-	cursorPos  int
-	agent      *agent.Agent
-	sessionID  string
+	draftSaved string // restore on arrow-down past newest
 
-	// Bracketed-paste accumulation across reads.
-	pasting  bool
-	pasteBuf []byte
+	// Completion dropdown (slash commands, @file paths).
+	completion           *completion
+	lastCompletionRows   int // scroll rows last painted by the dropdown
 
+	// Focus: Tab toggles between input editor and conversation scroll.
+	focusRegion focusRegion
+	convUserIdx int // index into scroll.userBlockIndices()
+
+	// Approval coordination. The input goroutine is the sole stdin reader;
+	// when approval is pending it routes the answer through this channel
+	// instead of feeding it to the editor.
+	approvalMu     sync.Mutex
+	approving      atomic.Bool
+	approvalAnswer chan bool
+	overlayQuit    atomic.Bool
+
+	// Submission signaling.
 	lastCtrlC time.Time
 
-	// Approval coordination. While an approval prompt is active it owns stdin
-	// exclusively (blocking mode); the Ctrl+C poller skips reading. pollerActive
-	// is true only while drainOutput runs its nonblocking poll loop.
-	approvalMu   sync.Mutex
-	approving    atomic.Bool
-	pollerActive atomic.Bool
-
-	// writer is where all rendered output is written. Defaults to os.Stdout.
-	writer io.Writer
-	// fd is the terminal file descriptor used for raw-mode toggling.
-	fd int
-	// oldState is the saved terminal state to restore on exit.
-	oldState *term.State
+	// cancelRun is set while an agent prompt is in flight. The input goroutine
+	// uses it to cancel a running request on Ctrl+C.
+	cancelRun context.CancelFunc
+	cancelMu  sync.Mutex
 }
 
-// NewTUI constructs a TUI wired to the given agent and output channel. The
-// sessionID is shown in the status bar.
+// NewTUI constructs the interactive TUI wired to the given agent and output channel.
 func NewTUI(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent) *TUI {
+	return newTUI(a, sessionID, outputChan)
+}
+
+func newTUI(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent) *TUI {
+	theme := "dark"
+	showTokens := true
+	showCost := true
+	if a != nil {
+		if c := a.Config(); c != nil {
+			if c.TUI.Theme != "" {
+				theme = c.TUI.Theme
+			}
+			showTokens = c.TUI.ShowTokens
+			showCost = c.TUI.ShowCost
+		}
+	}
+	applyTheme(theme)
+
 	return &TUI{
-		outputChan: outputChan,
-		history:    []string{},
-		histIdx:    -1,
-		agent:      a,
-		sessionID:  sessionID,
-		writer:     os.Stdout,
-		fd:         int(os.Stdin.Fd()),
+		agent:          a,
+		sessionID:      sessionID,
+		output:         outputChan,
+		writer:         os.Stdout,
+		fd:             int(os.Stdin.Fd()),
+		scroll:         newScrollback(8192),
+		editor:         newEditor(),
+		history:        []string{},
+		histIdx:        -1,
+		status: StatusSnapshot{
+			SessionID:  sessionID,
+			Cwd:        cwdOf(),
+			Model:      modelLabel(a),
+			ShowTokens: showTokens,
+			ShowCost:   showCost,
+		},
+		dirty:          newDirtyTracker(),
+		inputRows:      3,
+		headerRows:     2,
+		statusRows:     0,
+		lastInputRows:  3,
+		done:           make(chan struct{}),
+		approvalAnswer: make(chan bool, 1),
 	}
 }
 
-// Run starts the REPL loop. It puts the terminal into raw mode, reads keys,
-// and dispatches: Enter submits input (→ agent.Prompt → drain outputChan),
-// ↑/↓ navigates history, Tab completes slash commands, Ctrl+J inserts a
-// newline, Ctrl+C exits.
-// Run starts the REPL. If onReady is non-nil it is called with the live
-// Approver (v2 or classic *TUI) before the session blocks, so approval
-// callbacks wired into the agent can reach the running TUI.
-func (t *TUI) Run(onReady func(Approver)) error {
-	if os.Getenv("POISSON_TUI") != "classic" {
-		v2 := newTUIv2(t.agent, t.sessionID, t.outputChan)
-		if t.outputChan == nil {
-			v2.output = nil
-		}
-		if onReady != nil {
-			onReady(v2)
-		}
-		return v2.Run()
+// modelLabel returns a short "provider/model" label for status display.
+func modelLabel(a *agent.Agent) string {
+	if a == nil {
+		return "-"
 	}
-	if onReady != nil {
-		onReady(t)
+	return a.Provider().ID() + "/" + a.Model()
+}
+
+// inputHeight returns how many screen rows the input currently needs.
+// Caps at a third of total rows so the scrollback stays readable.
+func (t *TUI) inputHeight(width int) int {
+	n := totalVisualLines(t.editor, width) + 2 // +1 separator, +1 hint
+	if n < 4 {
+		n = 4
 	}
+	max := t.rows / 3
+	if max < 5 {
+		max = 5
+	}
+	if n > max {
+		n = max
+	}
+	return n
+}
+
+// Run starts the alt-screen TUI. It blocks until the user exits.
+func (t *TUI) Run() error {
 	oldState, err := term.MakeRaw(t.fd)
 	if err != nil {
 		return fmt.Errorf("enter raw mode: %w", err)
 	}
 	t.oldState = oldState
-	t.writeString("\x1b[?2004h") // enable bracketed paste mode
+	t.recomputeLayout()
+
+	// Wire terminal mode.
+	t.writeRaw(altScreenOn + hideCursor + bracketedOn + kittyKbOn + mouseOn)
+	t.installResize()
+
+	// Restore terminal on any exit path — including panic — so the user's
+	// shell isn't left in raw alt-screen with kitty keyboard enabled.
 	defer func() {
-		t.writeString("\x1b[?2004l") // disable bracketed paste mode
+		t.stopped.Store(true)
+		t.writeRaw(mouseOff + kittyKbOff + bracketedOff + showCursor + altScreenOff)
 		_ = term.Restore(t.fd, t.oldState)
 	}()
 
-	t.printPrompt()
+	// Lifecycle channel. render/input goroutines exit when this is closed.
+	stop := make(chan struct{})
 
-	buf := make([]byte, 65536)
-	for {
-		n, err := os.Stdin.Read(buf)
-		if err != nil {
-			return err
-		}
-		if err := t.feed(buf[:n]); err != nil {
-			if err == errQuit {
-				return nil
-			}
-			return err
-		}
-	}
-}
+	// Initial paint before starting goroutines so wrapWidth is set.
+	t.dirty.markFull()
+	t.paint(t.dirty.consume())
 
-// feed processes a chunk of input bytes. It handles control keys, escape
-// sequences, bracketed paste, and multi-byte UTF-8 printable text. A single
-// chunk may contain many bytes (e.g. a paste), so it is processed fully and
-// the line is refreshed once at the end.
-func (t *TUI) feed(data []byte) error {
-	// If we are mid-paste (paste spanned multiple reads), keep accumulating
-	// until we find the end marker.
-	if t.pasting {
-		if idx := bytesIndex(data, pasteEnd); idx >= 0 {
-			t.pasteBuf = append(t.pasteBuf, data[:idx]...)
-			t.insertPaste(string(t.pasteBuf))
-			t.pasting = false
-			t.pasteBuf = nil
-			t.refreshLine()
-			return t.feed(data[idx+len(pasteEnd):])
-		}
-		t.pasteBuf = append(t.pasteBuf, data...)
-		return nil
-	}
-
-	dirty := false
-	i := 0
-	for i < len(data) {
-		b := data[i]
-		switch {
-		case b == 3: // Ctrl+C
-			return t.handleIdleCtrlC()
-
-		case b == 13 || b == 10: // Enter / Ctrl+M / Ctrl+J
-			if dirty {
-				t.refreshLine()
-				dirty = false
+	// Render goroutine: 30fps redraw on dirty; animates spinners while busy.
+	renderDone := make(chan struct{})
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "poisson: render panic: %v\n", r)
 			}
-			if strings.HasSuffix(t.input, "\\") {
-				t.input = strings.TrimSuffix(t.input, "\\") + "\n"
-				t.cursorPos = len(t.input)
-				t.writeString("\r\n  ")
-				t.refreshLine()
-				i++
-				continue
-			}
-			t.writeString("\r\n")
-			input := t.input
-			t.input = ""
-			t.cursorPos = 0
-			if input == "" {
-				t.printPrompt()
-				i++
-				continue
-			}
-			t.history = append(t.history, input)
-			t.histIdx = len(t.history)
-			if err := t.processInput(input); err != nil {
-				return err
-			}
-			t.printPrompt()
-			i++
-
-		case b == 9: // Tab
-			if strings.HasPrefix(t.input, "/") {
-				completed := t.tabComplete(t.input)
-				if completed != t.input {
-					t.input = completed
-					t.cursorPos = len(t.input)
-					t.refreshLine()
-					dirty = false
+			close(renderDone)
+		}()
+		tick := time.NewTicker(33 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				t.mu.Lock()
+				animate := needsSpinner(t.status.Thinking, t.activeTools)
+				t.mu.Unlock()
+				if animate {
+					t.renderFrame++
+					t.markSpinnerTick()
 				}
-			} else if strings.Contains(t.input, "@") {
-				completed := t.tabComplete(t.input)
-				if completed != t.input {
-					t.input = completed
-					t.cursorPos = len(t.input)
-					t.refreshLine()
-					dirty = false
+				snap := t.dirty.consume()
+				if snap.any() {
+					t.paint(snap)
 				}
 			}
-			i++
+		}
+	}()
 
-		case b == 127 || b == 8: // Backspace / Ctrl+H
-			if t.cursorPos > 0 {
-				r := []rune(t.input)
-				pos := len([]rune(t.input[:t.cursorPos]))
-				if pos > 0 {
-					r = append(r[:pos-1], r[pos:]...)
-					t.input = string(r)
-					t.cursorPos = len([]byte(string(r[:pos-1])))
-				}
-				dirty = true
+	// Input loop.
+	go func() {
+		defer close(t.done)
+		buf := make([]byte, 65536)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
 			}
-			i++
-
-		case b == 23: // Ctrl+W — delete word backward
-			t.deleteWordBackward()
-			dirty = false
-			i++
-
-		case b == 21: // Ctrl+U — delete to beginning of line
-			t.input = t.input[t.cursorPos:]
-			t.cursorPos = 0
-			dirty = true
-			i++
-
-		case b == 11: // Ctrl+K — delete to end of line
-			t.input = t.input[:t.cursorPos]
-			dirty = true
-			i++
-
-		case b == 27: // ESC — escape sequence, arrow key, or bracketed paste
-			if dirty {
-				t.refreshLine()
-				dirty = false
-			}
-			consumed, quit, err := t.handleEscape(data[i:])
+			n, err := os.Stdin.Read(buf)
 			if err != nil {
-				return err
+				return
+			}
+			if handled := t.handleMouseInput(buf[:n]); handled {
+				continue
+			}
+			// Don't scroll scrollback behind modal overlays or approval.
+			if !t.blocksBackgroundInput() {
+				if delta, ok := parseScrollInputRaw(buf[:n], t.scrollRows); ok {
+					t.handleScrollDelta(delta)
+					continue
+				}
+			}
+			// If an approval prompt is active, route recognized answers to the
+			// approval channel instead of feeding them to the editor.
+			if t.approving.Load() {
+				allowed, ok := approvalKeyAllowed(decodeKittyKeys(buf[:n]))
+				if ok {
+					select {
+					case t.approvalAnswer <- allowed:
+					default:
+					}
+				}
+				continue
+			}
+			quit, err := t.feed(decodeKittyKeys(buf[:n]))
+			if err != nil {
+				t.appendError(err)
+				continue
 			}
 			if quit {
-				return nil
+				return
 			}
-			if consumed <= 0 {
-				consumed = 1
-			}
-			i += consumed
+		}
+	}()
 
-		case b < 32: // other control chars — ignore
-			i++
-
-		default: // printable UTF-8 rune
-			r, size := utf8.DecodeRune(data[i:])
-			if r == utf8.RuneError && size <= 1 {
-				i++
+	// Run loop: sole reader of t.output. Drains agent events until input exits.
+	for {
+		select {
+		case <-t.done:
+			close(stop)
+			<-renderDone
+			return nil
+		case ev, ok := <-t.output:
+			if !ok {
+				t.output = nil
 				continue
 			}
-			t.insertChar(r)
-			dirty = true
-			i += size
+			t.mu.Lock()
+			t.handleEvent(ev)
+			t.markAfterEvent(ev)
+			t.mu.Unlock()
 		}
 	}
-	if dirty {
-		t.refreshLine()
-	}
-	return nil
 }
 
-var (
-	pasteStart = []byte("\x1b[200~")
-	pasteEnd   = []byte("\x1b[201~")
-)
+// feed handles one chunk of input bytes. It returns (quit, error). If quit is
+// true, the input goroutine should exit. It must be called from the input
+// goroutine only.
+func (t *TUI) feed(data []byte) (bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
-// handleEscape processes an escape sequence starting at data[0] == 27.
-// Returns the number of bytes consumed, whether to quit, and any error.
-func (t *TUI) handleEscape(data []byte) (int, bool, error) {
-	if len(data) < 2 {
-		return 1, false, nil // lone ESC
-	}
-
-	// Alt+Backspace: ESC DEL or ESC BS.
-	if data[1] == 127 || data[1] == 8 {
-		t.deleteWordBackward()
-		return 2, false, nil
-	}
-
-	if data[1] == '[' {
-		// Bracketed paste start.
-		if bytesHasPrefix(data, pasteStart) {
-			rest := data[len(pasteStart):]
-			if idx := bytesIndex(rest, pasteEnd); idx >= 0 {
-				t.insertPaste(string(rest[:idx]))
-				t.refreshLine()
-				return len(pasteStart) + idx + len(pasteEnd), false, t.feed(rest[idx+len(pasteEnd):])
-			}
-			// Paste spans multiple reads — accumulate.
-			t.pasting = true
-			t.pasteBuf = append([]byte{}, rest...)
-			return len(data), false, nil
+	// Ensure wrapWidth is set so editor movements use the correct grid.
+	if t.editor.wrapWidth < 1 && t.cols > 0 {
+		w := t.cols - 1
+		if w < 1 {
+			w = 1
 		}
-		// Arrow keys: ESC [ A/B/C/D.
-		if len(data) >= 3 {
-			switch data[2] {
-			case 'A': // Up
+		t.editor.wrapWidth = w
+	}
+
+	// Block paste into the editor while a modal overlay or approval is active.
+	if t.blocksBackgroundInput() || t.hasKeyOverlay() {
+		if t.editor.paste || (len(data) >= 6 && data[0] == 27 && data[1] == '[' && data[2] == '2' && data[3] == '0' && data[4] == '0' && data[5] == '~') {
+			return false, nil
+		}
+	}
+
+	if t.handleKeyOverlay(data) {
+		if t.overlayQuit.Load() {
+			t.overlayQuit.Store(false)
+			return true, nil
+		}
+		return false, nil
+	}
+
+	// While a key-driven overlay is open, swallow keys that weren't handled above
+	// so they don't reach the editor or scrollback. Ctrl+C dismisses the overlay.
+	if t.hasKeyOverlay() {
+		if containsCtrlC(data) {
+			t.dismissOverlay()
+		}
+		return false, nil
+	}
+
+	// Conversation focus: Tab returns to input; PgUp/Dn scroll; Shift+←/→ prompts.
+	if t.focusRegion == focusConv {
+		if t.feedConvFocus(data) {
+			return false, nil
+		}
+		return false, nil
+	}
+
+	// Expanded tool result scroll (↑↓) and Esc collapse.
+	w := t.contentWidth()
+	if t.scroll.focusedToolExpanded(w) {
+		if isArrowUp(data) {
+			if t.scroll.scrollFocusedTool(w, -1) {
+				t.markScrollDirty()
+			}
+			return false, nil
+		}
+		if isArrowDown(data) {
+			if t.scroll.scrollFocusedTool(w, 1) {
+				t.markScrollDirty()
+			}
+			return false, nil
+		}
+	}
+	for _, b := range data {
+		if b == 27 && !hasCSI(data) {
+			if t.scroll.collapseFocusedTool() {
+				t.markScrollDirty()
+				return false, nil
+			}
+		}
+	}
+
+	// Arrow up/down cycle through completion while it's open (before scrollback).
+	if !t.completion.empty() {
+		for i, b := range data {
+			if b == 27 && i+2 < len(data) && data[i+1] == '[' {
+				switch data[i+2] {
+				case 'A':
+					t.completion.cycle(-1)
+					t.markInputDirty()
+					return false, nil
+				case 'B':
+					t.completion.cycle(+1)
+					t.markInputDirty()
+					return false, nil
+				}
+			}
+		}
+	}
+
+	// Scrollback navigation (PgUp/Dn, wheel, shift+arrows) — not plain arrows.
+	if delta, ok := parseScrollInputRaw(data, t.scrollRows); ok {
+		if isShiftArrowScroll(data) || isPageUp(data) || isPageDown(data) {
+			t.scrollByDelta(delta)
+			return false, nil
+		}
+	}
+
+	// While a prompt is running, only Ctrl+C and approval keys are meaningful.
+	if t.running() && !t.approving.Load() {
+		if containsCtrlC(data) {
+			t.cancelMu.Lock()
+			cancel := t.cancelRun
+			t.cancelMu.Unlock()
+			if cancel != nil {
+				cancel()
+				t.lastCtrlC = time.Now()
+				t.status.Hint = "cancelled — Ctrl+C again to exit"
+				t.dirty.markStatus()
+			}
+		}
+		return false, nil
+	}
+
+	// Tab: completion when typing tokens; otherwise toggle conversation focus.
+	if containsTab(data) {
+		t.handleTabKey()
+		return false, nil
+	}
+
+	// Enter accepts the current completion selection when the dropdown is open.
+	if !t.completion.empty() && t.completion.idx >= 0 && containsSubmitKey(data) {
+		t.applyCompletion(t.completion.cands[t.completion.idx])
+		t.completion = nil
+		t.markInputDirty()
+		return false, nil
+	}
+
+	// Escape: dismiss the completion dropdown if open.
+	for _, b := range data {
+		if b == 27 {
+			if t.completion != nil && !t.completion.empty() && !hasCSI(data) {
+				t.completion = nil
+				t.markInputDirty()
+				return false, nil
+			}
+		}
+	}
+
+	// Ctrl+C: clear editor / exit when idle.
+	if containsCtrlC(data) {
+		if t.editor.text() != "" {
+			t.editor.setText("")
+			t.completion = nil
+			t.markInputDirty()
+		} else {
+			now := time.Now()
+			if !t.lastCtrlC.IsZero() && now.Sub(t.lastCtrlC) <= 2*time.Second {
+				return true, nil
+			}
+			t.lastCtrlC = now
+			t.status.Hint = "Ctrl+C again to exit"
+			t.dirty.markStatus()
+		}
+		return false, nil
+	}
+
+	// Ctrl+T toggles collapse on the nearest thinking block in view.
+	for _, b := range data {
+		if b == 20 {
+			if t.scroll.toggleThinkingInView(t.scrollRows, t.contentWidth()) {
+				t.markScrollDirty()
+			}
+			return false, nil
+		}
+	}
+
+	// Ctrl+E toggles expand on the nearest tool card in view.
+	for _, b := range data {
+		if b == 5 {
+			if t.scroll.toggleToolExpandInView(t.scrollRows, t.contentWidth()) {
+				t.markScrollDirty()
+			}
+			return false, nil
+		}
+	}
+
+	// Ctrl+F scrollback search.
+	if t.completion.empty() {
+		for _, b := range data {
+			if b == 6 {
+				t.openSearch()
+				return false, nil
+			}
+		}
+	}
+
+	// Ctrl+Y yank last assistant block (or focused tool result) to clipboard.
+	for _, b := range data {
+		if b == 25 {
+			t.yankClipboard()
+			return false, nil
+		}
+	}
+
+	// Ctrl+P command palette (when no completion dropdown).
+	if t.completion.empty() {
+		for _, b := range data {
+			if b == 16 {
+				t.openCommandPalette()
+				return false, nil
+			}
+		}
+	}
+
+	// Ctrl+. shortcuts palette (Grok-style).
+	if t.completion.empty() {
+		for _, b := range data {
+			if b == 30 {
+				t.openCommandPalette()
+				return false, nil
+			}
+		}
+	}
+
+	// Ctrl+M model picker, Ctrl+S session picker.
+	if t.completion.empty() && t.activeOverlay == nil {
+		for _, b := range data {
+			if b == 13 {
+				t.openModelPicker()
+				return false, nil
+			}
+			if b == 19 {
+				t.openSessionPicker()
+				return false, nil
+			}
+		}
+	}
+
+	// History navigation (Ctrl+R / Ctrl+N) when no completion dropdown.
+	if t.completion.empty() && t.activeOverlay == nil {
+		for _, b := range data {
+			if b == 18 {
 				t.navigateHistory(-1)
-				t.refreshLine()
-				return 3, false, nil
-			case 'B': // Down
+				t.markInputDirty()
+				return false, nil
+			}
+			if b == 14 {
 				t.navigateHistory(1)
-				t.refreshLine()
-				return 3, false, nil
-			case 'C': // Right
-				if t.cursorPos < len(t.input) {
-					_, size := decodeRuneAt(t.input, t.cursorPos)
-					t.cursorPos += size
-					t.writeString("\x1b[C")
-				}
-				return 3, false, nil
-			case 'D': // Left
-				if t.cursorPos > 0 {
-					_, size := decodeRuneBefore(t.input, t.cursorPos)
-					t.cursorPos -= size
-					t.writeString("\x1b[D")
-				}
-				return 3, false, nil
+				t.markInputDirty()
+				return false, nil
 			}
 		}
-		// Unknown CSI — consume up to and including the final byte (0x40-0x7e).
-		j := 2
-		for j < len(data) && (data[j] < 0x40 || data[j] > 0x7e) {
-			j++
-		}
-		if j < len(data) {
-			j++
-		}
-		return j, false, nil
 	}
 
-	return 2, false, nil // ESC + other — skip both
+	return t.processEditor(data)
 }
 
-// insertPaste inserts pasted text at the cursor, normalizing line endings.
-func (t *TUI) insertPaste(s string) {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	t.input = t.input[:t.cursorPos] + s + t.input[t.cursorPos:]
-	t.cursorPos += len(s)
-}
-
-// bytesIndex / bytesHasPrefix — small helpers to avoid importing bytes
-// solely for two calls (a little copying beats a little dependency).
-func bytesIndex(haystack, needle []byte) int {
-	if len(needle) == 0 {
-		return 0
-	}
-outer:
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		for j := 0; j < len(needle); j++ {
-			if haystack[i+j] != needle[j] {
-				continue outer
+// processEditor feeds data to the editor and handles the result (submit/quit).
+func (t *TUI) processEditor(data []byte) (bool, error) {
+	submitted, quit := t.editor.feed(data)
+	if submitted != "" {
+		t.completion = nil
+		if err := t.submit(submitted); err != nil {
+			if errors.Is(err, errQuitSentinel) {
+				return true, nil
 			}
+			t.appendErrorLocked(err)
+			return false, nil
 		}
-		return i
+		t.refreshCompletion()
+		t.markInputDirty()
+		return false, nil
 	}
-	return -1
+	if quit {
+		return true, nil
+	}
+	t.refreshCompletion()
+	t.markInputDirty()
+	return false, nil
 }
 
-func bytesHasPrefix(s, prefix []byte) bool {
-	if len(s) < len(prefix) {
-		return false
+// hasCSI reports whether data contains any CSI sequence (ESC[).
+func hasCSI(data []byte) bool {
+	for i := 0; i+1 < len(data); i++ {
+		if data[i] == 27 && data[i+1] == '[' {
+			return true
+		}
 	}
-	for i := range prefix {
-		if s[i] != prefix[i] {
+	return false
+}
+
+// containsCtrlC reports whether data contains a Ctrl+C byte outside a
+// bracketed-paste region. A pasted 0x03 should not exit the editor.
+func containsCtrlC(data []byte) bool {
+	inPaste := false
+	for i := 0; i < len(data); i++ {
+		b := data[i]
+		if !inPaste && i+5 < len(data) && b == 27 && data[i+1] == '[' && data[i+2] == '2' && data[i+3] == '0' && data[i+4] == '0' && data[i+5] == '~' {
+			inPaste = true
+			i += 5
+			continue
+		}
+		if inPaste && i+5 < len(data) && b == 27 && data[i+1] == '[' && data[i+2] == '2' && data[i+3] == '0' && data[i+4] == '1' && data[i+5] == '~' {
+			inPaste = false
+			i += 5
+			continue
+		}
+		if !inPaste && b == 3 {
+			return true
+		}
+	}
+	return false
+}
+
+// containsSubmitKey reports whether data contains a plain Enter/Return key.
+// Handles both \r (raw) and kitty keyboard Enter (ESC[13u or ESC[13;1u).
+// Shift+Enter (ESC[13;2u) does NOT match.
+func containsSubmitKey(data []byte) bool {
+	for i, b := range data {
+		if b == '\r' {
+			return true
+		}
+		// kitty: ESC [ 1 3 u  (plain Enter)
+		if b == 27 && i+4 < len(data) && data[i+1] == '[' && data[i+2] == '1' && data[i+3] == '3' && data[i+4] == 'u' {
+			return true
+		}
+		// kitty: ESC [ 1 3 ; 1 u  (plain Enter, explicit mods)
+		if b == 27 && i+6 < len(data) && data[i+1] == '[' && data[i+2] == '1' && data[i+3] == '3' && data[i+4] == ';' && data[i+5] == '1' && data[i+6] == 'u' {
+			return true
+		}
+	}
+	return false
+}
+
+// handleTab triggers or accepts completion. Returns true if the caller should
+// schedule a redraw.
+func (t *TUI) handleTab() bool {
+	if t.completion == nil || t.completion.empty() {
+		t.refreshCompletion()
+		if t.completion == nil || t.completion.empty() {
 			return false
 		}
+		// If only one candidate, accept it immediately.
+		if len(t.completion.cands) == 1 {
+			t.acceptCompletion()
+			return true
+		}
+		// Expand to the common prefix.
+		if lcp := commonPrefixCands(t.completion.cands); len(lcp) > len(t.completion.prefix) {
+			t.applyCompletion(lcp)
+			t.refreshCompletion()
+			if t.completion == nil || t.completion.empty() {
+				return true
+			}
+		}
+		t.completion.idx = 0
+		return true
 	}
+	t.acceptCompletion()
 	return true
 }
 
-// processInput handles one submitted line. It expands @file references,
-// dispatches slash commands, or sends the input to the agent and drains the
-// output channel.
-func (t *TUI) processInput(input string) error {
-	trimmed := strings.TrimSpace(input)
-	if strings.HasPrefix(trimmed, "/") {
-		return t.handleSlashCommand(trimmed)
+// refreshCompletion rebuilds the candidate list from the current editor text.
+func (t *TUI) refreshCompletion() {
+	cwd, _ := os.Getwd()
+	line := t.editor.lines[t.editor.row]
+	prefix, token := splitPrefix(line, t.editor.col)
+	var cands []string
+	var kind completionKind
+	truncated := false
+	switch {
+	case strings.HasPrefix(token, "/") && !strings.ContainsAny(token, " \t"):
+		cands = matchSlash(token)
+		if len(cands) > 0 {
+			kind = completionSlash
+		}
+	case strings.ContainsRune(token, '@'):
+		cands, truncated = matchAtFileFuzzy(token, cwd)
+		if len(cands) > 0 {
+			kind = completionAtFile
+		}
 	}
+	if len(cands) == 0 {
+		t.completion = nil
+		return
+	}
+	idx := -1
+	if t.completion != nil && t.completion.kind == kind && t.completion.prefix == prefix {
+		idx = t.completion.idx
+		if idx >= len(cands) {
+			idx = -1
+		}
+	}
+	t.completion = &completion{kind: kind, prefix: prefix, cands: cands, idx: idx, truncated: truncated}
+}
 
-	expanded, err := expandAtFiles(input)
-	if err != nil {
-		t.writeString("error: " + err.Error() + "\r\n")
+// splitPrefix returns (text-before-cursor-on-this-row, partial token at cursor).
+// col is in runes (matches editor.col).
+func splitPrefix(line string, col int) (string, string) {
+	runes := []rune(line)
+	if col > len(runes) {
+		col = len(runes)
+	}
+	if col < 0 {
+		col = 0
+	}
+	head := string(runes[:col])
+	i := col - 1
+	for i >= 0 && runes[i] != ' ' && runes[i] != '\t' && runes[i] != '\n' {
+		i--
+	}
+	return head, string(runes[i+1 : col])
+}
+
+// acceptCompletion inserts the selected candidate at the cursor, replacing
+// the partial token.
+func (t *TUI) acceptCompletion() {
+	if t.completion == nil || t.completion.empty() || t.completion.idx < 0 {
+		return
+	}
+	t.applyCompletion(t.completion.cands[t.completion.idx])
+	t.refreshCompletion()
+}
+
+// applyCompletion replaces the partial token before the cursor with s.
+func (t *TUI) applyCompletion(s string) {
+	line := t.editor.lines[t.editor.row]
+	if t.completion != nil && strings.HasPrefix(s, t.completion.prefix) {
+		// Completion result extends what the user already typed; insert only the delta.
+		delta := strings.TrimPrefix(s, t.completion.prefix)
+		t.editor.insertText(delta)
+		return
+	}
+	// Fallback: replace the whole partial token.
+	runes := []rune(line)
+	if t.editor.col > len(runes) {
+		t.editor.col = len(runes)
+	}
+	tail := string(runes[t.editor.col:])
+	tokenStart := 0
+	for i := t.editor.col - 1; i >= 0; i-- {
+		if runes[i] == ' ' || runes[i] == '\t' {
+			tokenStart = i + 1
+			break
+		}
+	}
+	newLine := string(runes[:tokenStart]) + s + tail
+	t.editor.lines[t.editor.row] = newLine
+	t.editor.col = tokenStart + len([]rune(s))
+}
+
+func (t *TUI) submit(text string) error {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		t.editor.setText("")
 		return nil
 	}
-
-	// Send to agent and drain output channel concurrently. The agent's Prompt
-	// is synchronous and streams events to outputChan; we run it in a goroutine
-	// and drain the channel until we see a "done" event (or the goroutine
-	// finishes).
-	if t.agent != nil {
-		t.writeString("  ⠋ thinking...\r\n")
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		promptDone := make(chan error, 1)
-		go func() {
-			promptDone <- t.agent.PromptWithContext(ctx, expanded)
-		}()
-		if err := t.drainOutput(promptDone, cancel); err != nil {
-			if err == errQuit {
-				return err
-			}
-			if !errors.Is(err, context.Canceled) {
-				t.writeString("error: " + err.Error() + "\r\n")
-			}
-			return nil
-		}
-		select {
-		case err := <-promptDone:
-			if err != nil && !errors.Is(err, context.Canceled) {
-				t.writeString("error: " + err.Error() + "\r\n")
-			}
-		default:
-		}
+	if strings.HasPrefix(trimmed, "/") {
+		t.scroll.scrollToBottom()
+		t.scroll.append(StyledLine{Style: styleUser, Text: text})
+		t.editor.setText("")
+		t.histIdx = -1
+		t.draftSaved = ""
+		return t.handleSlash(trimmed)
 	}
+	expanded, err := expandAtFiles(text)
+	if err != nil {
+		t.appendErrorLocked(err)
+		t.editor.setText("")
+		return nil
+	}
+	t.history = append(t.history, text)
+	t.histIdx = -1
+	t.draftSaved = ""
+	t.scroll.scrollToBottom()
+	t.scroll.append(StyledLine{Style: styleUser, Text: text})
+	t.editor.setText("")
+
+	// Start the agent turn. feed (our caller) holds t.mu, so we can set
+	// status.Thinking directly. The agent runs in its own goroutine; the Run
+	// loop drains output events.
+	t.status.Thinking = true
+	t.status.Hint = ""
+	t.markScrollDirty()
+	t.dirty.markStatus()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.cancelMu.Lock()
+	t.cancelRun = cancel
+	t.cancelMu.Unlock()
+
+	go func() {
+		defer func() {
+			t.cancelMu.Lock()
+			t.cancelRun = nil
+			t.cancelMu.Unlock()
+			cancel()
+			t.mu.Lock()
+			t.status.Thinking = false
+			t.dirty.markStatus()
+			t.mu.Unlock()
+			if r := recover(); r != nil {
+				t.mu.Lock()
+				t.scroll.appendRaw(styleError, fmt.Sprintf("agent panic: %v", r))
+				t.mu.Unlock()
+			}
+		}()
+		// The agent sends OutputError on all error paths; the Run loop displays
+		// them. We just wait for completion and clean up.
+		_ = t.agent.PromptWithContext(ctx, expanded)
+	}()
 	return nil
 }
 
-// drainOutput reads OutputEvents until the prompt finishes. If cancel is not
-// nil, Ctrl+C cancels the running prompt; a second Ctrl+C exits the CLI.
-func (t *TUI) drainOutput(promptDone <-chan error, cancel context.CancelFunc) error {
-	if t.outputChan == nil {
-		return <-promptDone
-	}
-
-	var tick <-chan time.Time
-	var ticker *time.Ticker
-	if cancel != nil {
-		if err := syscall.SetNonblock(t.fd, true); err == nil {
-			t.pollerActive.Store(true)
-			defer func() {
-				t.pollerActive.Store(false)
-				syscall.SetNonblock(t.fd, false)
-			}()
-			ticker = time.NewTicker(50 * time.Millisecond)
-			tick = ticker.C
-			defer ticker.Stop()
-		}
-	}
-
-	cancelled := false
-	for {
-		select {
-		case ev, ok := <-t.outputChan:
-			if !ok {
-				return <-promptDone
-			}
-			if ev.Type == agent.OutputDone {
-				t.writeString("\r\n")
-				return nil
-			}
-			t.renderEvent(ev)
-		case err := <-promptDone:
-			if drainErr := t.drainBufferedOutput(); drainErr != nil {
-				return drainErr
-			}
-			return err
-		case <-tick:
-			// An active approval prompt owns stdin; don't steal its keypress.
-			if t.approving.Load() {
-				continue
-			}
-			var err error
-			cancelled, err = t.pollRunningCtrlC(cancel, cancelled)
-			if err != nil {
-				return err
-			}
-		}
+// handleEvent appends agent output to the scrollback. Caller must hold t.mu.
+func (t *TUI) handleEvent(ev agent.OutputEvent) {
+	switch ev.Type {
+	case agent.OutputText:
+		t.scroll.finalizeThinking()
+		t.scroll.append(StyledLine{Style: styleAssistant, Text: ev.Text})
+	case agent.OutputThinking:
+		t.scroll.append(StyledLine{Style: styleThinking, Text: ev.Text})
+	case agent.OutputToolStart:
+		t.scroll.finalizeThinking()
+		id := t.nextToolID
+		t.nextToolID++
+		t.scroll.appendToolCall(id, ev.ToolCallID, ev.ToolName, ev.ToolInput)
+	case agent.OutputToolResult:
+		t.scroll.completeToolCall(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
+	case agent.OutputApproval:
+		// Approval UI is shown via activeOverlay in Approve().
+	case agent.OutputError:
+		t.scroll.appendRaw(styleError, "error: "+ev.Text)
+	case agent.OutputCompacting:
+		t.scroll.appendRaw(styleCompacting, "  compacting context...")
+	case agent.OutputStatus:
+		// applied in markAfterEvent
 	}
 }
 
-// Approve renders an approval prompt for a dangerous bash command and reads a
-// single keypress. It takes stdin exclusively in blocking mode for the
-// duration so the Ctrl+C poller (which runs stdin nonblocking) cannot steal
-// the keypress. 'a'/'y' allow; anything else (incl. Ctrl+C) denies.
-// Always shows $ command and labeled Purpose: line (PR-24).
+// Approve renders an approval prompt for a dangerous bash command and waits
+// for the user's answer. The input goroutine is the sole stdin reader; it
+// routes the answer through t.approvalAnswer when t.approving is set.
 func (t *TUI) Approve(command, description string) bool {
 	t.approvalMu.Lock()
 	defer t.approvalMu.Unlock()
 
+	select {
+	case <-t.approvalAnswer:
+	default:
+	}
+
+	// Signal before paint so the input goroutine routes keys here immediately
+	// (running() would otherwise swallow them during tool execution).
 	t.approving.Store(true)
 	defer t.approving.Store(false)
 
-	if t.pollerActive.Load() {
-		syscall.SetNonblock(t.fd, false)
-		defer syscall.SetNonblock(t.fd, true)
-	}
+	t.mu.Lock()
+	t.activeOverlay = newApprovalOverlay(command, description)
+	t.dirty.markFull()
+	t.mu.Unlock()
 
-	purpose := resolveApprovalPurpose(command, description)
-	t.writeString("\r\n" + fgYellow + bold + "⚠ approval required" + reset + "\r\n")
-	t.writeString("  $ " + command + "\r\n")
-	t.writeString("  " + dim + "Purpose: " + purpose + reset + "\r\n")
-	t.writeString("  [A] Allow   [D] Deny: ")
-
-	buf := make([]byte, 1)
-	n, err := os.Stdin.Read(buf)
-	if err != nil || n == 0 {
-		t.writeString("\r\n")
+	var allowed bool
+	select {
+	case allowed = <-t.approvalAnswer:
+	case <-t.done:
+		t.mu.Lock()
+		t.activeOverlay = nil
+		t.mu.Unlock()
 		return false
 	}
-	allowed := buf[0] == 'a' || buf[0] == 'A' || buf[0] == 'y' || buf[0] == 'Y'
-	if allowed {
-		t.writeString("allow\r\n")
-	} else {
-		t.writeString("deny\r\n")
-	}
+
+	t.mu.Lock()
+	t.activeOverlay = nil
+	t.scroll.appendRaw(styleSystem, formatApprovalResult(allowed))
+	t.markScrollDirty()
+	t.mu.Unlock()
 	return allowed
 }
 
-func (t *TUI) drainBufferedOutput() error {
-	for {
-		select {
-		case ev, ok := <-t.outputChan:
-			if !ok {
-				return nil
-			}
-			if ev.Type == agent.OutputDone {
-				t.writeString("\r\n")
-				return nil
-			}
-			t.renderEvent(ev)
-		default:
-			return nil
-		}
-	}
-}
-
-func (t *TUI) pollRunningCtrlC(cancel context.CancelFunc, cancelled bool) (bool, error) {
-	buf := make([]byte, 64)
-	for {
-		n, err := syscall.Read(t.fd, buf)
-		if n > 0 {
-			for _, b := range buf[:n] {
-				if b != 3 {
-					continue
-				}
-				if cancelled {
-					t.writeString("\r\n")
-					return cancelled, errQuit
-				}
-				cancel()
-				cancelled = true
-				t.writeString("\r\n  cancelled — Ctrl+C again to exit\r\n")
-			}
-		}
-		if err == nil {
-			continue
-		}
-		if err == syscall.EAGAIN || err == syscall.EWOULDBLOCK {
-			return cancelled, nil
-		}
-		if err == syscall.EINTR {
-			continue
-		}
-		return cancelled, nil
-	}
-}
-
-// navigateHistory moves through the history list. dir is -1 for up, +1 for
-// down. At the boundaries it clamps (top stays at oldest, bottom restores the
-// in-progress input).
+// navigateHistory loads a previous/next prompt into the editor. dir=-1 is
+// older; dir=+1 is newer.
 func (t *TUI) navigateHistory(dir int) {
 	if len(t.history) == 0 {
 		return
 	}
 	if t.histIdx == -1 {
 		t.histIdx = len(t.history)
+		t.draftSaved = t.editor.text()
 	}
 	t.histIdx += dir
 	if t.histIdx < 0 {
@@ -575,64 +877,230 @@ func (t *TUI) navigateHistory(dir int) {
 	}
 	if t.histIdx >= len(t.history) {
 		t.histIdx = len(t.history)
-		t.input = ""
-		t.cursorPos = 0
+		t.editor.setText(t.draftSaved)
 		return
 	}
-	t.input = t.history[t.histIdx]
-	t.cursorPos = len(t.input)
+	t.editor.setText(t.history[t.histIdx])
 }
 
-// tabComplete does prefix completion for slash commands and @file references.
-// On the first call it expands to the longest common prefix; on a second
-// consecutive Tab call it cycles through candidates (numeric suffix appended).
-func (t *TUI) tabComplete(input string) string {
-	cwd, _ := os.Getwd()
-	if strings.HasPrefix(strings.TrimSpace(input), "/") {
-		if space := strings.IndexByte(input, ' '); space >= 0 {
-			return input
-		}
-		cands := matchSlash(input)
-		if len(cands) == 1 {
-			return cands[0] + " "
-		}
-		if len(cands) > 1 {
-			if lcp := commonPrefixCands(cands); len(lcp) > len(input) {
-				return lcp
+// running reports whether an agent prompt is in flight.
+func (t *TUI) running() bool { return t.status.Thinking }
+
+// --- Layout ---
+
+func (t *TUI) recomputeLayout() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	w, h, err := term.GetSize(t.fd)
+	if err != nil || w < 40 || h < 10 {
+		w, h = 80, 24
+	}
+	t.rows = h
+	t.cols = w
+	wrapWidth := w - 1
+	if wrapWidth < 1 {
+		wrapWidth = 1
+	}
+	t.editor.wrapWidth = wrapWidth
+	t.headerRows = 2
+	t.statusRows = 0
+	t.inputRows = t.inputHeight(wrapWidth)
+	t.scrollRows = h - t.headerRows - t.inputRows
+	if t.scrollRows < 3 {
+		t.scrollRows = 3
+	}
+}
+
+func (t *TUI) installResize() {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGWINCH)
+	go func() {
+		defer signal.Stop(sig)
+		for {
+			select {
+			case _, ok := <-sig:
+				if !ok {
+					return
+				}
+				if t.stopped.Load() {
+					return
+				}
+				t.recomputeLayout()
+				t.markFullDirty()
+				if t.done != nil {
+					select {
+					case <-t.done:
+						return
+					default:
+					}
+				}
 			}
 		}
-		return input
-	}
-	if atIdx := strings.LastIndexByte(input, '@'); atIdx >= 0 {
-		body := input[atIdx:]
-		cands := matchAtFile("@"+body, cwd)
-		if len(cands) == 1 {
-			return input[:atIdx] + cands[0]
-		}
-		if len(cands) > 1 {
-			if lcp := commonPrefixCands(cands); len(lcp) > len(body)+1 {
-				return input[:atIdx] + lcp
-			}
-		}
-	}
-	return input
+	}()
 }
 
-func commonPrefix(a, b string) string {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
+func (t *TUI) renderCompletion(c *completion) string {
+	var b strings.Builder
+	count := fmt.Sprintf("%d", len(c.cands))
+	if c.truncated {
+		count += "+"
 	}
-	for i := 0; i < n; i++ {
-		if a[i] != b[i] {
-			return a[:i]
+	header := fmt.Sprintf(" %s (%s) ", prefixName(c.kind), count)
+	b.WriteString(bgDarkRed)
+	b.WriteString(fgBlack)
+	b.WriteString(bold)
+	b.WriteString(header)
+	b.WriteString(reset)
+	b.WriteString("\n")
+	for i, cand := range c.cands {
+		marker := "  "
+		style := ""
+		if i == c.idx {
+			marker = "▶ "
+			style = fgCyan + bold
 		}
+		b.WriteString(style)
+		b.WriteString(marker)
+		b.WriteString(cand)
+		b.WriteString(reset)
+		b.WriteString("\n")
 	}
-	return a[:n]
+	return b.String()
 }
 
-// handleSlashCommand parses and dispatches a slash command.
-func (t *TUI) handleSlashCommand(cmd string) error {
+func prefixName(k completionKind) string {
+	switch k {
+	case completionSlash:
+		return "commands"
+	case completionAtFile:
+		return "files"
+	}
+	return "?"
+}
+
+func (t *TUI) renderInputHeader() string {
+	return ""
+}
+
+func (t *TUI) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc int) string {
+	if lineIdx >= len(screenLines) {
+		return ""
+	}
+	line := screenLines[lineIdx]
+	runes := []rune(line)
+	prompt := ""
+	if lineIdx == 0 {
+		prompt = fgGreen + "› " + reset
+	}
+	if lineIdx != sr {
+		if lineIdx == 0 {
+			return prompt + string(runes)
+		}
+		return " " + string(runes)
+	}
+	if sc < 0 {
+		sc = 0
+	}
+	prefix := string(runes[:min(sc, len(runes))])
+	suffix := ""
+	if sc < len(runes) {
+		suffix = string(runes[sc+1:])
+	}
+	var b strings.Builder
+	b.WriteString(prompt)
+	b.WriteString(prefix)
+	b.WriteString("\x1b[7m")
+	if sc < len(runes) {
+		b.WriteRune(runes[sc])
+	} else {
+		b.WriteRune(' ')
+	}
+	b.WriteString("\x1b[27m")
+	b.WriteString(suffix)
+	return b.String()
+}
+
+func (t *TUI) renderHintLine() string {
+	if t.focusRegion == focusConv {
+		return dim + "Tab:input · PgUp/Dn:scroll · Shift+←/→:prompts" + reset
+	}
+	base := "Tab:conv · Enter:send · Ctrl+Y:yank · Ctrl+E:tool · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model"
+	if t.status.Hint != "" {
+		return dim + t.status.Hint + " · " + base + reset
+	}
+	return dim + base + reset
+}
+
+// scrollByDelta scrolls the scrollback viewport. Caller must hold t.mu.
+func (t *TUI) scrollByDelta(delta int) {
+	if delta > 0 {
+		t.scroll.scrollUp(delta)
+	} else if delta < 0 {
+		t.scroll.scrollDown(-delta)
+	}
+	t.scroll.clampScrollOffset(t.convScrollRows(), t.contentWidth())
+	t.markScrollDirty()
+}
+
+func (t *TUI) handleScrollDelta(delta int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.scrollByDelta(delta)
+}
+
+func (t *TUI) editorAtScrollTop() bool {
+	if t.editor.row != 0 {
+		return false
+	}
+	sr, _ := screenCursor(t.editor, t.editor.wrapWidth)
+	return sr == 0
+}
+
+func (t *TUI) editorAtScrollBottom() bool {
+	if t.editor.row != len(t.editor.lines)-1 {
+		return false
+	}
+	sr, _ := screenCursor(t.editor, t.editor.wrapWidth)
+	last := totalVisualLines(t.editor, t.editor.wrapWidth) - 1
+	return sr >= last
+}
+
+// appendErrorLocked writes an error to the scrollback. The caller MUST hold
+// t.mu (e.g. feed/submit/processEditor, which run under the lock).
+func (t *TUI) appendErrorLocked(err error) {
+	t.scroll.appendRaw(styleError, "error: "+err.Error())
+	t.markScrollDirty()
+}
+
+// appendError writes an error to the scrollback, taking t.mu. Call only when
+// NOT already holding the lock (e.g. the input goroutine after feed returns).
+func (t *TUI) appendError(err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.appendErrorLocked(err)
+}
+
+func (t *TUI) writeRaw(s string) {
+	if t.writer != nil {
+		_, _ = t.writer.Write([]byte(s))
+	}
+}
+
+func (t *TUI) yankClipboard() {
+	t.mu.Lock()
+	text := t.scroll.yankText()
+	t.mu.Unlock()
+	if text == "" {
+		return
+	}
+	_ = osc52Copy(text)
+	t.mu.Lock()
+	t.status.Hint = "yanked to clipboard"
+	t.dirty.markStatus()
+	t.mu.Unlock()
+}
+
+func (t *TUI) handleSlash(cmd string) error {
 	parts := strings.Fields(cmd)
 	if len(parts) == 0 {
 		return nil
@@ -640,263 +1108,88 @@ func (t *TUI) handleSlashCommand(cmd string) error {
 	h := tuiCmdHost{t}
 	switch parts[0] {
 	case "/quit", "/q":
-		t.writeString("bye.\r\n")
-		return errQuit
+		return errQuitSentinel
 	case "/clear":
-		t.writeString("\x1b[2J\x1b[H")
+		t.scroll = newScrollback(8192)
+		t.markFullDirty()
 		return nil
 	case "/help", "/h", "/?":
-		t.writeString(renderHelp())
+		t.scroll.appendRaw(styleSystem, renderHelp())
+		t.markScrollDirty()
 		return nil
 	case "/new":
 		return cmdNew(h)
 	case "/resume", "/r":
+		if len(parts) == 1 {
+			t.openSessionPicker()
+			return nil
+		}
 		return cmdResume(h, parts[1:])
 	case "/sessions":
-		cmdSessions(h)
+		t.openSessionPicker()
 		return nil
 	case "/search":
+		if len(parts) == 1 {
+			t.openSearch()
+			return nil
+		}
 		return cmdSearch(h, parts[1:])
 	case "/fork":
 		return cmdFork(h, parts[1:])
 	case "/undo":
 		return cmdUndo(h)
 	case "/compact":
-		t.writeString("/compact — manual compaction not yet available (auto-compaction handles this)\r\n")
+		t.scroll.appendRaw(styleSystem, "/compact — manual compaction not yet available (auto-compaction handles this)")
+		t.markScrollDirty()
 		return nil
 	case "/model":
+		if len(parts) == 1 {
+			t.openModelPicker()
+			return nil
+		}
 		return cmdModel(h, parts[1:])
 	case "/providers":
-		cmdProviders(h)
+		t.openProviderPicker()
 		return nil
 	case "/effort":
 		return cmdEffort(h, parts[1:])
 	case "/models":
-		return cmdModels(h)
+		t.openModelPicker()
+		return nil
 	case "/reload":
 		return cmdReload(h)
 	case "/cost":
 		cmdCost(h)
 		return nil
+	case "/btw":
+		question := strings.TrimSpace(strings.TrimPrefix(cmd, parts[0]))
+		if question == "" {
+			t.scroll.appendRaw(styleSystem, "usage: /btw <question>")
+			t.markScrollDirty()
+			return nil
+		}
+		t.openBTW(question)
+		return nil
 	default:
-		t.writeString("unknown command: " + parts[0] + " (type /help)\r\n")
+		t.scroll.appendRaw(styleSystem, "unknown command: "+parts[0]+" (type /help)")
+		t.markScrollDirty()
 		return nil
 	}
 }
 
-// errQuit is a sentinel returned by handleSlashCommand via processInput to
-// tell Run to exit. Run checks for it after processInput.
-var errQuit = fmt.Errorf("quit")
+var errQuitSentinel = errors.New("quit")
 
-const ctrlCExitWindow = 2 * time.Second
-
-func (t *TUI) handleIdleCtrlC() error {
-	if t.input != "" {
-		t.input = ""
-		t.cursorPos = 0
-		t.lastCtrlC = time.Time{}
-		t.refreshLine()
-		return nil
+// cwdOf returns the current working directory or "" on error.
+func cwdOf() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
 	}
-	now := time.Now()
-	if !t.lastCtrlC.IsZero() && now.Sub(t.lastCtrlC) <= ctrlCExitWindow {
-		t.writeString("\r\n")
-		return errQuit
-	}
-	t.lastCtrlC = now
-	t.writeString("\r\nCtrl+C again to exit\r\n")
-	t.printPrompt()
-	return nil
+	return wd
 }
 
-const promptText = "poisson> "
+// getenv is a tiny indirection so tests can override the environment without
+// touching os.Setenv across goroutines.
+var getenv = os.Getenv
 
-// printPrompt writes the prompt.
-func (t *TUI) printPrompt() {
-	t.writeString(promptText)
-}
 
-// refreshLine redraws the current input line. It never prints past the terminal
-// width; wrapped prompts cannot be reliably cleared with a one-line editor.
-func (t *TUI) refreshLine() {
-	maxCols := t.inputViewportCols()
-	visible, cursorCol := visibleInput(t.input, t.cursorPos, maxCols)
-
-	t.writeString("\x1b[2K\r")
-	t.writeString(promptText)
-	t.writeString(visible)
-	if back := runeCount(visible) - cursorCol; back > 0 {
-		t.writeString(fmt.Sprintf("\x1b[%dD", back))
-	}
-}
-
-func (t *TUI) inputViewportCols() int {
-	width, _, err := term.GetSize(t.fd)
-	if err != nil || width <= len(promptText)+2 {
-		width = 80
-	}
-	cols := width - len(promptText) - 1 // keep one column free to avoid autowrap
-	if cols < 1 {
-		return 1
-	}
-	return cols
-}
-
-func visibleInput(input string, cursorPos, maxCols int) (string, int) {
-	if maxCols <= 0 {
-		return "", 0
-	}
-	if cursorPos < 0 {
-		cursorPos = 0
-	}
-	if cursorPos > len(input) {
-		cursorPos = len(input)
-	}
-
-	runes := []rune(input)
-	cursorRune := len([]rune(input[:cursorPos]))
-	for i, r := range runes {
-		switch {
-		case r == '\n' || r == '\r':
-			runes[i] = '↵'
-		case r == '\t':
-			runes[i] = ' '
-		case r < 32 || r == 127:
-			runes[i] = '?'
-		}
-	}
-	if len(runes) <= maxCols {
-		return string(runes), cursorRune
-	}
-	if maxCols == 1 {
-		if cursorRune == 0 {
-			return "…", 0
-		}
-		return "…", 1
-	}
-
-	slots := maxCols - 1
-	if cursorRune <= slots {
-		end := slots
-		if end > len(runes) {
-			end = len(runes)
-		}
-		return string(runes[:end]) + "…", cursorRune
-	}
-
-	start := cursorRune - slots
-	end := start + slots
-	if end > len(runes) {
-		end = len(runes)
-	}
-	return "…" + string(runes[start:end]), 1 + cursorRune - start
-}
-
-func runeCount(s string) int { return len([]rune(s)) }
-
-func (t *TUI) insertChar(r rune) {
-	s := string(r)
-	t.input = t.input[:t.cursorPos] + s + t.input[t.cursorPos:]
-	t.cursorPos += len(s)
-}
-
-func (t *TUI) writeString(s string) {
-	if t.writer != nil {
-		_, _ = io.WriteString(t.writer, s)
-	}
-}
-
-// decodeRuneAt decodes the rune at byte position pos in s, returning the
-// rune and its byte size.
-func decodeRuneAt(s string, pos int) (rune, int) {
-	return []rune(s[pos:])[0], len(string([]rune(s[pos:])[0]))
-}
-
-// decodeRuneBefore decodes the rune immediately before byte position pos.
-func decodeRuneBefore(s string, pos int) (rune, int) {
-	r := []rune(s[:pos])
-	return r[len(r)-1], len(string(r[len(r)-1]))
-}
-
-// --- @file expansion ---
-
-var atFileRe = regexp.MustCompile(`@([^\s@]+)`)
-
-// expandAtFiles replaces @path references in input with the file's contents
-// inlined as a fenced code block. A nonexistent path produces an error.
-func expandAtFiles(input string) (string, error) {
-	var firstErr error
-	result := atFileRe.ReplaceAllStringFunc(input, func(match string) string {
-		path := match[1:] // strip '@'
-		data, err := os.ReadFile(path)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = fmt.Errorf("read @%s: %w", path, err)
-			}
-			return match
-		}
-		// Detect a fence length that doesn't appear in the file contents.
-		fence := "```"
-		for strings.Contains(string(data), fence) {
-			fence += "`"
-		}
-		return fence + "\n" + string(data) + "\n" + fence
-	})
-	if firstErr != nil {
-		return "", firstErr
-	}
-	return result, nil
-}
-
-// renderHelp returns the help text listing all slash commands.
-func renderHelp() string {
-	var b strings.Builder
-	b.WriteString("Slash commands:\r\n")
-	b.WriteString("  /help        Show this help\r\n")
-	b.WriteString("  /quit        Exit Poisson\r\n")
-	b.WriteString("  /clear       Clear the screen\r\n")
-	b.WriteString("  /new         Start a new session\r\n")
-	b.WriteString("  /resume <id> Resume a session\r\n")
-	b.WriteString("  /sessions    List sessions\r\n")
-	b.WriteString("  /search <q>  Search across sessions\r\n")
-	b.WriteString("  /fork [seq]  Fork the current session\r\n")
-	b.WriteString("  /undo        Undo the last turn\r\n")
-	b.WriteString("  /compact     Compact context now\r\n")
-	b.WriteString("  /model <m>   Switch provider/model (e.g. ollama/glm-5.2:cloud)\r\n")
-	b.WriteString("  /providers  List available providers\r\n")
-	b.WriteString("  /effort <l>   Set thinking effort (low|medium|high|xhigh|max)\r\n")
-	b.WriteString("  /models     List models from current provider\r\n")
-	b.WriteString("  /reload      Reload config and skills\r\n")
-	b.WriteString("  /cost        Show session cost\r\n")
-	b.WriteString("  /btw <q>     Side question in floating box (Esc close/cancel)\r\n")
-	return b.String()
-}
-
-// deleteWordBackward deletes the word before the cursor, similar to
-// Alt+Backspace or Ctrl+W in readline. Skips trailing whitespace, then
-// deletes back to the previous word boundary.
-func (t *TUI) deleteWordBackward() {
-	if t.cursorPos == 0 {
-		return
-	}
-	// Work in runes for correctness.
-	r := []rune(t.input)
-	pos := len([]rune(t.input[:t.cursorPos]))
-	if pos == 0 {
-		return
-	}
-	// Skip whitespace before cursor.
-	for pos > 0 && (r[pos-1] == ' ' || r[pos-1] == '\t' || r[pos-1] == '\n') {
-		pos--
-	}
-	// Delete back to start of word (non-whitespace chars).
-	for pos > 0 && r[pos-1] != ' ' && r[pos-1] != '\t' && r[pos-1] != '\n' {
-		pos--
-	}
-	// r[pos:t.cursorPos_runes] is the deleted region.
-	cursorRuneIdx := len([]rune(t.input[:t.cursorPos]))
-	r = append(r[:pos], r[cursorRuneIdx:]...)
-	t.input = string(r)
-	t.cursorPos = len([]byte(string(r[:pos])))
-	t.refreshLine()
-}

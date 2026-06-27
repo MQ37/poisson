@@ -8,14 +8,14 @@ const (
 	focusConv
 )
 
-func (t *tuiV2) convScrollRows() int {
+func (t *TUI) convScrollRows() int {
 	if t.focusRegion == focusConv && t.scrollRows > 1 {
 		return t.scrollRows - 1
 	}
 	return t.scrollRows
 }
 
-func (t *tuiV2) pinnedPromptLine(width int) string {
+func (t *TUI) pinnedPromptLine(width int) string {
 	idxs := t.scroll.userBlockIndices()
 	if len(idxs) == 0 {
 		return dim + "› (no prompts yet)" + reset
@@ -34,7 +34,7 @@ func (t *tuiV2) pinnedPromptLine(width int) string {
 	return fgYellow + bold + "› " + reset + fgCyan + label + reset
 }
 
-func (t *tuiV2) enterConvFocus() {
+func (t *TUI) enterConvFocus() {
 	if !t.scroll.hasUserBlocks() {
 		return
 	}
@@ -46,7 +46,7 @@ func (t *tuiV2) enterConvFocus() {
 	t.markInputDirty()
 }
 
-func (t *tuiV2) scrollToConvPrompt() {
+func (t *TUI) scrollToConvPrompt() {
 	idxs := t.scroll.userBlockIndices()
 	if len(idxs) == 0 {
 		return
@@ -60,7 +60,7 @@ func (t *tuiV2) scrollToConvPrompt() {
 	t.scroll.scrollBlockToTop(idxs[t.convUserIdx], t.convScrollRows(), t.contentWidth())
 }
 
-func (t *tuiV2) stepConvPrompt(dir int) {
+func (t *TUI) stepConvPrompt(dir int) {
 	idxs := t.scroll.userBlockIndices()
 	if len(idxs) == 0 {
 		return
@@ -76,7 +76,7 @@ func (t *tuiV2) stepConvPrompt(dir int) {
 	t.markScrollDirty()
 }
 
-func (t *tuiV2) handleTabKey() {
+func (t *TUI) handleTabKey() {
 	if t.focusRegion == focusConv {
 		t.focusRegion = focusInput
 		t.markScrollDirty()
@@ -92,7 +92,7 @@ func (t *tuiV2) handleTabKey() {
 	t.enterConvFocus()
 }
 
-func (t *tuiV2) feedConvFocus(data []byte) (handled bool) {
+func (t *TUI) feedConvFocus(data []byte) (handled bool) {
 	if containsTab(data) {
 		t.handleTabKey()
 		return true

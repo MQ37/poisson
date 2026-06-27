@@ -57,7 +57,7 @@ func TestPaletteOverlayArrowKeys(t *testing.T) {
 }
 
 func TestHandleKeyOverlayPreservesChainedPicker(t *testing.T) {
-	tui := newTestTUIv2()
+	tui := newTestTUIHelper()
 	pal := newPaletteOverlay(func(cmd string) error {
 		if cmd == "/providers" {
 			tui.activeOverlay = newPickerOverlay("Providers", []pickerItem{
@@ -81,7 +81,7 @@ func TestHandleKeyOverlayPreservesChainedPicker(t *testing.T) {
 }
 
 func TestPaletteQuitPropagates(t *testing.T) {
-	tui := newTestTUIv2()
+	tui := newTestTUIHelper()
 	pal := newPaletteOverlay(func(cmd string) error {
 		if cmd == "/quit" {
 			tui.overlayQuit.Store(true)
@@ -124,7 +124,7 @@ func TestSearchOverlayCtrlCDismisses(t *testing.T) {
 }
 
 func TestMouseClickOverlayRowMapping(t *testing.T) {
-	tui := newTestTUIv2()
+	tui := newTestTUIHelper()
 	tui.headerRows = 2
 	tui.scrollRows = 20
 	p := newPickerOverlay("Providers", []pickerItem{
@@ -141,8 +141,8 @@ func TestMouseClickOverlayRowMapping(t *testing.T) {
 	}
 }
 
-func TestV2ApproveBufferedAnswerBeforeReceive(t *testing.T) {
-	tui := newTestTUIv2()
+func TestApproveBufferedAnswerBeforeReceive(t *testing.T) {
+	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
 		result <- tui.Approve("rm -rf x", "danger")

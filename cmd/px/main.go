@@ -188,7 +188,8 @@ func runREPL() {
 
 	// Run TUI.
 	t := tui.NewTUI(a, sessionID, outputChan)
-	runErr := t.Run(func(a tui.Approver) { approveUI = a })
+	approveUI = t
+	runErr := t.Run()
 	if runErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
 	}

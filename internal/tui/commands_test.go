@@ -50,18 +50,23 @@ func newTestStoreAndAgent(t *testing.T) (*store.Store, *agent.Agent, string) {
 }
 
 func newTUIWithAgent(a *agent.Agent, sessionID string) *TUI {
-	buf := &bytes.Buffer{}
-	return &TUI{
-		outputChan: make(chan agent.OutputEvent, 64),
-		history:    []string{},
-		histIdx:    -1,
-		agent:      a,
-		sessionID:  sessionID,
-		writer:     buf,
-	}
+	t := NewTUI(a, sessionID, make(chan agent.OutputEvent, 64))
+	t.rows = 24
+	t.cols = 80
+	t.scrollRows = 20
+	t.writer = &bytes.Buffer{}
+	return t
 }
 
 func cmdHost(tui *TUI) commandHost { return tuiCmdHost{tui} }
+
+func testScrollOutput(tui *TUI) string {
+	var parts []string
+	for i := 0; i < tui.scroll.blockCount(); i++ {
+		parts = append(parts, tui.scroll.blockRaw(i))
+	}
+	return strings.Join(parts, "\n")
+}
 
 // --- /new ---
 
@@ -72,7 +77,7 @@ func TestCmdNew(t *testing.T) {
 	if err := cmdNew(cmdHost(tui)); err != nil {
 		t.Fatalf("cmdNew: %v", err)
 	}
-	out := tui.output()
+	out := testScrollOutput(tui)
 	if !strings.Contains(out, "new session") {
 		t.Errorf("expected 'new session', got %q", out)
 	}
@@ -106,7 +111,7 @@ func TestCmdResume(t *testing.T) {
 	if tui.sessionID != otherID {
 		t.Errorf("expected session %q, got %q", otherID, tui.sessionID)
 	}
-	if out := tui.output(); !strings.Contains(out, "resumed session") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "resumed session") {
 		t.Errorf("expected resume message, got %q", out)
 	}
 }
@@ -140,7 +145,7 @@ func TestCmdResumeNotFound(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdResume(cmdHost(tui), []string{"nonexistent"})
-	if out := tui.output(); !strings.Contains(out, "session not found") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "session not found") {
 		t.Errorf("expected not found, got %q", out)
 	}
 }
@@ -150,7 +155,7 @@ func TestCmdResumeNoArg(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdResume(cmdHost(tui), nil)
-	if out := tui.output(); !strings.Contains(out, "usage") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "usage") {
 		t.Errorf("expected usage, got %q", out)
 	}
 }
@@ -171,7 +176,7 @@ func TestCmdSessions(t *testing.T) {
 	})
 
 	cmdSessions(cmdHost(tui))
-	out := tui.output()
+	out := testScrollOutput(tui)
 	if !strings.Contains(out, "test-cmd-session") {
 		t.Errorf("expected current session in output, got %q", out)
 	}
@@ -193,7 +198,7 @@ func TestCmdSessionsEmpty(t *testing.T) {
 	t.Cleanup(func() { s.Close() })
 	tui.agent = agent.NewAgent(s, provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 4096}}), tools.NewRegistry(), config.DefaultConfig(), sessionID, make(chan agent.OutputEvent, 64), func(_, _, _ string) bool { return false })
 	cmdSessions(cmdHost(tui))
-	if out := tui.output(); !strings.Contains(out, "no sessions") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "no sessions") {
 		t.Errorf("expected no sessions, got %q", out)
 	}
 }
@@ -211,7 +216,7 @@ func TestCmdSearch(t *testing.T) {
 	})
 
 	cmdSearch(cmdHost(tui), []string{"hello"})
-	out := tui.output()
+	out := testScrollOutput(tui)
 	if !strings.Contains(out, "[hello]") {
 		t.Errorf("expected search result with highlighted term, got %q", out)
 	}
@@ -222,7 +227,7 @@ func TestCmdSearchNoResults(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdSearch(cmdHost(tui), []string{"nonexistent"})
-	if out := tui.output(); !strings.Contains(out, "no results") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "no results") {
 		t.Errorf("expected no results, got %q", out)
 	}
 }
@@ -232,7 +237,7 @@ func TestCmdSearchNoQuery(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdSearch(cmdHost(tui), nil)
-	if out := tui.output(); !strings.Contains(out, "usage") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "usage") {
 		t.Errorf("expected usage, got %q", out)
 	}
 }
@@ -250,7 +255,7 @@ func TestCmdForkLatest(t *testing.T) {
 	})
 
 	cmdFork(cmdHost(tui), nil)
-	out := tui.output()
+	out := testScrollOutput(tui)
 	if !strings.Contains(out, "forked to new session") {
 		t.Errorf("expected fork message, got %q", out)
 	}
@@ -271,7 +276,7 @@ func TestCmdForkEmptySession(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdFork(cmdHost(tui), nil)
-	if out := tui.output(); !strings.Contains(out, "nothing to fork") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "nothing to fork") {
 		t.Errorf("expected empty fork message, got %q", out)
 	}
 }
@@ -281,7 +286,7 @@ func TestCmdForkRejectsInvalidSeq(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdFork(cmdHost(tui), []string{"abc"})
-	if out := tui.output(); !strings.Contains(out, "usage") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "usage") {
 		t.Fatalf("expected usage, got %q", out)
 	}
 	if tui.sessionID != sessionID {
@@ -299,7 +304,7 @@ func TestCmdUndo(t *testing.T) {
 	s.AppendMessage(&store.Message{SessionID: sessionID, Role: "assistant", Content: `{"text":"hello"}`})
 
 	cmdUndo(cmdHost(tui))
-	out := tui.output()
+	out := testScrollOutput(tui)
 	if !strings.Contains(out, "undid last turn") {
 		t.Errorf("expected undo message, got %q", out)
 	}
@@ -316,7 +321,7 @@ func TestCmdUndoNoUserMessage(t *testing.T) {
 	s.AppendMessage(&store.Message{SessionID: sessionID, Role: "assistant", Content: `{"text":"only assistant"}`})
 
 	cmdUndo(cmdHost(tui))
-	if out := tui.output(); !strings.Contains(out, "no user message") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "no user message") {
 		t.Errorf("expected no user message message, got %q", out)
 	}
 }
@@ -331,7 +336,7 @@ func TestCmdModel(t *testing.T) {
 	if a.Model() != "test-model-2" {
 		t.Errorf("expected model test-model-2, got %q", a.Model())
 	}
-	if out := tui.output(); !strings.Contains(out, "test-model-2") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "test-model-2") {
 		t.Errorf("expected model message, got %q", out)
 	}
 }
@@ -365,7 +370,7 @@ func TestCmdModelProviderOnlyResetsToDefault(t *testing.T) {
 	if a.Model() != a.Config().Ollama.Model {
 		t.Fatalf("model = %q, want default %q", a.Model(), a.Config().Ollama.Model)
 	}
-	if out := tui.output(); !strings.Contains(out, "model: ollama/") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "model: ollama/") {
 		t.Fatalf("expected model output, got %q", out)
 	}
 }
@@ -375,7 +380,7 @@ func TestCmdModelRejectsEmptyModel(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdModel(cmdHost(tui), []string{"ollama/"})
-	if out := tui.output(); !strings.Contains(out, "usage") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "usage") {
 		t.Fatalf("expected usage, got %q", out)
 	}
 }
@@ -385,7 +390,7 @@ func TestCmdModelNoArg(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdModel(cmdHost(tui), nil)
-	if out := tui.output(); !strings.Contains(out, "current") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "current") {
 		t.Errorf("expected current model message, got %q", out)
 	}
 }
@@ -397,7 +402,7 @@ func TestCmdCost(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdCost(cmdHost(tui))
-	out := tui.output()
+	out := testScrollOutput(tui)
 	if !strings.Contains(out, "tokens") {
 		t.Errorf("expected token output, got %q", out)
 	}
@@ -408,7 +413,7 @@ func TestCmdCostEmpty(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdCost(cmdHost(tui))
-	out := tui.output()
+	out := testScrollOutput(tui)
 	if !strings.Contains(out, "Cost") && !strings.Contains(out, "calls") {
 		t.Errorf("expected cost output, got %q", out)
 	}
@@ -421,7 +426,7 @@ func TestCmdReload(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdReload(cmdHost(tui))
-	if out := tui.output(); !strings.Contains(out, "reloaded") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "reloaded") {
 		t.Errorf("expected reload message, got %q", out)
 	}
 	if _, ok := a.Provider().(*provider.FakeProvider); ok {
@@ -435,9 +440,8 @@ func TestCmdCompactStub(t *testing.T) {
 	_, a, sessionID := newTestStoreAndAgent(t)
 	tui := newTUIWithAgent(a, sessionID)
 
-	// Classic TUI doesn't have /compact implemented.
-	if out := tui.output(); out != "" {
-		t.Logf("classic output before compact: %q", out)
+	if out := testScrollOutput(tui); out != "" {
+		t.Logf("scroll output before compact: %q", out)
 	}
 }
 
@@ -451,7 +455,7 @@ func TestCmdEffort(t *testing.T) {
 	if a.Effort() != "high" {
 		t.Errorf("expected effort high, got %q", a.Effort())
 	}
-	if out := tui.output(); !strings.Contains(out, "high") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "high") {
 		t.Errorf("expected effort message, got %q", out)
 	}
 }
@@ -461,7 +465,7 @@ func TestCmdEffortInvalid(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdEffort(cmdHost(tui), []string{"bogus"})
-	if out := tui.output(); !strings.Contains(out, "unknown") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "unknown") {
 		t.Errorf("expected unknown effort message, got %q", out)
 	}
 }
@@ -471,7 +475,7 @@ func TestCmdEffortNoArg(t *testing.T) {
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdEffort(cmdHost(tui), nil)
-	if out := tui.output(); !strings.Contains(out, "current") {
+	if out := testScrollOutput(tui); !strings.Contains(out, "current") {
 		t.Errorf("expected current effort message, got %q", out)
 	}
 }

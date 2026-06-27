@@ -6,7 +6,7 @@ import (
 )
 
 func TestCompletionLinesCapsToScrollRows(t *testing.T) {
-	tui := newTUIv2(nil, "s-abc", nil)
+	tui := newTUI(nil, "s-abc", nil)
 	tui.scrollRows = 5
 	cands := make([]string, 20)
 	for i := range cands {
@@ -23,7 +23,7 @@ func TestCompletionLinesCapsToScrollRows(t *testing.T) {
 }
 
 func TestPaintCompletionZoneRestoresShrunkRows(t *testing.T) {
-	tui := newTUIv2(nil, "s-abc", nil)
+	tui := newTUI(nil, "s-abc", nil)
 	tui.cols = 40
 	tui.rows = 12
 	tui.scrollRows = 8

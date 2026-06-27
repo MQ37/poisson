@@ -13,9 +13,8 @@ import (
 	"poisson/internal/store"
 )
 
-// commandHost is the small interface shared by *TUI and *tuiV2 so the slash
-// commands live in one place. The TUIs wrap themselves in this shape before
-// dispatching.
+// commandHost is the small interface the slash commands use. The TUI wraps
+// itself in tuiCmdHost before dispatching.
 type commandHost interface {
 	Agent() *agent.Agent
 	SessionID() string
@@ -26,18 +25,10 @@ type commandHost interface {
 // tuiCmdHost wraps *TUI.
 type tuiCmdHost struct{ t *TUI }
 
-func (h tuiCmdHost) Agent() *agent.Agent           { return h.t.agent }
-func (h tuiCmdHost) SessionID() string             { return h.t.sessionID }
-func (h tuiCmdHost) SetSessionID(id string)        { h.t.sessionID = id }
-func (h tuiCmdHost) Out(style LineStyle, s string) { h.t.writeString(s + "\r\n") }
-
-// v2CmdHost wraps *tuiV2.
-type v2CmdHost struct{ t *tuiV2 }
-
-func (h v2CmdHost) Agent() *agent.Agent    { return h.t.agent }
-func (h v2CmdHost) SessionID() string      { return h.t.sessionID }
-func (h v2CmdHost) SetSessionID(id string) { h.t.sessionID = id; h.t.status.SessionID = id }
-func (h v2CmdHost) Out(style LineStyle, s string) {
+func (h tuiCmdHost) Agent() *agent.Agent    { return h.t.agent }
+func (h tuiCmdHost) SessionID() string      { return h.t.sessionID }
+func (h tuiCmdHost) SetSessionID(id string) { h.t.sessionID = id; h.t.status.SessionID = id }
+func (h tuiCmdHost) Out(style LineStyle, s string) {
 	h.t.scroll.appendRaw(style, s)
 	h.t.markScrollDirty()
 }

@@ -23,7 +23,7 @@ type layoutSnapshot struct {
 	visible     []ScreenRow
 }
 
-func (t *tuiV2) prepareLayout() layoutSnapshot {
+func (t *TUI) prepareLayout() layoutSnapshot {
 	wrapWidth := t.cols - 1
 	if wrapWidth < 1 {
 		wrapWidth = 1
@@ -66,7 +66,7 @@ func (t *tuiV2) prepareLayout() layoutSnapshot {
 	}
 }
 
-func (t *tuiV2) paint(snap dirtySnapshot) {
+func (t *TUI) paint(snap dirtySnapshot) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -84,7 +84,7 @@ func (t *tuiV2) paint(snap dirtySnapshot) {
 	}
 }
 
-func (t *tuiV2) paintFull(lay layoutSnapshot) {
+func (t *TUI) paintFull(lay layoutSnapshot) {
 	var b strings.Builder
 	t.paintHeaderRegion(&b, lay)
 	t.paintScrollRegion(&b, lay, nil)
@@ -95,7 +95,7 @@ func (t *tuiV2) paintFull(lay layoutSnapshot) {
 	t.writeRaw(b.String())
 }
 
-func (t *tuiV2) paintPartial(snap dirtySnapshot, lay layoutSnapshot) {
+func (t *TUI) paintPartial(snap dirtySnapshot, lay layoutSnapshot) {
 	var b strings.Builder
 	if len(snap.scroll) > 0 {
 		t.paintScrollRegion(&b, lay, snap.scroll)
@@ -123,7 +123,7 @@ func (t *tuiV2) paintPartial(snap dirtySnapshot, lay layoutSnapshot) {
 	}
 }
 
-func (t *tuiV2) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []int) {
+func (t *TUI) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []int) {
 	startRow := lay.scrollStart
 	paintAll := only == nil
 	onlySet := map[int]struct{}{}
@@ -178,7 +178,7 @@ func animateToolLine(text string, frame int) string {
 	return head + spin + rest
 }
 
-func (t *tuiV2) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
+func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 	b.WriteString(cup(lay.inputTop, 1))
 	b.WriteString(clearLine())
 	if header := t.renderInputHeader(); header != "" {
@@ -212,7 +212,7 @@ func (t *tuiV2) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 	}
 }
 
-func (t *tuiV2) paintCompletionOverlay(b *strings.Builder, lay layoutSnapshot) {
+func (t *TUI) paintCompletionOverlay(b *strings.Builder, lay layoutSnapshot) {
 	c := t.completion
 	if c == nil || c.empty() {
 		if t.lastCompletionRows > 0 {
@@ -227,7 +227,7 @@ func (t *tuiV2) paintCompletionOverlay(b *strings.Builder, lay layoutSnapshot) {
 }
 
 // completionLines returns the completion dropdown rows to paint (capped to scrollback).
-func completionLines(t *tuiV2, c *completion) []string {
+func completionLines(t *TUI, c *completion) []string {
 	lines := strings.Split(strings.TrimRight(t.renderCompletion(c), "\n"), "\n")
 	if len(lines) > t.scrollRows {
 		lines = append(lines[:1], lines[len(lines)-(t.scrollRows-1):]...)
@@ -238,7 +238,7 @@ func completionLines(t *tuiV2, c *completion) []string {
 // paintCompletionZone clears the union of the previous and current overlay
 // heights, restores scrollback where the dropdown no longer covers, and paints
 // the dropdown lines at the bottom of the scroll region.
-func (t *tuiV2) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, lines []string, lineCount int) {
+func (t *TUI) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, lines []string, lineCount int) {
 	zone := lineCount
 	if t.lastCompletionRows > zone {
 		zone = t.lastCompletionRows
@@ -271,7 +271,7 @@ func (t *tuiV2) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, line
 	}
 }
 
-func (t *tuiV2) formatScrollLine(text string) string {
+func (t *TUI) formatScrollLine(text string) string {
 	if strings.Contains(stripANSI(text), toolWorkingMarker) {
 		return animateToolLine(text, t.renderFrame)
 	}
@@ -281,7 +281,7 @@ func (t *tuiV2) formatScrollLine(text string) string {
 	return text
 }
 
-func (t *tuiV2) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
+func (t *TUI) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
 	if t.activeOverlay == nil {
 		return
 	}
@@ -297,7 +297,7 @@ func (t *tuiV2) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
 	}
 }
 
-func (t *tuiV2) paintHeaderRegion(b *strings.Builder, lay layoutSnapshot) {
+func (t *TUI) paintHeaderRegion(b *strings.Builder, lay layoutSnapshot) {
 	if t.headerRows < 1 {
 		return
 	}
@@ -310,7 +310,7 @@ func (t *tuiV2) paintHeaderRegion(b *strings.Builder, lay layoutSnapshot) {
 	}
 }
 
-func (t *tuiV2) applySearchHighlight(vi int, lay layoutSnapshot, line string) string {
+func (t *TUI) applySearchHighlight(vi int, lay layoutSnapshot, line string) string {
 	so, ok := t.activeOverlay.(*searchOverlay)
 	if !ok || so.query == "" {
 		return line
@@ -328,7 +328,7 @@ func (t *tuiV2) applySearchHighlight(vi int, lay layoutSnapshot, line string) st
 	return line
 }
 
-func (t *tuiV2) paintCursor(b *strings.Builder, lay layoutSnapshot) {
+func (t *TUI) paintCursor(b *strings.Builder, lay layoutSnapshot) {
 	if t.focusRegion == focusConv {
 		return
 	}
@@ -346,7 +346,7 @@ func (t *tuiV2) paintCursor(b *strings.Builder, lay layoutSnapshot) {
 	b.WriteString(cup(lay.bodyStart+visRow, col))
 }
 
-func (t *tuiV2) toolSpinnerRows(lay layoutSnapshot) []int {
+func (t *TUI) toolSpinnerRows(lay layoutSnapshot) []int {
 	seen := map[int]struct{}{}
 	var rows []int
 	for _, i := range thinkingSpinnerRows(lay.visible) {
@@ -369,7 +369,7 @@ func (t *tuiV2) toolSpinnerRows(lay layoutSnapshot) []int {
 	return rows
 }
 
-func (t *tuiV2) markAfterEvent(ev agent.OutputEvent) {
+func (t *TUI) markAfterEvent(ev agent.OutputEvent) {
 	switch ev.Type {
 	case agent.OutputText, agent.OutputThinking:
 		if rows := t.scroll.streamViewportDirty(t.scrollRows, t.contentWidth()); len(rows) > 0 {
@@ -396,7 +396,7 @@ func (t *tuiV2) markAfterEvent(ev agent.OutputEvent) {
 	}
 }
 
-func (t *tuiV2) applyStatus(ev agent.OutputEvent) {
+func (t *TUI) applyStatus(ev agent.OutputEvent) {
 	t.status.ContextPct = ev.ContextPct
 	t.status.ContextTokens = ev.ContextTokens
 	t.status.ContextWindow = ev.ContextWindow
@@ -412,7 +412,7 @@ func (t *tuiV2) applyStatus(ev agent.OutputEvent) {
 	t.status.WarnContext = ev.ContextPct > 75.0
 }
 
-func (t *tuiV2) markScrollDirty() {
+func (t *TUI) markScrollDirty() {
 	h := t.scrollRows
 	if h < 1 {
 		h = 1
@@ -423,15 +423,15 @@ func (t *tuiV2) markScrollDirty() {
 	}
 }
 
-func (t *tuiV2) markFullDirty() {
+func (t *TUI) markFullDirty() {
 	t.dirty.markFull()
 }
 
-func (t *tuiV2) markInputDirty() {
+func (t *TUI) markInputDirty() {
 	t.dirty.markInput()
 }
 
-func (t *tuiV2) markSpinnerTick() {
+func (t *TUI) markSpinnerTick() {
 	t.mu.Lock()
 	lay := t.prepareLayout()
 	rows := t.toolSpinnerRows(lay)

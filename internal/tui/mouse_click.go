@@ -2,7 +2,7 @@ package tui
 
 // handleMouseInput consumes pure mouse reports (wheel + click). Returns true if
 // the input goroutine should skip further processing.
-func (t *tuiV2) handleMouseInput(data []byte) bool {
+func (t *TUI) handleMouseInput(data []byte) bool {
 	if !dataIsOnlyMouse(data) {
 		return false
 	}
@@ -30,7 +30,7 @@ func (t *tuiV2) handleMouseInput(data []byte) bool {
 	return true // consume release / other buttons
 }
 
-func (t *tuiV2) handleMouseClick(row int) {
+func (t *TUI) handleMouseClick(row int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 

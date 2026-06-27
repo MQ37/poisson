@@ -7,7 +7,7 @@ import (
 )
 
 func TestConvFocusPinnedPrompt(t *testing.T) {
-	tui := newTUIv2(nil, "s1", nil)
+	tui := newTUI(nil, "s1", nil)
 	tui.writer = io.Discard
 	tui.rows = 24
 	tui.cols = 80
@@ -30,7 +30,7 @@ func TestConvFocusPinnedPrompt(t *testing.T) {
 }
 
 func TestConvFocusStepPrompts(t *testing.T) {
-	tui := newTUIv2(nil, "s1", nil)
+	tui := newTUI(nil, "s1", nil)
 	tui.rows = 24
 	tui.cols = 80
 	tui.scrollRows = 16
@@ -54,7 +54,7 @@ func TestConvFocusStepPrompts(t *testing.T) {
 }
 
 func TestTabTogglesConvFocus(t *testing.T) {
-	tui := newTUIv2(nil, "s1", nil)
+	tui := newTUI(nil, "s1", nil)
 	tui.rows = 24
 	tui.cols = 80
 	tui.scrollRows = 16

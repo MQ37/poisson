@@ -42,7 +42,7 @@ func TestClickBlockAtStreamingThinking(t *testing.T) {
 }
 
 func TestHandleMouseInputWheel(t *testing.T) {
-	tui := newTUIv2(nil, "s1", nil)
+	tui := newTUI(nil, "s1", nil)
 	tui.scrollRows = 5
 	tui.cols = 40
 	tui.scroll.appendRaw(styleAssistant, strings.Repeat("word ", 200))
@@ -57,7 +57,7 @@ func TestHandleMouseInputWheel(t *testing.T) {
 }
 
 func TestHandleMouseClickScrollRegion(t *testing.T) {
-	tui := newTUIv2(nil, "s1", nil)
+	tui := newTUI(nil, "s1", nil)
 	tui.headerRows = 1
 	tui.scrollRows = 8
 	tui.cols = 80
@@ -75,7 +75,7 @@ func TestHandleMouseClickScrollRegion(t *testing.T) {
 }
 
 func TestHandleMouseClickIgnoresHeader(t *testing.T) {
-	tui := newTUIv2(nil, "s1", nil)
+	tui := newTUI(nil, "s1", nil)
 	tui.headerRows = 1
 	tui.scrollRows = 8
 	tui.cols = 80

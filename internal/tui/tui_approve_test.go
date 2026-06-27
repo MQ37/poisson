@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-func newTestTUIv2() *tuiV2 {
-	tui := newTUIv2(nil, "s-test", nil)
+func newTestTUIHelper() *TUI {
+	tui := newTUI(nil, "s-test", nil)
 	tui.rows = 24
 	tui.cols = 80
 	tui.scrollRows = 20
@@ -15,8 +15,8 @@ func newTestTUIv2() *tuiV2 {
 	return tui
 }
 
-func TestV2ApproveLifecycle(t *testing.T) {
-	tui := newTestTUIv2()
+func TestApproveLifecycle(t *testing.T) {
+	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
 		result <- tui.Approve("rm -rf x", "danger")
@@ -50,7 +50,7 @@ func TestV2ApproveLifecycle(t *testing.T) {
 }
 
 func TestScrollHandledBeforeApproval(t *testing.T) {
-	tui := newTestTUIv2()
+	tui := newTestTUIHelper()
 	tui.mu.Lock()
 	for i := 0; i < 30; i++ {
 		tui.scroll.appendRaw(styleSystem, "line")
@@ -84,7 +84,7 @@ func TestEditorDeleteKeyCSI(t *testing.T) {
 }
 
 func TestApproveWhileAgentRunning(t *testing.T) {
-	tui := newTestTUIv2()
+	tui := newTestTUIHelper()
 	tui.status.Thinking = true
 	result := make(chan bool, 1)
 	go func() {
@@ -117,7 +117,7 @@ func TestApproveWhileAgentRunning(t *testing.T) {
 }
 
 func TestFeedArrowRightMovesCursor(t *testing.T) {
-	tui := newTestTUIv2()
+	tui := newTestTUIHelper()
 	tui.editor.setText("abc")
 	tui.editor.col = 1
 	quit, err := tui.feed([]byte{27, '[', 'C'})
@@ -130,7 +130,7 @@ func TestFeedArrowRightMovesCursor(t *testing.T) {
 }
 
 func TestFeedPlainArrowNotScrollback(t *testing.T) {
-	tui := newTestTUIv2()
+	tui := newTestTUIHelper()
 	tui.scroll.appendRaw(styleSystem, "history")
 	tui.scroll.scrollToBottom()
 	before := tui.scroll.scrollOffset

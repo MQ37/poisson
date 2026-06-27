@@ -8,16 +8,6 @@ import (
 	"poisson/internal/agent"
 )
 
-// renderEvent renders a single OutputEvent to the TUI's writer based on its
-// type. The testable core is renderEventString.
-func (t *TUI) renderEvent(ev agent.OutputEvent) {
-	if ev.Type == agent.OutputStatus {
-		t.writeString(renderStatusBarString(ev, t.sessionID))
-		return
-	}
-	t.writeString(renderEventString(ev))
-}
-
 // renderEventString formats an OutputEvent into a string without writing to a
 // terminal. This is the testable core of the rendering logic.
 func renderEventString(ev agent.OutputEvent) string {
@@ -163,11 +153,6 @@ func previewText(s string, maxBytes int) string {
 	return b.String()
 }
 
-// renderStatusBar formats and writes the status bar for a status event.
-func (t *TUI) renderStatusBar(ev agent.OutputEvent) {
-	t.writeString(renderStatusBarString(ev, t.sessionID))
-}
-
 // renderStatusBarString formats the status bar line:
 //
 //	[session] ctx: 42.3% (12,847/30,400) | $0.0124 | provider/model
@@ -226,20 +211,4 @@ func formatNum(n int) string {
 	return b.String()
 }
 
-// clearLine erases the current line and moves the cursor to column 1.
-func (t *TUI) clearLine() {
-	t.writeString("\x1b[2K\r")
-}
 
-// moveCursor moves the cursor by n columns. dir is 'C' (right) or 'D' (left).
-func (t *TUI) moveCursor(dir byte, n int) {
-	if n <= 0 {
-		return
-	}
-	t.writeString(fmt.Sprintf("\x1b[%d%c", n, dir))
-}
-
-// clearScreen clears the entire screen and homes the cursor.
-func (t *TUI) clearScreen() {
-	t.writeString("\x1b[2J\x1b[H")
-}

@@ -358,8 +358,7 @@ func runeByteIndex(s string, col int) int {
 	return len(s)
 }
 
-// pasteEndV2 markers for bracketed paste mode (v2 editor). The classic readline
-// editor keeps its own copies in tui.go to avoid coupling the two paths.
+// Bracketed-paste markers (OSC 200/201).
 var (
 	pasteStartV2 = []byte("\x1b[200~")
 	pasteEndV2   = []byte("\x1b[201~")
