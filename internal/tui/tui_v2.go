@@ -248,7 +248,10 @@ func (t *tuiV2) Run() error {
 			if t.approving.Load() {
 				allowed, ok := approvalKeyAllowed(decodeKittyKeys(buf[:n]))
 				if ok {
-					t.approvalAnswer <- allowed
+					select {
+					case t.approvalAnswer <- allowed:
+					default:
+					}
 				}
 				continue
 			}
@@ -374,24 +377,16 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		}
 	}
 
-	// Scrollback navigation — works even while the agent is running.
+	// Scrollback navigation (PgUp/Dn, wheel, shift+arrows) — not plain arrows.
 	if delta, ok := parseScrollInputRaw(data, t.scrollRows); ok {
-		if !(isShiftArrowScroll(data) && t.scroll.scrollOffset == 0) {
+		if isShiftArrowScroll(data) || isPageUp(data) || isPageDown(data) {
 			t.scrollByDelta(delta)
 			return false, nil
 		}
 	}
-	if isArrowUp(data) && t.editorAtScrollTop() && t.completion.empty() {
-		t.scrollByDelta(1)
-		return false, nil
-	}
-	if isArrowDown(data) && t.scroll.scrollOffset > 0 && t.editorAtScrollBottom() && t.completion.empty() {
-		t.scrollByDelta(-1)
-		return false, nil
-	}
 
-	// While a prompt is running, only Ctrl+C is meaningful for editor input.
-	if t.running() {
+	// While a prompt is running, only Ctrl+C and approval keys are meaningful.
+	if t.running() && !t.approving.Load() {
 		if containsCtrlC(data) {
 			t.cancelMu.Lock()
 			cancel := t.cancelRun
@@ -835,14 +830,15 @@ func (t *tuiV2) Approve(command, description string) bool {
 	default:
 	}
 
+	// Signal before paint so the input goroutine routes keys here immediately
+	// (running() would otherwise swallow them during tool execution).
+	t.approving.Store(true)
+	defer t.approving.Store(false)
+
 	t.mu.Lock()
 	t.activeOverlay = newApprovalOverlay(command, description)
 	t.dirty.markFull()
 	t.mu.Unlock()
-	t.paint(t.dirty.consume())
-
-	t.approving.Store(true)
-	defer t.approving.Store(false)
 
 	var allowed bool
 	select {

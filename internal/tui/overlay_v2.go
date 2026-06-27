@@ -136,7 +136,8 @@ func (t *tuiV2) blocksBackgroundInput() bool {
 	if t.activeOverlay == nil {
 		return false
 	}
-	if _, ok := t.activeOverlay.(*searchOverlay); ok {
+	switch t.activeOverlay.(type) {
+	case *searchOverlay, *approvalOverlay:
 		return false
 	}
 	return true

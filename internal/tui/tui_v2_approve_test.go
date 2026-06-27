@@ -83,6 +83,63 @@ func TestEditorDeleteKeyCSI(t *testing.T) {
 	}
 }
 
+func TestApproveWhileAgentRunning(t *testing.T) {
+	tui := newTestTUIv2()
+	tui.status.Thinking = true
+	result := make(chan bool, 1)
+	go func() {
+		result <- tui.Approve("rm -rf x", "danger")
+	}()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for !tui.approving.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !tui.approving.Load() {
+		t.Fatal("approving not set while agent running")
+	}
+	allowed, ok := approvalKeyAllowed([]byte{'a'})
+	if !ok || !allowed {
+		t.Fatal("expected allow key")
+	}
+	select {
+	case tui.approvalAnswer <- allowed:
+	default:
+		t.Fatal("approval answer channel full")
+	}
+	select {
+	case got := <-result:
+		if !got {
+			t.Fatal("expected allow")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Approve timed out while agent running")
+	}
+}
+
+func TestFeedArrowRightMovesCursor(t *testing.T) {
+	tui := newTestTUIv2()
+	tui.editor.setText("abc")
+	tui.editor.col = 1
+	quit, err := tui.feed([]byte{27, '[', 'C'})
+	if err != nil || quit {
+		t.Fatalf("feed: quit=%v err=%v", quit, err)
+	}
+	if tui.editor.col != 2 {
+		t.Fatalf("col=%d want 2", tui.editor.col)
+	}
+}
+
+func TestFeedPlainArrowNotScrollback(t *testing.T) {
+	tui := newTestTUIv2()
+	tui.scroll.appendRaw(styleSystem, "history")
+	tui.scroll.scrollToBottom()
+	before := tui.scroll.scrollOffset
+	_, _ = tui.feed([]byte{27, '[', 'A'})
+	if tui.scroll.scrollOffset != before {
+		t.Fatalf("plain up scrolled offset %d -> %d", before, tui.scroll.scrollOffset)
+	}
+}
+
 func TestSplitPrefixUnicode(t *testing.T) {
 	line := "prefix @café"
 	col := len([]rune(line))
