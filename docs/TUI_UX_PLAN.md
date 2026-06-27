@@ -1042,10 +1042,10 @@ Build-style CLIs surface a one-liner so the user can approve with context.
 1. Bash tool schema: add `description` to `required` alongside `command`.
 2. Tool `Description()` text: tell the model to supply a short one-line purpose
    for every bash invocation (especially commands that may need approval).
-3. `approvalOverlay.render`: show command on line 1 (`$ cmd`), purpose on line 2
-   (`Purpose: …` in dim). If description empty at runtime, synthesize fallback
-   from guard `reason` (e.g. `Purpose: destructive command — rm`) or
-   `Purpose: (no description provided)`.
+3. Show `$ cmd` + labeled `Purpose: …` (dim) in overlay + classic. If description
+   empty at runtime, bash tool synthesizes fallback from guard `reason` before
+   calling approval (e.g. `Purpose: destructive command: rm`) or `(no description
+   provided)`. Render/UI also defensive fallback.
 4. Classic `TUI.Approve`: mirror the two-line layout.
 5. Subagent JSON approval path (`main.go` child mode): include `description` in
    `approval_request` payload (already has field — verify wired end-to-end).

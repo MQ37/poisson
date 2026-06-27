@@ -51,11 +51,11 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 		fgYellow + bold + top + reset,
 	}
 	for _, ln := range body {
-		pad := inner - visibleWidth(ln)
+		pad := inner - 2 - visibleWidth(ln)
 		if pad < 0 {
 			pad = 0
 		}
-		lines = append(lines, fgYellow+bold+"│"+reset+" "+ln+strings.Repeat(" ", pad)+" "+fgYellow+bold+"│"+reset)
+		lines = append(lines, fgYellow+bold+"│"+reset+"  "+ln+strings.Repeat(" ", pad)+"  "+fgYellow+bold+"│"+reset)
 	}
 	lines = append(lines, fgYellow+bold+bot+reset)
 	return anchor, lines
