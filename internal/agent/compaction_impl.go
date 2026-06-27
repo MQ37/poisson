@@ -65,11 +65,28 @@ func (a *Agent) compact() error {
 			summarizeCount = 1
 		}
 	}
+	summarizeCount = adjustCompactionCount(msgs, summarizeCount)
+	if summarizeCount <= 0 {
+		return nil
+	}
 
 	toSummarize := msgs[:summarizeCount]
 
 	// 3. Build summarization request.
-	summarizationMsgs := make([]provider.Message, 0, len(toSummarize)+1)
+	summarizationMsgs := make([]provider.Message, 0, len(toSummarize)+2)
+	instruction := "Summarize the following conversation for context handoff. Produce ONLY the structured summary."
+	if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil &&
+		sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
+		instruction = "You have a previous conversation summary. Merge it with the new messages below into ONE updated structured summary. Preserve all important details from the previous summary.\n\nPrevious summary:\n" +
+			*sess.CompactionSummary + "\n\nNow merge with these additional messages:"
+	}
+	summarizationMsgs = append(summarizationMsgs, provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: instruction,
+		}},
+	})
 	for _, m := range toSummarize {
 		pm, err := messageToProvider(m)
 		if err != nil {
@@ -77,15 +94,6 @@ func (a *Agent) compact() error {
 		}
 		summarizationMsgs = append(summarizationMsgs, pm)
 	}
-
-	// Prepend a user message instructing summarization.
-	summarizationMsgs = append([]provider.Message{{
-		Role: "user",
-		Content: []provider.ContentBlock{{
-			Type: "text",
-			Text: "Summarize the following conversation for context handoff. Produce ONLY the structured summary.",
-		}},
-	}}, summarizationMsgs...)
 
 	compactionModel := a.currentModel()
 	if a.config != nil && a.config.Compaction.Model != "" {
@@ -125,15 +133,10 @@ func (a *Agent) compact() error {
 		return fmt.Errorf("compaction produced empty summary")
 	}
 
-	// 5. Mark old messages as compacted.
+	// 5–6. Atomically store summary and mark messages compacted.
 	upToSeq := toSummarize[len(toSummarize)-1].Seq
-	if err := a.store.MarkCompacted(a.sessionID, upToSeq); err != nil {
-		return fmt.Errorf("mark compacted: %w", err)
-	}
-
-	// 6. Store summary on session.
-	if err := a.store.SetCompactionSummary(a.sessionID, summaryText); err != nil {
-		return fmt.Errorf("set compaction summary: %w", err)
+	if err := a.store.ApplyCompaction(a.sessionID, upToSeq, summaryText); err != nil {
+		return fmt.Errorf("apply compaction: %w", err)
 	}
 
 	// 7. Record api_call for summarization (exact tokens + cost).
@@ -178,4 +181,18 @@ func (a *Agent) compact() error {
 // shouldCompact checks if compaction should trigger.
 func (a *Agent) shouldCompact() bool {
 	return a.ShouldCompact()
+}
+
+// adjustCompactionCount ensures we don't split assistant/tool_use from tool results.
+func adjustCompactionCount(msgs []store.Message, count int) int {
+	if count <= 0 {
+		return 0
+	}
+	if count > len(msgs) {
+		count = len(msgs)
+	}
+	for count < len(msgs) && msgs[count].Role == "tool" {
+		count++
+	}
+	return count
 }

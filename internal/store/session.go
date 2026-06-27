@@ -129,6 +129,29 @@ func (s *Store) UpdateSession(sess *Session) error {
 	return nil
 }
 
+// ApplyCompaction atomically stores the summary and marks messages compacted.
+func (s *Store) ApplyCompaction(sessionID string, upToSeq int, summary string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin compaction tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	now := time.Now().Unix()
+	if _, err := tx.Exec(
+		`UPDATE sessions SET compaction_summary = ?, updated_at = ? WHERE id = ?`,
+		summary, now, sessionID); err != nil {
+		return fmt.Errorf("set compaction summary: %w", err)
+	}
+	if _, err := tx.Exec(
+		`UPDATE messages SET compacted = 1
+		 WHERE session_id = ? AND seq <= ? AND deleted_at IS NULL AND compacted = 0`,
+		sessionID, upToSeq); err != nil {
+		return fmt.Errorf("mark compacted: %w", err)
+	}
+	return tx.Commit()
+}
+
 // SetCompactionSummary stores the compaction summary on a session and
 // bumps updated_at.
 func (s *Store) SetCompactionSummary(id, summary string) error {

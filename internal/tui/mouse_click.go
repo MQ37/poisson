@@ -54,8 +54,17 @@ func (t *TUI) handleMouseClick(row int) {
 	if row < scrollStart || row > scrollEnd {
 		return
 	}
-	vi := row - scrollStart
-	if t.scroll.clickBlockAt(t.scrollRows, t.contentWidth(), vi) {
+	pinRows := 0
+	viewH := t.scrollRows
+	if t.focusRegion == focusConv {
+		pinRows = 1
+		viewH = t.convScrollRows()
+	}
+	vi := row - scrollStart - pinRows
+	if vi < 0 {
+		return
+	}
+	if t.scroll.clickBlockAt(viewH, t.contentWidth(), vi) {
 		t.markScrollDirty()
 	}
 }

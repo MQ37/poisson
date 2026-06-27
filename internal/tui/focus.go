@@ -84,6 +84,7 @@ func (t *TUI) handleTabKey() {
 		return
 	}
 	if t.handleTab() {
+		t.markInputDirty()
 		return
 	}
 	if t.completion != nil && !t.completion.empty() {
@@ -116,6 +117,18 @@ func (t *TUI) scrollViewportRows() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.convScrollRows()
+}
+
+// trimScrollbackFromLastUser removes the last user turn from on-screen scrollback.
+func (t *TUI) trimScrollbackFromLastUser() {
+	idxs := t.scroll.userBlockIndices()
+	if len(idxs) == 0 {
+		return
+	}
+	t.mu.Lock()
+	t.scroll.trimFromBlockIndex(idxs[len(idxs)-1])
+	t.mu.Unlock()
+	t.markScrollDirty()
 }
 
 // resetSessionView clears scrollback and focus state after switching sessions.

@@ -413,6 +413,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		if a.shouldCompact() {
 			if err := a.compact(); err != nil {
 				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Compaction error: %v", err)})
+				return fmt.Errorf("compaction failed: %w", err)
 			}
 		}
 
@@ -478,8 +479,13 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 		toolDefs = a.tools.Definitions()
 	}
 
+	model := a.Model()
+	if model == "" {
+		model = sess.Model
+	}
+
 	return &provider.Request{
-		Model:    sess.Model,
+		Model:    model,
 		System:   systemBlocks,
 		Messages: providerMsgs,
 		Tools:    toolDefs,

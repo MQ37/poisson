@@ -153,7 +153,7 @@ func (t *TUI) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []i
 		b.WriteString(clearLine())
 		if i < len(lay.visible) {
 			line := t.formatScrollLine(lay.visible[i].Text)
-			line = t.applySearchHighlight(i+pinRows, lay, line)
+			line = t.applySearchHighlight(i, lay, line)
 			b.WriteString(truncateToWidth(line, lay.wrapWidth))
 		}
 	}
@@ -435,6 +435,11 @@ func (t *TUI) markSpinnerTick() {
 	t.mu.Lock()
 	lay := t.prepareLayout()
 	rows := t.toolSpinnerRows(lay)
+	if t.focusRegion == focusConv {
+		for i := range rows {
+			rows[i]++
+		}
+	}
 	t.mu.Unlock()
 	if len(rows) > 0 {
 		t.dirty.markScrollRows(rows...)

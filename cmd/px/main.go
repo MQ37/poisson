@@ -237,8 +237,20 @@ func cmdCost(args []string) {
 
 	if len(args) > 0 {
 		sid := args[0]
-		cost, _ := st.GetSessionCost(sid)
-		breakdown, _ := st.GetSessionTokenBreakdown(sid)
+		if _, err := st.GetSession(sid); err != nil {
+			fmt.Fprintf(os.Stderr, "error: session not found: %s\n", sid)
+			os.Exit(1)
+		}
+		cost, err := st.GetSessionCost(sid)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading cost: %v\n", err)
+			os.Exit(1)
+		}
+		breakdown, err := st.GetSessionTokenBreakdown(sid)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading token breakdown: %v\n", err)
+			os.Exit(1)
+		}
 		fmt.Printf("Session %s:\n", sid)
 		if breakdown.InputUnknownCalls > 0 {
 			fmt.Printf("  Input:  %d tokens + unknown (%d call(s))\n", breakdown.InputTokens, breakdown.InputUnknownCalls)
@@ -251,7 +263,11 @@ func cmdCost(args []string) {
 		return
 	}
 
-	cost, _ := st.GetTotalCost()
+	cost, err := st.GetTotalCost()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error reading total cost: %v\n", err)
+		os.Exit(1)
+	}
 	fmt.Printf("Total cost across all sessions: $%.4f\n", cost)
 }
 

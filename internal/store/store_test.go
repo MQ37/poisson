@@ -312,6 +312,36 @@ func TestSoftDeleteMessages(t *testing.T) {
 	}
 }
 
+func TestApplyCompaction(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "ac")
+
+	for _, txt := range []string{"a", "b", "c"} {
+		if err := s.AppendMessage(&Message{SessionID: "ac", Role: "user", Content: textContent(txt)}); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+	}
+
+	summary := "## Big Picture\nmerged"
+	if err := s.ApplyCompaction("ac", 2, summary); err != nil {
+		t.Fatalf("ApplyCompaction: %v", err)
+	}
+	sess, err := s.GetSession("ac")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.CompactionSummary == nil || *sess.CompactionSummary != summary {
+		t.Fatalf("summary = %v, want %q", sess.CompactionSummary, summary)
+	}
+	got, err := s.GetMessages("ac")
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(got) != 1 || got[0].Seq != 3 {
+		t.Fatalf("active messages = %v, want seq 3 only", got)
+	}
+}
+
 func TestMarkCompacted(t *testing.T) {
 	s := newTestStore(t)
 	mustCreateSession(t, s, "mc")

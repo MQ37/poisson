@@ -38,6 +38,9 @@ func (a *Agent) ContextTokens() (int, int) {
 // estimated_new_tokens is derived from the tool result texts appended in the
 // current iteration (pendingResults).
 func (a *Agent) ShouldCompact() bool {
+	if a.config == nil {
+		return false
+	}
 	last, err := a.store.GetLastAPICall(a.sessionID)
 	if err != nil {
 		return false

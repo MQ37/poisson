@@ -99,7 +99,7 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 			}
 			approved := false
 			if t.approvalFn != nil {
-				approved = t.approvalFn(in.Command, purpose, in.Workdir)
+				approved = t.approvalFn(in.Command, purpose, dir)
 			}
 			if !approved {
 				return ToolResult{Error: fmt.Sprintf("command denied (not safe: %s)", reason)}, nil

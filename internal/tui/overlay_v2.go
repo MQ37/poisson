@@ -97,20 +97,28 @@ func (t *TUI) openSessionPicker() {
 
 // openSearch opens in-scrollback find (Ctrl+F).
 func (t *TUI) openSearch() {
-	width := t.contentWidth()
 	t.setActiveOverlay(newSearchOverlay(
 		func() []ScreenRow {
+			t.mu.Lock()
+			width := t.contentWidth()
 			wrapped, _ := t.scroll.layoutAll(width)
+			t.mu.Unlock()
 			return wrapped
 		},
 		func(globalRow int) {
-			// Caller (feed) already holds t.mu.
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			width := t.contentWidth()
+			viewH := t.scrollRows
+			if t.focusRegion == focusConv && t.scrollRows > 1 {
+				viewH = t.scrollRows - 1
+			}
 			wrapped, _ := t.scroll.layoutAll(width)
-			max := len(wrapped) - t.scrollRows
+			max := len(wrapped) - viewH
 			if max < 0 {
 				max = 0
 			}
-			off := len(wrapped) - globalRow - t.scrollRows/2
+			off := len(wrapped) - globalRow - viewH/2
 			if off < 0 {
 				off = 0
 			}

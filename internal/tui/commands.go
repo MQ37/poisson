@@ -294,8 +294,15 @@ func cmdUndo(h commandHost) error {
 			s.ClearCompactionSummary(sid)
 		}
 	}
+	trimHostScrollbackFromLastUser(h)
 	h.Out(styleSystem, fmt.Sprintf("undid last turn (%d messages soft-deleted)", count))
 	return nil
+}
+
+func trimHostScrollbackFromLastUser(h commandHost) {
+	if th, ok := h.(tuiCmdHost); ok {
+		th.t.trimScrollbackFromLastUser()
+	}
 }
 
 // cmdModel switches provider/model.
@@ -365,8 +372,16 @@ func cmdReload(h commandHost) error {
 func cmdCost(h commandHost) {
 	a := h.Agent()
 	sid := h.SessionID()
-	cost, _ := a.Store().GetSessionCost(sid)
-	breakdown, _ := a.Store().GetSessionTokenBreakdown(sid)
+	cost, err := a.Store().GetSessionCost(sid)
+	if err != nil {
+		h.Out(styleError, "error reading cost: "+err.Error())
+		return
+	}
+	breakdown, err := a.Store().GetSessionTokenBreakdown(sid)
+	if err != nil {
+		h.Out(styleError, "error reading token breakdown: "+err.Error())
+		return
+	}
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Session %s:\n", sid))
 	if breakdown.InputUnknownCalls > 0 {

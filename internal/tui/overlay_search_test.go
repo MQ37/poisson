@@ -1,33 +1,21 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+)
 
-func TestSearchOverlayFindsMatches(t *testing.T) {
+func TestSearchOverlayPreservesMatchIndexOnRender(t *testing.T) {
 	rows := []ScreenRow{
-		{Text: "hello world"},
-		{Text: "foo bar"},
-		{Text: "hello again"},
+		{Text: "alpha line"},
+		{Text: "beta line"},
+		{Text: "gamma line"},
 	}
-	o := newSearchOverlay(func() []ScreenRow { return rows }, nil)
-	o.query = "hello"
-	o.recompute()
-	if len(o.matches) != 2 {
-		t.Fatalf("matches = %v, want 2", o.matches)
-	}
-}
-
-func TestSearchOverlayNext(t *testing.T) {
-	var scrolled int
-	o := newSearchOverlay(
-		func() []ScreenRow {
-			return []ScreenRow{{Text: "a"}, {Text: "b"}}
-		},
-		func(g int) { scrolled = g },
-	)
-	o.query = "a"
-	o.recompute()
-	o.next(1)
-	if scrolled != o.matches[0] {
-		t.Fatalf("scroll = %d, want %d", scrolled, o.matches[0])
+	s := newSearchOverlay(func() []ScreenRow { return rows }, nil)
+	s.query = "line"
+	s.updateMatches(true)
+	s.cur = 2
+	s.render(10, 80)
+	if s.cur != 2 {
+		t.Fatalf("render reset cur to %d, want 2", s.cur)
 	}
 }

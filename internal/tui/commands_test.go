@@ -306,11 +306,16 @@ func TestCmdUndo(t *testing.T) {
 
 	s.AppendMessage(&store.Message{SessionID: sessionID, Role: "user", Content: `{"text":"hi"}`})
 	s.AppendMessage(&store.Message{SessionID: sessionID, Role: "assistant", Content: `{"text":"hello"}`})
+	tui.scroll.append(StyledLine{Style: styleUser, Text: "hi"})
+	tui.scroll.append(StyledLine{Style: styleAssistant, Text: "hello"})
 
 	cmdUndo(cmdHost(tui))
 	out := testScrollOutput(tui)
 	if !strings.Contains(out, "undid last turn") {
 		t.Errorf("expected undo message, got %q", out)
+	}
+	if strings.Contains(out, "hello") {
+		t.Errorf("undo should trim assistant reply from scrollback, got %q", out)
 	}
 	msgs, _ := s.GetMessages(sessionID)
 	if len(msgs) != 0 {

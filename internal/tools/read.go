@@ -3,6 +3,7 @@ package tools
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,9 +44,10 @@ type readInput struct {
 }
 
 const (
-	maxLines     = 2000
-	maxBytes     = 50 * 1024
-	readLineSize = 64 * 1024
+	maxLines      = 2000
+	maxBytes      = 50 * 1024
+	maxImageBytes = 5 * 1024 * 1024
+	readLineSize  = 64 * 1024
 )
 
 func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
@@ -58,6 +60,10 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	}
 
 	path := resolvePath(t.cwd, in.Path)
+
+	if isImagePath(path) {
+		return t.readImage(path)
+	}
 
 	f, err := os.Open(path)
 	if err != nil {
@@ -122,4 +128,37 @@ var imageExtensions = map[string]bool{
 // isImagePath reports whether the path looks like an image file.
 func isImagePath(path string) bool {
 	return imageExtensions[strings.ToLower(filepath.Ext(path))]
+}
+
+func imageMIME(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".gif":
+		return "image/gif"
+	case ".webp":
+		return "image/webp"
+	default:
+		return "application/octet-stream"
+	}
+}
+
+func (t *ReadTool) readImage(path string) (ToolResult, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return ToolResult{Error: "cannot stat file: " + err.Error()}, nil
+	}
+	if info.Size() > maxImageBytes {
+		return ToolResult{Error: fmt.Sprintf("image too large (%d bytes, max %d)", info.Size(), maxImageBytes)}, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ToolResult{Error: "cannot read image: " + err.Error()}, nil
+	}
+	mime := imageMIME(path)
+	b64 := base64.StdEncoding.EncodeToString(data)
+	content := fmt.Sprintf("Image: %s (%s, %d bytes)\nbase64:\n%s", path, mime, len(data), b64)
+	return ToolResult{Content: content}, nil
 }

@@ -8,28 +8,41 @@ import (
 
 // searchOverlay is an in-scrollback find bar (Ctrl+F).
 type searchOverlay struct {
-	query   string
-	matches []int
-	cur     int
-	rows    func() []ScreenRow
-	scroll  func(globalRow int)
+	query     string
+	lastQuery string
+	matches   []int
+	cur       int
+	rows      func() []ScreenRow
+	scroll    func(globalRow int)
 }
 
 func newSearchOverlay(rows func() []ScreenRow, scroll func(int)) *searchOverlay {
 	return &searchOverlay{rows: rows, scroll: scroll}
 }
 
-func (s *searchOverlay) recompute() {
-	s.matches = nil
-	s.cur = 0
+func (s *searchOverlay) updateMatches(resetCur bool) {
 	q := strings.ToLower(strings.TrimSpace(s.query))
 	if q == "" {
+		s.matches = nil
+		if resetCur || s.lastQuery != "" {
+			s.cur = 0
+		}
+		s.lastQuery = ""
 		return
 	}
+	var matches []int
 	for i, row := range s.rows() {
 		if strings.Contains(strings.ToLower(stripANSI(row.Text)), q) {
-			s.matches = append(s.matches, i)
+			matches = append(matches, i)
 		}
+	}
+	if resetCur || q != s.lastQuery {
+		s.cur = 0
+	}
+	s.lastQuery = q
+	s.matches = matches
+	if len(s.matches) > 0 && s.cur >= len(s.matches) {
+		s.cur = len(s.matches) - 1
 	}
 }
 
@@ -45,7 +58,7 @@ func (s *searchOverlay) matchRows() []int {
 }
 
 func (s *searchOverlay) render(scrollRows, cols int) (int, []string) {
-	s.recompute()
+	s.updateMatches(false)
 	q := s.query
 	if q == "" {
 		q = dim + "type to find" + reset
@@ -93,7 +106,7 @@ func (s *searchOverlay) feedKey(data []byte) (handled bool, done bool, cancel bo
 			if len(s.query) > 0 {
 				_, size := utf8.DecodeLastRuneInString(s.query)
 				s.query = s.query[:len(s.query)-size]
-				s.recompute()
+				s.updateMatches(true)
 			}
 			return true, false, false
 		}
@@ -104,7 +117,7 @@ func (s *searchOverlay) feedKey(data []byte) (handled bool, done bool, cancel bo
 		}
 		if unicode.IsPrint(r) {
 			s.query += string(r)
-			s.recompute()
+			s.updateMatches(true)
 			return true, false, false
 		}
 	}
