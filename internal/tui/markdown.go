@@ -124,7 +124,8 @@ func renderInline(s string) string {
 	return b.String()
 }
 
-// wrapANSI hard-wraps an ANSI-bearing string to width visible columns.
+// wrapANSI wraps an ANSI-bearing string to width visible columns, breaking at
+// word boundaries when possible while preserving escape sequences.
 func wrapANSI(src string, width int) []string {
 	if width < 1 {
 		width = 1
@@ -133,42 +134,20 @@ func wrapANSI(src string, width int) []string {
 	if utf8.RuneCountInString(plain) <= width {
 		return []string{src}
 	}
+	plainLines := wrapWords(plain, width)
 	var out []string
-	var chunk strings.Builder
-	vis := 0
-	inEsc := false
-	i := 0
-	flush := func() {
-		if chunk.Len() > 0 {
-			out = append(out, chunk.String())
-			chunk.Reset()
-			vis = 0
-		}
-	}
-	for i < len(src) {
-		if src[i] == 0x1b {
-			inEsc = true
-			chunk.WriteByte(src[i])
-			i++
+	rest := src
+	for _, pl := range plainLines {
+		if pl == "" {
 			continue
 		}
-		if inEsc {
-			chunk.WriteByte(src[i])
-			if src[i] >= 0x40 && src[i] <= 0x7e {
-				inEsc = false
-			}
-			i++
-			continue
+		rest = skipLeadingPlainWS(rest)
+		var seg string
+		seg, rest = extractPlainPrefix(rest, utf8.RuneCountInString(pl))
+		if seg != "" {
+			out = append(out, seg)
 		}
-		_, size := utf8.DecodeRuneInString(src[i:])
-		if vis >= width {
-			flush()
-		}
-		chunk.WriteString(src[i : i+size])
-		vis++
-		i += size
 	}
-	flush()
 	if len(out) == 0 {
 		return []string{src}
 	}

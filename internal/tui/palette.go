@@ -1,29 +1,31 @@
 package tui
 
-// ANSI escape sequence helpers. We avoid bringing in a styling dep — these
-// constants are the only color codes we use.
+// ANSI escape sequence helpers. We avoid bringing in a styling dep.
+// Color and basic style sequences are variables populated by theme.go
+// (light/dark + 16/truecolor detection from COLORTERM/TERM).
+// The non-themable terminal control sequences remain const.
 
-const (
-	reset     = "\x1b[0m"
-	bold      = "\x1b[1m"
-	dim       = "\x1b[2m"
-	italic    = "\x1b[3m"
-	underline = "\x1b[4m"
+var (
+	reset     string
+	bold      string
+	dim       string
+	italic    string
+	underline string
 
-	fgBlack   = "\x1b[30m"
-	fgRed     = "\x1b[31m"
-	fgGreen   = "\x1b[32m"
-	fgYellow  = "\x1b[33m"
-	fgBlue    = "\x1b[34m"
-	fgMagenta = "\x1b[35m"
-	fgCyan    = "\x1b[36m"
-	fgGray    = "\x1b[90m"
+	fgBlack   string
+	fgRed     string
+	fgGreen   string
+	fgYellow  string
+	fgBlue    string
+	fgMagenta string
+	fgCyan    string
+	fgGray    string
 
-	bgBlack   = "\x1b[40m"
-	bgDarkRed = "\x1b[41m"
-	bgYellow  = "\x1b[43m"
-	bgBlue    = "\x1b[44m"
-	bgMagenta = "\x1b[45m"
+	bgBlack   string
+	bgDarkRed string
+	bgYellow  string
+	bgBlue    string
+	bgMagenta string
 )
 
 // Cursor / screen control.

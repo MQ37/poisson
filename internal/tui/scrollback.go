@@ -276,27 +276,10 @@ func (s *scrollback) yankText() string {
 	return ""
 }
 
-// wrapLine hard-wraps a single logical line to width runes per chunk.
+// wrapLine wraps a single logical line to width runes per chunk (word-aware when
+// spaces are present; hard wrap for long tokens).
 func wrapLine(text string, width int) []string {
-	if width < 1 {
-		width = 1
-	}
-	runes := []rune(text)
-	if len(runes) == 0 {
-		return []string{""}
-	}
-	if len(runes) <= width {
-		return []string{text}
-	}
-	var out []string
-	for len(runes) > width {
-		out = append(out, string(runes[:width]))
-		runes = runes[width:]
-	}
-	if len(runes) > 0 {
-		out = append(out, string(runes))
-	}
-	return out
+	return wrapWords(text, width)
 }
 
 // stylePrefix returns the ANSI prefix for a given line style.

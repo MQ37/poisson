@@ -89,6 +89,20 @@ type tuiV2 struct {
 
 // newTUIv2 constructs the split-screen TUI.
 func newTUIv2(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent) *tuiV2 {
+	theme := "dark"
+	showTokens := true
+	showCost := true
+	if a != nil {
+		if c := a.Config(); c != nil {
+			if c.TUI.Theme != "" {
+				theme = c.TUI.Theme
+			}
+			showTokens = c.TUI.ShowTokens
+			showCost = c.TUI.ShowCost
+		}
+	}
+	applyTheme(theme)
+
 	return &tuiV2{
 		agent:          a,
 		sessionID:      sessionID,
@@ -103,8 +117,8 @@ func newTUIv2(a *agent.Agent, sessionID string, outputChan chan agent.OutputEven
 			SessionID:  sessionID,
 			Cwd:        cwdOf(),
 			Model:      modelLabel(a),
-			ShowTokens: true,
-			ShowCost:   true,
+			ShowTokens: showTokens,
+			ShowCost:   showCost,
 		},
 		dirty:          newDirtyTracker(),
 		inputRows:      3,

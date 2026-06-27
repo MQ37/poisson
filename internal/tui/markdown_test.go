@@ -22,7 +22,7 @@ func TestRenderInlineItalic(t *testing.T) {
 
 func TestRenderInlineCode(t *testing.T) {
 	full := renderInline("use `foo` here")
-	if !stringsContains(full, "\x1b[33m") {
+	if !stringsContains(full, fgYellow) {
 		t.Fatalf("missing code color: %q", full)
 	}
 }

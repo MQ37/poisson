@@ -17,7 +17,7 @@ original v2 scaffold spec.
 | **B — Rich content** | PR-05 … PR-09 | ✅ Done (`fd249a8` … `d3f123f` + fixes) |
 | **C — Interactive UX** | PR-10 … PR-14 | ✅ Done (v2 pickers, fuzzy, palette) |
 | **C+ — Grok parity** | PR-21–23 | 🚧 Top header + input chrome done; visual polish ongoing |
-| **D — Power features** | PR-15 … PR-20 | 🚧 PR-15–18 done; PR-19–20 pending |
+| **D — Power features** | PR-15 … PR-20 | ✅ Done (PR-20 true-color + theme) |
 
 Post-phase hardening: Kitty keys, row-scroll, completion ghosting (`99d9686`),
 test `/tmp` isolation (`7672e2a`). **B follow-up:** GFM bordered tables (`markdown_table.go`),
@@ -106,7 +106,7 @@ From `docs/SPEC.md` §1 and project conventions:
 | 16 | Status bar missing tool counters | 5 | ✅ PR-04 |
 | 17 | No word-wrap scrollback | 4 | ❌ PR-19 pending |
 | 18 | Completion shows all candidates | 4 | ✅ PR-10 cap/rank |
-| 19 | No true-color detection | 3 | ❌ PR-20 pending |
+| 19 | No true-color detection | 3 | ✅ PR-20 done |
 | 20 | Classic TUI diverges | 3 | Open (by design for now) |
 
 ---
@@ -241,7 +241,7 @@ Phase D — Power features 🚧
   PR-17 scrollback search ✅
   PR-15 mouse support (wheel + clicks) ✅
   PR-18 OSC 52 copy / yank ✅
-  PR-19 word-wrap scrollback (optional quality)
+  PR-19 word-wrap scrollback ✅
   PR-20 true-color + theme config
 ```
 
@@ -973,7 +973,8 @@ Frees vertical space for scrollback; matches Grok Build chrome.
 3. Preserve ANSI span integrity across wraps.
 
 **Acceptance criteria:**
-- [ ] Prose wraps at spaces; `https://...` long URL hard-wraps.
+- [x] Prose wraps at spaces; `https://...` long URL hard-wraps.
+- [x] ANSI spans preserved across word-wrap breaks in markdown.
 
 **Agent prompt:**
 > Implement PR-19: word-aware wrapping for scrollback/markdown rows. Preserve
@@ -1000,8 +1001,16 @@ Frees vertical space for scrollback; matches Grok Build chrome.
 4. Fallback to current 16-color constants.
 
 **Acceptance criteria:**
-- [ ] `config.toml [tui] theme = "light"` switches palette.
-- [ ] Unknown theme → dark default.
+- [x] `config.toml [tui] theme = "light"` switches palette.
+- [x] Unknown theme → dark default.
+- [x] COLORTERM=truecolor yields 24-bit RGB codes; otherwise 16-color fallback.
+- [x] Tests in theme_test.go.
+
+**Implementation notes:**
+Wired via agent.Config().TUI.Theme in newTUIv2 (TUIConfig already parsed).
+Palette variables (not consts) populated from light/dark + truecolor palettes.
+Created theme.go + tests; updated palette.go. No new semantic const names
+added (fg* vars now theme-driven).
 
 **Agent prompt:**
 > Implement PR-20: true-color detection + light/dark themes via config TUI.Theme.
@@ -1186,7 +1195,7 @@ internal/tui/
   overlay_picker.go     PR-11
   overlay_search.go     PR-17
   spinner.go            PR-02
-  theme.go              PR-20
+  theme.go              PR-20 ✅
   thinking.go           PR-08
   toolcard.go           PR-09
   … (existing files)
