@@ -41,9 +41,10 @@ type tuiV2 struct {
 	mu         sync.Mutex
 	rows       int // total terminal rows
 	cols       int // total terminal cols
-	scrollRows int // rows allotted to scrollback (= rows - statusRows - inputRows)
-	inputRows  int // rows for multi-line input (3)
-	statusRows int // rows for status bar (2)
+	headerRows int // Grok-style top strip (cwd · tokens · time)
+	scrollRows int // rows allotted to scrollback
+	inputRows  int // rows for multi-line input
+	statusRows int // legacy; 0 in v2 (status moved to headerRows)
 
 	// Region content.
 	scroll *scrollback
@@ -107,7 +108,8 @@ func newTUIv2(a *agent.Agent, sessionID string, outputChan chan agent.OutputEven
 		},
 		dirty:          newDirtyTracker(),
 		inputRows:      3,
-		statusRows:     2,
+		headerRows:     1,
+		statusRows:     0,
 		lastInputRows:  3,
 		done:           make(chan struct{}),
 		approvalAnswer: make(chan bool),
@@ -125,7 +127,7 @@ func modelLabel(a *agent.Agent) string {
 // inputHeight returns how many screen rows the input currently needs.
 // Caps at a third of total rows so the scrollback stays readable.
 func (t *tuiV2) inputHeight(width int) int {
-	n := totalVisualLines(t.editor, width) + 3 // +1 header, +1 separator, +1 hint
+	n := totalVisualLines(t.editor, width) + 2 // +1 separator, +1 hint
 	if n < 4 {
 		n = 4
 	}
@@ -390,10 +392,30 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		}
 	}
 
+	// Ctrl+F scrollback search.
+	if t.completion.empty() {
+		for _, b := range data {
+			if b == 6 {
+				t.openSearch()
+				return false, nil
+			}
+		}
+	}
+
 	// Ctrl+P command palette (when no completion dropdown).
 	if t.completion.empty() {
 		for _, b := range data {
 			if b == 16 {
+				t.openCommandPalette()
+				return false, nil
+			}
+		}
+	}
+
+	// Ctrl+. shortcuts palette (Grok-style).
+	if t.completion.empty() {
+		for _, b := range data {
+			if b == 30 {
 				t.openCommandPalette()
 				return false, nil
 			}
@@ -787,9 +809,10 @@ func (t *tuiV2) recomputeLayout() {
 		wrapWidth = 1
 	}
 	t.editor.wrapWidth = wrapWidth
-	t.statusRows = 2
+	t.headerRows = 1
+	t.statusRows = 0
 	t.inputRows = t.inputHeight(wrapWidth)
-	t.scrollRows = h - t.inputRows - t.statusRows
+	t.scrollRows = h - t.headerRows - t.inputRows
 	if t.scrollRows < 3 {
 		t.scrollRows = 3
 	}
@@ -863,19 +886,7 @@ func prefixName(k completionKind) string {
 }
 
 func (t *tuiV2) renderInputHeader() string {
-	if t.agent == nil {
-		return ""
-	}
-	effort := t.agent.Effort()
-	if effort == "" {
-		return ""
-	}
-	txt := fgYellow + bold + effort + reset
-	gap := t.cols - visibleWidth(txt)
-	if gap < 0 {
-		gap = 0
-	}
-	return strings.Repeat(" ", gap) + txt
+	return ""
 }
 
 func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc int) string {
@@ -884,7 +895,14 @@ func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc i
 	}
 	line := screenLines[lineIdx]
 	runes := []rune(line)
+	prompt := ""
+	if lineIdx == 0 {
+		prompt = fgGreen + "› " + reset
+	}
 	if lineIdx != sr {
+		if lineIdx == 0 {
+			return prompt + string(runes)
+		}
 		return " " + string(runes)
 	}
 	if sc < 0 {
@@ -896,7 +914,7 @@ func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc i
 		suffix = string(runes[sc+1:])
 	}
 	var b strings.Builder
-	b.WriteString(" ")
+	b.WriteString(prompt)
 	b.WriteString(prefix)
 	b.WriteString("\x1b[7m")
 	if sc < len(runes) {
@@ -910,7 +928,7 @@ func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc i
 }
 
 func (t *tuiV2) renderHintLine() string {
-	hint := "Enter submit · PgUp/PgDn scroll · Ctrl+P palette · Ctrl+R/N history · /model picker"
+	hint := "Enter:send · Shift+Enter:newline · Ctrl+F:find · Ctrl+P:commands · Ctrl+.:shortcuts"
 	return dim + hint + reset
 }
 

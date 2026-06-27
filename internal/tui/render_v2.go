@@ -10,17 +10,17 @@ const toolWorkingMarker = " working..."
 
 // layoutSnapshot is the geometry computed once per paint pass.
 type layoutSnapshot struct {
-	wrapWidth int
-	inputTop  int
-	bodyRows  int
-	bodyStart int
-	hintRow   int
-	statusTop int
-	firstRow  int
-	sr        int
-	sc        int
+	wrapWidth   int
+	scrollStart int // 1-based terminal row of first scroll line
+	inputTop    int
+	bodyRows    int
+	bodyStart   int
+	hintRow     int
+	firstRow    int
+	sr          int
+	sc          int
 	screenLines []string
-	visible   []ScreenRow
+	visible     []ScreenRow
 }
 
 func (t *tuiV2) prepareLayout() layoutSnapshot {
@@ -35,11 +35,12 @@ func (t *tuiV2) prepareLayout() layoutSnapshot {
 		t.dirty.markFull()
 	}
 	t.inputRows = wantedInput
-	t.scrollRows = t.rows - t.inputRows - t.statusRows
+	t.scrollRows = t.rows - t.headerRows - t.inputRows
 	if t.scrollRows < 3 {
 		t.scrollRows = 3
 	}
-	inputTop := t.scrollRows + 1
+	scrollStart := t.headerRows + 1
+	inputTop := t.headerRows + t.scrollRows + 1
 	bodyRows := t.inputRows - 3
 	if bodyRows < 1 {
 		bodyRows = 1
@@ -52,11 +53,11 @@ func (t *tuiV2) prepareLayout() layoutSnapshot {
 	}
 	return layoutSnapshot{
 		wrapWidth:     wrapWidth,
+		scrollStart:   scrollStart,
 		inputTop:      inputTop,
 		bodyRows:      bodyRows,
 		bodyStart:     inputTop + 2,
 		hintRow:       inputTop + 2 + bodyRows,
-		statusTop:     t.rows - t.statusRows + 1,
 		firstRow:      firstRow,
 		sr:            sr,
 		sc:            sc,
@@ -85,11 +86,11 @@ func (t *tuiV2) paint(snap dirtySnapshot) {
 
 func (t *tuiV2) paintFull(lay layoutSnapshot) {
 	var b strings.Builder
+	t.paintHeaderRegion(&b, lay)
 	t.paintScrollRegion(&b, lay, nil)
 	t.paintInputRegion(&b, lay)
 	t.paintCompletionOverlay(&b, lay)
 	t.paintOverlay(&b, lay)
-	t.paintStatusRegion(&b, lay)
 	t.paintCursor(&b, lay)
 	t.writeRaw(b.String())
 }
@@ -112,7 +113,7 @@ func (t *tuiV2) paintPartial(snap dirtySnapshot, lay layoutSnapshot) {
 		t.paintOverlay(&b, lay)
 	}
 	if snap.status {
-		t.paintStatusRegion(&b, lay)
+		t.paintHeaderRegion(&b, lay)
 	}
 	if snap.cursor || snap.input || len(snap.scroll) > 0 || snap.status || snap.overlay {
 		t.paintCursor(&b, lay)
@@ -123,7 +124,7 @@ func (t *tuiV2) paintPartial(snap dirtySnapshot, lay layoutSnapshot) {
 }
 
 func (t *tuiV2) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []int) {
-	startRow := 1
+	startRow := lay.scrollStart
 	paintAll := only == nil
 	onlySet := map[int]struct{}{}
 	if !paintAll {
@@ -140,7 +141,9 @@ func (t *tuiV2) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only [
 		b.WriteString(cup(startRow+i, 1))
 		b.WriteString(clearLine())
 		if i < len(lay.visible) {
-			b.WriteString(truncateToWidth(t.formatScrollLine(lay.visible[i].Text), lay.wrapWidth))
+			line := t.formatScrollLine(lay.visible[i].Text)
+			line = t.applySearchHighlight(i, lay, line)
+			b.WriteString(truncateToWidth(line, lay.wrapWidth))
 		}
 	}
 }
@@ -188,7 +191,7 @@ func (t *tuiV2) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 	b.WriteString(clearLine())
 	b.WriteString(t.renderHintLine())
 
-	for r := lay.hintRow + 1; r <= t.rows-t.statusRows; r++ {
+	for r := lay.hintRow + 1; r < lay.inputTop; r++ {
 		b.WriteString(cup(r, 1))
 		b.WriteString(clearLine())
 	}
@@ -228,15 +231,15 @@ func (t *tuiV2) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, line
 	if zone < 1 {
 		return
 	}
-	clearStart := t.scrollRows - zone + 1
-	if clearStart < 1 {
-		clearStart = 1
+	clearStart := lay.scrollStart + t.scrollRows - zone
+	if clearStart < lay.scrollStart {
+		clearStart = lay.scrollStart
 	}
-	anchor := t.scrollRows - lineCount + 1
-	if anchor < 1 {
-		anchor = 1
+	anchor := lay.scrollStart + t.scrollRows - lineCount
+	if anchor < lay.scrollStart {
+		anchor = lay.scrollStart
 	}
-	for row := clearStart; row <= t.scrollRows; row++ {
+	for row := clearStart; row < lay.scrollStart+t.scrollRows; row++ {
 		b.WriteString(cup(row, 1))
 		b.WriteString(clearLine())
 		if lines != nil {
@@ -245,8 +248,10 @@ func (t *tuiV2) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, line
 				continue
 			}
 		}
-		if vi := row - 1; vi >= 0 && vi < len(lay.visible) {
-			b.WriteString(truncateToWidth(t.formatScrollLine(lay.visible[vi].Text), lay.wrapWidth))
+		if vi := row - lay.scrollStart; vi >= 0 && vi < len(lay.visible) {
+			line := t.formatScrollLine(lay.visible[vi].Text)
+			line = t.applySearchHighlight(vi, lay, line)
+			b.WriteString(truncateToWidth(line, lay.wrapWidth))
 		}
 	}
 }
@@ -267,22 +272,41 @@ func (t *tuiV2) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
 	}
 	anchor, lines := t.activeOverlay.render(t.scrollRows, t.cols)
 	for i, line := range lines {
-		row := anchor + i
-		if row < 1 || row > t.scrollRows {
+		row := lay.scrollStart + anchor - 1 + i
+		if row < lay.scrollStart || row >= lay.scrollStart+t.scrollRows {
 			continue
 		}
 		b.WriteString(cup(row, 1))
 		b.WriteString(clearLine())
-		b.WriteString(truncateToWidth(line, t.cols))
+		b.WriteString(truncateToWidth(line, lay.wrapWidth))
 	}
 }
 
-func (t *tuiV2) paintStatusRegion(b *strings.Builder, lay layoutSnapshot) {
-	b.WriteString(cup(lay.statusTop, 1))
+func (t *tuiV2) paintHeaderRegion(b *strings.Builder, lay layoutSnapshot) {
+	if t.headerRows < 1 {
+		return
+	}
+	b.WriteString(cup(1, 1))
 	b.WriteString(clearLine())
-	b.WriteString(t.status.Render(t.cols))
-	b.WriteString(cup(lay.statusTop+t.statusRows, 1))
-	b.WriteString(clearLine())
+	b.WriteString(truncateToWidth(t.status.RenderHeader(lay.wrapWidth), lay.wrapWidth))
+}
+
+func (t *tuiV2) applySearchHighlight(vi int, lay layoutSnapshot, line string) string {
+	so, ok := t.activeOverlay.(*searchOverlay)
+	if !ok || so.query == "" {
+		return line
+	}
+	_, start, _ := t.scroll.viewportRange(t.scrollRows, lay.wrapWidth)
+	global := start + vi
+	for _, m := range so.matchRows() {
+		if m == global {
+			if m == so.currentGlobalRow() {
+				return bold + fgYellow + stripANSI(line) + reset
+			}
+			return fgYellow + stripANSI(line) + reset
+		}
+	}
+	return line
 }
 
 func (t *tuiV2) paintCursor(b *strings.Builder, lay layoutSnapshot) {
@@ -293,7 +317,11 @@ func (t *tuiV2) paintCursor(b *strings.Builder, lay layoutSnapshot) {
 	if visRow >= lay.bodyRows {
 		visRow = lay.bodyRows - 1
 	}
-	b.WriteString(cup(lay.bodyStart+visRow, 2+lay.sc))
+	col := 2 + lay.sc
+	if lay.sr == 0 {
+		col = 3 + lay.sc
+	}
+	b.WriteString(cup(lay.bodyStart+visRow, col))
 }
 
 func (t *tuiV2) toolSpinnerRows(lay layoutSnapshot) []int {

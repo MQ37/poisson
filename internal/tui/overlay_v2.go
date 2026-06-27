@@ -99,6 +99,35 @@ func (t *tuiV2) openSessionPicker() {
 	t.dirty.markFull()
 }
 
+// openSearch opens in-scrollback find (Ctrl+F).
+func (t *tuiV2) openSearch() {
+	width := t.contentWidth()
+	t.activeOverlay = newSearchOverlay(
+		func() []ScreenRow {
+			wrapped, _ := t.scroll.layoutAll(width)
+			return wrapped
+		},
+		func(globalRow int) {
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			wrapped, _ := t.scroll.layoutAll(width)
+			max := len(wrapped) - t.scrollRows
+			if max < 0 {
+				max = 0
+			}
+			off := len(wrapped) - globalRow - t.scrollRows/2
+			if off < 0 {
+				off = 0
+			}
+			if off > max {
+				off = max
+			}
+			t.scroll.scrollOffset = off
+		},
+	)
+	t.dirty.markFull()
+}
+
 // openCommandPalette shows fuzzy command launcher (Ctrl+P).
 func (t *tuiV2) openCommandPalette() {
 	t.activeOverlay = newPaletteOverlay(func(cmd string) error {

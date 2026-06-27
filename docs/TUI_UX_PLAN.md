@@ -16,8 +16,8 @@ original v2 scaffold spec.
 | **A — Smoothness** | PR-01 … PR-04 | ✅ Done (`72e1e27` + fixes) |
 | **B — Rich content** | PR-05 … PR-09 | ✅ Done (`fd249a8` … `d3f123f` + fixes) |
 | **C — Interactive UX** | PR-10 … PR-14 | ✅ Done (v2 pickers, fuzzy, palette) |
-| **C+ — Grok parity** | PR-21 | 🚧 In progress (`/btw` side-steer landed; more parity below) |
-| **D — Power features** | PR-15 … PR-20 | ❌ Not started |
+| **C+ — Grok parity** | PR-21–23 | 🚧 Top header + input chrome done; visual polish ongoing |
+| **D — Power features** | PR-15 … PR-20 | 🚧 PR-17 scrollback search done; PR-15 wheel exists |
 
 Post-phase hardening: Kitty keys, row-scroll, completion ghosting (`99d9686`),
 test `/tmp` isolation (`7672e2a`). **B follow-up:** GFM bordered tables (`markdown_table.go`),
@@ -60,13 +60,13 @@ From `docs/SPEC.md` §1 and project conventions:
 ### Layout (alt-screen)
 
 ```
-┌─ scrollback (color-coded flat lines) ─────────────────┐
+┌─ header (cwd · tokens/window · model · time) ───────────┐
+├─ scrollback (blocks, markdown, tool cards) ─────────────┤
 │  user / assistant / thinking / tool / system / error   │
-├─ input header (effort badge, right-aligned) ────────────┤
+├─ input ─────────────────────────────────────────────────┤
 │  ─────────────────────────────────────────────────────  │
-│  multi-line editor (wrap, vertical scroll)              │
-│  hint: Enter submit · Shift+Enter newline · …           │
-├─ status bar (2 rows: cwd/branch/model · tokens/cost) ─┤
+│  › multi-line editor (wrap, vertical scroll)            │
+│  Enter:send · Shift+Enter:newline · Ctrl+F:find · …   │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -101,7 +101,7 @@ From `docs/SPEC.md` §1 and project conventions:
 | 11 | No command palette | 6 | ✅ PR-14 Ctrl+P (v2) |
 | 12 | `/sessions` is text list | 6 | ✅ PR-13 picker (v2) |
 | 13 | Tool results truncated | 5 | ❌ PR-16 pending |
-| 14 | No scrollback search | 5 | ❌ PR-17 pending |
+| 14 | No scrollback search | 5 | ✅ PR-17 Ctrl+F (v2) |
 | 15 | No OSC 52 copy | 5 | ❌ PR-18 pending |
 | 16 | Status bar missing tool counters | 5 | ✅ PR-04 |
 | 17 | No word-wrap scrollback | 4 | ❌ PR-19 pending |
@@ -233,10 +233,12 @@ Phase C — Interactive UX ✅
 
 Phase C+ — Grok Build parity 🚧
   PR-21 /btw side-steer overlay ✅
-  (next) top status strip like Grok, tighter input chrome, table polish
+  PR-22 top header strip (cwd · tokens · time) ✅
+  PR-23 input chrome (› prompt, Grok hints, Ctrl+.) ✅
 
-Phase D — Power features ❌
-  PR-15 mouse support
+Phase D — Power features 🚧
+  PR-17 scrollback search ✅
+  PR-15 mouse support (wheel ✅; clicks pending)
   PR-16 expandable tool results
   PR-17 scrollback search
   PR-18 OSC 52 copy / yank
@@ -814,6 +816,33 @@ Grok Build exposes this as a non-blocking floating answer panel.
 
 ---
 
+### PR-22: Grok-style top header strip
+
+**Impact:** 7 · **Effort:** 3–4h · **Deps:** PR-04
+
+Move status from bottom to a single top row: cwd left, `tokens / window` + model + clock right.
+Frees vertical space for scrollback; matches Grok Build chrome.
+
+**Files:** `status.go` (`RenderHeader`), `render_v2.go`, `tui_v2.go`
+
+**Acceptance criteria:**
+- [x] Row 1 shows cwd and context usage.
+- [x] Bottom 2-row status bar removed in v2.
+
+---
+
+### PR-23: Grok-style input chrome
+
+**Impact:** 6 · **Effort:** 2–3h · **Deps:** PR-22
+
+**Files:** `tui_v2.go` — `›` prompt, compact hint line, `Ctrl+.` → palette
+
+**Acceptance criteria:**
+- [x] First input line shows green `›` prefix.
+- [x] Hint: `Enter:send · Shift+Enter:newline · Ctrl+F:find · …`
+
+---
+
 ### PR-15: Mouse support
 
 **Impact:** 6 · **Effort:** 6–8h · **Deps:** PR-01, PR-08 (optional)
@@ -1095,9 +1124,9 @@ POISSON_TUI=classic ./px                # classic still works
 | A — Smoothness | 01–04 | 17–22 | ✅ Done |
 | B — Rich content | 05–09 | 39–48 | ✅ Done |
 | C — Interactive | 10–14 | 26–33 | ✅ Done (v2); classic unchanged |
-| C+ — Grok parity | 21 | 4–6 | 🚧 `/btw` done; visual parity ongoing |
-| D — Power | 15–20 | 28–35 | ❌ Not started |
-| **Total** | **21** | **~114–144** | **~80% complete** |
+| C+ — Grok parity | 21–23 | 9–13 | 🚧 header + input chrome done |
+| D — Power | 15–20 | 28–35 | 🚧 PR-17 done; 15–16–18–20 pending |
+| **Total** | **23** | **~123–157** | **~85% complete** |
 
 Parallelizing Phase A (after PR-01) and Phase B (after PR-05) can wall-clock
 compress to ~4–6 focused days with 3–4 agents.
@@ -1143,6 +1172,7 @@ internal/tui/
   overlay_palette.go    PR-14 ✅
   overlay_v2.go         PR-11–14, PR-21 wiring ✅
   overlay_btw.go        PR-21 /btw ✅
+  overlay_search.go     PR-17 ✅
   quickanswer.go        PR-21 (agent/) ✅
   highlight.go          PR-07
   markdown.go           PR-06

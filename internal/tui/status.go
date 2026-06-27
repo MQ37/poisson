@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // StatusSnapshot is the data rendered in the 2-line status bar at the bottom
@@ -30,6 +31,57 @@ type StatusSnapshot struct {
 	Hint           string
 	ShowTokens     bool
 	ShowCost       bool
+}
+
+// RenderHeader returns a single Grok-style top strip: cwd left, tokens/model/time right.
+func (s StatusSnapshot) RenderHeader(width int) string {
+	if width < 20 {
+		width = 80
+	}
+	left := s.renderHeaderLeft()
+	right := s.renderHeaderRight()
+	gap := width - visibleWidth(left) - visibleWidth(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return truncateToWidth(left+strings.Repeat(" ", gap)+right, width)
+}
+
+func (s StatusSnapshot) renderHeaderLeft() string {
+	cwd := shortenPath(s.Cwd, 36)
+	if cwd == "" {
+		cwd = "."
+	}
+	return dim + " " + fgBlue + cwd + reset
+}
+
+func (s StatusSnapshot) renderHeaderRight() string {
+	var b strings.Builder
+	if s.ShowTokens && s.ContextWindow > 0 {
+		b.WriteString(fgCyan)
+		b.WriteString(formatNum(s.ContextTokens))
+		b.WriteString(reset)
+		b.WriteString(dim + " / " + reset)
+		b.WriteString(fgGray)
+		b.WriteString(formatNum(s.ContextWindow))
+		b.WriteString(reset)
+		b.WriteString("  ")
+	}
+	if s.Thinking {
+		b.WriteString(spinnerChar(s.SpinnerFrame))
+		b.WriteString(" ")
+	}
+	if s.Model != "" {
+		b.WriteString(fgMagenta)
+		b.WriteString(shortenPath(s.Model, 24))
+		b.WriteString(reset)
+		b.WriteString("  ")
+	}
+	b.WriteString(dim)
+	b.WriteString(time.Now().Format("3:04 PM"))
+	b.WriteString(reset)
+	b.WriteString(" ")
+	return b.String()
 }
 
 // Render returns the two status lines joined with a "\n" separator. The
