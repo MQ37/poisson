@@ -31,7 +31,7 @@ func NewBashTool(cwd string, sandbox bool, approvalFn func(command, description,
 func (t *BashTool) Name() string { return "bash" }
 
 func (t *BashTool) Description() string {
-	return "Execute a bash command. Safe commands run automatically; others require approval."
+	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. Safe commands run automatically; others require approval."
 }
 
 func (t *BashTool) Schema() json.RawMessage {
@@ -43,7 +43,7 @@ func (t *BashTool) Schema() json.RawMessage {
     "workdir": { "type": "string", "description": "Working directory (default: cwd)" },
     "timeout": { "type": "integer", "description": "Timeout in seconds (default: 120)" }
   },
-  "required": ["command"]
+  "required": ["command", "description"]
 }`)
 }
 
@@ -73,10 +73,21 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	if !t.sandbox {
 		safe, reason := guard.Classify(in.Command)
 		if !safe {
-			// Need approval.
+			// Gated bash call requires description (per PR-24); reject at tool layer if missing.
+			if in.Description == "" {
+				return ToolResult{Error: "description is required"}, nil
+			}
+			// Use provided description; fallback from guard reason if somehow empty at approval time.
+			purpose := in.Description
+			if purpose == "" {
+				purpose = reason
+				if purpose == "" {
+					purpose = "(no description provided)"
+				}
+			}
 			approved := false
 			if t.approvalFn != nil {
-				approved = t.approvalFn(in.Command, in.Description, in.Workdir)
+				approved = t.approvalFn(in.Command, purpose, in.Workdir)
 			}
 			if !approved {
 				return ToolResult{Error: fmt.Sprintf("command denied (not safe: %s)", reason)}, nil
