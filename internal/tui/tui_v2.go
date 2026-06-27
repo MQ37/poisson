@@ -440,6 +440,14 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		}
 	}
 
+	// Ctrl+Y yank last assistant block (or focused tool result) to clipboard.
+	for _, b := range data {
+		if b == 25 {
+			t.yankClipboard()
+			return false, nil
+		}
+	}
+
 	// Ctrl+P command palette (when no completion dropdown).
 	if t.completion.empty() {
 		for _, b := range data {
@@ -966,7 +974,7 @@ func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc i
 }
 
 func (t *tuiV2) renderHintLine() string {
-	hint := "Enter:send · Shift+Enter:newline · Ctrl+E:tool · Ctrl+F:find · Ctrl+P:palette"
+	hint := "Enter:send · Shift+Enter:newline · Ctrl+Y:yank · Ctrl+E:tool · Ctrl+F:find · Ctrl+P:palette"
 	return dim + hint + reset
 }
 
@@ -1023,6 +1031,20 @@ func (t *tuiV2) writeRaw(s string) {
 	if t.writer != nil {
 		_, _ = t.writer.Write([]byte(s))
 	}
+}
+
+func (t *tuiV2) yankClipboard() {
+	t.mu.Lock()
+	text := t.scroll.yankText()
+	t.mu.Unlock()
+	if text == "" {
+		return
+	}
+	_ = osc52Copy(text)
+	t.mu.Lock()
+	t.status.Hint = "yanked to clipboard"
+	t.dirty.markStatus()
+	t.mu.Unlock()
 }
 
 func (t *tuiV2) handleSlash(cmd string) error {

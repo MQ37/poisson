@@ -256,6 +256,26 @@ func (s *scrollback) blockRaw(i int) string {
 	return s.blocks[i].raw
 }
 
+// yankText returns plain text for Ctrl+Y clipboard yank: focused tool result
+// when a tool card is expanded, otherwise the last assistant block.
+func (s *scrollback) yankText() string {
+	if s.focusedToolID != 0 {
+		for i := range s.blocks {
+			b := &s.blocks[i]
+			if b.id == s.focusedToolID && b.kind == blockToolCall && b.meta.ToolDone {
+				return toolResultFullText(b)
+			}
+		}
+	}
+	for i := len(s.blocks) - 1; i >= 0; i-- {
+		b := &s.blocks[i]
+		if b.kind == blockAssistant && b.raw != "" {
+			return b.raw
+		}
+	}
+	return ""
+}
+
 // wrapLine hard-wraps a single logical line to width runes per chunk.
 func wrapLine(text string, width int) []string {
 	if width < 1 {

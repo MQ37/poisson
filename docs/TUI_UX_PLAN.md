@@ -17,7 +17,7 @@ original v2 scaffold spec.
 | **B — Rich content** | PR-05 … PR-09 | ✅ Done (`fd249a8` … `d3f123f` + fixes) |
 | **C — Interactive UX** | PR-10 … PR-14 | ✅ Done (v2 pickers, fuzzy, palette) |
 | **C+ — Grok parity** | PR-21–23 | 🚧 Top header + input chrome done; visual polish ongoing |
-| **D — Power features** | PR-15 … PR-20 | 🚧 PR-15 mouse + PR-16/17 done; PR-18–20 pending |
+| **D — Power features** | PR-15 … PR-20 | 🚧 PR-15–18 done; PR-19–20 pending |
 
 Post-phase hardening: Kitty keys, row-scroll, completion ghosting (`99d9686`),
 test `/tmp` isolation (`7672e2a`). **B follow-up:** GFM bordered tables (`markdown_table.go`),
@@ -102,7 +102,7 @@ From `docs/SPEC.md` §1 and project conventions:
 | 12 | `/sessions` is text list | 6 | ✅ PR-13 picker (v2) |
 | 13 | Tool results truncated | 5 | ✅ PR-16 Ctrl+E expand (v2) |
 | 14 | No scrollback search | 5 | ✅ PR-17 Ctrl+F (v2) |
-| 15 | No OSC 52 copy | 5 | ❌ PR-18 pending |
+| 15 | No OSC 52 copy | 5 | ✅ PR-18 Ctrl+Y yank |
 | 16 | Status bar missing tool counters | 5 | ✅ PR-04 |
 | 17 | No word-wrap scrollback | 4 | ❌ PR-19 pending |
 | 18 | Completion shows all candidates | 4 | ✅ PR-10 cap/rank |
@@ -240,7 +240,7 @@ Phase D — Power features 🚧
   PR-16 expandable tool results ✅
   PR-17 scrollback search ✅
   PR-15 mouse support (wheel + clicks) ✅
-  PR-18 OSC 52 copy / yank
+  PR-18 OSC 52 copy / yank ✅
   PR-19 word-wrap scrollback (optional quality)
   PR-20 true-color + theme config
 ```
@@ -947,8 +947,9 @@ Frees vertical space for scrollback; matches Grok Build chrome.
 3. Optional: yank selected tool result when card focused.
 
 **Acceptance criteria:**
-- [ ] OSC 52 sequence emitted (verify in `script` capture).
-- [ ] Graceful no-op if terminal doesn't support (no crash).
+- [x] OSC 52 sequence emitted (verify in `script` capture).
+- [x] Ctrl+Y yanks last assistant block (or focused tool result).
+- [x] Graceful no-op if terminal doesn't support (no crash).
 
 **Agent prompt:**
 > Implement PR-18: OSC 52 clipboard yank for assistant output. Ctrl+Y.
