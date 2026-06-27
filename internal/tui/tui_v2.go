@@ -240,9 +240,12 @@ func (t *tuiV2) Run() error {
 			// This avoids the race where Approve and the input goroutine
 			// both read from stdin.
 			if t.approving.Load() {
-				allowed, ok := approvalKeyAllowed(decodeKittyKeys(buf[:n]))
-				if ok {
-					t.approvalAnswer <- allowed
+				// Any key during approval resolves it (unknown treated as deny).
+				// Non-blocking send prevents hang if receiver raced.
+				allowed, _ := approvalKeyAllowed(decodeKittyKeys(buf[:n]))
+				select {
+				case t.approvalAnswer <- allowed:
+				default:
 				}
 				continue
 			}
@@ -813,6 +816,7 @@ func (t *tuiV2) Approve(command, description string) bool {
 	var allowed bool
 	select {
 	case allowed = <-t.approvalAnswer:
+		t.approving.Store(false) // shrink race window before unlock/return; input drops extra sends
 	case <-t.done:
 		t.mu.Lock()
 		t.activeOverlay = nil

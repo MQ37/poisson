@@ -496,7 +496,7 @@ func (t *TUI) Approve(command, description string) bool {
 	t.writeString("\r\n" + fgYellow + bold + "⚠ approval required" + reset + "\r\n")
 	t.writeString("  $ " + command + "\r\n")
 	t.writeString("  " + dim + "Purpose: " + purpose + reset + "\r\n")
-	t.writeString("  [a]llow  [d]eny: ")
+	t.writeString("  [A] Allow   [D] Deny: ")
 
 	buf := make([]byte, 1)
 	n, err := os.Stdin.Read(buf)

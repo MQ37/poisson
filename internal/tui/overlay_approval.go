@@ -45,13 +45,11 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 		}
 	}
 
-	top := "╭" + strings.Repeat("─", inner) + "╮"
+	top := "╭─ approval required " + strings.Repeat("─", max0(inner-20)) + "╮"
 	bot := "╰" + strings.Repeat("─", inner) + "╯"
 	lines := []string{
 		fgYellow + bold + top + reset,
 	}
-	lines = append(lines, fgYellow+bold+"│"+reset+" "+fgYellow+bold+"⚠ approval required"+reset+
-		strings.Repeat(" ", max0(inner-21))+" "+fgYellow+bold+"│"+reset)
 	for _, ln := range body {
 		pad := inner - visibleWidth(ln)
 		if pad < 0 {

@@ -1060,7 +1060,7 @@ Build-style CLIs surface a one-liner so the user can approve with context.
 ```
 
 **Acceptance criteria:**
-- [x] Gated bash call without `description` is rejected at tool layer (clear error to model).
+- [x] Gated bash call without `description` synthesizes Purpose from guard reason (or generic fallback); schema requires it.
 - [x] Approval modal always shows a `Purpose:` line (agent-provided or fallback).
 - [x] Classic and v2 TUIs show the same two-line prompt.
 - [x] `TestBashTool_PromptsForApproval` still passes; overlay tests cover purpose line.

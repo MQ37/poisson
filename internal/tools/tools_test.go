@@ -557,27 +557,32 @@ func TestBashTool_PromptsForApproval(t *testing.T) {
 	}
 }
 
-// TestBashTool_DescriptionRequiredForGated verifies PR-24: a gated (unsafe) bash
-// call without description is rejected at the tool layer with clear error,
-// never reaching approvalFn.
-func TestBashTool_DescriptionRequiredForGated(t *testing.T) {
+// TestBashTool_MissingDescFallsBackToGuardReason verifies PR-24: a gated bash call
+// without description still reaches approval using fallback synthesized from
+// guard reason (so Purpose: line always populated).
+func TestBashTool_MissingDescFallsBackToGuardReason(t *testing.T) {
 	dir := testutil.TempDir(t)
+	var gotDesc string
 	called := false
 	approvalFn := func(command, desc, wd string) bool {
 		called = true
-		return true
+		gotDesc = desc
+		return false
 	}
 	b := NewBashTool(dir, false, approvalFn)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command": "rm -rf foo",
-		// no description
+		// deliberately no description -> should fallback to reason
 	}))
-	if called {
-		t.Error("approvalFn must not be called when description missing for gated cmd")
+	if !called {
+		t.Fatal("approvalFn must be called with fallback purpose even if no description")
 	}
-	if res.Error != "description is required" {
-		t.Errorf("got error %q, want %q", res.Error, "description is required")
+	if gotDesc == "" || !strings.Contains(gotDesc, "destructive") {
+		t.Errorf("approval got fallback desc %q, want reason containing 'destructive'", gotDesc)
+	}
+	if res.Error == "" {
+		t.Error("expected denial after approval returned false")
 	}
 }
 

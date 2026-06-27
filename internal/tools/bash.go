@@ -73,11 +73,7 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	if !t.sandbox {
 		safe, reason := guard.Classify(in.Command)
 		if !safe {
-			// Gated bash call requires description (per PR-24); reject at tool layer if missing.
-			if in.Description == "" {
-				return ToolResult{Error: "description is required"}, nil
-			}
-			// Use provided description; fallback from guard reason if somehow empty at approval time.
+			// Use provided description; fallback from guard reason if empty at approval time (PR-24).
 			purpose := in.Description
 			if purpose == "" {
 				purpose = reason
