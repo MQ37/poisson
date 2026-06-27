@@ -25,10 +25,12 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 	}
 
 	var body []string
-	body = append(body, truncatePlain(o.command, inner-2))
-	if o.description != "" {
-		body = append(body, truncatePlain(o.description, inner-2))
+	body = append(body, "$ "+truncatePlain(o.command, inner-4))
+	purpose := o.description
+	if purpose == "" {
+		purpose = "(no description provided)"
 	}
+	body = append(body, dim+"Purpose: "+truncatePlain(purpose, inner-10)+reset)
 	body = append(body, "[A] Allow   [D] Deny")
 
 	height := len(body) + 2 // top + bottom border
@@ -65,9 +67,11 @@ func (o *approvalOverlay) fallbackLines(cols int) []string {
 	var b strings.Builder
 	b.WriteString(fgYellow + bold + "⚠ approval required" + reset + "\n")
 	b.WriteString("  $ " + truncatePlain(o.command, cols-4) + "\n")
-	if o.description != "" {
-		b.WriteString("  " + truncatePlain(o.description, cols-4) + "\n")
+	purpose := o.description
+	if purpose == "" {
+		purpose = "(no description provided)"
 	}
+	b.WriteString("  " + dim + "Purpose: " + truncatePlain(purpose, cols-12) + reset + "\n")
 	b.WriteString(dim + "  [A] Allow   [D] Deny" + reset)
 	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
 }

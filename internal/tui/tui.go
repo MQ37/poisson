@@ -476,6 +476,7 @@ func (t *TUI) drainOutput(promptDone <-chan error, cancel context.CancelFunc) er
 // single keypress. It takes stdin exclusively in blocking mode for the
 // duration so the Ctrl+C poller (which runs stdin nonblocking) cannot steal
 // the keypress. 'a'/'y' allow; anything else (incl. Ctrl+C) denies.
+// Always shows $ command and labeled Purpose: line (PR-24).
 func (t *TUI) Approve(command, description string) bool {
 	t.approvalMu.Lock()
 	defer t.approvalMu.Unlock()
@@ -488,10 +489,13 @@ func (t *TUI) Approve(command, description string) bool {
 		defer syscall.SetNonblock(t.fd, true)
 	}
 
-	t.writeString("\r\n\x1b[33m⚠ approval required\x1b[0m\r\n  $ " + command + "\r\n")
-	if description != "" {
-		t.writeString("  " + description + "\r\n")
+	purpose := description
+	if purpose == "" {
+		purpose = "(no description provided)"
 	}
+	t.writeString("\r\n" + fgYellow + bold + "⚠ approval required" + reset + "\r\n")
+	t.writeString("  $ " + command + "\r\n")
+	t.writeString("  " + dim + "Purpose: " + purpose + reset + "\r\n")
 	t.writeString("  [a]llow  [d]eny: ")
 
 	buf := make([]byte, 1)
