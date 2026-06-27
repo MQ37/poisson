@@ -63,6 +63,69 @@ func TestToolCardParallelPairingFIFO(t *testing.T) {
 	}
 }
 
+func TestToolCardExpandHint(t *testing.T) {
+	long := strings.Repeat("x", 500)
+	b := Block{
+		id:   4,
+		kind: blockToolCall,
+		meta: BlockMeta{
+			ToolName:   "bash",
+			ToolDone:   true,
+			ToolResult: `{"stdout":"` + long + `","stderr":"","exitCode":0}`,
+		},
+	}
+	rows := layoutToolCard(&b, 60, 0)
+	last := stripANSI(rows[len(rows)-1].Text)
+	if !strings.Contains(last, "Ctrl+E") {
+		t.Fatalf("expected expand hint: %q", last)
+	}
+}
+
+func TestToolCardExpandedLayout(t *testing.T) {
+	var lines []string
+	for i := 0; i < 30; i++ {
+		lines = append(lines, "line "+strings.Repeat("y", 40))
+	}
+	b := Block{
+		id:   5,
+		kind: blockToolCall,
+		meta: BlockMeta{
+			ToolName:   "read",
+			ToolDone:   true,
+			ToolResult: strings.Join(lines, "\n"),
+			Expanded:   true,
+		},
+	}
+	expanded := layoutToolCard(&b, 50, 0)
+	if len(expanded) < 10 {
+		t.Fatalf("expanded rows = %d, want many", len(expanded))
+	}
+	b.meta.Expanded = false
+	collapsed := layoutToolCard(&b, 50, 0)
+	if len(collapsed) >= len(expanded) {
+		t.Fatalf("collapsed %d should be fewer than expanded %d", len(collapsed), len(expanded))
+	}
+}
+
+func TestToggleToolExpandInView(t *testing.T) {
+	s := newScrollback(1024)
+	long := strings.Repeat("z", 600)
+	s.appendToolCall(1, "bash", toolInputJSON("bash", map[string]string{"command": "echo"}))
+	s.completeToolCall(`{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", 10)
+	if !s.toggleToolExpandInView(10, 50) {
+		t.Fatal("toggle expand failed")
+	}
+	if !s.blocks[0].meta.Expanded {
+		t.Fatal("expected expanded")
+	}
+	if !s.toggleToolExpandInView(10, 50) {
+		t.Fatal("toggle collapse failed")
+	}
+	if s.blocks[0].meta.Expanded {
+		t.Fatal("expected collapsed")
+	}
+}
+
 func TestToolCardError(t *testing.T) {
 	b := Block{
 		id:   3,

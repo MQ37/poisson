@@ -38,6 +38,7 @@ type scrollback struct {
 	totalAdded int
 	lastStreamWrapCount int
 	nextID     int64
+	focusedToolID int64 // expanded tool card receiving ↑↓ scroll
 }
 
 func newScrollback(max int) *scrollback {

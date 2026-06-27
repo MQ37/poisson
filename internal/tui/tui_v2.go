@@ -287,6 +287,31 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		return false, nil
 	}
 
+	// Expanded tool result scroll (↑↓) and Esc collapse.
+	w := t.contentWidth()
+	if t.scroll.focusedToolExpanded(w) {
+		if isArrowUp(data) {
+			if t.scroll.scrollFocusedTool(w, -1) {
+				t.markScrollDirty()
+			}
+			return false, nil
+		}
+		if isArrowDown(data) {
+			if t.scroll.scrollFocusedTool(w, 1) {
+				t.markScrollDirty()
+			}
+			return false, nil
+		}
+	}
+	for _, b := range data {
+		if b == 27 && !hasCSI(data) {
+			if t.scroll.collapseFocusedTool() {
+				t.markScrollDirty()
+				return false, nil
+			}
+		}
+	}
+
 	// Scrollback navigation — works even while the agent is running.
 	if delta, ok := parseScrollInputRaw(data, t.scrollRows); ok {
 		t.scrollByDelta(delta)
@@ -386,6 +411,16 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 	for _, b := range data {
 		if b == 20 {
 			if t.scroll.toggleThinkingInView(t.scrollRows, t.contentWidth()) {
+				t.markScrollDirty()
+			}
+			return false, nil
+		}
+	}
+
+	// Ctrl+E toggles expand on the nearest tool card in view.
+	for _, b := range data {
+		if b == 5 {
+			if t.scroll.toggleToolExpandInView(t.scrollRows, t.contentWidth()) {
 				t.markScrollDirty()
 			}
 			return false, nil
@@ -928,7 +963,7 @@ func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc i
 }
 
 func (t *tuiV2) renderHintLine() string {
-	hint := "Enter:send · Shift+Enter:newline · Ctrl+F:find · Ctrl+P:commands · Ctrl+.:shortcuts"
+	hint := "Enter:send · Shift+Enter:newline · Ctrl+E:tool · Ctrl+F:find · Ctrl+P:palette"
 	return dim + hint + reset
 }
 

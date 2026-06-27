@@ -33,8 +33,17 @@ func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 	for _, ln := range bodyLines {
 		chunks = append(chunks, fgYellow+toolCardBodyLine(ln, width)+reset)
 	}
+	if b.meta.ToolDone && b.meta.Expanded {
+		for _, ln := range toolCardExpandedResultLines(b, width) {
+			style := fgGray
+			if b.meta.ToolError != "" {
+				style = fgRed
+			}
+			chunks = append(chunks, style+toolCardBodyLine(ln, width)+reset)
+		}
+	}
 	chunks = append(chunks, fgYellow+toolCardFooter(width)+reset)
-	if b.meta.ToolDone {
+	if b.meta.ToolDone && !b.meta.Expanded {
 		chunks = append(chunks, toolCardResultLine(b, width)+reset)
 	}
 	rows := make([]ScreenRow, len(chunks))
@@ -86,16 +95,36 @@ func toolCardBody(toolName string, input []byte, width int) []string {
 }
 
 func toolCardResultLine(b *Block, width int) string {
+	text := toolResultFullText(b)
+	preview := previewText(text, toolResultCollapsedBytes)
+	inner := width - 8
+	if inner < 10 {
+		inner = width - 4
+	}
+	lines := wrapLine(preview, inner)
+	if len(lines) > toolResultCollapsedLines {
+		lines = lines[:toolResultCollapsedLines]
+	}
+	body := strings.Join(lines, " ")
 	var summary string
 	if b.meta.ToolError != "" {
-		summary = "  ✗ " + previewText(b.meta.ToolError, 400)
+		summary = "  ✗ " + body
 	} else {
-		summary = "  ✓ " + toolResultPreview(b.meta.ToolName, b.meta.ToolResult)
+		summary = "  ✓ " + body
 	}
 	if b.meta.DurationMs > 0 {
 		summary += fmt.Sprintf(" · %.1fs", float64(b.meta.DurationMs)/1000)
 	}
-	return fgGray + truncateToWidth(summary, width) + reset
+	hint := ""
+	if toolResultNeedsExpand(b) {
+		hint = dim + " · Ctrl+E" + reset
+	}
+	avail := width - visibleWidth(hint)
+	if avail < 12 {
+		avail = width
+		hint = ""
+	}
+	return fgGray + truncateToWidth(summary, avail) + hint + reset
 }
 
 // appendToolCall adds a tool invocation block.

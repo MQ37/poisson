@@ -100,7 +100,7 @@ From `docs/SPEC.md` §1 and project conventions:
 | 10 | Mouse unsupported | 6 | ⚠️ wheel only; PR-15 pending |
 | 11 | No command palette | 6 | ✅ PR-14 Ctrl+P (v2) |
 | 12 | `/sessions` is text list | 6 | ✅ PR-13 picker (v2) |
-| 13 | Tool results truncated | 5 | ❌ PR-16 pending |
+| 13 | Tool results truncated | 5 | ✅ PR-16 Ctrl+E expand (v2) |
 | 14 | No scrollback search | 5 | ✅ PR-17 Ctrl+F (v2) |
 | 15 | No OSC 52 copy | 5 | ❌ PR-18 pending |
 | 16 | Status bar missing tool counters | 5 | ✅ PR-04 |
@@ -237,6 +237,7 @@ Phase C+ — Grok Build parity 🚧
   PR-23 input chrome (› prompt, Grok hints, Ctrl+.) ✅
 
 Phase D — Power features 🚧
+  PR-16 expandable tool results ✅
   PR-17 scrollback search ✅
   PR-15 mouse support (wheel ✅; clicks pending)
   PR-16 expandable tool results
@@ -892,8 +893,9 @@ Frees vertical space for scrollback; matches Grok Build chrome.
 4. Expanded results scroll within card if taller than 20 rows (sub-viewport).
 
 **Acceptance criteria:**
-- [ ] Large bash output expandable without freezing UI.
-- [ ] Collapse restores truncated view.
+- [x] Large bash output expandable without freezing UI.
+- [x] Collapse restores truncated view (Esc / Ctrl+E).
+- [x] ↑↓ scroll inside expanded body (>20 lines).
 
 **Agent prompt:**
 > Implement PR-16: expandable/collapsible tool result bodies in tool cards.
@@ -1125,7 +1127,7 @@ POISSON_TUI=classic ./px                # classic still works
 | B — Rich content | 05–09 | 39–48 | ✅ Done |
 | C — Interactive | 10–14 | 26–33 | ✅ Done (v2); classic unchanged |
 | C+ — Grok parity | 21–23 | 9–13 | 🚧 header + input chrome done |
-| D — Power | 15–20 | 28–35 | 🚧 PR-17 done; 15–16–18–20 pending |
+| D — Power | 15–20 | 28–35 | 🚧 PR-16/17 done; 15/18–20 pending |
 | **Total** | **23** | **~123–157** | **~85% complete** |
 
 Parallelizing Phase A (after PR-01) and Phase B (after PR-05) can wall-clock
