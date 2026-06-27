@@ -3,6 +3,12 @@ package tui
 // Kitty keyboard protocol functional key codes (PUA 57344+).
 // See kitty/key_encoding.py functional_key_number_to_name_map.
 const (
+	kittyKeyEscape   = 57344
+	kittyKeyEnter    = 57345
+	kittyKeyTab      = 57346
+	kittyKeyBackspace = 57347
+	kittyKeyDelete   = 57348
+	kittyKeyInsert   = 57349
 	kittyKeyUp       = 57352
 	kittyKeyDown     = 57353
 	kittyKeyPageUp   = 57354
@@ -44,6 +50,10 @@ func kittyToLegacyCSI(code, mods int) ([]byte, bool) {
 		return []byte("\x1b[H"), true
 	case 57357, 57424: // END, KP_END
 		return []byte("\x1b[F"), true
+	case kittyKeyDelete:
+		return []byte("\x1b[3~"), true
+	case kittyKeyInsert:
+		return []byte("\x1b[2~"), true
 	}
 	return nil, false
 }

@@ -98,6 +98,11 @@ func (t *tuiV2) paintPartial(snap dirtySnapshot, lay layoutSnapshot) {
 	var b strings.Builder
 	if len(snap.scroll) > 0 {
 		t.paintScrollRegion(&b, lay, snap.scroll)
+		// Completion paints over the bottom of the scroll region; partial
+		// scroll repaints must restore the dropdown on affected rows.
+		if t.lastCompletionRows > 0 || (t.completion != nil && !t.completion.empty()) {
+			t.paintCompletionOverlay(&b, lay)
+		}
 	}
 	if snap.input || snap.overlay {
 		t.paintInputRegion(&b, lay)
@@ -315,13 +320,9 @@ func (t *tuiV2) toolSpinnerRows(lay layoutSnapshot) []int {
 }
 
 func (t *tuiV2) markAfterEvent(ev agent.OutputEvent) {
-	wrapWidth := t.cols - 1
-	if wrapWidth < 1 {
-		wrapWidth = 1
-	}
 	switch ev.Type {
 	case agent.OutputText, agent.OutputThinking:
-		if rows := t.scroll.streamViewportDirty(t.scrollRows, wrapWidth); len(rows) > 0 {
+		if rows := t.scroll.streamViewportDirty(t.scrollRows, t.cols); len(rows) > 0 {
 			t.dirty.markScrollRows(rows...)
 		}
 	case agent.OutputStatus:

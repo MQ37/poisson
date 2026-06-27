@@ -316,6 +316,17 @@ func kittyToBytes(code, mods int) ([]byte, bool) {
 		return []byte{9}, true
 	case 27: // Escape
 		return []byte{27}, true
+	case kittyKeyEscape:
+		return []byte{27}, true
+	case kittyKeyEnter:
+		if shift {
+			return []byte{'\n'}, true
+		}
+		return []byte{'\r'}, true
+	case kittyKeyTab:
+		return []byte{9}, true
+	case kittyKeyBackspace:
+		return []byte{127}, true
 	}
 	if ctrl && ((code >= 'a' && code <= 'z') || (code >= 'A' && code <= 'Z')) {
 		return []byte{byte(code) & 0x1f}, true
@@ -457,6 +468,15 @@ func (e *editor) handleEscape(data []byte) (int, bool) {
 			e.paste = true
 			e.pasteBuf = append([]byte{}, rest...)
 			return len(data), false
+		}
+		// Legacy CSI function keys (must precede parseKittyKey — it also
+		// matches ESC [ <n> ~ sequences and would swallow Delete/Insert).
+		if len(data) >= 4 && data[2] == '3' && data[3] == '~' {
+			e.delete()
+			return 4, false
+		}
+		if len(data) >= 4 && data[2] == '2' && data[3] == '~' {
+			return 4, false // Insert — no-op in line editor
 		}
 		// Kitty keyboard protocol: ESC [ <code> ; <mods> <final>
 		// Shift+Enter: code=13, mods=2, final='u' or '~'

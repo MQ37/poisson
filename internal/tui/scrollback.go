@@ -116,11 +116,6 @@ func (s *scrollback) streamViewportDirty(height, width int) []int {
 	if height < 1 || width < 1 || len(s.blocks) == 0 || s.scrollOffset > 0 {
 		return nil
 	}
-	newCount := len(wrapLine(s.blocks[len(s.blocks)-1].raw, width))
-	prev := s.lastStreamWrapCount
-	grew := newCount > prev
-	s.lastStreamWrapCount = newCount
-
 	wrapped, _ := s.layoutAll(width)
 	viewStart := len(wrapped) - height
 	if viewStart < 0 {
@@ -130,6 +125,9 @@ func (s *scrollback) streamViewportDirty(height, width int) []int {
 	if viewLen < 1 {
 		return nil
 	}
+	prev := s.lastStreamWrapCount
+	grew := viewLen > prev
+	s.lastStreamWrapCount = viewLen
 	if prev == 0 || grew {
 		rows := make([]int, viewLen)
 		for i := range rows {

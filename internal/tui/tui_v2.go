@@ -162,7 +162,7 @@ func (t *tuiV2) Run() error {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				_ = fmt.Sprintf("render panic: %v", r)
+				fmt.Fprintf(os.Stderr, "poisson: render panic: %v\n", r)
 			}
 			close(renderDone)
 		}()
@@ -202,6 +202,10 @@ func (t *tuiV2) Run() error {
 			if err != nil {
 				return
 			}
+			if delta, ok := parseScrollInputRaw(buf[:n], t.scrollRows); ok {
+				t.handleScrollDelta(delta)
+				continue
+			}
 			// If an approval prompt is active, route the answer to the
 			// approval channel instead of feeding it to the editor.
 			// This avoids the race where Approve and the input goroutine
@@ -211,10 +215,6 @@ func (t *tuiV2) Run() error {
 				if ok {
 					t.approvalAnswer <- allowed
 				}
-				continue
-			}
-			if delta, ok := parseScrollInputRaw(buf[:n], t.scrollRows); ok {
-				t.handleScrollDelta(delta)
 				continue
 			}
 			quit, err := t.feed(decodeKittyKeys(buf[:n]))
@@ -525,25 +525,32 @@ func (t *tuiV2) refreshCompletion() {
 		t.completion = nil
 		return
 	}
-	t.completion = &completion{kind: kind, prefix: prefix, cands: cands, idx: -1}
+	idx := -1
+	if t.completion != nil && t.completion.kind == kind && t.completion.prefix == prefix {
+		idx = t.completion.idx
+		if idx >= len(cands) {
+			idx = -1
+		}
+	}
+	t.completion = &completion{kind: kind, prefix: prefix, cands: cands, idx: idx}
 }
 
 // splitPrefix returns (text-before-cursor-on-this-row, partial token at cursor).
+// col is in runes (matches editor.col).
 func splitPrefix(line string, col int) (string, string) {
-	if col > len(line) {
-		col = len(line)
-	}
 	runes := []rune(line)
-	colRune := col
-	if colRune > len(runes) {
-		colRune = len(runes)
+	if col > len(runes) {
+		col = len(runes)
 	}
-	head := string(runes[:colRune])
-	i := len(head) - 1
-	for i >= 0 && head[i] != ' ' && head[i] != '\t' && head[i] != '\n' {
+	if col < 0 {
+		col = 0
+	}
+	head := string(runes[:col])
+	i := col - 1
+	for i >= 0 && runes[i] != ' ' && runes[i] != '\t' && runes[i] != '\n' {
 		i--
 	}
-	return head, head[i+1:]
+	return head, string(runes[i+1 : col])
 }
 
 // acceptCompletion inserts the selected candidate at the cursor, replacing
@@ -819,6 +826,9 @@ func prefixName(k completionKind) string {
 }
 
 func (t *tuiV2) renderInputHeader() string {
+	if t.agent == nil {
+		return ""
+	}
 	effort := t.agent.Effort()
 	if effort == "" {
 		return ""
