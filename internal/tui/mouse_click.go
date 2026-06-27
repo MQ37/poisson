@@ -14,7 +14,7 @@ func (t *tuiV2) handleMouseInput(data []byte) bool {
 
 	if delta, ok := mouseWheelDelta(ev.Button); ok {
 		t.mu.Lock()
-		block := t.hasKeyOverlay()
+		block := t.blocksBackgroundInput()
 		t.mu.Unlock()
 		if !block {
 			t.handleScrollDelta(delta)
@@ -37,7 +37,7 @@ func (t *tuiV2) handleMouseClick(row int) {
 	if lo := asListClickOverlay(t.activeOverlay); lo != nil {
 		chrome := lo.listChrome()
 		scrollStart := t.headerRows + 1
-		lineInOverlay := row - scrollStart - chrome.anchor
+		lineInOverlay := row - scrollStart - chrome.anchor + 1
 		prev := t.activeOverlay
 		if handled, done := lo.clickRow(lineInOverlay); handled {
 			t.closeOverlayAfter(prev, done, false)

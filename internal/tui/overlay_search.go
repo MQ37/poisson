@@ -48,43 +48,45 @@ func (s *searchOverlay) render(scrollRows, cols int) (int, []string) {
 	s.recompute()
 	q := s.query
 	if q == "" {
-		q = "_"
+		q = dim + "type to find" + reset
+	} else {
+		q = fgCyan + q + reset
 	}
 	inner := cols - 6
 	if inner < 20 {
 		inner = cols - 4
 	}
-	label := fgYellow + bold + " search: " + reset + fgCyan + q + reset
+	label := fgYellow + bold + " search: " + reset + q
 	count := ""
 	if s.query != "" {
 		if len(s.matches) == 0 {
 			count = dim + "  (no matches)" + reset
 		} else {
-			count = dim + "  " + itoa(len(s.matches)) + " · n/N · Esc" + reset
+			count = dim + "  " + itoa(s.cur+1) + "/" + itoa(len(s.matches)) + " · ↑↓ · Esc" + reset
 		}
 	} else {
-		count = dim + "  type to find · Esc close" + reset
+		count = dim + "  · Esc close · Ctrl+C dismiss" + reset
 	}
 	line := truncateToWidth(label+count, cols)
 	return 1, []string{line}
 }
 
 func (s *searchOverlay) feedKey(data []byte) (handled bool, done bool, cancel bool) {
-	if isArrowUp(data) || isArrowDown(data) {
+	if containsCtrlC(data) {
+		return true, true, true
+	}
+	if isArrowUp(data) {
+		s.next(-1)
+		return true, false, false
+	}
+	if isArrowDown(data) {
+		s.next(1)
 		return true, false, false
 	}
 	for _, b := range data {
 		if b == 27 && !hasCSI(data) {
 			return true, true, true
 		}
-	}
-	if indexOf(data, []byte{'n'}) >= 0 && !hasCtrl(data) {
-		s.next(1)
-		return true, false, false
-	}
-	if indexOf(data, []byte{'N'}) >= 0 {
-		s.next(-1)
-		return true, false, false
 	}
 	for _, b := range data {
 		if b == 127 || b == 8 {
@@ -109,6 +111,24 @@ func (s *searchOverlay) feedKey(data []byte) (handled bool, done bool, cancel bo
 	return true, false, false
 }
 
+// highlightSearchMatch wraps the first case-insensitive query hit, preserving existing ANSI.
+func highlightSearchMatch(line, query, pre, post string) string {
+	if query == "" {
+		return line
+	}
+	plain := stripANSI(line)
+	lower := strings.ToLower(plain)
+	q := strings.ToLower(strings.TrimSpace(query))
+	idx := strings.Index(lower, q)
+	if idx < 0 {
+		return line
+	}
+	before := plain[:idx]
+	match := plain[idx : idx+len(q)]
+	after := plain[idx+len(q):]
+	return pre + before + bold + match + post + after + reset
+}
+
 func (s *searchOverlay) next(dir int) {
 	if len(s.matches) == 0 {
 		return
@@ -124,13 +144,3 @@ func (s *searchOverlay) next(dir int) {
 		s.scroll(s.matches[s.cur])
 	}
 }
-
-func hasCtrl(data []byte) bool {
-	for _, b := range data {
-		if b < 32 && b != 9 && b != 10 && b != 13 {
-			return true
-		}
-	}
-	return false
-}
-

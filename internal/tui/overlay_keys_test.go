@@ -1,6 +1,9 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestIsArrowUpKittyCSIu(t *testing.T) {
 	raw := []byte{27, '[', '5', '7', '3', '5', '2', 'u'}
@@ -71,5 +74,88 @@ func TestHandleKeyOverlayPreservesChainedPicker(t *testing.T) {
 	}
 	if _, ok := tui.activeOverlay.(*pickerOverlay); !ok {
 		t.Fatalf("expected pickerOverlay, got %T", tui.activeOverlay)
+	}
+}
+
+func TestPaletteQuitPropagates(t *testing.T) {
+	tui := newTestTUIv2()
+	pal := newPaletteOverlay(func(cmd string) error {
+		if cmd == "/quit" {
+			tui.overlayQuit.Store(true)
+			return errQuitSentinel
+		}
+		return nil
+	})
+	for i, it := range paletteCommands {
+		if it.cmd == "/quit" {
+			pal.idx = i
+			break
+		}
+	}
+	tui.activeOverlay = pal
+	if !tui.handleKeyOverlay([]byte{'\r'}) {
+		t.Fatal("enter not handled")
+	}
+	if !tui.overlayQuit.Load() {
+		t.Fatal("expected overlay quit flag")
+	}
+}
+
+func TestSearchOverlayAcceptsLetterN(t *testing.T) {
+	s := newSearchOverlay(func() []ScreenRow { return nil }, nil)
+	handled, _, _ := s.feedKey([]byte{'n'})
+	if !handled {
+		t.Fatal("expected handled")
+	}
+	if s.query != "n" {
+		t.Fatalf("query=%q want n", s.query)
+	}
+}
+
+func TestSearchOverlayCtrlCDismisses(t *testing.T) {
+	s := newSearchOverlay(func() []ScreenRow { return nil }, nil)
+	handled, done, cancel := s.feedKey([]byte{3})
+	if !handled || !done || !cancel {
+		t.Fatalf("handled=%v done=%v cancel=%v", handled, done, cancel)
+	}
+}
+
+func TestMouseClickOverlayRowMapping(t *testing.T) {
+	tui := newTestTUIv2()
+	tui.headerRows = 2
+	tui.scrollRows = 20
+	p := newPickerOverlay("Providers", []pickerItem{
+		{id: "a", label: "alpha"},
+		{id: "b", label: "beta"},
+	}, "", nil)
+	p.render(tui.scrollRows, tui.cols)
+	tui.activeOverlay = p
+	scrollStart := tui.headerRows + 1
+	targetRow := scrollStart + p.chrome.anchor - 1 + p.chrome.itemLine0
+	tui.handleMouseClick(targetRow)
+	if p.idx != 0 {
+		t.Fatalf("first row click idx=%d want 0", p.idx)
+	}
+}
+
+func TestV2ApproveBufferedAnswerBeforeReceive(t *testing.T) {
+	tui := newTestTUIv2()
+	result := make(chan bool, 1)
+	go func() {
+		result <- tui.Approve("rm -rf x", "danger")
+	}()
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for !tui.approving.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	// Send before Approve blocks on receive (simulates fast key).
+	tui.approvalAnswer <- true
+	select {
+	case got := <-result:
+		if !got {
+			t.Fatal("expected allow")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Approve timed out — answer likely dropped")
 	}
 }

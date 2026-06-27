@@ -9,7 +9,10 @@ type approvalOverlay struct {
 }
 
 func newApprovalOverlay(command, description string) *approvalOverlay {
-	return &approvalOverlay{command: command, description: description}
+	return &approvalOverlay{
+		command:     command,
+		description: resolveApprovalPurpose(command, description),
+	}
 }
 
 func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
@@ -26,12 +29,8 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 
 	var body []string
 	body = append(body, "$ "+truncatePlain(o.command, inner-4))
-	purpose := o.description
-	if purpose == "" {
-		purpose = "(no description provided)"
-	}
-	body = append(body, dim+"Purpose: "+truncatePlain(purpose, inner-10)+reset)
-	body = append(body, "[A] Allow   [D] Deny")
+	body = append(body, dim+"Purpose: "+truncatePlain(o.description, inner-10)+reset)
+	body = append(body, "[A/y] Allow   [D/n/Esc] Deny")
 
 	height := len(body) + 2 // top + bottom border
 	anchor := (scrollRows-height)/2 + 1
@@ -65,12 +64,8 @@ func (o *approvalOverlay) fallbackLines(cols int) []string {
 	var b strings.Builder
 	b.WriteString(fgYellow + bold + "⚠ approval required" + reset + "\n")
 	b.WriteString("  $ " + truncatePlain(o.command, cols-4) + "\n")
-	purpose := o.description
-	if purpose == "" {
-		purpose = "(no description provided)"
-	}
-	b.WriteString("  " + dim + "Purpose: " + truncatePlain(purpose, cols-12) + reset + "\n")
-	b.WriteString(dim + "  [A] Allow   [D] Deny" + reset)
+	b.WriteString("  " + dim + "Purpose: " + truncatePlain(o.description, cols-12) + reset + "\n")
+	b.WriteString(dim + "  [A/y] Allow   [D/n/Esc] Deny" + reset)
 	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
 }
 
@@ -98,11 +93,18 @@ func max0(n int) int {
 // approvalKeyAllowed maps approval input bytes to allow/deny. ok reports
 // whether the chunk contained a recognized approval answer.
 func approvalKeyAllowed(data []byte) (allowed, ok bool) {
+	data = decodeKittyKeys(data)
+	if containsCtrlC(data) {
+		return false, true
+	}
+	if len(data) == 1 && data[0] == 27 {
+		return false, true
+	}
 	for _, b := range data {
 		switch b {
-		case 'a', 'A', 'y', 'Y', '\r':
+		case 'a', 'A', 'y', 'Y':
 			return true, true
-		case 'd', 'D', 'n', 'N', 3, 27: // Ctrl+C, Esc
+		case 'd', 'D', 'n', 'N':
 			return false, true
 		}
 	}
@@ -122,4 +124,3 @@ func formatApprovalResult(allowed bool) string {
 	}
 	return "  deny"
 }
-

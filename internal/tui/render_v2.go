@@ -286,9 +286,13 @@ func (t *tuiV2) paintHeaderRegion(b *strings.Builder, lay layoutSnapshot) {
 	if t.headerRows < 1 {
 		return
 	}
-	b.WriteString(cup(1, 1))
-	b.WriteString(clearLine())
-	b.WriteString(truncateToWidth(t.status.RenderHeader(lay.wrapWidth), lay.wrapWidth))
+	rendered := t.status.Render(lay.wrapWidth)
+	lines := strings.Split(rendered, "\r\n")
+	for i := 0; i < t.headerRows && i < len(lines); i++ {
+		b.WriteString(cup(1+i, 1))
+		b.WriteString(clearLine())
+		b.WriteString(truncateToWidth(lines[i], lay.wrapWidth))
+	}
 }
 
 func (t *tuiV2) applySearchHighlight(vi int, lay layoutSnapshot, line string) string {
@@ -301,9 +305,9 @@ func (t *tuiV2) applySearchHighlight(vi int, lay layoutSnapshot, line string) st
 	for _, m := range so.matchRows() {
 		if m == global {
 			if m == so.currentGlobalRow() {
-				return bold + fgYellow + stripANSI(line) + reset
+				return highlightSearchMatch(line, so.query, bold+fgYellow, reset)
 			}
-			return fgYellow + stripANSI(line) + reset
+			return highlightSearchMatch(line, so.query, fgYellow, reset)
 		}
 	}
 	return line

@@ -52,7 +52,7 @@ func (p *pickerOverlay) render(scrollRows, cols int) (int, []string) {
 	visible := p.filtered()
 	if len(visible) == 0 {
 		body := []string{dim + "(no matches)" + reset}
-		chrome, lines := renderBoxedList(p.title, p.filter, body, scrollRows, cols, 76)
+		chrome, lines := renderBoxedList(p.title, p.filter, body, scrollRows, cols, boxListMaxInner)
 		p.chrome = chrome
 		return p.chrome.anchor, lines
 	}
@@ -102,7 +102,7 @@ func (p *pickerOverlay) render(scrollRows, cols int) (int, []string) {
 		body = append(body, style+marker+it.label+reset+cur+hint)
 	}
 
-	chrome, lines := renderBoxedList(p.title, p.filter, body, scrollRows, cols, 76)
+	chrome, lines := renderBoxedList(p.title, p.filter, body, scrollRows, cols, boxListMaxInner)
 	p.chrome = chrome
 	return p.chrome.anchor, lines
 }
@@ -155,19 +155,14 @@ func (p *pickerOverlay) feedKey(data []byte) (handled bool, done bool, cancel bo
 		}
 	}
 	if containsBackspace(data) {
-		runes := []rune(p.filter)
-		if len(runes) > 0 {
-			p.filter = string(runes[:len(runes)-1])
+		if trimOverlayFilter(&p.filter) {
 			p.idx = 0
 		}
 		return true, false, false
 	}
-	for _, b := range data {
-		if b >= 32 && b != 127 {
-			p.filter += string(b)
-			p.idx = 0
-			return true, false, false
-		}
+	if appendOverlayFilter(&p.filter, data) {
+		p.idx = 0
+		return true, false, false
 	}
 	return false, false, false
 }

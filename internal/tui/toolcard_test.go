@@ -33,8 +33,8 @@ func TestToolCardLayout(t *testing.T) {
 
 func TestToolCardComplete(t *testing.T) {
 	s := newScrollback(1024)
-	s.appendToolCall(1, "read", toolInputJSON("read", map[string]string{"path": "main.go"}))
-	s.completeToolCall("package main", "", 400)
+	s.appendToolCall(1, "", "read", toolInputJSON("read", map[string]string{"path": "main.go"}))
+	s.completeToolCall("", "package main", "", 400)
 	b := s.blocks[0]
 	if !b.meta.ToolDone || b.meta.ToolResult != "package main" {
 		t.Fatalf("meta = %+v", b.meta)
@@ -48,16 +48,16 @@ func TestToolCardComplete(t *testing.T) {
 
 func TestToolCardParallelPairingFIFO(t *testing.T) {
 	s := newScrollback(1024)
-	s.appendToolCall(0, "read", toolInputJSON("read", map[string]string{"path": "a.go"}))
-	s.appendToolCall(1, "bash", toolInputJSON("bash", map[string]string{"command": "ls"}))
-	s.completeToolCall("READ_OUT", "", 0)
+	s.appendToolCall(0, "call_a", "read", toolInputJSON("read", map[string]string{"path": "a.go"}))
+	s.appendToolCall(1, "call_b", "bash", toolInputJSON("bash", map[string]string{"command": "ls"}))
+	s.completeToolCall("call_a", "READ_OUT", "", 0)
 	if s.blocks[0].meta.ToolDone != true || s.blocks[0].meta.ToolResult != "READ_OUT" {
 		t.Fatalf("block0 = %+v", s.blocks[0].meta)
 	}
 	if s.blocks[1].meta.ToolDone {
 		t.Fatalf("block1 should still be open: %+v", s.blocks[1].meta)
 	}
-	s.completeToolCall("BASH_OUT", "", 0)
+	s.completeToolCall("call_b", "BASH_OUT", "", 0)
 	if s.blocks[1].meta.ToolResult != "BASH_OUT" {
 		t.Fatalf("block1 = %+v", s.blocks[1].meta)
 	}
@@ -110,8 +110,8 @@ func TestToolCardExpandedLayout(t *testing.T) {
 func TestToggleToolExpandInView(t *testing.T) {
 	s := newScrollback(1024)
 	long := strings.Repeat("z", 600)
-	s.appendToolCall(1, "bash", toolInputJSON("bash", map[string]string{"command": "echo"}))
-	s.completeToolCall(`{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", 10)
+	s.appendToolCall(1, "", "bash", toolInputJSON("bash", map[string]string{"command": "echo"}))
+	s.completeToolCall("", `{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", 10)
 	if !s.toggleToolExpandInView(10, 50) {
 		t.Fatal("toggle expand failed")
 	}

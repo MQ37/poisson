@@ -489,10 +489,7 @@ func (t *TUI) Approve(command, description string) bool {
 		defer syscall.SetNonblock(t.fd, true)
 	}
 
-	purpose := description
-	if purpose == "" {
-		purpose = "(no description provided)"
-	}
+	purpose := resolveApprovalPurpose(command, description)
 	t.writeString("\r\n" + fgYellow + bold + "⚠ approval required" + reset + "\r\n")
 	t.writeString("  $ " + command + "\r\n")
 	t.writeString("  " + dim + "Purpose: " + purpose + reset + "\r\n")

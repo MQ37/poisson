@@ -76,8 +76,11 @@ func toolCardExpandedResultLines(b *Block, width int) []string {
 	return lines[start:end]
 }
 
-// toggleToolExpandInView toggles expand on the last completed tool card in view.
+// toggleToolExpandInView toggles expand on the focused or last completed tool card in view.
 func (s *scrollback) toggleToolExpandInView(height, width int) bool {
+	if s.focusedToolID != 0 {
+		return s.toggleToolExpandBlock(s.focusedToolID)
+	}
 	id := s.lastToolBlockInView(height, width, true)
 	if id == 0 {
 		return false

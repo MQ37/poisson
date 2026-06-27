@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"poisson/internal/config"
@@ -37,6 +38,7 @@ type OutputEvent struct {
 	Type              string          // text | tool_start | tool_result | status | approval | error | compacting
 	Text              string          // text | error | compacting
 	ToolName          string          // tool_start | tool_result
+	ToolCallID        string          // tool_start | tool_result (provider call id)
 	ToolInput         json.RawMessage // tool_start
 	ToolResultContent string          // tool_result
 	ToolError         string          // tool_result
@@ -333,26 +335,43 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		// TOOLS: notify TUI of tool starts.
 		for _, tc := range toolCalls {
 			a.sendEvent(OutputEvent{
-				Type:      OutputToolStart,
-				ToolName:  tc.Name,
-				ToolInput: tc.Input,
+				Type:       OutputToolStart,
+				ToolName:   tc.Name,
+				ToolCallID: tc.ID,
+				ToolInput:  tc.Input,
 			})
 		}
 
-		// Dispatch all tool calls concurrently.
+		// Dispatch concurrently; emit each tool_result to the TUI as it finishes
+		// so cards stop spinning without waiting for slower siblings (e.g. bash approval).
 		a.pendingResults = nil
-		results, execErr := a.tools.ExecuteParallel(ctx, toolCalls)
-		if execErr != nil {
-			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Tool error: %v", execErr)})
-			a.sendEvent(OutputEvent{Type: OutputDone})
-			return fmt.Errorf("execute tools: %w", execErr)
+		results := make([]tools.ToolResult, len(toolCalls))
+		var wg sync.WaitGroup
+		for i, tc := range toolCalls {
+			wg.Add(1)
+			go func(idx int, call tools.ToolCall) {
+				defer wg.Done()
+				res, err := a.tools.Execute(ctx, call.Name, call.Input)
+				if err != nil {
+					res = tools.TrimToolResult(tools.ToolResult{Error: err.Error()})
+				}
+				results[idx] = res
+				a.sendEvent(OutputEvent{
+					Type:              OutputToolResult,
+					ToolName:          call.Name,
+					ToolCallID:        call.ID,
+					ToolResultContent: res.Content,
+					ToolError:         res.Error,
+				})
+			}(i, tc)
 		}
+		wg.Wait()
 		if err := ctx.Err(); err != nil {
 			a.sendEvent(OutputEvent{Type: OutputDone})
 			return err
 		}
 
-		// Append tool_result messages and notify TUI.
+		// Persist tool_result messages in start order.
 		for i, result := range results {
 			resultText := result.Content
 			if result.Error != "" {
@@ -388,12 +407,6 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				a.sessionToolErrors++
 			}
 
-			a.sendEvent(OutputEvent{
-				Type:              OutputToolResult,
-				ToolName:          toolCalls[i].Name,
-				ToolResultContent: result.Content,
-				ToolError:         result.Error,
-			})
 		}
 
 		// CHECK COMPACTION (stub — Phase 11 will implement full compaction).

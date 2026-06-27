@@ -1,5 +1,7 @@
 package tui
 
+import "errors"
+
 type paletteItem struct {
 	cmd  string
 	desc string
@@ -15,7 +17,8 @@ var paletteCommands = []paletteItem{
 	{"/providers", "provider picker"},
 	{"/cost", "token cost breakdown"},
 	{"/clear", "clear scrollback"},
-	{"/search", "search messages"},
+	{"/search", "find in scrollback (Ctrl+F)"},
+	{"/compact", "compact context (auto)"},
 	{"/fork", "fork session"},
 	{"/undo", "undo last turn"},
 	{"/reload", "reload config"},
@@ -59,7 +62,7 @@ func (p *paletteOverlay) render(scrollRows, cols int) (int, []string) {
 
 	if len(visible) == 0 {
 		body := []string{dim + "(no matches)" + reset}
-		chrome, lines := renderBoxedList("command palette", p.filter, body, scrollRows, cols, 72)
+		chrome, lines := renderBoxedList("command palette", p.filter, body, scrollRows, cols, boxListMaxInner)
 		p.chrome = chrome
 		return p.chrome.anchor, lines
 	}
@@ -113,7 +116,9 @@ func (p *paletteOverlay) clickRow(lineInOverlay int) (handled bool, done bool) {
 		return true, false
 	}
 	if p.onRun != nil {
-		_ = p.onRun(vis[p.idx].cmd)
+		if err := p.onRun(vis[p.idx].cmd); errors.Is(err, errQuitSentinel) {
+			return true, true
+		}
 	}
 	return true, true
 }
@@ -137,7 +142,9 @@ func (p *paletteOverlay) feedKey(data []byte) (handled bool, done bool, cancel b
 			return true, false, true
 		}
 		if p.onRun != nil {
-			_ = p.onRun(vis[p.idx].cmd)
+			if err := p.onRun(vis[p.idx].cmd); errors.Is(err, errQuitSentinel) {
+				return true, true, false
+			}
 		}
 		return true, true, false
 	}
@@ -147,19 +154,14 @@ func (p *paletteOverlay) feedKey(data []byte) (handled bool, done bool, cancel b
 		}
 	}
 	if containsBackspace(data) {
-		runes := []rune(p.filter)
-		if len(runes) > 0 {
-			p.filter = string(runes[:len(runes)-1])
+		if trimOverlayFilter(&p.filter) {
 			p.idx = 0
 		}
 		return true, false, false
 	}
-	for _, b := range data {
-		if b >= 32 && b != 127 {
-			p.filter += string(b)
-			p.idx = 0
-			return true, false, false
-		}
+	if appendOverlayFilter(&p.filter, data) {
+		p.idx = 0
+		return true, false, false
 	}
 	return false, false, false
 }

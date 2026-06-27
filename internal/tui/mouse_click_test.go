@@ -23,8 +23,8 @@ func TestClickBlockAtThinking(t *testing.T) {
 func TestClickBlockAtTool(t *testing.T) {
 	s := newScrollback(1024)
 	long := strings.Repeat("z", 600)
-	s.appendToolCall(1, "bash", toolInputJSON("bash", map[string]string{"command": "echo"}))
-	s.completeToolCall(`{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", 10)
+	s.appendToolCall(1, "", "bash", toolInputJSON("bash", map[string]string{"command": "echo"}))
+	s.completeToolCall("", `{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", 10)
 	if !s.clickBlockAt(10, 50, 0) {
 		t.Fatal("click expand failed")
 	}

@@ -25,6 +25,12 @@ func parseScrollInput(data []byte, viewHeight int) (delta int, ok bool) {
 	return 0, false
 }
 
+// isShiftArrowScroll reports shift+up/down scroll gestures.
+func isShiftArrowScroll(data []byte) bool {
+	return indexOf(data, []byte("\x1b[1;2A")) >= 0 ||
+		indexOf(data, []byte("\x1b[1;2B")) >= 0
+}
+
 // parseMouseWheel parses SGR mouse wheel sequences (DECSET 1006).
 // Wheel up scrolls history up (positive delta).
 func parseMouseWheel(data []byte) (delta int, ok bool) {

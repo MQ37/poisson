@@ -72,8 +72,18 @@ func (s StatusSnapshot) renderHeaderRight() string {
 		b.WriteString(" ")
 	}
 	if s.Model != "" {
+		label := s.Model
+		if s.Effort != "" {
+			label = s.Effort + " · " + label
+		}
 		b.WriteString(fgMagenta)
-		b.WriteString(shortenPath(s.Model, 24))
+		b.WriteString(shortenPath(label, 28))
+		b.WriteString(reset)
+		b.WriteString("  ")
+	}
+	if s.ShowCost && s.Cost > 0 {
+		b.WriteString(fgYellow)
+		b.WriteString(fmt.Sprintf("$%.4f", s.Cost))
 		b.WriteString(reset)
 		b.WriteString("  ")
 	}

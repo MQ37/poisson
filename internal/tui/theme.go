@@ -81,12 +81,28 @@ func applyDark16() {
 	bgMagenta = "\x1b[45m"
 }
 
-// applyLight16 uses the same ANSI codes; light vs dark is mostly terminal
-// profile dependent for the base 16. Semantic names stay consistent.
+// applyLight16 uses darker foreground codes for readability on light profiles.
 func applyLight16() {
-	applyDark16()
-	// Future: could remap gray to darker code if desired, but 16-color
-	// palette is limited; callers get same codes.
+	reset = "\x1b[0m"
+	bold = "\x1b[1m"
+	dim = "\x1b[2m"
+	italic = "\x1b[3m"
+	underline = "\x1b[4m"
+
+	fgBlack = "\x1b[30m"
+	fgRed = "\x1b[31m"
+	fgGreen = "\x1b[32m"
+	fgYellow = "\x1b[33m"
+	fgBlue = "\x1b[34m"
+	fgMagenta = "\x1b[35m"
+	fgCyan = "\x1b[36m"
+	fgGray = "\x1b[90m"
+
+	bgBlack = "\x1b[47m"
+	bgDarkRed = "\x1b[41m"
+	bgYellow = "\x1b[43m"
+	bgBlue = "\x1b[44m"
+	bgMagenta = "\x1b[45m"
 }
 
 // applyDarkTruecolor uses 24-bit RGB tuned for dark terminals.

@@ -117,7 +117,7 @@ func toolCardResultLine(b *Block, width int) string {
 	}
 	hint := ""
 	if toolResultNeedsExpand(b) {
-		hint = dim + " · Ctrl+E" + reset
+		hint = dim + " · click/Ctrl+E" + reset
 	}
 	avail := width - visibleWidth(hint)
 	if avail < 12 {
@@ -128,14 +128,15 @@ func toolCardResultLine(b *Block, width int) string {
 }
 
 // appendToolCall adds a tool invocation block.
-func (s *scrollback) appendToolCall(id int64, name string, input []byte) {
+func (s *scrollback) appendToolCall(id int64, providerCallID, name string, input []byte) {
 	b := s.newBlock(blockToolCall, "")
 	b.meta = BlockMeta{
-		ToolName:  name,
-		ToolID:    id,
-		ToolInput: append([]byte(nil), input...),
-		Streaming: true,
-		StartedAt: time.Now(),
+		ToolName:       name,
+		ToolID:         id,
+		ProviderCallID: providerCallID,
+		ToolInput:      append([]byte(nil), input...),
+		Streaming:      true,
+		StartedAt:      time.Now(),
 	}
 	s.blocks = append(s.blocks, b)
 	s.totalAdded++
@@ -143,12 +144,15 @@ func (s *scrollback) appendToolCall(id int64, name string, input []byte) {
 	s.trim()
 }
 
-// completeToolCall attaches a result to the oldest open tool card (FIFO).
-// Agent emits tool starts then results in start order; LIFO pairing mis-associates
-// parallel tool results.
-func (s *scrollback) completeToolCall(result, err string, durationMs int64) {
+// completeToolCall attaches a result to the matching open tool card.
+// When providerCallID is set, pair by id so parallel results can arrive out of order.
+// Otherwise fall back to oldest open card (FIFO).
+func (s *scrollback) completeToolCall(providerCallID, result, err string, durationMs int64) {
 	for i := range s.blocks {
 		if s.blocks[i].kind != blockToolCall || s.blocks[i].meta.ToolDone {
+			continue
+		}
+		if providerCallID != "" && s.blocks[i].meta.ProviderCallID != providerCallID {
 			continue
 		}
 		b := &s.blocks[i]

@@ -77,6 +77,7 @@ type tuiV2 struct {
 	approvalMu     sync.Mutex
 	approving      atomic.Bool
 	approvalAnswer chan bool
+	overlayQuit    atomic.Bool
 
 	// Submission signaling.
 	lastCtrlC time.Time
@@ -122,11 +123,11 @@ func newTUIv2(a *agent.Agent, sessionID string, outputChan chan agent.OutputEven
 		},
 		dirty:          newDirtyTracker(),
 		inputRows:      3,
-		headerRows:     1,
+		headerRows:     2,
 		statusRows:     0,
 		lastInputRows:  3,
 		done:           make(chan struct{}),
-		approvalAnswer: make(chan bool),
+		approvalAnswer: make(chan bool, 1),
 	}
 }
 
@@ -231,24 +232,19 @@ func (t *tuiV2) Run() error {
 			if handled := t.handleMouseInput(buf[:n]); handled {
 				continue
 			}
-			// Don't scroll scrollback behind an interactive overlay (palette/picker).
-			if !t.hasKeyOverlay() {
+			// Don't scroll scrollback behind modal overlays or approval.
+			if !t.blocksBackgroundInput() {
 				if delta, ok := parseScrollInputRaw(buf[:n], t.scrollRows); ok {
 					t.handleScrollDelta(delta)
 					continue
 				}
 			}
-			// If an approval prompt is active, route the answer to the
-			// approval channel instead of feeding it to the editor.
-			// This avoids the race where Approve and the input goroutine
-			// both read from stdin.
+			// If an approval prompt is active, route recognized answers to the
+			// approval channel instead of feeding them to the editor.
 			if t.approving.Load() {
-				// Any key during approval resolves it (unknown treated as deny).
-				// Non-blocking send prevents hang if receiver raced.
-				allowed, _ := approvalKeyAllowed(decodeKittyKeys(buf[:n]))
-				select {
-				case t.approvalAnswer <- allowed:
-				default:
+				allowed, ok := approvalKeyAllowed(decodeKittyKeys(buf[:n]))
+				if ok {
+					t.approvalAnswer <- allowed
 				}
 				continue
 			}
@@ -299,14 +295,18 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		t.editor.wrapWidth = w
 	}
 
-	// If mid-paste or starting a bracketed paste, bypass all key interception
-	// (Tab/Enter/Esc/arrows) so pasted bytes don't trigger completions or
-	// submissions. The editor handles paste accumulation.
-	if t.editor.paste || (len(data) >= 6 && data[0] == 27 && data[1] == '[' && data[2] == '2' && data[3] == '0' && data[4] == '0' && data[5] == '~') {
-		return t.processEditor(data)
+	// Block paste into the editor while a modal overlay or approval is active.
+	if t.blocksBackgroundInput() || t.hasKeyOverlay() {
+		if t.editor.paste || (len(data) >= 6 && data[0] == 27 && data[1] == '[' && data[2] == '2' && data[3] == '0' && data[4] == '0' && data[5] == '~') {
+			return false, nil
+		}
 	}
 
 	if t.handleKeyOverlay(data) {
+		if t.overlayQuit.Load() {
+			t.overlayQuit.Store(false)
+			return true, nil
+		}
 		return false, nil
 	}
 
@@ -314,8 +314,7 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 	// so they don't reach the editor or scrollback. Ctrl+C dismisses the overlay.
 	if t.hasKeyOverlay() {
 		if containsCtrlC(data) {
-			t.activeOverlay = nil
-			t.dirty.markFull()
+			t.dismissOverlay()
 		}
 		return false, nil
 	}
@@ -345,16 +344,36 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		}
 	}
 
+	// Arrow up/down cycle through completion while it's open (before scrollback).
+	if !t.completion.empty() {
+		for i, b := range data {
+			if b == 27 && i+2 < len(data) && data[i+1] == '[' {
+				switch data[i+2] {
+				case 'A':
+					t.completion.cycle(-1)
+					t.markInputDirty()
+					return false, nil
+				case 'B':
+					t.completion.cycle(+1)
+					t.markInputDirty()
+					return false, nil
+				}
+			}
+		}
+	}
+
 	// Scrollback navigation — works even while the agent is running.
 	if delta, ok := parseScrollInputRaw(data, t.scrollRows); ok {
-		t.scrollByDelta(delta)
-		return false, nil
+		if !(isShiftArrowScroll(data) && t.scroll.scrollOffset == 0) {
+			t.scrollByDelta(delta)
+			return false, nil
+		}
 	}
-	if isArrowUp(data) && t.editorAtScrollTop() {
+	if isArrowUp(data) && t.editorAtScrollTop() && t.completion.empty() {
 		t.scrollByDelta(1)
 		return false, nil
 	}
-	if isArrowDown(data) && t.scroll.scrollOffset > 0 && t.editorAtScrollBottom() {
+	if isArrowDown(data) && t.scroll.scrollOffset > 0 && t.editorAtScrollBottom() && t.completion.empty() {
 		t.scrollByDelta(-1)
 		return false, nil
 	}
@@ -400,24 +419,6 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 				t.completion = nil
 				t.markInputDirty()
 				return false, nil
-			}
-		}
-	}
-
-	// Arrow up/down cycle through completion while it's open.
-	if !t.completion.empty() {
-		for i, b := range data {
-			if b == 27 && i+2 < len(data) && data[i+1] == '[' {
-				switch data[i+2] {
-				case 'A':
-					t.completion.cycle(-1)
-					t.markInputDirty()
-					return false, nil
-				case 'B':
-					t.completion.cycle(+1)
-					t.markInputDirty()
-					return false, nil
-				}
 			}
 		}
 	}
@@ -501,6 +502,10 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 	// Ctrl+M model picker, Ctrl+S session picker.
 	if t.completion.empty() && t.activeOverlay == nil {
 		for _, b := range data {
+			if b == 13 {
+				t.openModelPicker()
+				return false, nil
+			}
 			if b == 19 {
 				t.openSessionPicker()
 				return false, nil
@@ -796,9 +801,9 @@ func (t *tuiV2) handleEvent(ev agent.OutputEvent) {
 		t.scroll.finalizeThinking()
 		id := t.nextToolID
 		t.nextToolID++
-		t.scroll.appendToolCall(id, ev.ToolName, ev.ToolInput)
+		t.scroll.appendToolCall(id, ev.ToolCallID, ev.ToolName, ev.ToolInput)
 	case agent.OutputToolResult:
-		t.scroll.completeToolCall(ev.ToolResultContent, ev.ToolError, 0)
+		t.scroll.completeToolCall(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
 	case agent.OutputApproval:
 		// Approval UI is shown via activeOverlay in Approve().
 	case agent.OutputError:
@@ -817,8 +822,10 @@ func (t *tuiV2) Approve(command, description string) bool {
 	t.approvalMu.Lock()
 	defer t.approvalMu.Unlock()
 
-	t.approving.Store(true)
-	defer t.approving.Store(false)
+	select {
+	case <-t.approvalAnswer:
+	default:
+	}
 
 	t.mu.Lock()
 	t.activeOverlay = newApprovalOverlay(command, description)
@@ -826,10 +833,12 @@ func (t *tuiV2) Approve(command, description string) bool {
 	t.mu.Unlock()
 	t.paint(t.dirty.consume())
 
+	t.approving.Store(true)
+	defer t.approving.Store(false)
+
 	var allowed bool
 	select {
 	case allowed = <-t.approvalAnswer:
-		t.approving.Store(false) // shrink race window before unlock/return; input drops extra sends
 	case <-t.done:
 		t.mu.Lock()
 		t.activeOverlay = nil
@@ -886,7 +895,7 @@ func (t *tuiV2) recomputeLayout() {
 		wrapWidth = 1
 	}
 	t.editor.wrapWidth = wrapWidth
-	t.headerRows = 1
+	t.headerRows = 2
 	t.statusRows = 0
 	t.inputRows = t.inputHeight(wrapWidth)
 	t.scrollRows = h - t.headerRows - t.inputRows
@@ -1005,8 +1014,11 @@ func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc i
 }
 
 func (t *tuiV2) renderHintLine() string {
-	hint := "Enter:send · Shift+Enter:newline · Ctrl+Y:yank · Ctrl+E:tool · Ctrl+F:find · Ctrl+P:palette"
-	return dim + hint + reset
+	base := "Enter:send · Ctrl+Y:yank · Ctrl+E:tool · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model"
+	if t.status.Hint != "" {
+		return dim + t.status.Hint + " · " + base + reset
+	}
+	return dim + base + reset
 }
 
 // scrollByDelta scrolls the scrollback viewport. Caller must hold t.mu.
@@ -1107,6 +1119,10 @@ func (t *tuiV2) handleSlash(cmd string) error {
 		t.openSessionPicker()
 		return nil
 	case "/search":
+		if len(parts) == 1 {
+			t.openSearch()
+			return nil
+		}
 		return cmdSearch(h, parts[1:])
 	case "/fork":
 		return cmdFork(h, parts[1:])

@@ -2,19 +2,12 @@ package tui
 
 import (
 	"context"
+	"errors"
 )
 
 // openBTW opens a floating side-question box (/btw) while the main agent keeps running.
 func (t *tuiV2) openBTW(question string) {
-	if t.activeOverlay != nil {
-		if b, ok := t.activeOverlay.(*btwOverlay); ok {
-			b.mu.Lock()
-			if c := b.cancel; c != nil {
-				c()
-			}
-			b.mu.Unlock()
-		}
-	}
+	t.cancelOverlayWork()
 	maxH := t.rows * 15 / 100
 	if maxH < 3 {
 		maxH = 3
@@ -63,20 +56,18 @@ func (t *tuiV2) openModelPicker() {
 		return
 	}
 	prov := t.agent.Provider().ID()
-	t.activeOverlay = newPickerOverlay("Models ("+prov+")", items, t.agent.Model(), func(id string) error {
+	t.setActiveOverlay(newPickerOverlay("Models ("+prov+")", items, t.agent.Model(), func(id string) error {
 		return cmdModel(h, []string{prov + "/" + id})
-	})
-	t.dirty.markFull()
+	}))
 }
 
 // openProviderPicker shows provider switcher overlay.
 func (t *tuiV2) openProviderPicker() {
 	h := v2CmdHost{t}
 	cur := t.agent.Provider().ID()
-	t.activeOverlay = newPickerOverlay("Providers", pickerProviderItems(h), cur, func(id string) error {
+	t.setActiveOverlay(newPickerOverlay("Providers", pickerProviderItems(h), cur, func(id string) error {
 		return cmdModel(h, []string{id})
-	})
-	t.dirty.markFull()
+	}))
 }
 
 // openSessionPicker shows recent sessions overlay.
@@ -93,23 +84,21 @@ func (t *tuiV2) openSessionPicker() {
 		t.markScrollDirty()
 		return
 	}
-	t.activeOverlay = newPickerOverlay("Sessions", items, t.sessionID, func(id string) error {
+	t.setActiveOverlay(newPickerOverlay("Sessions", items, t.sessionID, func(id string) error {
 		return cmdResume(h, []string{id})
-	})
-	t.dirty.markFull()
+	}))
 }
 
 // openSearch opens in-scrollback find (Ctrl+F).
 func (t *tuiV2) openSearch() {
 	width := t.contentWidth()
-	t.activeOverlay = newSearchOverlay(
+	t.setActiveOverlay(newSearchOverlay(
 		func() []ScreenRow {
 			wrapped, _ := t.scroll.layoutAll(width)
 			return wrapped
 		},
 		func(globalRow int) {
-			t.mu.Lock()
-			defer t.mu.Unlock()
+			// Caller (feed) already holds t.mu.
 			wrapped, _ := t.scroll.layoutAll(width)
 			max := len(wrapped) - t.scrollRows
 			if max < 0 {
@@ -124,8 +113,7 @@ func (t *tuiV2) openSearch() {
 			}
 			t.scroll.scrollOffset = off
 		},
-	)
-	t.dirty.markFull()
+	))
 }
 
 // hasKeyOverlay reports whether a modal that consumes keyboard input is active.
@@ -133,22 +121,62 @@ func (t *tuiV2) hasKeyOverlay() bool {
 	return asKeyOverlay(t.activeOverlay) != nil
 }
 
+// blocksBackgroundInput reports whether scroll/wheel/paste should stay behind the overlay.
+// Search is non-modal and allows background scroll.
+func (t *tuiV2) blocksBackgroundInput() bool {
+	if t.approving.Load() {
+		return true
+	}
+	if t.activeOverlay == nil {
+		return false
+	}
+	if _, ok := t.activeOverlay.(*searchOverlay); ok {
+		return false
+	}
+	return true
+}
+
+func (t *tuiV2) cancelOverlayWork() {
+	if b, ok := t.activeOverlay.(*btwOverlay); ok {
+		b.mu.Lock()
+		if c := b.cancel; c != nil {
+			c()
+		}
+		b.mu.Unlock()
+	}
+}
+
+func (t *tuiV2) setActiveOverlay(o overlay) {
+	t.cancelOverlayWork()
+	t.activeOverlay = o
+	t.dirty.markFull()
+}
+
+func (t *tuiV2) dismissOverlay() {
+	t.cancelOverlayWork()
+	t.activeOverlay = nil
+	t.dirty.markFull()
+}
+
 // openCommandPalette shows fuzzy command launcher (Ctrl+P).
 func (t *tuiV2) openCommandPalette() {
-	t.activeOverlay = newPaletteOverlay(func(cmd string) error {
-		return t.handleSlash(cmd)
-	})
-	t.dirty.markFull()
+	t.setActiveOverlay(newPaletteOverlay(func(cmd string) error {
+		err := t.handleSlash(cmd)
+		if errors.Is(err, errQuitSentinel) {
+			t.overlayQuit.Store(true)
+		}
+		return err
+	}))
 }
 
 func (t *tuiV2) closeOverlayAfter(prev overlay, done, cancel bool) {
 	if cancel {
-		t.activeOverlay = nil
+		t.dismissOverlay()
 	} else if done && t.activeOverlay == prev {
 		// onRun/onPick may replace this overlay (e.g. palette → provider picker).
 		t.activeOverlay = nil
+		t.dirty.markFull()
 	}
-	t.dirty.markFull()
 }
 
 func (t *tuiV2) handleKeyOverlay(data []byte) bool {
