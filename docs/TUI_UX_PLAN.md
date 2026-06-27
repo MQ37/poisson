@@ -9,7 +9,22 @@ follow-up review pass.
 readline). ~6,100 LoC in `internal/tui/`. See `docs/TUI_REDESIGN.md` for the
 original v2 scaffold spec.
 
-**Status:** v2 scaffold ✅ · UX polish ❌ (this plan)
+**Status (2026-06-27):**
+
+| Phase | PRs | State |
+|-------|-----|-------|
+| **A — Smoothness** | PR-01 … PR-04 | ✅ Done (`72e1e27` + fixes) |
+| **B — Rich content** | PR-05 … PR-09 | ✅ Done (`fd249a8` … `d3f123f` + fixes) |
+| **C — Interactive UX** | PR-10 … PR-14 | ✅ Done (v2 pickers, fuzzy, palette) |
+| **C+ — Grok parity** | PR-21 | 🚧 In progress (`/btw` side-steer landed; more parity below) |
+| **D — Power features** | PR-15 … PR-20 | ❌ Not started |
+
+Post-phase hardening: Kitty keys, row-scroll, completion ghosting (`99d9686`),
+test `/tmp` isolation (`7672e2a`). **B follow-up:** GFM bordered tables (`markdown_table.go`),
+scroll paint width `cols-1` (right-edge alignment).
+
+**North star:** Grok Build CLI — clean chat column, bordered tables, token/status header,
+bottom input with mode hints, floating side Q&A without blocking the main agent (`/btw`).
 
 ---
 
@@ -71,28 +86,28 @@ From `docs/SPEC.md` §1 and project conventions:
 
 ### Known pain points (ranked by user impact)
 
-| # | Gap | Impact | Root cause |
-|---|-----|--------|------------|
-| 1 | Screen flicker during streaming | 10 | Full-region repaint @ ~30fps (`tui_v2.go:render`) |
-| 2 | Plain text assistant output | 9 | No markdown → ANSI pipeline |
-| 3 | `/model` `/providers` are text-only | 9 | No interactive overlay picker |
-| 4 | Thinking streams as dim plain text | 8 | No block model / collapse |
-| 5 | Tool calls are one-liner previews | 8 | No structured card component |
-| 6 | Tab completion is prefix-only, on Tab | 8 | No live fuzzy filter as-you-type |
-| 7 | Static `⠋` spinner | 7 | No frame animation in render loop |
-| 8 | Approval buried in scrollback | 7 | Not a floating modal overlay |
-| 9 | No syntax highlighting in code fences | 7 | No code-block renderer |
-| 10 | Mouse unsupported | 6 | No `?1000h` mouse tracking |
-| 11 | No command palette | 6 | Only `/help` text dump |
-| 12 | `/sessions` is text list | 6 | No picker overlay |
-| 13 | Tool results truncated, not expandable | 5 | Fixed `previewText` limits |
-| 14 | No scrollback search | 5 | No in-buffer find |
-| 15 | No copy-to-clipboard (OSC 52) | 5 | No yank on selection |
-| 16 | Status bar missing tool counters | 5 | `OutputStatus` lacks tool stats |
-| 17 | No word-wrap in scrollback | 4 | Hard wrap only |
-| 18 | Completion shows all candidates | 4 | No fuzzy rank / cap |
-| 19 | No true-color detection | 3 | Fixed 256/16 palette |
-| 20 | Classic TUI diverges | 3 | v2-only features |
+| # | Gap | Impact | Status |
+|---|-----|--------|--------|
+| 1 | Screen flicker during streaming | 10 | ✅ PR-01 dirty render |
+| 2 | Plain text assistant output | 9 | ✅ PR-06 markdown (+ tables) |
+| 3 | `/model` `/providers` text-only | 9 | ✅ PR-11/12 pickers (v2) |
+| 4 | Thinking streams as dim plain text | 8 | ✅ PR-08 collapse |
+| 5 | Tool calls are one-liner previews | 8 | ✅ PR-09 tool cards |
+| 6 | Tab completion prefix-only, on Tab | 8 | ✅ PR-10 live fuzzy |
+| 7 | Static spinner | 7 | ✅ PR-02 animated |
+| 8 | Approval buried in scrollback | 7 | ✅ PR-03 modal |
+| 9 | No syntax highlighting in fences | 7 | ✅ PR-07 highlight |
+| 10 | Mouse unsupported | 6 | ⚠️ wheel only; PR-15 pending |
+| 11 | No command palette | 6 | ✅ PR-14 Ctrl+P (v2) |
+| 12 | `/sessions` is text list | 6 | ✅ PR-13 picker (v2) |
+| 13 | Tool results truncated | 5 | ❌ PR-16 pending |
+| 14 | No scrollback search | 5 | ❌ PR-17 pending |
+| 15 | No OSC 52 copy | 5 | ❌ PR-18 pending |
+| 16 | Status bar missing tool counters | 5 | ✅ PR-04 |
+| 17 | No word-wrap scrollback | 4 | ❌ PR-19 pending |
+| 18 | Completion shows all candidates | 4 | ✅ PR-10 cap/rank |
+| 19 | No true-color detection | 3 | ❌ PR-20 pending |
+| 20 | Classic TUI diverges | 3 | Open (by design for now) |
 
 ---
 
@@ -197,26 +212,30 @@ Resize marks `full`.
 ## 5. Phase DAG
 
 ```
-Phase A — Smoothness (foundation)
-  PR-01 incremental render ──┬──► PR-02 animated indicators
-                             └──► PR-03 approval modal
+Phase A — Smoothness ✅
+  PR-01 incremental render ──┬──► PR-02 animated indicators ✅
+                             └──► PR-03 approval modal ✅
                                       │
-Phase B — Rich content       PR-04 status polish
-  PR-05 block model ◄───────────────┘ (needs PR-01 dirty infra)
+Phase B — Rich content ✅    PR-04 status polish ✅
+  PR-05 block model ◄───────────────┘
        │
-       ├──► PR-06 markdown inline
-       ├──► PR-07 code blocks + highlight
-       ├──► PR-08 collapsible thinking
-       └──► PR-09 tool call cards
+       ├──► PR-06 markdown inline ✅ (+ GFM tables)
+       ├──► PR-07 code blocks + highlight ✅
+       ├──► PR-08 collapsible thinking ✅
+       └──► PR-09 tool call cards ✅
 
-Phase C — Interactive UX (overlays share PR-05 overlay stack from PR-03)
-  PR-10 live fuzzy autocomplete
-  PR-11 model picker
-  PR-12 provider picker
-  PR-13 session picker
-  PR-14 command palette
+Phase C — Interactive UX ✅
+  PR-10 live fuzzy autocomplete ✅
+  PR-11 model picker ✅
+  PR-12 provider picker ✅
+  PR-13 session picker ✅
+  PR-14 command palette ✅
 
-Phase D — Power features
+Phase C+ — Grok Build parity 🚧
+  PR-21 /btw side-steer overlay ✅
+  (next) top status strip like Grok, tighter input chrome, table polish
+
+Phase D — Power features ❌
   PR-15 mouse support
   PR-16 expandable tool results
   PR-17 scrollback search
@@ -761,6 +780,40 @@ code blocks, partial re-render.
 
 ---
 
+### PR-21: `/btw` side-steer floating Q&A (Grok parity)
+
+**Impact:** 8 · **Effort:** 4–6h · **Deps:** PR-03 (overlay stack)
+
+**Problem:** User cannot ask a quick side question while the main agent turn runs.
+Grok Build exposes this as a non-blocking floating answer panel.
+
+**Files:**
+| Action | Path |
+|--------|------|
+| Create | `internal/agent/quickanswer.go` — one-off stream, no session/outputChan |
+| Create | `internal/tui/overlay_btw.go` |
+| Modify | `internal/tui/overlay_v2.go` — `openBTW`, `runBTW` goroutine |
+| Modify | `internal/tui/tui_v2.go` — `/btw` slash handler |
+
+**Implementation steps:**
+
+1. `/btw <question>` — parse remainder of line as question text.
+2. Spawn `Agent.StreamQuickAnswer` in background (separate provider call).
+3. Floating box: top-right of scroll region, max **15% terminal height**.
+4. While streaming: spinner + partial answer; **Esc cancels** in-flight request.
+5. When done: **Esc closes**; **↑↓** scroll long answers inside the box.
+6. Replacing an open `/btw` cancels the previous request.
+
+**Acceptance criteria:**
+- [x] Main agent stream continues while `/btw` runs.
+- [x] Box height ≤ `rows * 15 / 100`.
+- [x] Esc cancel vs close semantics.
+- [x] Arrow scroll inside box.
+
+**Tests:** `quickanswer_test.go`, `overlay_btw_test.go`.
+
+---
+
 ### PR-15: Mouse support
 
 **Impact:** 6 · **Effort:** 6–8h · **Deps:** PR-01, PR-08 (optional)
@@ -1037,13 +1090,14 @@ POISSON_TUI=classic ./px                # classic still works
 
 ## 12. Effort Summary
 
-| Phase | PRs | Est. hours |
-|-------|-----|------------|
-| A — Smoothness | 01–04 | 17–22 |
-| B — Rich content | 05–09 | 39–48 |
-| C — Interactive | 10–14 | 26–33 |
-| D — Power | 15–20 | 28–35 |
-| **Total** | **20** | **~110–138** |
+| Phase | PRs | Est. hours | Status |
+|-------|-----|------------|--------|
+| A — Smoothness | 01–04 | 17–22 | ✅ Done |
+| B — Rich content | 05–09 | 39–48 | ✅ Done |
+| C — Interactive | 10–14 | 26–33 | ✅ Done (v2); classic unchanged |
+| C+ — Grok parity | 21 | 4–6 | 🚧 `/btw` done; visual parity ongoing |
+| D — Power | 15–20 | 28–35 | ❌ Not started |
+| **Total** | **21** | **~114–144** | **~80% complete** |
 
 Parallelizing Phase A (after PR-01) and Phase B (after PR-05) can wall-clock
 compress to ~4–6 focused days with 3–4 agents.
@@ -1058,7 +1112,7 @@ compress to ~4–6 focused days with 3–4 agents.
 | Shift+Enter | Newline |
 | Tab | Completion cycle / accept |
 | Ctrl+Space | Open completion |
-| Ctrl+P | Command palette |
+| Ctrl+P | Command palette (v2; history prev moved to Ctrl+R) |
 | Ctrl+M | Model picker |
 | Ctrl+S | Session picker |
 | Ctrl+F | Scrollback search |
@@ -1066,7 +1120,7 @@ compress to ~4–6 focused days with 3–4 agents.
 | Ctrl+Y | Yank last assistant block |
 | Ctrl+C | Clear / cancel / exit (double) |
 | Ctrl+D | Exit (empty editor) |
-| Ctrl+P/N | History prev/next |
+| Ctrl+R/N | History prev/next |
 | PgUp/PgDn | Scroll history |
 | Mouse wheel | Scroll history |
 | `a`/`d` | Allow/deny approval |
@@ -1083,7 +1137,13 @@ internal/tui/
   clipboard.go          PR-18
   complete.go           (existing, PR-10)
   dirty.go              PR-01
-  fuzzy.go              PR-10
+  fuzzy.go              PR-10 ✅
+  markdown_table.go     PR-06 ext ✅
+  overlay_picker.go     PR-11–13 ✅
+  overlay_palette.go    PR-14 ✅
+  overlay_v2.go         PR-11–14, PR-21 wiring ✅
+  overlay_btw.go        PR-21 /btw ✅
+  quickanswer.go        PR-21 (agent/) ✅
   highlight.go          PR-07
   markdown.go           PR-06
   mouse.go              PR-15

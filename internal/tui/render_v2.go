@@ -61,7 +61,7 @@ func (t *tuiV2) prepareLayout() layoutSnapshot {
 		sr:            sr,
 		sc:            sc,
 		screenLines:   screenLines,
-		visible:       t.scroll.visible(t.scrollRows, t.cols),
+		visible:       t.scroll.visible(t.scrollRows, wrapWidth),
 	}
 }
 
@@ -140,7 +140,7 @@ func (t *tuiV2) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only [
 		b.WriteString(cup(startRow+i, 1))
 		b.WriteString(clearLine())
 		if i < len(lay.visible) {
-			b.WriteString(truncateToWidth(t.formatScrollLine(lay.visible[i].Text), t.cols))
+			b.WriteString(truncateToWidth(t.formatScrollLine(lay.visible[i].Text), lay.wrapWidth))
 		}
 	}
 }
@@ -241,12 +241,12 @@ func (t *tuiV2) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, line
 		b.WriteString(clearLine())
 		if lines != nil {
 			if idx := row - anchor; idx >= 0 && idx < len(lines) {
-				b.WriteString(truncateToWidth(lines[idx], t.cols))
+				b.WriteString(truncateToWidth(lines[idx], lay.wrapWidth))
 				continue
 			}
 		}
 		if vi := row - 1; vi >= 0 && vi < len(lay.visible) {
-			b.WriteString(truncateToWidth(t.formatScrollLine(lay.visible[vi].Text), t.cols))
+			b.WriteString(truncateToWidth(t.formatScrollLine(lay.visible[vi].Text), lay.wrapWidth))
 		}
 	}
 }
@@ -322,7 +322,7 @@ func (t *tuiV2) toolSpinnerRows(lay layoutSnapshot) []int {
 func (t *tuiV2) markAfterEvent(ev agent.OutputEvent) {
 	switch ev.Type {
 	case agent.OutputText, agent.OutputThinking:
-		if rows := t.scroll.streamViewportDirty(t.scrollRows, t.cols); len(rows) > 0 {
+		if rows := t.scroll.streamViewportDirty(t.scrollRows, t.contentWidth()); len(rows) > 0 {
 			t.dirty.markScrollRows(rows...)
 		}
 	case agent.OutputStatus:

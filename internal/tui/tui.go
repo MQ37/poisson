@@ -867,6 +867,7 @@ func renderHelp() string {
 	b.WriteString("  /models     List models from current provider\r\n")
 	b.WriteString("  /reload      Reload config and skills\r\n")
 	b.WriteString("  /cost        Show session cost\r\n")
+	b.WriteString("  /btw <q>     Side question in floating box (Esc close/cancel)\r\n")
 	return b.String()
 }
 

@@ -17,6 +17,16 @@ import (
 	"poisson/internal/agent"
 )
 
+// contentWidth is the safe scrollback line width. Writing exactly cols runes at
+// column 1 makes many terminals auto-wrap, so scroll content stays cols-1.
+func (t *tuiV2) contentWidth() int {
+	w := t.cols - 1
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
 // tuiV2 is the split-screen alt-screen TUI. The classic readline TUI stays in
 // tui.go as the fallback (POISSON_TUI=classic).
 type tuiV2 struct {
@@ -271,6 +281,10 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		return t.processEditor(data)
 	}
 
+	if t.handleKeyOverlay(data) {
+		return false, nil
+	}
+
 	// Scrollback navigation — works even while the agent is running.
 	if delta, ok := parseScrollInputRaw(data, t.scrollRows); ok {
 		t.scrollByDelta(delta)
@@ -369,17 +383,37 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 	// Ctrl+T toggles collapse on the nearest thinking block in view.
 	for _, b := range data {
 		if b == 20 {
-			if t.scroll.toggleThinkingInView(t.scrollRows, t.cols) {
+			if t.scroll.toggleThinkingInView(t.scrollRows, t.contentWidth()) {
 				t.markScrollDirty()
 			}
 			return false, nil
 		}
 	}
 
-	// History navigation (Ctrl+P / Ctrl+N) when no completion dropdown is open.
+	// Ctrl+P command palette (when no completion dropdown).
 	if t.completion.empty() {
 		for _, b := range data {
 			if b == 16 {
+				t.openCommandPalette()
+				return false, nil
+			}
+		}
+	}
+
+	// Ctrl+M model picker, Ctrl+S session picker.
+	if t.completion.empty() && t.activeOverlay == nil {
+		for _, b := range data {
+			if b == 19 {
+				t.openSessionPicker()
+				return false, nil
+			}
+		}
+	}
+
+	// History navigation (Ctrl+R / Ctrl+N) when no completion dropdown.
+	if t.completion.empty() && t.activeOverlay == nil {
+		for _, b := range data {
+			if b == 18 {
 				t.navigateHistory(-1)
 				t.markInputDirty()
 				return false, nil
@@ -504,19 +538,18 @@ func (t *tuiV2) handleTab() bool {
 func (t *tuiV2) refreshCompletion() {
 	cwd, _ := os.Getwd()
 	line := t.editor.lines[t.editor.row]
-	prefix, _ := splitPrefix(line, t.editor.col)
+	prefix, token := splitPrefix(line, t.editor.col)
 	var cands []string
 	var kind completionKind
+	truncated := false
 	switch {
-	case strings.HasPrefix(strings.TrimSpace(line), "/") && !strings.ContainsAny(prefix, " \t"):
-		cands = matchSlash(line)
+	case strings.HasPrefix(token, "/") && !strings.ContainsAny(token, " \t"):
+		cands = matchSlash(token)
 		if len(cands) > 0 {
 			kind = completionSlash
 		}
-	case strings.ContainsRune(prefix, '@'):
-		atIdx := strings.LastIndexByte(prefix, '@')
-		body := prefix[atIdx:]
-		cands = matchAtFile(body, cwd)
+	case strings.ContainsRune(token, '@'):
+		cands, truncated = matchAtFileFuzzy(token, cwd)
 		if len(cands) > 0 {
 			kind = completionAtFile
 		}
@@ -532,7 +565,7 @@ func (t *tuiV2) refreshCompletion() {
 			idx = -1
 		}
 	}
-	t.completion = &completion{kind: kind, prefix: prefix, cands: cands, idx: idx}
+	t.completion = &completion{kind: kind, prefix: prefix, cands: cands, idx: idx, truncated: truncated}
 }
 
 // splitPrefix returns (text-before-cursor-on-this-row, partial token at cursor).
@@ -792,7 +825,11 @@ func (t *tuiV2) installResize() {
 
 func (t *tuiV2) renderCompletion(c *completion) string {
 	var b strings.Builder
-	header := fmt.Sprintf(" %s (%d) ", prefixName(c.kind), len(c.cands))
+	count := fmt.Sprintf("%d", len(c.cands))
+	if c.truncated {
+		count += "+"
+	}
+	header := fmt.Sprintf(" %s (%s) ", prefixName(c.kind), count)
 	b.WriteString(bgDarkRed)
 	b.WriteString(fgBlack)
 	b.WriteString(bold)
@@ -873,7 +910,7 @@ func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc i
 }
 
 func (t *tuiV2) renderHintLine() string {
-	hint := "Enter submit · PgUp/PgDn scroll · ↑ at top scrolls back · wheel · Ctrl+P/N history"
+	hint := "Enter submit · PgUp/PgDn scroll · Ctrl+P palette · Ctrl+R/N history · /model picker"
 	return dim + hint + reset
 }
 
@@ -884,7 +921,7 @@ func (t *tuiV2) scrollByDelta(delta int) {
 	} else if delta < 0 {
 		t.scroll.scrollDown(-delta)
 	}
-	t.scroll.clampScrollOffset(t.scrollRows, t.cols)
+	t.scroll.clampScrollOffset(t.scrollRows, t.contentWidth())
 	t.markScrollDirty()
 }
 
@@ -952,9 +989,13 @@ func (t *tuiV2) handleSlash(cmd string) error {
 	case "/new":
 		return cmdNew(h)
 	case "/resume", "/r":
+		if len(parts) == 1 {
+			t.openSessionPicker()
+			return nil
+		}
 		return cmdResume(h, parts[1:])
 	case "/sessions":
-		cmdSessions(h)
+		t.openSessionPicker()
 		return nil
 	case "/search":
 		return cmdSearch(h, parts[1:])
@@ -967,18 +1008,32 @@ func (t *tuiV2) handleSlash(cmd string) error {
 		t.markScrollDirty()
 		return nil
 	case "/model":
+		if len(parts) == 1 {
+			t.openModelPicker()
+			return nil
+		}
 		return cmdModel(h, parts[1:])
 	case "/providers":
-		cmdProviders(h)
+		t.openProviderPicker()
 		return nil
 	case "/effort":
 		return cmdEffort(h, parts[1:])
 	case "/models":
-		return cmdModels(h)
+		t.openModelPicker()
+		return nil
 	case "/reload":
 		return cmdReload(h)
 	case "/cost":
 		cmdCost(h)
+		return nil
+	case "/btw":
+		question := strings.TrimSpace(strings.TrimPrefix(cmd, parts[0]))
+		if question == "" {
+			t.scroll.appendRaw(styleSystem, "usage: /btw <question>")
+			t.markScrollDirty()
+			return nil
+		}
+		t.openBTW(question)
 		return nil
 	default:
 		t.scroll.appendRaw(styleSystem, "unknown command: "+parts[0]+" (type /help)")

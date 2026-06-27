@@ -6,8 +6,7 @@ import (
 )
 
 // renderMarkdown turns markdown source into hard-wrapped ANSI lines at width.
-// Supports a small LLM-oriented subset: headers, bullets, bold/italic/code/
-// strike, and [text](url) links.
+// Supports headers, bullets, bold/italic/code/strike, links, and GFM tables.
 func renderMarkdown(src string, width int, basePrefix string) []string {
 	if width < 1 {
 		width = 1
@@ -15,13 +14,26 @@ func renderMarkdown(src string, width int, basePrefix string) []string {
 	src = strings.ReplaceAll(src, "\r\n", "\n")
 	lines := strings.Split(src, "\n")
 	var out []string
-	for _, ln := range lines {
+	first := true
+	for i := 0; i < len(lines); i++ {
+		if end := tableBlockEnd(lines, i); end > i+1 {
+			prefix := ""
+			if first {
+				prefix = basePrefix
+				first = false
+			}
+			out = append(out, renderMarkdownTable(lines[i:end], width, prefix)...)
+			i = end - 1
+			continue
+		}
+		ln := lines[i]
 		styled := styleMarkdownLine(strings.TrimRight(ln, " \t"))
 		chunks := wrapANSI(styled, width)
-		for i, chunk := range chunks {
-			prefix := basePrefix
-			if i > 0 {
-				prefix = ""
+		for j, chunk := range chunks {
+			prefix := ""
+			if first && j == 0 {
+				prefix = basePrefix
+				first = false
 			}
 			out = append(out, prefix+chunk+reset)
 		}

@@ -1,12 +1,5 @@
 package tui
 
-import (
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-)
-
 // completionKind distinguishes slash command completion from @file completion.
 type completionKind uint8
 
@@ -18,10 +11,11 @@ const (
 
 // completion is the candidate list shown above the input box.
 type completion struct {
-	kind   completionKind
-	prefix string // the partial token the user typed (with leading / or @)
-	cands  []string
-	idx    int // -1 = no selection; otherwise 0..len-1
+	kind       completionKind
+	prefix     string // the partial token the user typed (with leading / or @)
+	cands      []string
+	idx        int  // -1 = no selection; otherwise 0..len-1
+	truncated  bool // true when file matches were capped at fuzzyResultCap
 }
 
 // empty reports whether the completion has nothing to show.
@@ -56,67 +50,18 @@ func (c *completion) reset() { c.idx = -1 }
 var slashCommands = []string{
 	"/quit", "/clear", "/help", "/new", "/resume", "/sessions",
 	"/search", "/fork", "/undo", "/compact", "/model", "/effort",
-	"/models", "/providers", "/reload", "/cost",
+	"/models", "/providers", "/reload", "/cost", "/btw",
 }
 
-// matchSlash returns slash commands that start with the given partial token
-// (already including the leading "/" if present).
+// matchSlash returns slash commands matching partial (prefix or fuzzy).
 func matchSlash(partial string) []string {
-	if !strings.HasPrefix(partial, "/") {
-		return nil
-	}
-	var out []string
-	for _, c := range slashCommands {
-		if strings.HasPrefix(c, partial) {
-			out = append(out, c)
-		}
-	}
-	return out
+	return matchSlashFuzzy(partial)
 }
 
-// matchAtFile returns filesystem paths matching partial. partial includes the
-// leading "@" and possibly a directory prefix (e.g. "@/home/mq/w").
-// Searches relative to cwd.
+// matchAtFile returns filesystem paths matching partial (fuzzy-ranked).
 func matchAtFile(partial string, cwd string) []string {
-	if !strings.HasPrefix(partial, "@") {
-		return nil
-	}
-	body := strings.TrimPrefix(partial, "@")
-	dirPart, prefix := filepath.Split(body)
-	dir := cwd
-	if dirPart != "" {
-		if filepath.IsAbs(dirPart) {
-			dir = dirPart
-		} else {
-			dir = filepath.Join(cwd, dirPart)
-		}
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, e := range entries {
-		name := e.Name()
-		// Skip dotfiles unless prefix starts with "."
-		if strings.HasPrefix(name, ".") && !strings.HasPrefix(prefix, ".") {
-			continue
-		}
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		// Build the replacement: @<body-with-prefix-replaced>
-		repl := "@" + dirPart + name
-		if e.IsDir() {
-			repl += "/"
-		}
-		out = append(out, repl)
-	}
-	sort.Strings(out)
-	if len(out) > 16 {
-		out = out[:16]
-	}
-	return out
+	cands, _ := matchAtFileFuzzy(partial, cwd)
+	return cands
 }
 
 // commonPrefix returns the longest common prefix of all strings, or "" if
