@@ -13,7 +13,12 @@ func (t *tuiV2) handleMouseInput(data []byte) bool {
 	ev := events[len(events)-1]
 
 	if delta, ok := mouseWheelDelta(ev.Button); ok {
-		t.handleScrollDelta(delta)
+		t.mu.Lock()
+		block := t.hasKeyOverlay()
+		t.mu.Unlock()
+		if !block {
+			t.handleScrollDelta(delta)
+		}
 		return true
 	}
 
@@ -28,6 +33,17 @@ func (t *tuiV2) handleMouseInput(data []byte) bool {
 func (t *tuiV2) handleMouseClick(row int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	if lo := asListClickOverlay(t.activeOverlay); lo != nil {
+		chrome := lo.listChrome()
+		scrollStart := t.headerRows + 1
+		lineInOverlay := row - scrollStart - chrome.anchor
+		prev := t.activeOverlay
+		if handled, done := lo.clickRow(lineInOverlay); handled {
+			t.closeOverlayAfter(prev, done, false)
+		}
+		return
+	}
 
 	if t.activeOverlay != nil {
 		return

@@ -21,6 +21,7 @@ type pickerOverlay struct {
 	filter  string
 	idx     int
 	onPick  func(id string) error
+	chrome  listBoxChrome
 }
 
 func newPickerOverlay(title string, items []pickerItem, current string, onPick func(string) error) *pickerOverlay {
@@ -50,17 +51,22 @@ func (p *pickerOverlay) filtered() []pickerItem {
 func (p *pickerOverlay) render(scrollRows, cols int) (int, []string) {
 	visible := p.filtered()
 	if len(visible) == 0 {
-		return 1, []string{dim + "  (no matches)" + reset}
+		body := []string{dim + "(no matches)" + reset}
+		chrome, lines := renderBoxedList(p.title, p.filter, body, scrollRows, cols, 76)
+		p.chrome = chrome
+		return p.chrome.anchor, lines
 	}
+
 	if p.idx >= len(visible) {
 		p.idx = len(visible) - 1
 	}
 	if p.idx < 0 {
 		p.idx = 0
 	}
-	maxRows := scrollRows - 4
-	if maxRows < 5 {
-		maxRows = 5
+
+	maxRows := scrollRows - 8
+	if maxRows < 4 {
+		maxRows = 4
 	}
 	start := 0
 	if p.idx >= maxRows-1 {
@@ -74,19 +80,15 @@ func (p *pickerOverlay) render(scrollRows, cols int) (int, []string) {
 			start = 0
 		}
 	}
+	p.chrome.itemStart = start
 
-	var lines []string
-	title := fgYellow + bold + " " + p.title + reset
-	if p.filter != "" {
-		title += dim + "  filter: " + p.filter + reset
-	}
-	lines = append(lines, title)
+	var body []string
 	for i := start; i < end; i++ {
 		it := visible[i]
 		marker := "  "
 		style := ""
 		if i == p.idx {
-			marker = "▶ "
+			marker = fgCyan + bold + "▶ " + reset
 			style = fgCyan + bold
 		}
 		cur := ""
@@ -95,28 +97,32 @@ func (p *pickerOverlay) render(scrollRows, cols int) (int, []string) {
 		}
 		hint := ""
 		if it.hint != "" {
-			hint = dim + "  " + it.hint + reset
+			hint = dim + "  " + truncatePlain(it.hint, 48) + reset
 		}
-		lines = append(lines, style+marker+it.label+cur+hint+reset)
+		body = append(body, style+marker+it.label+reset+cur+hint)
 	}
-	lines = append(lines, dim+"  ↑↓ move · Enter select · Esc cancel · type to filter"+reset)
 
-	height := len(lines)
-	anchor := (scrollRows - height) / 2
-	if anchor < 1 {
-		anchor = 1
+	chrome, lines := renderBoxedList(p.title, p.filter, body, scrollRows, cols, 76)
+	p.chrome = chrome
+	return p.chrome.anchor, lines
+}
+
+func (p *pickerOverlay) listChrome() listBoxChrome { return p.chrome }
+
+func (p *pickerOverlay) clickRow(lineInOverlay int) (handled bool, done bool) {
+	if lineInOverlay < p.chrome.itemLine0 || lineInOverlay >= p.chrome.itemLine0+p.chrome.itemCount {
+		return false, false
 	}
-	if anchor+height-1 > scrollRows {
-		anchor = scrollRows - height + 1
-		if anchor < 1 {
-			anchor = 1
-		}
+	off := lineInOverlay - p.chrome.itemLine0
+	p.idx = p.chrome.itemStart + off
+	vis := p.filtered()
+	if p.idx < 0 || p.idx >= len(vis) {
+		return true, false
 	}
-	out := make([]string, len(lines))
-	for i, ln := range lines {
-		out[i] = truncateToWidth(ln, cols)
+	if p.onPick != nil {
+		_ = p.onPick(vis[p.idx].id)
 	}
-	return anchor, out
+	return true, true
 }
 
 func (p *pickerOverlay) feedKey(data []byte) (handled bool, done bool, cancel bool) {

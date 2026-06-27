@@ -48,8 +48,9 @@ func isPageDown(data []byte) bool {
 		indexOf(data, []byte("\x1b[6;")) >= 0
 }
 
-// isArrowUp reports a plain Up-arrow CSI sequence (no shift modifier).
+// isArrowUp reports a plain Up-arrow (legacy CSI or kitty CSI-u).
 func isArrowUp(data []byte) bool {
+	data = decodeKittyKeys(data)
 	for _, seq := range [][]byte{
 		[]byte("\x1b[A"), []byte("\x1bOA"),
 		[]byte("\x1b[1;1A"), []byte("\x1b[1A"),
@@ -58,17 +59,45 @@ func isArrowUp(data []byte) bool {
 			return true
 		}
 	}
-	return false
+	return isKittyArrowKey(data, kittyKeyUp, kittyKeyKPUp)
 }
 
-// isArrowDown reports a plain Down-arrow CSI sequence.
+// isArrowDown reports a plain Down-arrow (legacy CSI or kitty CSI-u).
 func isArrowDown(data []byte) bool {
+	data = decodeKittyKeys(data)
 	for _, seq := range [][]byte{
 		[]byte("\x1b[B"), []byte("\x1bOB"),
 		[]byte("\x1b[1;1B"), []byte("\x1b[1B"),
 	} {
 		if indexOf(data, seq) >= 0 {
 			return true
+		}
+	}
+	return isKittyArrowKey(data, kittyKeyDown, kittyKeyKPDown)
+}
+
+// isKittyArrowKey matches kitty keyboard protocol arrow keys (plain, no ctrl/alt).
+func isKittyArrowKey(data []byte, codes ...int) bool {
+	for i := 0; i < len(data); i++ {
+		if data[i] != 27 || i+1 >= len(data) || data[i+1] != '[' {
+			continue
+		}
+		code, mods, final, n := parseKittyKey(data[i:])
+		if n == 0 || final != 'u' {
+			continue
+		}
+		m := mods - 1
+		if m < 0 {
+			m = 0
+		}
+		// Ignore ctrl/alt/super; allow plain (0) or shift-only for navigation.
+		if m&^1 != 0 {
+			continue
+		}
+		for _, want := range codes {
+			if code == want {
+				return true
+			}
 		}
 	}
 	return false

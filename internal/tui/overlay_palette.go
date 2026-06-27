@@ -28,6 +28,7 @@ type paletteOverlay struct {
 	filter string
 	idx    int
 	onRun  func(cmd string) error
+	chrome listBoxChrome
 }
 
 func newPaletteOverlay(onRun func(string) error) *paletteOverlay {
@@ -55,9 +56,17 @@ func (p *paletteOverlay) render(scrollRows, cols int) (int, []string) {
 	if p.idx < 0 {
 		p.idx = 0
 	}
-	maxRows := scrollRows - 4
-	if maxRows < 6 {
-		maxRows = 6
+
+	if len(visible) == 0 {
+		body := []string{dim + "(no matches)" + reset}
+		chrome, lines := renderBoxedList("command palette", p.filter, body, scrollRows, cols, 72)
+		p.chrome = chrome
+		return p.chrome.anchor, lines
+	}
+
+	maxRows := scrollRows - 8
+	if maxRows < 4 {
+		maxRows = 4
 	}
 	start := 0
 	if p.idx >= maxRows-1 {
@@ -71,35 +80,42 @@ func (p *paletteOverlay) render(scrollRows, cols int) (int, []string) {
 			start = 0
 		}
 	}
+	p.chrome.itemStart = start
 
-	var lines []string
-	title := fgYellow + bold + " command palette" + reset
-	if p.filter != "" {
-		title += dim + "  " + p.filter + reset
-	}
-	lines = append(lines, title)
+	var body []string
 	for i := start; i < end && i < len(visible); i++ {
 		it := visible[i]
 		marker := "  "
 		style := ""
 		if i == p.idx {
-			marker = "▶ "
+			marker = fgCyan + bold + "▶ " + reset
 			style = fgCyan + bold
 		}
-		lines = append(lines, style+marker+it.cmd+dim+"  "+it.desc+reset)
+		line := style + marker + it.cmd + reset + dim + "  " + it.desc + reset
+		body = append(body, line)
 	}
-	lines = append(lines, dim+"  ↑↓ move · Enter run · Esc cancel · type to filter"+reset)
 
-	height := len(lines)
-	anchor := (scrollRows - height) / 2
-	if anchor < 1 {
-		anchor = 1
+	chrome, lines := renderBoxedList("command palette", p.filter, body, scrollRows, cols, 72)
+	p.chrome = chrome
+	return p.chrome.anchor, lines
+}
+
+func (p *paletteOverlay) listChrome() listBoxChrome { return p.chrome }
+
+func (p *paletteOverlay) clickRow(lineInOverlay int) (handled bool, done bool) {
+	if lineInOverlay < p.chrome.itemLine0 || lineInOverlay >= p.chrome.itemLine0+p.chrome.itemCount {
+		return false, false
 	}
-	out := make([]string, len(lines))
-	for i, ln := range lines {
-		out[i] = truncateToWidth(ln, cols)
+	off := lineInOverlay - p.chrome.itemLine0
+	p.idx = p.chrome.itemStart + off
+	vis := p.filtered()
+	if p.idx < 0 || p.idx >= len(vis) {
+		return true, false
 	}
-	return anchor, out
+	if p.onRun != nil {
+		_ = p.onRun(vis[p.idx].cmd)
+	}
+	return true, true
 }
 
 func (p *paletteOverlay) feedKey(data []byte) (handled bool, done bool, cancel bool) {

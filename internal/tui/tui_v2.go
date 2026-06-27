@@ -231,9 +231,12 @@ func (t *tuiV2) Run() error {
 			if handled := t.handleMouseInput(buf[:n]); handled {
 				continue
 			}
-			if delta, ok := parseScrollInputRaw(buf[:n], t.scrollRows); ok {
-				t.handleScrollDelta(delta)
-				continue
+			// Don't scroll scrollback behind an interactive overlay (palette/picker).
+			if !t.hasKeyOverlay() {
+				if delta, ok := parseScrollInputRaw(buf[:n], t.scrollRows); ok {
+					t.handleScrollDelta(delta)
+					continue
+				}
 			}
 			// If an approval prompt is active, route the answer to the
 			// approval channel instead of feeding it to the editor.
@@ -304,6 +307,16 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 	}
 
 	if t.handleKeyOverlay(data) {
+		return false, nil
+	}
+
+	// While a key-driven overlay is open, swallow keys that weren't handled above
+	// so they don't reach the editor or scrollback. Ctrl+C dismisses the overlay.
+	if t.hasKeyOverlay() {
+		if containsCtrlC(data) {
+			t.activeOverlay = nil
+			t.dirty.markFull()
+		}
 		return false, nil
 	}
 

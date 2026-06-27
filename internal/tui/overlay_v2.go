@@ -128,6 +128,11 @@ func (t *tuiV2) openSearch() {
 	t.dirty.markFull()
 }
 
+// hasKeyOverlay reports whether a modal that consumes keyboard input is active.
+func (t *tuiV2) hasKeyOverlay() bool {
+	return asKeyOverlay(t.activeOverlay) != nil
+}
+
 // openCommandPalette shows fuzzy command launcher (Ctrl+P).
 func (t *tuiV2) openCommandPalette() {
 	t.activeOverlay = newPaletteOverlay(func(cmd string) error {
@@ -136,18 +141,26 @@ func (t *tuiV2) openCommandPalette() {
 	t.dirty.markFull()
 }
 
+func (t *tuiV2) closeOverlayAfter(prev overlay, done, cancel bool) {
+	if cancel {
+		t.activeOverlay = nil
+	} else if done && t.activeOverlay == prev {
+		// onRun/onPick may replace this overlay (e.g. palette → provider picker).
+		t.activeOverlay = nil
+	}
+	t.dirty.markFull()
+}
+
 func (t *tuiV2) handleKeyOverlay(data []byte) bool {
 	ko := asKeyOverlay(t.activeOverlay)
 	if ko == nil {
 		return false
 	}
+	prev := t.activeOverlay
 	handled, done, cancel := ko.feedKey(data)
 	if !handled {
 		return false
 	}
-	if done || cancel {
-		t.activeOverlay = nil
-	}
-	t.dirty.markFull()
+	t.closeOverlayAfter(prev, done, cancel)
 	return true
 }
