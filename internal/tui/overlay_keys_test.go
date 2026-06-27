@@ -5,6 +5,9 @@ import (
 	"time"
 )
 
+func arrowUpBytes() []byte   { return []byte{27, '[', 'A'} }
+func arrowDownBytes() []byte { return []byte{27, '[', 'B'} }
+
 func TestIsArrowUpKittyCSIu(t *testing.T) {
 	raw := []byte{27, '[', '5', '7', '3', '5', '2', 'u'}
 	if !isArrowUp(raw) {

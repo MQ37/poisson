@@ -8,9 +8,15 @@ import (
 // openBTW opens a floating side-question box (/btw) while the main agent keeps running.
 func (t *tuiV2) openBTW(question string) {
 	t.cancelOverlayWork()
-	maxH := t.rows * 15 / 100
-	if maxH < 3 {
-		maxH = 3
+	maxH := t.scrollRows * 2 / 5
+	if maxH < 10 {
+		maxH = 10
+	}
+	if maxH > t.scrollRows-2 {
+		maxH = t.scrollRows - 2
+	}
+	if maxH < 5 {
+		maxH = 5
 	}
 	o := newBTWOverlay(question, maxH)
 	ctx, cancel := context.WithCancel(context.Background())

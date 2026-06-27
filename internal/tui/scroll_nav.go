@@ -31,6 +31,20 @@ func isShiftArrowScroll(data []byte) bool {
 		indexOf(data, []byte("\x1b[1;2B")) >= 0
 }
 
+// isShiftArrowLeft reports shift+left (prompt navigation in conv focus).
+func isShiftArrowLeft(data []byte) bool {
+	data = decodeKittyKeys(data)
+	return indexOf(data, []byte("\x1b[1;2D")) >= 0 ||
+		indexOf(data, []byte("\x1b[1;4D")) >= 0
+}
+
+// isShiftArrowRight reports shift+right (prompt navigation in conv focus).
+func isShiftArrowRight(data []byte) bool {
+	data = decodeKittyKeys(data)
+	return indexOf(data, []byte("\x1b[1;2C")) >= 0 ||
+		indexOf(data, []byte("\x1b[1;4C")) >= 0
+}
+
 // parseMouseWheel parses SGR mouse wheel sequences (DECSET 1006).
 // Wheel up scrolls history up (positive delta).
 func parseMouseWheel(data []byte) (delta int, ok bool) {

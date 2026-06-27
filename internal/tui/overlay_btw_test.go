@@ -6,34 +6,40 @@ import (
 )
 
 func TestBTWOverlayMaxHeight(t *testing.T) {
-	o := newBTWOverlay("short question", 4) // 15% of ~27 rows
+	o := newBTWOverlay("short question", 12)
 	o.appendText("line one\nline two\nline three\nline four\nline five")
 	o.finish(nil)
 	_, lines := o.render(30, 80)
-	if len(lines) > 4 {
-		t.Fatalf("overlay height = %d, want <= 4 (15%% cap)", len(lines))
+	if len(lines) > 12 {
+		t.Fatalf("overlay height = %d, want <= 12", len(lines))
 	}
 }
 
-func TestBTWOverlayRightAligned(t *testing.T) {
-	o := newBTWOverlay("hi", 8)
+func TestBTWOverlayFullWidthLeftAligned(t *testing.T) {
+	o := newBTWOverlay("hi", 10)
 	o.finish(nil)
-	_, lines := o.render(20, 60)
+	anchor, lines := o.render(24, 80)
 	if len(lines) < 3 {
 		t.Fatalf("lines = %d", len(lines))
 	}
-	for _, ln := range lines {
-		if visibleWidth(ln) > 60 {
-			t.Fatalf("line too wide: %d", visibleWidth(ln))
-		}
-		plain := stripANSI(ln)
-		if !stringsHasSuffixSpace(plain) && plain[0] != ' ' && len(stringsTrimLeft(plain)) == len(plain) {
-			// right-aligned box lines should have leading spaces (except full-width)
-		}
+	if anchor < 8 {
+		t.Fatalf("expected lower placement, anchor=%d", anchor)
+	}
+	top := stripANSI(lines[0])
+	if !strings.HasPrefix(top, "╭") {
+		t.Fatalf("expected left-aligned top border, got %q", top)
+	}
+	if strings.HasPrefix(top, " ") {
+		t.Fatalf("top border should not be right-padded: %q", top)
 	}
 	last := stripANSI(lines[len(lines)-1])
-	if last == "" || []rune(last)[len([]rune(last))-1] != '╯' {
-		t.Fatalf("expected right-aligned bottom corner, got %q", last)
+	if !strings.HasPrefix(last, "╰") {
+		t.Fatalf("expected left-aligned bottom border, got %q", last)
+	}
+	for _, ln := range lines {
+		if visibleWidth(ln) > 80 {
+			t.Fatalf("line too wide: %d", visibleWidth(ln))
+		}
 	}
 }
 
@@ -56,7 +62,7 @@ func TestBTWOverlayEscCancel(t *testing.T) {
 }
 
 func TestBTWOverlayScroll(t *testing.T) {
-	o := newBTWOverlay("q", 6)
+	o := newBTWOverlay("q", 8)
 	var lines []string
 	for i := 0; i < 12; i++ {
 		lines = append(lines, "answer line "+strings.Repeat("x", 20))
@@ -73,16 +79,4 @@ func TestBTWOverlayScroll(t *testing.T) {
 	if scroll2 != 0 {
 		t.Fatalf("scroll = %d after up, want 0", scroll2)
 	}
-}
-
-func arrowUpBytes() []byte   { return []byte{27, '[', 'A'} }
-func arrowDownBytes() []byte { return []byte{27, '[', 'B'} }
-
-func stringsHasSuffixSpace(s string) bool { return len(s) > 0 && s[len(s)-1] == ' ' }
-func stringsTrimLeft(s string) string {
-	i := 0
-	for i < len(s) && s[i] == ' ' {
-		i++
-	}
-	return s[i:]
 }

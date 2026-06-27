@@ -62,7 +62,7 @@ func (t *tuiV2) prepareLayout() layoutSnapshot {
 		sr:            sr,
 		sc:            sc,
 		screenLines:   screenLines,
-		visible:       t.scroll.visible(t.scrollRows, wrapWidth),
+		visible:       t.scroll.visible(t.convScrollRows(), wrapWidth),
 	}
 }
 
@@ -132,17 +132,28 @@ func (t *tuiV2) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only [
 			onlySet[r] = struct{}{}
 		}
 	}
-	for i := 0; i < t.scrollRows; i++ {
+	pinRows := 0
+	if t.focusRegion == focusConv {
+		pinRows = 1
+		if paintAll || len(onlySet) == 0 {
+			b.WriteString(cup(startRow, 1))
+			b.WriteString(clearLine())
+			b.WriteString(truncateToWidth(t.pinnedPromptLine(lay.wrapWidth), lay.wrapWidth))
+		}
+	}
+	contentRows := t.scrollRows - pinRows
+	for i := 0; i < contentRows; i++ {
+		screenRow := startRow + pinRows + i
 		if !paintAll {
-			if _, ok := onlySet[i]; !ok {
+			if _, ok := onlySet[i+pinRows]; !ok {
 				continue
 			}
 		}
-		b.WriteString(cup(startRow+i, 1))
+		b.WriteString(cup(screenRow, 1))
 		b.WriteString(clearLine())
 		if i < len(lay.visible) {
 			line := t.formatScrollLine(lay.visible[i].Text)
-			line = t.applySearchHighlight(i, lay, line)
+			line = t.applySearchHighlight(i+pinRows, lay, line)
 			b.WriteString(truncateToWidth(line, lay.wrapWidth))
 		}
 	}
@@ -176,7 +187,11 @@ func (t *tuiV2) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 
 	b.WriteString(cup(lay.inputTop+1, 1))
 	b.WriteString(clearLine())
-	b.WriteString(dim + strings.Repeat("─", t.cols) + reset)
+	sep := dim + strings.Repeat("─", t.cols) + reset
+	if t.focusRegion == focusConv {
+		sep = dim + strings.Repeat("·", t.cols) + reset
+	}
+	b.WriteString(sep)
 
 	for i := 0; i < lay.bodyRows; i++ {
 		lineIdx := lay.firstRow + i
@@ -314,6 +329,9 @@ func (t *tuiV2) applySearchHighlight(vi int, lay layoutSnapshot, line string) st
 }
 
 func (t *tuiV2) paintCursor(b *strings.Builder, lay layoutSnapshot) {
+	if t.focusRegion == focusConv {
+		return
+	}
 	visRow := lay.sr - lay.firstRow
 	if visRow < 0 {
 		visRow = 0

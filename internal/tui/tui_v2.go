@@ -71,6 +71,10 @@ type tuiV2 struct {
 	completion           *completion
 	lastCompletionRows   int // scroll rows last painted by the dropdown
 
+	// Focus: Tab toggles between input editor and conversation scroll.
+	focusRegion focusRegion
+	convUserIdx int // index into scroll.userBlockIndices()
+
 	// Approval coordination. The input goroutine is the sole stdin reader;
 	// when approval is pending it routes the answer through this channel
 	// instead of feeding it to the editor.
@@ -319,6 +323,14 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		return false, nil
 	}
 
+	// Conversation focus: Tab returns to input; PgUp/Dn scroll; Shift+←/→ prompts.
+	if t.focusRegion == focusConv {
+		if t.feedConvFocus(data) {
+			return false, nil
+		}
+		return false, nil
+	}
+
 	// Expanded tool result scroll (↑↓) and Esc collapse.
 	w := t.contentWidth()
 	if t.scroll.focusedToolExpanded(w) {
@@ -394,14 +406,10 @@ func (t *tuiV2) feed(data []byte) (bool, error) {
 		return false, nil
 	}
 
-	// Tab: trigger or cycle/accept completion. Don't return early — other
-	// bytes in this chunk still need processing by editor.feed (Tab itself is
-	// ignored by the editor).
-	for _, b := range data {
-		if b == 9 {
-			t.handleTab()
-			t.markInputDirty()
-		}
+	// Tab: completion when typing tokens; otherwise toggle conversation focus.
+	if containsTab(data) {
+		t.handleTabKey()
+		return false, nil
 	}
 
 	// Enter accepts the current completion selection when the dropdown is open.
@@ -1014,7 +1022,10 @@ func (t *tuiV2) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc i
 }
 
 func (t *tuiV2) renderHintLine() string {
-	base := "Enter:send · Ctrl+Y:yank · Ctrl+E:tool · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model"
+	if t.focusRegion == focusConv {
+		return dim + "Tab:input · PgUp/Dn:scroll · Shift+←/→:prompts" + reset
+	}
+	base := "Tab:conv · Enter:send · Ctrl+Y:yank · Ctrl+E:tool · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model"
 	if t.status.Hint != "" {
 		return dim + t.status.Hint + " · " + base + reset
 	}
@@ -1028,7 +1039,7 @@ func (t *tuiV2) scrollByDelta(delta int) {
 	} else if delta < 0 {
 		t.scroll.scrollDown(-delta)
 	}
-	t.scroll.clampScrollOffset(t.scrollRows, t.contentWidth())
+	t.scroll.clampScrollOffset(t.convScrollRows(), t.contentWidth())
 	t.markScrollDirty()
 }
 
