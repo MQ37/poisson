@@ -82,6 +82,10 @@ func (s *scrollback) toggleToolExpandInView(height, width int) bool {
 	if id == 0 {
 		return false
 	}
+	return s.toggleToolExpandBlock(id)
+}
+
+func (s *scrollback) toggleToolExpandBlock(id int64) bool {
 	for i := range s.blocks {
 		if s.blocks[i].id != id || s.blocks[i].kind != blockToolCall || !s.blocks[i].meta.ToolDone {
 			continue

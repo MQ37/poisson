@@ -214,6 +214,9 @@ func (t *tuiV2) Run() error {
 			if err != nil {
 				return
 			}
+			if handled := t.handleMouseInput(buf[:n]); handled {
+				continue
+			}
 			if delta, ok := parseScrollInputRaw(buf[:n], t.scrollRows); ok {
 				t.handleScrollDelta(delta)
 				continue

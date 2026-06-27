@@ -28,36 +28,14 @@ func parseScrollInput(data []byte, viewHeight int) (delta int, ok bool) {
 // parseMouseWheel parses SGR mouse wheel sequences (DECSET 1006).
 // Wheel up scrolls history up (positive delta).
 func parseMouseWheel(data []byte) (delta int, ok bool) {
-	if len(data) < 6 || data[0] != 27 || data[1] != '[' || data[2] != '<' {
-		return 0, false
-	}
-	i := 3
-	btn := 0
-	for i < len(data) && data[i] >= '0' && data[i] <= '9' {
-		btn = btn*10 + int(data[i]-'0')
-		i++
-	}
-	if i >= len(data) || (data[i] != ';' && data[i] != 'M' && data[i] != 'm') {
-		return 0, false
-	}
-	if data[i] == ';' {
-		for i < len(data) && data[i] != 'M' && data[i] != 'm' {
-			i++
+	events := parseMouseEvents(data)
+	if len(events) != 1 || len(data) > advancePastMouse(data) {
+		// Only treat as wheel when the chunk is a single mouse event.
+		if !dataIsOnlyMouse(data) || len(events) != 1 {
+			return 0, false
 		}
 	}
-	if i >= len(data) {
-		return 0, false
-	}
-	consumed := i + 1
-	switch btn {
-	case 64: // wheel up
-		return 3, true
-	case 65: // wheel down
-		return -3, true
-	default:
-		_ = consumed
-		return 0, false
-	}
+	return mouseWheelDelta(events[0].Button)
 }
 
 func isPageUp(data []byte) bool {

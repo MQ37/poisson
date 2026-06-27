@@ -17,7 +17,7 @@ original v2 scaffold spec.
 | **B — Rich content** | PR-05 … PR-09 | ✅ Done (`fd249a8` … `d3f123f` + fixes) |
 | **C — Interactive UX** | PR-10 … PR-14 | ✅ Done (v2 pickers, fuzzy, palette) |
 | **C+ — Grok parity** | PR-21–23 | 🚧 Top header + input chrome done; visual polish ongoing |
-| **D — Power features** | PR-15 … PR-20 | 🚧 PR-17 scrollback search done; PR-15 wheel exists |
+| **D — Power features** | PR-15 … PR-20 | 🚧 PR-15 mouse + PR-16/17 done; PR-18–20 pending |
 
 Post-phase hardening: Kitty keys, row-scroll, completion ghosting (`99d9686`),
 test `/tmp` isolation (`7672e2a`). **B follow-up:** GFM bordered tables (`markdown_table.go`),
@@ -97,7 +97,7 @@ From `docs/SPEC.md` §1 and project conventions:
 | 7 | Static spinner | 7 | ✅ PR-02 animated |
 | 8 | Approval buried in scrollback | 7 | ✅ PR-03 modal |
 | 9 | No syntax highlighting in fences | 7 | ✅ PR-07 highlight |
-| 10 | Mouse unsupported | 6 | ⚠️ wheel only; PR-15 pending |
+| 10 | Mouse unsupported | 6 | ✅ wheel + click (PR-15) |
 | 11 | No command palette | 6 | ✅ PR-14 Ctrl+P (v2) |
 | 12 | `/sessions` is text list | 6 | ✅ PR-13 picker (v2) |
 | 13 | Tool results truncated | 5 | ✅ PR-16 Ctrl+E expand (v2) |
@@ -239,9 +239,7 @@ Phase C+ — Grok Build parity 🚧
 Phase D — Power features 🚧
   PR-16 expandable tool results ✅
   PR-17 scrollback search ✅
-  PR-15 mouse support (wheel ✅; clicks pending)
-  PR-16 expandable tool results
-  PR-17 scrollback search
+  PR-15 mouse support (wheel + clicks) ✅
   PR-18 OSC 52 copy / yank
   PR-19 word-wrap scrollback (optional quality)
   PR-20 true-color + theme config
@@ -864,8 +862,10 @@ Frees vertical space for scrollback; matches Grok Build chrome.
 5. Ignore clicks in input region (or place cursor — stretch goal).
 
 **Acceptance criteria:**
-- [ ] Wheel scrolls history when not pinned to bottom.
-- [ ] No crash on non-mouse terminals (ignore unknown sequences).
+- [x] Wheel scrolls history when not pinned to bottom.
+- [x] Click thinking header → toggle collapse.
+- [x] Click tool card → expand/collapse.
+- [x] No crash on non-mouse terminals (ignore unknown sequences).
 
 **Tests:** Mouse sequence parser table tests.
 

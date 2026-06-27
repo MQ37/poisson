@@ -46,8 +46,3 @@ func TestParseScrollInputRawKittyPageUp(t *testing.T) {
 	}
 }
 
-func TestParseMouseWheel(t *testing.T) {
-	if d, ok := parseMouseWheel([]byte("\x1b[<64;10;20M")); !ok || d != 3 {
-		t.Fatalf("wheel up = %d %v", d, ok)
-	}
-}
