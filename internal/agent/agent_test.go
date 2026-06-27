@@ -13,6 +13,7 @@ import (
 	"poisson/internal/config"
 	"poisson/internal/provider"
 	"poisson/internal/store"
+	"poisson/internal/testutil"
 	"poisson/internal/tools"
 )
 
@@ -20,7 +21,7 @@ import (
 
 func newTestStore(t *testing.T) *store.Store {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	dbPath := filepath.Join(dir, "test.db")
 	s, err := store.Open(dbPath)
 	if err != nil {
@@ -130,7 +131,7 @@ func TestEstimateTokens(t *testing.T) {
 func TestBuildRequest(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
-	cwd := t.TempDir()
+	cwd := testutil.TempDir(t)
 	reg := newTestRegistry(cwd)
 	cfg := newTestConfig()
 	agent := NewAgent(s, newFakeProvider(), reg, cfg, sessionID, nil, nil)
@@ -180,7 +181,7 @@ func TestBuildRequest(t *testing.T) {
 func TestBuildRequestWithCompactionSummary(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
-	reg := newTestRegistry(t.TempDir())
+	reg := newTestRegistry(testutil.TempDir(t))
 	cfg := newTestConfig()
 	agent := NewAgent(s, newFakeProvider(), reg, cfg, sessionID, nil, nil)
 
@@ -304,7 +305,7 @@ func TestContentBlocksJSON(t *testing.T) {
 func TestAgentLoopTextResponse(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
-	cwd := t.TempDir()
+	cwd := testutil.TempDir(t)
 	reg := newTestRegistry(cwd)
 	cfg := newTestConfig()
 	p := newFakeProvider()
@@ -354,7 +355,7 @@ func TestAgentLoopTextResponse(t *testing.T) {
 func TestAgentLoopWithToolCall(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
-	cwd := t.TempDir()
+	cwd := testutil.TempDir(t)
 	// Create a file for the read tool.
 	testFile := filepath.Join(cwd, "hello.txt")
 	if err := os.WriteFile(testFile, []byte("Hello from file!"), 0644); err != nil {
@@ -428,7 +429,7 @@ func TestAgentLoopWithToolCall(t *testing.T) {
 func TestAgentLoopError(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
-	reg := newTestRegistry(t.TempDir())
+	reg := newTestRegistry(testutil.TempDir(t))
 	cfg := newTestConfig()
 	p := newFakeProvider()
 	p.SetResponses([][]provider.StreamEvent{
@@ -457,7 +458,7 @@ func TestAgentLoopError(t *testing.T) {
 func TestBuildRequestEmptyMessages(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
-	reg := newTestRegistry(t.TempDir())
+	reg := newTestRegistry(testutil.TempDir(t))
 	cfg := newTestConfig()
 	agent := NewAgent(s, newFakeProvider(), reg, cfg, sessionID, nil, nil)
 
@@ -488,7 +489,7 @@ func TestContextWindow(t *testing.T) {
 func TestPromptStoresUserMessage(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
-	reg := newTestRegistry(t.TempDir())
+	reg := newTestRegistry(testutil.TempDir(t))
 	cfg := newTestConfig()
 	p := newFakeProvider()
 	p.SetResponses([][]provider.StreamEvent{
@@ -546,7 +547,7 @@ func TestPromptWithContextCancelsStream(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
 	p := &blockingProvider{started: make(chan struct{})}
-	a := NewAgent(s, p, newTestRegistry(t.TempDir()), newTestConfig(), sessionID, make(chan OutputEvent, 16), nil)
+	a := NewAgent(s, p, newTestRegistry(testutil.TempDir(t)), newTestConfig(), sessionID, make(chan OutputEvent, 16), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"poisson/internal/testutil"
 )
 
 func TestParseSkillWithFrontmatter(t *testing.T) {
@@ -40,16 +42,7 @@ func TestParseSkillQuotedValues(t *testing.T) {
 }
 
 func TestDiscover(t *testing.T) {
-	tmpHome := t.TempDir()
-	origHome, hadHome := os.LookupEnv("HOME")
-	os.Setenv("HOME", tmpHome)
-	t.Cleanup(func() {
-		if hadHome {
-			os.Setenv("HOME", origHome)
-		} else {
-			os.Unsetenv("HOME")
-		}
-	})
+	tmpHome := testutil.TempHome(t)
 
 	// Create a skill.
 	skillDir := filepath.Join(tmpHome, ".poisson", "skills", "test-skill")
@@ -75,16 +68,7 @@ func TestDiscover(t *testing.T) {
 }
 
 func TestDiscoverEmpty(t *testing.T) {
-	tmpHome := t.TempDir()
-	origHome, hadHome := os.LookupEnv("HOME")
-	os.Setenv("HOME", tmpHome)
-	t.Cleanup(func() {
-		if hadHome {
-			os.Setenv("HOME", origHome)
-		} else {
-			os.Unsetenv("HOME")
-		}
-	})
+	testutil.TempHome(t)
 
 	skills, err := Discover()
 	if err != nil {

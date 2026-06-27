@@ -4,19 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"poisson/internal/testutil"
 )
 
 func TestLoadEmpty(t *testing.T) {
-	tmpHome := t.TempDir()
-	origHome, hadHome := os.LookupEnv("HOME")
-	os.Setenv("HOME", tmpHome)
-	t.Cleanup(func() {
-		if hadHome {
-			os.Setenv("HOME", origHome)
-		} else {
-			os.Unsetenv("HOME")
-		}
-	})
+	testutil.TempHome(t)
 
 	store, err := Load()
 	if err != nil {
@@ -28,16 +21,7 @@ func TestLoadEmpty(t *testing.T) {
 }
 
 func TestSaveAndLoad(t *testing.T) {
-	tmpHome := t.TempDir()
-	origHome, hadHome := os.LookupEnv("HOME")
-	os.Setenv("HOME", tmpHome)
-	t.Cleanup(func() {
-		if hadHome {
-			os.Setenv("HOME", origHome)
-		} else {
-			os.Unsetenv("HOME")
-		}
-	})
+	tmpHome := testutil.TempHome(t)
 
 	store := AuthStore{
 		"anthropic": {Type: "oauth", Access: "tok123", Refresh: "ref456", Expires: 9999999999999},

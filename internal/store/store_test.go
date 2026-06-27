@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+
+	"poisson/internal/testutil"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	s, err := Open(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -63,13 +65,10 @@ func TestOpenAndSchema(t *testing.T) {
 		t.Fatalf("SeedPricing: %v", err)
 	}
 
-	// Re-open the same DB file; schema creation must be idempotent.
-	dir := filepath.Dir(t.TempDir()) // unused; re-open via the same path below
-	_ = dir
 }
 
 func TestOpenIdempotent(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "idem.db")
+	dbPath := filepath.Join(testutil.TempDir(t), "idem.db")
 	s1, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("Open 1: %v", err)
@@ -502,7 +501,7 @@ func TestSearchFiltersCompacted(t *testing.T) {
 // ---------- API calls ----------
 
 func TestAPICallMigrationMarksMinimaxZeroInputUnknown(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "test.db")
 	s, err := Open(path)
 	if err != nil {

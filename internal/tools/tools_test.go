@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"poisson/internal/testutil"
 )
 
 func mustJSON(t *testing.T, v interface{}) json.RawMessage {
@@ -21,7 +23,7 @@ func mustJSON(t *testing.T, v interface{}) json.RawMessage {
 }
 
 func TestWriteThenRead(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	r := NewReadTool(dir)
 
@@ -59,7 +61,7 @@ func TestWriteThenRead(t *testing.T) {
 }
 
 func TestWrite_CreatesParentDirs(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 
 	res, _ := w.Execute(context.Background(), mustJSON(t, map[string]string{
@@ -76,7 +78,7 @@ func TestWrite_CreatesParentDirs(t *testing.T) {
 }
 
 func TestWrite_PreservesExistingMode(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "script.sh")
 	if err := os.WriteFile(path, []byte("old"), 0o755); err != nil {
 		t.Fatalf("write: %v", err)
@@ -96,7 +98,7 @@ func TestWrite_PreservesExistingMode(t *testing.T) {
 }
 
 func TestRead_OffsetLimit(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	r := NewReadTool(dir)
 
@@ -148,7 +150,7 @@ func itoaTest(n int, b *strings.Builder) {
 }
 
 func TestEdit(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	e := NewEditTool(dir)
 
@@ -176,7 +178,7 @@ func TestEdit(t *testing.T) {
 }
 
 func TestEdit_NonUniqueFails(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	e := NewEditTool(dir)
 
@@ -198,7 +200,7 @@ func TestEdit_NonUniqueFails(t *testing.T) {
 }
 
 func TestEdit_MissingFails(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	e := NewEditTool(dir)
 
@@ -219,7 +221,7 @@ func TestEdit_MissingFails(t *testing.T) {
 }
 
 func TestEdit_MultipleEditsUseOriginalFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "f.txt")
 	if err := os.WriteFile(path, []byte("alpha\nbeta\ngamma\n"), 0o755); err != nil {
 		t.Fatalf("write: %v", err)
@@ -250,7 +252,7 @@ func TestEdit_MultipleEditsUseOriginalFile(t *testing.T) {
 }
 
 func TestEdit_OverlappingEditsFail(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	e := NewEditTool(dir)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "abcdef\n"}))
@@ -268,7 +270,7 @@ func TestEdit_OverlappingEditsFail(t *testing.T) {
 }
 
 func TestSearch(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	s := NewSearchTool(dir)
 
@@ -298,7 +300,7 @@ func TestSearch(t *testing.T) {
 }
 
 func TestSearch_MaxResultsIsGlobal(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	s := NewSearchTool(dir)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "a.txt", "content": "hit\nhit\nhit\n"}))
@@ -319,7 +321,7 @@ func TestSearch_MaxResultsIsGlobal(t *testing.T) {
 }
 
 func TestSearch_InvalidRegexReturnsError(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	s := NewSearchTool(dir)
 	res, _ := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"pattern": "[",
@@ -331,7 +333,7 @@ func TestSearch_InvalidRegexReturnsError(t *testing.T) {
 }
 
 func TestSearch_NoMatches(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	s := NewSearchTool(dir)
 
@@ -350,7 +352,7 @@ func TestSearch_NoMatches(t *testing.T) {
 }
 
 func TestLs(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	ls := NewLsTool(dir)
 
@@ -380,7 +382,7 @@ func TestLs(t *testing.T) {
 }
 
 func TestGlob(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	g := NewGlobTool(dir)
 
@@ -404,7 +406,7 @@ func TestGlob(t *testing.T) {
 }
 
 func TestGlob_Doublestar(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
 	g := NewGlobTool(dir)
 
@@ -430,7 +432,7 @@ func TestGlob_Doublestar(t *testing.T) {
 }
 
 func TestBashTool_SafeCommand(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, false, nil)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -452,7 +454,7 @@ func TestBashTool_SafeCommand(t *testing.T) {
 }
 
 func TestBashTool_SanitizesOutput(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, true, nil)
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command": `printf '\033[31mred\033[0m\0done'`,
@@ -470,7 +472,7 @@ func TestBashTool_SanitizesOutput(t *testing.T) {
 }
 
 func TestBashTool_WorkdirErrorInStderr(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, true, nil)
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command": "pwd",
@@ -489,7 +491,7 @@ func TestBashTool_WorkdirErrorInStderr(t *testing.T) {
 }
 
 func TestBashTool_UnsafeDenied(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, false, nil) // no approvalFn → deny
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -501,7 +503,7 @@ func TestBashTool_UnsafeDenied(t *testing.T) {
 }
 
 func TestBashTool_UnsafeApproved(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	approved := func(command, desc, wd string) bool { return true }
 	b := NewBashTool(dir, false, approved)
 
@@ -521,7 +523,7 @@ func TestBashTool_UnsafeApproved(t *testing.T) {
 // invokes the approval callback (with the command + description) rather than
 // being auto-denied.
 func TestBashTool_PromptsForApproval(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	var gotCmd, gotDesc string
 	called := false
 	approvalFn := func(command, desc, wd string) bool {
@@ -551,7 +553,7 @@ func TestBashTool_PromptsForApproval(t *testing.T) {
 }
 
 func TestBashTool_Sandbox(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, true, nil) // sandbox bypasses guard
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -569,7 +571,7 @@ func TestBashTool_Sandbox(t *testing.T) {
 
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	r := NewRegistry()
-	w := NewWriteTool(t.TempDir())
+	w := NewWriteTool(testutil.TempDir(t))
 	r.Register(w)
 
 	got, ok := r.Get("write")
@@ -606,7 +608,7 @@ func TestRegistry_Definitions(t *testing.T) {
 }
 
 func TestRegistry_ExecuteParallel(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r := NewRegistry()
 	r.Register(NewWriteTool(dir))
 	r.Register(NewReadTool(dir))
@@ -666,7 +668,7 @@ func TestRegistry_ExecuteParallel(t *testing.T) {
 }
 
 func TestRegistry_ExecuteParallel_OrderPreserved(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r := NewRegistry()
 	r.Register(NewWriteTool(dir))
 
@@ -699,7 +701,7 @@ func TestRegistry_ExecuteParallel_OrderPreserved(t *testing.T) {
 func TestRegistry_ExecuteParallel_Concurrency(t *testing.T) {
 	// Verify tools actually run concurrently by counting simultaneous
 	// executions.
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	r := NewRegistry()
 
 	// We use bash with a sleep to simulate concurrency.
@@ -777,7 +779,7 @@ func TestRegistry_ExecuteSanitizesControls(t *testing.T) {
 }
 
 func TestReadTool_TrimsLongLine(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "huge.txt"), []byte(strings.Repeat("x", maxBytes+100)), 0o644); err != nil {
 		t.Fatalf("write huge file: %v", err)
 	}

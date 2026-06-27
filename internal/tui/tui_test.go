@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"poisson/internal/agent"
+	"poisson/internal/testutil"
 )
 
 // --- Helpers -----------------------------------------------------------
@@ -35,7 +36,7 @@ func (t *TUI) output() string {
 // --- @file expansion tests ---------------------------------------------
 
 func TestExpandAtFiles(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "hello.go")
 	content := "package main\n\nfunc main() {}\n"
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
@@ -78,7 +79,7 @@ func TestExpandAtFilesNoMatch(t *testing.T) {
 }
 
 func TestExpandAtFilesFenceEscalation(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "nested.md")
 	content := "```\ncode block inside\n```\n"
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
@@ -880,7 +881,7 @@ func TestSplitPrefix(t *testing.T) {
 }
 
 func TestMatchAtFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	for _, n := range []string{"alpha.txt", "beta.go", "gamma.md"} {
 		if err := os.WriteFile(filepath.Join(dir, n), nil, 0644); err != nil {
 			t.Fatal(err)

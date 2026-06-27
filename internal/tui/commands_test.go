@@ -11,6 +11,7 @@ import (
 	"poisson/internal/config"
 	"poisson/internal/provider"
 	"poisson/internal/store"
+	"poisson/internal/testutil"
 	"poisson/internal/tools"
 )
 
@@ -18,8 +19,8 @@ import (
 
 func newTestStoreAndAgent(t *testing.T) (*store.Store, *agent.Agent, string) {
 	t.Helper()
-	t.Setenv("HOME", t.TempDir())
-	dir := t.TempDir()
+	testutil.TempHome(t)
+	dir := testutil.TempDir(t)
 	dbPath := filepath.Join(dir, "test.db")
 	s, err := store.Open(dbPath)
 	if err != nil {
@@ -183,7 +184,7 @@ func TestCmdSessionsEmpty(t *testing.T) {
 	_, a, sessionID := newTestStoreAndAgent(t)
 	tui := newTUIWithAgent(a, sessionID)
 	cmdUndo(cmdHost(tui))
-	dir := t.TempDir()
+	dir := testutil.TempDir(t)
 	dbPath := filepath.Join(dir, "empty.db")
 	s, err := store.Open(dbPath)
 	if err != nil {

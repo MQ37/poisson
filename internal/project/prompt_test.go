@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"poisson/internal/testutil"
 )
 
 func TestLoadProjectContextFiles(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := testutil.TempDir(t)
 	subDir := filepath.Join(tmpDir, "project")
 	os.MkdirAll(subDir, 0o700)
 
@@ -45,7 +47,7 @@ func TestLoadProjectContextFiles(t *testing.T) {
 }
 
 func TestLoadProjectContextFilesNoFiles(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := testutil.TempDir(t)
 	files := LoadProjectContextFiles(tmpDir, filepath.Join(tmpDir, ".poisson"))
 	if len(files) != 0 {
 		t.Errorf("expected 0 files, got %d", len(files))
@@ -53,7 +55,7 @@ func TestLoadProjectContextFilesNoFiles(t *testing.T) {
 }
 
 func TestLoadProjectContextFilesClaudeMdFallback(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := testutil.TempDir(t)
 	os.WriteFile(filepath.Join(tmpDir, "CLAUDE.md"), []byte("# Claude rules\nDo good."), 0o600)
 
 	files := LoadProjectContextFiles(tmpDir, filepath.Join(tmpDir, ".poisson"))

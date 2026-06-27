@@ -4,22 +4,15 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"poisson/internal/testutil"
 )
 
 // writeTempConfig writes content to a temp config.toml inside a temp HOME,
 // then restores the original HOME. Returns the config path.
 func writeTempConfig(t *testing.T, content string) string {
 	t.Helper()
-	tmpHome := t.TempDir()
-	origHome, hadHome := os.LookupEnv("HOME")
-	os.Setenv("HOME", tmpHome)
-	t.Cleanup(func() {
-		if hadHome {
-			os.Setenv("HOME", origHome)
-		} else {
-			os.Unsetenv("HOME")
-		}
-	})
+	tmpHome := testutil.TempHome(t)
 
 	dir := filepath.Join(tmpHome, ".poisson")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -261,16 +254,7 @@ output = 0
 func TestLoadCreatesConfigIfMissing(t *testing.T) {
 	// Set HOME to a temp dir without creating the .poisson dir; Load should
 	// create the config file and return defaults.
-	tmpHome := t.TempDir()
-	origHome, hadHome := os.LookupEnv("HOME")
-	os.Setenv("HOME", tmpHome)
-	t.Cleanup(func() {
-		if hadHome {
-			os.Setenv("HOME", origHome)
-		} else {
-			os.Unsetenv("HOME")
-		}
-	})
+	tmpHome := testutil.TempHome(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -294,16 +278,7 @@ func TestLoadCreatesConfigIfMissing(t *testing.T) {
 }
 
 func TestConfigDirCreates(t *testing.T) {
-	tmpHome := t.TempDir()
-	origHome, hadHome := os.LookupEnv("HOME")
-	os.Setenv("HOME", tmpHome)
-	t.Cleanup(func() {
-		if hadHome {
-			os.Setenv("HOME", origHome)
-		} else {
-			os.Unsetenv("HOME")
-		}
-	})
+	tmpHome := testutil.TempHome(t)
 	dir := ConfigDir()
 	if dir != filepath.Join(tmpHome, ".poisson") {
 		t.Errorf("ConfigDir = %q", dir)
@@ -314,16 +289,7 @@ func TestConfigDirCreates(t *testing.T) {
 }
 
 func TestConfigPath(t *testing.T) {
-	tmpHome := t.TempDir()
-	origHome, hadHome := os.LookupEnv("HOME")
-	os.Setenv("HOME", tmpHome)
-	t.Cleanup(func() {
-		if hadHome {
-			os.Setenv("HOME", origHome)
-		} else {
-			os.Unsetenv("HOME")
-		}
-	})
+	tmpHome := testutil.TempHome(t)
 	p := ConfigPath()
 	want := filepath.Join(tmpHome, ".poisson", "config.toml")
 	if p != want {
