@@ -436,7 +436,8 @@ func TestBashTool_SafeCommand(t *testing.T) {
 	b := NewBashTool(dir, false, nil)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
-		"command": "echo hello",
+		"command":     "echo hello",
+		"description": "print hello",
 	}))
 	if res.Error != "" {
 		t.Fatalf("bash error: %s", res.Error)
@@ -457,7 +458,8 @@ func TestBashTool_SanitizesOutput(t *testing.T) {
 	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, true, nil)
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
-		"command": `printf '\033[31mred\033[0m\0done'`,
+		"command":     `printf '\033[31mred\033[0m\0done'`,
+		"description": "print colored text",
 	}))
 	if res.Error != "" {
 		t.Fatalf("bash error: %s", res.Error)
@@ -475,8 +477,9 @@ func TestBashTool_WorkdirErrorInStderr(t *testing.T) {
 	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, true, nil)
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
-		"command": "pwd",
-		"workdir": "missing",
+		"command":     "pwd",
+		"description": "print working dir",
+		"workdir":     "missing",
 	}))
 	if res.Error != "" {
 		t.Fatalf("bash error: %s", res.Error)
@@ -495,7 +498,8 @@ func TestBashTool_UnsafeDenied(t *testing.T) {
 	b := NewBashTool(dir, false, nil) // no approvalFn → deny
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
-		"command": "rm -rf /",
+		"command":     "rm -rf /",
+		"description": "remove everything",
 	}))
 	if res.Error == "" {
 		t.Error("expected denial for unsafe command")
@@ -508,8 +512,9 @@ func TestBashTool_UnsafeApproved(t *testing.T) {
 	b := NewBashTool(dir, false, approved)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
-		"command": "touch approved.txt",
-		"workdir": ".",
+		"command":     "touch approved.txt",
+		"description": "create marker file",
+		"workdir":     ".",
 	}))
 	if res.Error != "" {
 		t.Fatalf("bash error: %s", res.Error)
@@ -552,12 +557,37 @@ func TestBashTool_PromptsForApproval(t *testing.T) {
 	}
 }
 
+// TestBashTool_DescriptionRequiredForGated verifies PR-24: a gated (unsafe) bash
+// call without description is rejected at the tool layer with clear error,
+// never reaching approvalFn.
+func TestBashTool_DescriptionRequiredForGated(t *testing.T) {
+	dir := testutil.TempDir(t)
+	called := false
+	approvalFn := func(command, desc, wd string) bool {
+		called = true
+		return true
+	}
+	b := NewBashTool(dir, false, approvalFn)
+
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command": "rm -rf foo",
+		// no description
+	}))
+	if called {
+		t.Error("approvalFn must not be called when description missing for gated cmd")
+	}
+	if res.Error != "description is required" {
+		t.Errorf("got error %q, want %q", res.Error, "description is required")
+	}
+}
+
 func TestBashTool_Sandbox(t *testing.T) {
 	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, true, nil) // sandbox bypasses guard
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
-		"command": "echo safe_in_sandbox",
+		"command":     "echo safe_in_sandbox",
+		"description": "echo in sandbox",
 	}))
 	if res.Error != "" {
 		t.Fatalf("bash error: %s", res.Error)
@@ -711,8 +741,9 @@ func TestRegistry_ExecuteParallel_Concurrency(t *testing.T) {
 	var calls []ToolCall
 	for i := 0; i < 5; i++ {
 		input, _ := json.Marshal(map[string]interface{}{
-			"command": "sleep 0.1; echo done",
-			"timeout": 10,
+			"command":     "sleep 0.1; echo done",
+			"description": "sleep briefly for concurrency test",
+			"timeout":     10,
 		})
 		calls = append(calls, ToolCall{Name: "bash", Input: input})
 	}

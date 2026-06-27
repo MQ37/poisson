@@ -1,6 +1,9 @@
 package tui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestApprovalKeyAllowed(t *testing.T) {
 	cases := []struct {
@@ -47,5 +50,51 @@ func TestApprovalOverlayRenderFits(t *testing.T) {
 		if visibleWidth(ln) > 80 {
 			t.Fatalf("line too wide: %d %q", visibleWidth(ln), ln)
 		}
+	}
+}
+
+func TestApprovalOverlayShowsPurposeLine(t *testing.T) {
+	o := newApprovalOverlay("rm -rf ./build", "clean build artifacts")
+	_, lines := o.render(20, 80)
+	foundCmd := false
+	foundPurpose := false
+	for _, ln := range lines {
+		if strings.Contains(ln, "$ rm -rf ./build") {
+			foundCmd = true
+		}
+		if strings.Contains(ln, "Purpose:") && strings.Contains(ln, "clean build artifacts") {
+			foundPurpose = true
+		}
+	}
+	if !foundCmd {
+		t.Errorf("expected command line with $ prefix in %v", lines)
+	}
+	if !foundPurpose {
+		t.Errorf("expected Purpose: line in %v", lines)
+	}
+}
+
+func TestApprovalOverlayPurposeFallback(t *testing.T) {
+	o := newApprovalOverlay("rm -rf x", "")
+	_, lines := o.render(20, 60)
+	foundFallback := false
+	for _, ln := range lines {
+		if strings.Contains(ln, "Purpose:") && strings.Contains(ln, "(no description provided)") {
+			foundFallback = true
+		}
+	}
+	if !foundFallback {
+		t.Errorf("expected fallback Purpose in %v", lines)
+	}
+	// also test fallbackLines path
+	fb := o.fallbackLines(40)
+	foundFb := false
+	for _, ln := range fb {
+		if strings.Contains(ln, "Purpose:") && strings.Contains(ln, "(no description provided)") {
+			foundFb = true
+		}
+	}
+	if !foundFb {
+		t.Errorf("expected fallback in fallbackLines %v", fb)
 	}
 }
