@@ -6,6 +6,73 @@ import (
 	"strings"
 )
 
+// hasCommandSubstitution reports whether the raw command contains $(...) or
+// backtick substitution outside of quoted strings.
+func hasCommandSubstitution(raw string) bool {
+	i := 0
+	n := len(raw)
+	for i < n {
+		c := raw[i]
+		if c == '\'' {
+			i++
+			for i < n && raw[i] != '\'' {
+				i++
+			}
+			i++
+			continue
+		}
+		if c == '"' {
+			i++
+			for i < n {
+				if raw[i] == '\\' && i+1 < n {
+					i += 2
+					continue
+				}
+				if raw[i] == '"' {
+					i++
+					break
+				}
+				if raw[i] == '`' {
+					return true
+				}
+				if raw[i] == '$' && i+1 < n && raw[i+1] == '(' {
+					return true
+				}
+				i++
+			}
+			continue
+		}
+		if c == '`' {
+			return true
+		}
+		if c == '$' && i+1 < n && raw[i+1] == '(' {
+			return true
+		}
+		i++
+	}
+	return false
+}
+
+// IsSensitiveDir reports whether dir is a sensitive working directory (e.g.
+// ~/.ssh). dir should be absolute and cleaned.
+func IsSensitiveDir(dir string) (bool, string) {
+	d := filepath.Clean(dir)
+	check := d
+	if !strings.HasSuffix(check, string(filepath.Separator)) {
+		check += string(filepath.Separator)
+	}
+	for _, pat := range sensitiveDirPatterns {
+		if strings.Contains(check, pat) {
+			return true, "sensitive working directory: " + pat
+		}
+	}
+	base := filepath.Base(d)
+	if sensitiveExactBasenames[base] || sshPrivKeyRe.MatchString(base) {
+		return true, "sensitive working directory: " + base
+	}
+	return false, ""
+}
+
 // hasDangerousPatterns checks the raw command string for dangerous patterns:
 // output redirects that overwrite/truncate files (>, >>), and pipes into
 // dangerous shells.

@@ -104,12 +104,16 @@ func TestCmdResume(t *testing.T) {
 		ID: otherID, Cwd: ".", Provider: "ollama", Model: a.Config().Ollama.Model,
 		CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix(),
 	})
+	tui.scroll.appendRaw(styleAssistant, "stale-marker from previous session")
 
 	if err := cmdResume(cmdHost(tui), []string{otherID}); err != nil {
 		t.Fatalf("cmdResume: %v", err)
 	}
 	if tui.sessionID != otherID {
 		t.Errorf("expected session %q, got %q", otherID, tui.sessionID)
+	}
+	if out := testScrollOutput(tui); strings.Contains(out, "stale-marker") {
+		t.Errorf("resume should clear old scrollback, got %q", out)
 	}
 	if out := testScrollOutput(tui); !strings.Contains(out, "resumed session") {
 		t.Errorf("expected resume message, got %q", out)

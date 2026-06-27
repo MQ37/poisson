@@ -71,6 +71,23 @@ func TestTabTogglesConvFocus(t *testing.T) {
 	}
 }
 
+func TestConvFocusCtrlCFallthrough(t *testing.T) {
+	tui := newTUI(nil, "s1", nil)
+	tui.rows = 24
+	tui.cols = 80
+	tui.scrollRows = 16
+	tui.scroll.append(StyledLine{Style: styleUser, Text: "hello"})
+	tui.enterConvFocus()
+
+	quit, err := tui.feed([]byte{3})
+	if err != nil || quit {
+		t.Fatalf("first Ctrl+C in conv focus: quit=%v err=%v", quit, err)
+	}
+	if tui.status.Hint == "" {
+		t.Fatal("expected exit hint after Ctrl+C in conv focus")
+	}
+}
+
 func containsPlain(hay, needle string) bool {
 	return strings.Contains(stripANSI(hay), needle)
 }

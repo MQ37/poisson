@@ -17,9 +17,9 @@ func TestApprovalKeyAllowed(t *testing.T) {
 		{"d", false, true},
 		{"n", false, true},
 		{"\x1b", false, true},
-		{"\x03", false, true},
+		{"\x03", false, false},
 		{"x", false, false},
-		{"\r", false, false},
+		{"\r", true, true},
 	}
 	for _, tc := range cases {
 		got, ok := approvalKeyAllowed([]byte(tc.key))

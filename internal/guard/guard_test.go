@@ -104,6 +104,40 @@ func TestIsAllSafe_UnsafeCommands(t *testing.T) {
 	}
 }
 
+func TestIsAllSafe_CommandSubstitution(t *testing.T) {
+	unsafe := []string{
+		`echo $(rm -rf /)`,
+		"echo `id`",
+		`cat $(echo secret)`,
+	}
+	for _, cmd := range unsafe {
+		if IsAllSafe(cmd) {
+			t.Errorf("expected unsafe (substitution): %q", cmd)
+		}
+	}
+	// Quoted substitution is still visible to the shell — keep blocked.
+	if IsAllSafe(`echo "$(whoami)"`) {
+		t.Error("expected unsafe for quoted $(...)")
+	}
+}
+
+func TestIsSensitiveDir(t *testing.T) {
+	cases := []struct {
+		dir   string
+		safe  bool
+	}{
+		{"/home/user/.ssh", false},
+		{"/home/user/project", true},
+		{"/home/user/.aws", false},
+	}
+	for _, tc := range cases {
+		got, _ := IsSensitiveDir(tc.dir)
+		if got == tc.safe {
+			t.Errorf("IsSensitiveDir(%q) = %v, want %v", tc.dir, got, !tc.safe)
+		}
+	}
+}
+
 func TestIsAllSafe_EdgeCases(t *testing.T) {
 	// Semicolons: safe + unsafe → unsafe.
 	if IsAllSafe("git status; rm -rf /") {

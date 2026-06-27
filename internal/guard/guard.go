@@ -21,9 +21,12 @@ func Classify(command string) (safe bool, reason string) {
 
 	raw := command
 
-	// 1. Dangerous patterns: redirects, pipes into dangerous shells.
+	// 1. Dangerous patterns: redirects, pipes into dangerous shells, substitution.
 	if hasDangerousPatterns(raw) {
 		return false, "dangerous pattern: redirect or pipe into dangerous shell"
+	}
+	if hasCommandSubstitution(raw) {
+		return false, "command substitution ($(…) or backticks)"
 	}
 
 	// 2. ANSI escape sequences.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -66,8 +67,8 @@ func Spawn(input SpawnInput) (*ChildProcess, error) {
 	cmd := exec.Command("poisson", args...)
 	cmd.Dir = input.Cwd
 
-	// Environment.
-	env := append([]string{}, input.ExtraEnv...)
+	// Environment: inherit parent env so PATH/HOME/etc. are available.
+	env := append(os.Environ(), input.ExtraEnv...)
 	env = append(env, fmt.Sprintf("POISSON_SUBAGENT_CHILD=1"))
 	if input.Name != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_NAME=%s", input.Name))

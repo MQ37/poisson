@@ -50,6 +50,7 @@ func cmdNew(h commandHost) error {
 	}
 	a.SwitchSession(id)
 	h.SetSessionID(id)
+	resetHostSessionView(h)
 	h.Out(styleSystem, "new session: "+id)
 	return nil
 }
@@ -240,7 +241,14 @@ func switchAgentToSession(h commandHost, sess *store.Session) bool {
 	a.SetProvider(p)
 	a.SetModel(sess.Model)
 	h.SetSessionID(sess.ID)
+	resetHostSessionView(h)
 	return true
+}
+
+func resetHostSessionView(h commandHost) {
+	if th, ok := h.(tuiCmdHost); ok {
+		th.t.resetSessionView()
+	}
 }
 
 // cmdUndo soft-deletes the last user turn.

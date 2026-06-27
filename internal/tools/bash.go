@@ -69,9 +69,25 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		return ToolResult{Error: "command is required"}, nil
 	}
 
-	// Guard: unless sandbox, classify the command.
+	// Resolve working directory before guard (sensitive cwd affects approval).
+	dir := t.cwd
+	if in.Workdir != "" {
+		if filepath.IsAbs(in.Workdir) {
+			dir = in.Workdir
+		} else {
+			dir = filepath.Join(t.cwd, in.Workdir)
+		}
+	}
+
+	// Guard: unless sandbox, classify the command and working directory.
 	if !t.sandbox {
 		safe, reason := guard.Classify(in.Command)
+		if safe {
+			if sensitive, sreason := guard.IsSensitiveDir(dir); sensitive {
+				safe = false
+				reason = sreason
+			}
+		}
 		if !safe {
 			// Use provided description; fallback from guard reason if empty at approval time (PR-24).
 			purpose := in.Description
@@ -88,16 +104,6 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 			if !approved {
 				return ToolResult{Error: fmt.Sprintf("command denied (not safe: %s)", reason)}, nil
 			}
-		}
-	}
-
-	// Resolve working directory.
-	dir := t.cwd
-	if in.Workdir != "" {
-		if filepath.IsAbs(in.Workdir) {
-			dir = in.Workdir
-		} else {
-			dir = filepath.Join(t.cwd, in.Workdir)
 		}
 	}
 

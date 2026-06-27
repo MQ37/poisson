@@ -112,6 +112,44 @@ func (t *TUI) feedConvFocus(data []byte) (handled bool) {
 	return false
 }
 
+func (t *TUI) scrollViewportRows() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.convScrollRows()
+}
+
+// resetSessionView clears scrollback and focus state after switching sessions.
+func (t *TUI) resetSessionView() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.scroll = newScrollback(8192)
+	t.focusRegion = focusInput
+	t.convUserIdx = 0
+	t.activeOverlay = nil
+	t.completion = nil
+	t.dirty.markFull()
+}
+
+func (t *TUI) cancelActiveRun() {
+	t.cancelMu.Lock()
+	cancel := t.cancelRun
+	t.cancelMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	t.mu.Lock()
+	t.status.Hint = "cancelled — Ctrl+C again to exit"
+	t.dirty.markStatus()
+	t.mu.Unlock()
+}
+
+func (t *TUI) flashApprovalHint() {
+	t.mu.Lock()
+	t.status.Hint = "approval: A/y/Enter allow · D/n/Esc deny · Ctrl+C cancel"
+	t.dirty.markStatus()
+	t.mu.Unlock()
+}
+
 func containsTab(data []byte) bool {
 	for _, b := range data {
 		if b == 9 {

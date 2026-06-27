@@ -85,10 +85,11 @@ type TUI struct {
 	// Submission signaling.
 	lastCtrlC time.Time
 
-	// cancelRun is set while an agent prompt is in flight. The input goroutine
-	// uses it to cancel a running request on Ctrl+C.
-	cancelRun context.CancelFunc
-	cancelMu  sync.Mutex
+	// cancelRun/cancelCtx are set while an agent prompt is in flight. The input
+	// goroutine uses them to cancel a running request (and pending approval) on Ctrl+C.
+	cancelCtx  context.Context
+	cancelRun  context.CancelFunc
+	cancelMu   sync.Mutex
 }
 
 // NewTUI constructs the interactive TUI wired to the given agent and output channel.
@@ -241,7 +242,8 @@ func (t *TUI) Run() error {
 			}
 			// Don't scroll scrollback behind modal overlays or approval.
 			if !t.blocksBackgroundInput() {
-				if delta, ok := parseScrollInputRaw(buf[:n], t.scrollRows); ok {
+				viewport := t.scrollViewportRows()
+				if delta, ok := parseScrollInputRaw(buf[:n], viewport); ok {
 					t.handleScrollDelta(delta)
 					continue
 				}
@@ -249,12 +251,16 @@ func (t *TUI) Run() error {
 			// If an approval prompt is active, route recognized answers to the
 			// approval channel instead of feeding them to the editor.
 			if t.approving.Load() {
-				allowed, ok := approvalKeyAllowed(decodeKittyKeys(buf[:n]))
+				data := decodeKittyKeys(buf[:n])
+				if containsCtrlC(data) {
+					t.cancelActiveRun()
+					continue
+				}
+				allowed, ok := approvalKeyAllowed(data)
 				if ok {
-					select {
-					case t.approvalAnswer <- allowed:
-					default:
-					}
+					t.approvalAnswer <- allowed
+				} else {
+					t.flashApprovalHint()
 				}
 				continue
 			}
@@ -330,10 +336,8 @@ func (t *TUI) feed(data []byte) (bool, error) {
 	}
 
 	// Conversation focus: Tab returns to input; PgUp/Dn scroll; Shift+←/→ prompts.
-	if t.focusRegion == focusConv {
-		if t.feedConvFocus(data) {
-			return false, nil
-		}
+	// Unhandled keys (Ctrl+C, Ctrl+P, …) fall through to normal routing.
+	if t.focusRegion == focusConv && t.feedConvFocus(data) {
 		return false, nil
 	}
 
@@ -391,15 +395,8 @@ func (t *TUI) feed(data []byte) (bool, error) {
 	// While a prompt is running, only Ctrl+C and approval keys are meaningful.
 	if t.running() && !t.approving.Load() {
 		if containsCtrlC(data) {
-			t.cancelMu.Lock()
-			cancel := t.cancelRun
-			t.cancelMu.Unlock()
-			if cancel != nil {
-				cancel()
-				t.lastCtrlC = time.Now()
-				t.status.Hint = "cancelled — Ctrl+C again to exit"
-				t.dirty.markStatus()
-			}
+			t.cancelActiveRun()
+			t.lastCtrlC = time.Now()
 		}
 		return false, nil
 	}
@@ -769,12 +766,14 @@ func (t *TUI) submit(text string) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.cancelMu.Lock()
+	t.cancelCtx = ctx
 	t.cancelRun = cancel
 	t.cancelMu.Unlock()
 
 	go func() {
 		defer func() {
 			t.cancelMu.Lock()
+			t.cancelCtx = nil
 			t.cancelRun = nil
 			t.cancelMu.Unlock()
 			cancel()
@@ -843,6 +842,15 @@ func (t *TUI) Approve(command, description string) bool {
 	t.dirty.markFull()
 	t.mu.Unlock()
 
+	t.cancelMu.Lock()
+	runCtx := t.cancelCtx
+	t.cancelMu.Unlock()
+
+	var cancelCh <-chan struct{}
+	if runCtx != nil {
+		cancelCh = runCtx.Done()
+	}
+
 	var allowed bool
 	select {
 	case allowed = <-t.approvalAnswer:
@@ -851,6 +859,8 @@ func (t *TUI) Approve(command, description string) bool {
 		t.activeOverlay = nil
 		t.mu.Unlock()
 		return false
+	case <-cancelCh:
+		allowed = false
 	}
 
 	t.mu.Lock()

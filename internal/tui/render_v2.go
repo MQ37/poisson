@@ -187,9 +187,9 @@ func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 
 	b.WriteString(cup(lay.inputTop+1, 1))
 	b.WriteString(clearLine())
-	sep := dim + strings.Repeat("─", t.cols) + reset
+	sep := dim + strings.Repeat("─", lay.wrapWidth) + reset
 	if t.focusRegion == focusConv {
-		sep = dim + strings.Repeat("·", t.cols) + reset
+		sep = dim + strings.Repeat("·", lay.wrapWidth) + reset
 	}
 	b.WriteString(sep)
 
@@ -206,7 +206,7 @@ func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 	b.WriteString(clearLine())
 	b.WriteString(t.renderHintLine())
 
-	for r := lay.hintRow + 1; r < lay.inputTop; r++ {
+	for r := lay.hintRow + 1; r <= t.rows; r++ {
 		b.WriteString(cup(r, 1))
 		b.WriteString(clearLine())
 	}
@@ -315,7 +315,7 @@ func (t *TUI) applySearchHighlight(vi int, lay layoutSnapshot, line string) stri
 	if !ok || so.query == "" {
 		return line
 	}
-	_, start, _ := t.scroll.viewportRange(t.scrollRows, lay.wrapWidth)
+	_, start, _ := t.scroll.viewportRange(t.convScrollRows(), lay.wrapWidth)
 	global := start + vi
 	for _, m := range so.matchRows() {
 		if m == global {

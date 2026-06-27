@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"io"
 	"testing"
 	"time"
@@ -137,6 +138,38 @@ func TestFeedPlainArrowNotScrollback(t *testing.T) {
 	_, _ = tui.feed([]byte{27, '[', 'A'})
 	if tui.scroll.scrollOffset != before {
 		t.Fatalf("plain up scrolled offset %d -> %d", before, tui.scroll.scrollOffset)
+	}
+}
+
+func TestApproveCancelledByRunCancel(t *testing.T) {
+	tui := newTestTUIHelper()
+	ctx, cancel := context.WithCancel(context.Background())
+	tui.cancelMu.Lock()
+	tui.cancelCtx = ctx
+	tui.cancelRun = cancel
+	tui.cancelMu.Unlock()
+
+	result := make(chan bool, 1)
+	go func() {
+		result <- tui.Approve("rm -rf x", "danger")
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for !tui.approving.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !tui.approving.Load() {
+		t.Fatal("Approve never entered approving state")
+	}
+	cancel()
+
+	select {
+	case got := <-result:
+		if got {
+			t.Fatal("expected deny when run cancelled during approval")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Approve timed out after cancel")
 	}
 }
 

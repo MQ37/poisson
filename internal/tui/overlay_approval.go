@@ -30,7 +30,7 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 	var body []string
 	body = append(body, "$ "+truncatePlain(o.command, inner-4))
 	body = append(body, dim+"Purpose: "+truncatePlain(o.description, inner-10)+reset)
-	body = append(body, "[A/y] Allow   [D/n/Esc] Deny")
+	body = append(body, "[A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel")
 
 	height := len(body) + 2 // top + bottom border
 	anchor := (scrollRows-height)/2 + 1
@@ -65,7 +65,7 @@ func (o *approvalOverlay) fallbackLines(cols int) []string {
 	b.WriteString(fgYellow + bold + "⚠ approval required" + reset + "\n")
 	b.WriteString("  $ " + truncatePlain(o.command, cols-4) + "\n")
 	b.WriteString("  " + dim + "Purpose: " + truncatePlain(o.description, cols-12) + reset + "\n")
-	b.WriteString(dim + "  [A/y] Allow   [D/n/Esc] Deny" + reset)
+	b.WriteString(dim + "  [A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel" + reset)
 	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
 }
 
@@ -94,15 +94,12 @@ func max0(n int) int {
 // whether the chunk contained a recognized approval answer.
 func approvalKeyAllowed(data []byte) (allowed, ok bool) {
 	data = decodeKittyKeys(data)
-	if containsCtrlC(data) {
-		return false, true
-	}
 	if len(data) == 1 && data[0] == 27 {
 		return false, true
 	}
 	for _, b := range data {
 		switch b {
-		case 'a', 'A', 'y', 'Y':
+		case 'a', 'A', 'y', 'Y', '\r', '\n':
 			return true, true
 		case 'd', 'D', 'n', 'N':
 			return false, true

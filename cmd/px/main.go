@@ -456,14 +456,17 @@ func runChildMode() {
 	}()
 
 	// Run the prompt.
+	success := true
 	if err := a.Prompt(task); err != nil {
 		writeChildEvent(map[string]interface{}{"type": "error", "error": err.Error()})
+		success = false
 	}
+	close(outputChan)
 
 	// Write done event.
 	writeChildEvent(map[string]interface{}{
 		"type":    "done",
-		"success": true,
+		"success": success,
 	})
 }
 
