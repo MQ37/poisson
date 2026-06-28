@@ -14,172 +14,20 @@ type pickerItem struct {
 	hint  string
 }
 
-type pickerOverlay struct {
-	title   string
-	items   []pickerItem
-	current string
-	filter  string
-	idx     int
-	onPick  func(id string) error
-	chrome  listBoxChrome
-}
+type pickerOverlay = filterableListOverlay
 
 func newPickerOverlay(title string, items []pickerItem, current string, onPick func(string) error) *pickerOverlay {
-	idx := 0
+	list := make([]filterableListItem, len(items))
 	for i, it := range items {
-		if it.id == current {
-			idx = i
-			break
+		list[i] = filterableListItem{id: it.id, label: it.label, hint: it.hint}
+	}
+	pick := func(id string) bool {
+		if onPick != nil {
+			_ = onPick(id)
 		}
+		return true
 	}
-	return &pickerOverlay{title: title, items: items, current: current, idx: idx, onPick: onPick}
-}
-
-func (p *pickerOverlay) filtered() []pickerItem {
-	if p.filter == "" {
-		return p.items
-	}
-	var out []pickerItem
-	for _, it := range p.items {
-		if fuzzyScore(p.filter, it.label) >= 0 || fuzzyScore(p.filter, it.hint) >= 0 {
-			out = append(out, it)
-		}
-	}
-	return out
-}
-
-func (p *pickerOverlay) render(scrollRows, cols int) (int, []string) {
-	visible := p.filtered()
-	if len(visible) == 0 {
-		body := []string{dim + "(no matches)" + reset}
-		chrome, lines := renderBoxedList(p.title, p.filter, body, scrollRows, cols, boxListMaxInner)
-		p.chrome = chrome
-		return p.chrome.anchor, lines
-	}
-
-	if p.idx >= len(visible) {
-		p.idx = len(visible) - 1
-	}
-	if p.idx < 0 {
-		p.idx = 0
-	}
-
-	maxRows := scrollRows - 8
-	if maxRows < 4 {
-		maxRows = 4
-	}
-	start := 0
-	if p.idx >= maxRows-1 {
-		start = p.idx - maxRows + 2
-	}
-	end := start + maxRows
-	if end > len(visible) {
-		end = len(visible)
-		start = end - maxRows
-		if start < 0 {
-			start = 0
-		}
-	}
-	p.chrome.itemStart = start
-
-	var body []string
-	for i := start; i < end; i++ {
-		it := visible[i]
-		marker := "  "
-		style := ""
-		if i == p.idx {
-			marker = fgCyan + bold + "▶ " + reset
-			style = fgCyan + bold
-		}
-		cur := ""
-		if it.id == p.current {
-			cur = dim + " (current)" + reset
-		}
-		hint := ""
-		if it.hint != "" {
-			hint = dim + "  " + truncatePlain(it.hint, 48) + reset
-		}
-		body = append(body, style+marker+it.label+reset+cur+hint)
-	}
-
-	chrome, lines := renderBoxedList(p.title, p.filter, body, scrollRows, cols, boxListMaxInner)
-	p.chrome = chrome
-	return p.chrome.anchor, lines
-}
-
-func (p *pickerOverlay) listChrome() listBoxChrome { return p.chrome }
-
-func (p *pickerOverlay) clickRow(lineInOverlay int) (handled bool, done bool) {
-	if lineInOverlay < p.chrome.itemLine0 || lineInOverlay >= p.chrome.itemLine0+p.chrome.itemCount {
-		return false, false
-	}
-	off := lineInOverlay - p.chrome.itemLine0
-	p.idx = p.chrome.itemStart + off
-	vis := p.filtered()
-	if p.idx < 0 || p.idx >= len(vis) {
-		return true, false
-	}
-	if p.onPick != nil {
-		_ = p.onPick(vis[p.idx].id)
-	}
-	return true, true
-}
-
-func (p *pickerOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
-	switch {
-	case k.isNavUp():
-		if p.idx > 0 {
-			p.idx--
-		}
-		return true, false, false
-	case k.isNavDown():
-		vis := p.filtered()
-		if p.idx < len(vis)-1 {
-			p.idx++
-		}
-		return true, false, false
-	case k.isEnter():
-		vis := p.filtered()
-		if len(vis) == 0 {
-			return true, false, true
-		}
-		if p.onPick != nil {
-			_ = p.onPick(vis[p.idx].id)
-		}
-		return true, true, false
-	case k.Kind == KeyEscape:
-		return true, false, true
-	case k.Kind == KeyBackspace:
-		if trimOverlayFilter(&p.filter) {
-			p.idx = 0
-		}
-		return true, false, false
-	case k.Kind == KeyRune:
-		if appendOverlayFilterRune(&p.filter, k.Rune) {
-			p.idx = 0
-		}
-		return true, false, false
-	case k.Kind == KeyPaste:
-		appendOverlayFilterText(&p.filter, k.Text, &p.idx)
-		return true, false, false
-	}
-	return false, false, false
-}
-
-// keyOverlay is an overlay that consumes keyboard input until done/cancel.
-type keyOverlay interface {
-	overlay
-	feedKey(k Key) (handled bool, done bool, cancel bool)
-}
-
-func asKeyOverlay(o overlay) keyOverlay {
-	if o == nil {
-		return nil
-	}
-	if k, ok := o.(keyOverlay); ok {
-		return k
-	}
-	return nil
+	return newFilterableListOverlay(title, list, current, pick, boxListMaxInner)
 }
 
 func pickerProviderItems(h commandHost) []pickerItem {

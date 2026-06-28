@@ -27,140 +27,19 @@ var paletteCommands = []paletteItem{
 	{"/quit", "exit"},
 }
 
-type paletteOverlay struct {
-	filter string
-	idx    int
-	onRun  func(cmd string) error
-	chrome listBoxChrome
-}
+type paletteOverlay = filterableListOverlay
 
 func newPaletteOverlay(onRun func(string) error) *paletteOverlay {
-	return &paletteOverlay{onRun: onRun}
-}
-
-func (p *paletteOverlay) filtered() []paletteItem {
-	if p.filter == "" {
-		return paletteCommands
+	list := make([]filterableListItem, len(paletteCommands))
+	for i, it := range paletteCommands {
+		list[i] = filterableListItem{id: it.cmd, label: it.cmd, hint: it.desc}
 	}
-	var out []paletteItem
-	for _, it := range paletteCommands {
-		if fuzzyScore(p.filter, it.cmd) >= 0 || fuzzyScore(p.filter, it.desc) >= 0 {
-			out = append(out, it)
+	pick := func(id string) bool {
+		if onRun == nil {
+			return true
 		}
+		err := onRun(id)
+		return errors.Is(err, errQuitSentinel) || err == nil
 	}
-	return out
-}
-
-func (p *paletteOverlay) render(scrollRows, cols int) (int, []string) {
-	visible := p.filtered()
-	if p.idx >= len(visible) {
-		p.idx = len(visible) - 1
-	}
-	if p.idx < 0 {
-		p.idx = 0
-	}
-
-	if len(visible) == 0 {
-		body := []string{dim + "(no matches)" + reset}
-		chrome, lines := renderBoxedList("command palette", p.filter, body, scrollRows, cols, boxListMaxInner)
-		p.chrome = chrome
-		return p.chrome.anchor, lines
-	}
-
-	maxRows := scrollRows - 8
-	if maxRows < 4 {
-		maxRows = 4
-	}
-	start := 0
-	if p.idx >= maxRows-1 {
-		start = p.idx - maxRows + 2
-	}
-	end := start + maxRows
-	if end > len(visible) {
-		end = len(visible)
-		start = end - maxRows
-		if start < 0 {
-			start = 0
-		}
-	}
-	p.chrome.itemStart = start
-
-	var body []string
-	for i := start; i < end && i < len(visible); i++ {
-		it := visible[i]
-		marker := "  "
-		style := ""
-		if i == p.idx {
-			marker = fgCyan + bold + "▶ " + reset
-			style = fgCyan + bold
-		}
-		line := style + marker + it.cmd + reset + dim + "  " + it.desc + reset
-		body = append(body, line)
-	}
-
-	chrome, lines := renderBoxedList("command palette", p.filter, body, scrollRows, cols, 72)
-	p.chrome = chrome
-	return p.chrome.anchor, lines
-}
-
-func (p *paletteOverlay) listChrome() listBoxChrome { return p.chrome }
-
-func (p *paletteOverlay) clickRow(lineInOverlay int) (handled bool, done bool) {
-	if lineInOverlay < p.chrome.itemLine0 || lineInOverlay >= p.chrome.itemLine0+p.chrome.itemCount {
-		return false, false
-	}
-	off := lineInOverlay - p.chrome.itemLine0
-	p.idx = p.chrome.itemStart + off
-	vis := p.filtered()
-	if p.idx < 0 || p.idx >= len(vis) {
-		return true, false
-	}
-	if p.onRun != nil {
-		if err := p.onRun(vis[p.idx].cmd); errors.Is(err, errQuitSentinel) {
-			return true, true
-		}
-	}
-	return true, true
-}
-
-func (p *paletteOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
-	switch {
-	case k.isNavUp():
-		if p.idx > 0 {
-			p.idx--
-		}
-		return true, false, false
-	case k.isNavDown():
-		if p.idx < len(p.filtered())-1 {
-			p.idx++
-		}
-		return true, false, false
-	case k.isEnter():
-		vis := p.filtered()
-		if len(vis) == 0 {
-			return true, false, true
-		}
-		if p.onRun != nil {
-			if err := p.onRun(vis[p.idx].cmd); errors.Is(err, errQuitSentinel) {
-				return true, true, false
-			}
-		}
-		return true, true, false
-	case k.Kind == KeyEscape:
-		return true, false, true
-	case k.Kind == KeyBackspace:
-		if trimOverlayFilter(&p.filter) {
-			p.idx = 0
-		}
-		return true, false, false
-	case k.Kind == KeyRune:
-		if appendOverlayFilterRune(&p.filter, k.Rune) {
-			p.idx = 0
-		}
-		return true, false, false
-	case k.Kind == KeyPaste:
-		appendOverlayFilterText(&p.filter, k.Text, &p.idx)
-		return true, false, false
-	}
-	return false, false, false
+	return newFilterableListOverlay("command palette", list, "", pick, 72)
 }

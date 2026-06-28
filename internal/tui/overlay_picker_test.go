@@ -17,7 +17,7 @@ func TestPaletteOverlayFilter(t *testing.T) {
 	p := newPaletteOverlay(nil)
 	p.filter = "cost"
 	vis := p.filtered()
-	if len(vis) != 1 || vis[0].cmd != "/cost" {
+	if len(vis) != 1 || vis[0].id != "/cost" {
 		t.Fatalf("filtered = %v", vis)
 	}
 }

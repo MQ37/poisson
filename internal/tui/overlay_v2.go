@@ -209,9 +209,7 @@ func (t *TUI) handleOverlayPaste(k Key) bool {
 	switch o := t.activeOverlay.(type) {
 	case *searchOverlay:
 		return o.appendPaste(k.Text)
-	case *pickerOverlay:
-		return appendOverlayFilterText(&o.filter, k.Text, &o.idx)
-	case *paletteOverlay:
+	case *filterableListOverlay:
 		return appendOverlayFilterText(&o.filter, k.Text, &o.idx)
 	}
 	return false
