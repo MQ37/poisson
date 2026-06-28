@@ -30,8 +30,14 @@ func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 	bodyLines := toolCardBody(name, b.meta.ToolInput, width)
 	var chunks []string
 	chunks = append(chunks, fgYellow+header+reset)
+	inner := width - 4
+	if inner < 1 {
+		inner = 1
+	}
 	for _, ln := range bodyLines {
-		chunks = append(chunks, fgYellow+toolCardBodyLine(ln, width)+reset)
+		for _, chunk := range wrapLine(stripANSI(ln), inner) {
+			chunks = append(chunks, fgYellow+formatToolCardBodyLine(chunk, width)+reset)
+		}
 	}
 	if b.meta.ToolDone && b.meta.Expanded {
 		for _, ln := range toolCardExpandedResultLines(b, width) {
@@ -62,19 +68,28 @@ func toolCardHeader(name, status string, width int) string {
 	return "╭" + title + strings.Repeat("─", fill) + " " + status + " ╮"
 }
 
+func formatToolCardBodyLine(chunk string, width int) string {
+	inner := width - 4
+	if inner < 1 {
+		inner = 1
+	}
+	pad := inner - len([]rune(chunk))
+	if pad < 0 {
+		pad = 0
+	}
+	return "│ " + chunk + strings.Repeat(" ", pad) + " │"
+}
+
 func toolCardBodyLine(content string, width int) string {
 	inner := width - 4
 	if inner < 1 {
 		inner = 1
 	}
-	for _, chunk := range wrapLine(stripANSI(content), inner) {
-		pad := inner - len([]rune(chunk))
-		if pad < 0 {
-			pad = 0
-		}
-		return "│ " + chunk + strings.Repeat(" ", pad) + " │"
+	chunks := wrapLine(stripANSI(content), inner)
+	if len(chunks) == 0 {
+		return "│ " + strings.Repeat(" ", inner) + " │"
 	}
-	return "│ " + strings.Repeat(" ", inner) + " │"
+	return formatToolCardBodyLine(chunks[0], width)
 }
 
 func toolCardFooter(width int) string {

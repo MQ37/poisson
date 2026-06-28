@@ -15,6 +15,19 @@ func (t *TUI) handleMouseInput(data []byte) bool {
 	if delta, ok := mouseWheelDelta(ev.Button); ok {
 		t.mu.Lock()
 		block := t.blocksBackgroundInput()
+		if block {
+			if flo, ok := t.activeOverlay.(*filterableListOverlay); ok {
+				vis := flo.filtered()
+				if delta > 0 && flo.idx > 0 {
+					flo.idx--
+				} else if delta < 0 && flo.idx < len(vis)-1 {
+					flo.idx++
+				}
+				t.dirty.markFull()
+				t.mu.Unlock()
+				return true
+			}
+		}
 		t.mu.Unlock()
 		if !block {
 			t.handleScrollDelta(delta)

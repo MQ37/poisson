@@ -150,7 +150,7 @@ func (t *TUI) renderHintLine() string {
 	if t.focusRegion == focusConv {
 		return dim + "Tab:input · PgUp/Dn:scroll · Shift+←/→:prompts · Ctrl+E:tool" + reset
 	}
-	base := "Tab:conv · Enter:send · ↑↓:history · Ctrl+Y:yank · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model"
+	base := "Tab:conv · Enter:send · ↑↓:history · Ctrl+Y:yank · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model · Ctrl+D:exit"
 	if t.status.Hint != "" {
 		return dim + t.status.Hint + " · " + base + reset
 	}
@@ -219,7 +219,10 @@ func (t *TUI) yankClipboardLocked() {
 		t.setEphemeralHintLocked("nothing to yank", 2*time.Second)
 		return
 	}
-	_ = osc52Copy(text)
+	if err := osc52Copy(text); err != nil {
+		t.setEphemeralHintLocked("clipboard unavailable", 2*time.Second)
+		return
+	}
 	t.setEphemeralHintLocked("yanked to clipboard", 2*time.Second)
 }
 

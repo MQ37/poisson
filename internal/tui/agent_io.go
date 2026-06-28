@@ -117,6 +117,7 @@ func (t *TUI) Approve(command, description string) bool {
 	defer t.approving.Store(false)
 
 	t.mu.Lock()
+	t.cancelOverlayWork()
 	t.activeOverlay = newApprovalOverlay(command, description)
 	t.dirty.markFull()
 	t.mu.Unlock()

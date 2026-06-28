@@ -160,6 +160,12 @@ func sanitizeControls(s string) string {
 func (s *scrollback) trim() {
 	if len(s.blocks) > s.maxLines {
 		drop := len(s.blocks) - s.maxLines
+		for _, b := range s.blocks[:drop] {
+			if b.id == s.focusedToolID {
+				s.focusedToolID = 0
+				break
+			}
+		}
 		s.blocks = s.blocks[drop:]
 	}
 }

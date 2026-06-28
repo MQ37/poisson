@@ -226,6 +226,10 @@ func forkFromLatest(h commandHost) error {
 }
 
 func switchAgentToSession(h commandHost, sess *store.Session) bool {
+	if th, ok := h.(tuiCmdHost); ok && th.t.running() {
+		h.Out(styleError, "cannot switch session while agent is running")
+		return false
+	}
 	if sess == nil {
 		h.Out(styleError, "session not found")
 		return false
@@ -271,8 +275,15 @@ func cmdUndo(h commandHost) error {
 		h.Out(styleSystem, "no user message to undo")
 		return nil
 	}
-	for _, m := range msgs {
-		if m.Seq == lastUserSeq && m.Compacted {
+	sess, _ := s.GetSession(sid)
+	if sess != nil && sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
+		userTurns := 0
+		for _, m := range msgs {
+			if m.Role == "user" {
+				userTurns++
+			}
+		}
+		if userTurns <= 1 {
 			h.Out(styleError, "cannot undo past compaction point. Use /fork before compacting.")
 			return nil
 		}
@@ -287,7 +298,6 @@ func cmdUndo(h commandHost) error {
 		h.Out(styleError, "error undoing: "+err.Error())
 		return nil
 	}
-	sess, _ := s.GetSession(sid)
 	if sess != nil && sess.CompactionSummary != nil {
 		if remaining, _ := s.GetMessages(sid); len(remaining) == 0 {
 			s.ClearCompactionSummary(sid)

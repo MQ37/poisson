@@ -100,6 +100,21 @@ func (t *TUI) feedConvFocus(k Key) (handled bool) {
 		t.handleTabKey()
 		return true
 	}
+	w := t.contentWidth()
+	if t.scroll.focusedToolExpanded(w) {
+		switch k.Kind {
+		case KeyArrowUp:
+			if t.scroll.scrollFocusedTool(w, -1) {
+				t.markScrollDirty()
+			}
+			return true
+		case KeyArrowDown:
+			if t.scroll.scrollFocusedTool(w, 1) {
+				t.markScrollDirty()
+			}
+			return true
+		}
+	}
 	if delta, ok := scrollDeltaForKey(k, t.convScrollRows()); ok {
 		t.scrollByDelta(delta)
 		return true
@@ -195,9 +210,10 @@ func (t *TUI) cancelActiveRunLocked() {
 	cancel := t.cancelRun
 	t.cancelMu.Unlock()
 	if cancel != nil {
+		t.turnCancelled = true
 		cancel()
 	}
-	t.setEphemeralHintLocked("cancelled — Ctrl+C again to exit", 4*time.Second)
+	t.setEphemeralHintLocked("cancelled — Ctrl+C again to exit", 2*time.Second)
 }
 
 func (t *TUI) cancelActiveRun() {

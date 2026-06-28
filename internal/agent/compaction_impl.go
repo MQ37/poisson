@@ -35,6 +35,11 @@ What remains to be done. If the conversation was interrupted mid-task, describe 
 ## Important Details
 Any small but critical details: file paths, error messages, environment quirks, version numbers, or anything that would be hard to rediscover.`
 
+// Compact triggers manual mid-turn compaction (/compact).
+func (a *Agent) Compact() error {
+	return a.compact()
+}
+
 // compact performs mid-turn compaction of the conversation.
 func (a *Agent) compact() error {
 	// Send "compacting" status event.

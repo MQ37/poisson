@@ -70,6 +70,46 @@ func TestFeedKeyCtrlSOpensSessionPicker(t *testing.T) {
 	}
 }
 
+func TestFeedKeySearchTypeDoesNotDeadlock(t *testing.T) {
+	tui := newTestTUIHelper()
+	tui.mu.Lock()
+	tui.openSearchLocked()
+	tui.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = tui.feedKey(Key{Kind: KeyRune, Rune: 'x'})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("search typing deadlocked feedKey")
+	}
+}
+
+func TestFeedKeyCtrlCCancelsWhileRunning(t *testing.T) {
+	tui := newTestTUIHelper()
+	tui.status.Thinking = true
+	cancelled := make(chan struct{}, 1)
+	tui.cancelMu.Lock()
+	tui.cancelRun = func() { cancelled <- struct{}{} }
+	tui.cancelMu.Unlock()
+
+	_, err := tui.feedKey(Key{Kind: KeyCtrl, Byte: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Ctrl+C while running should cancel, not wait for double-tap")
+	}
+	if !tui.turnCancelled {
+		t.Fatal("expected turnCancelled flag")
+	}
+}
+
 func TestSessionPickerResumeDoesNotDeadlock(t *testing.T) {
 	st, a, sessionID := newTestStoreAndAgent(t)
 	otherID := store.NewSessionID()

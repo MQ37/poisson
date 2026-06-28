@@ -44,6 +44,9 @@ func (s *searchOverlay) updateMatches(resetCur bool) {
 	if len(s.matches) > 0 && s.cur >= len(s.matches) {
 		s.cur = len(s.matches) - 1
 	}
+	if resetCur && len(s.matches) > 0 && s.scroll != nil {
+		s.scroll(s.matches[s.cur])
+	}
 }
 
 func (s *searchOverlay) currentGlobalRow() int {
@@ -114,7 +117,7 @@ func (s *searchOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
 		s.appendPaste(k.Text)
 		return true, false, false
 	}
-	return true, false, false
+	return false, false, false
 }
 
 func (s *searchOverlay) appendPaste(text string) bool {

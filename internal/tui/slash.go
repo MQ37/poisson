@@ -18,12 +18,19 @@ func (t *TUI) handleSlash(cmd string) error {
 	case "/clear":
 		t.scroll = newScrollback(8192)
 		t.markFullDirty()
+		t.scroll.appendRaw(styleSystem, "display cleared (session history unchanged)")
+		t.markScrollDirty()
 		return nil
 	case "/help", "/h", "/?":
 		t.scroll.appendRaw(styleSystem, renderHelp())
 		t.markScrollDirty()
 		return nil
 	case "/new":
+		if t.running() {
+			t.scroll.appendRaw(styleSystem, "cannot create session while agent is running")
+			t.markScrollDirty()
+			return nil
+		}
 		return cmdNew(h)
 	case "/resume", "/r":
 		if len(parts) == 1 {
@@ -41,12 +48,32 @@ func (t *TUI) handleSlash(cmd string) error {
 		}
 		return cmdSearch(h, parts[1:])
 	case "/fork":
+		if t.running() {
+			t.scroll.appendRaw(styleSystem, "cannot fork while agent is running")
+			t.markScrollDirty()
+			return nil
+		}
 		return cmdFork(h, parts[1:])
 	case "/undo":
+		if t.running() {
+			t.scroll.appendRaw(styleSystem, "cannot undo while agent is running")
+			t.markScrollDirty()
+			return nil
+		}
 		return cmdUndo(h)
 	case "/compact":
-		t.scroll.appendRaw(styleSystem, "/compact — manual compaction not yet available (auto-compaction handles this)")
-		t.markScrollDirty()
+		if t.running() {
+			t.scroll.appendRaw(styleSystem, "cannot compact while agent is running")
+			t.markScrollDirty()
+			return nil
+		}
+		if err := t.agent.Compact(); err != nil {
+			t.scroll.appendRaw(styleError, "compaction failed: "+err.Error())
+			t.markScrollDirty()
+			return nil
+		}
+		t.hydrateScrollbackLocked()
+		t.markFullDirty()
 		return nil
 	case "/model":
 		if len(parts) == 1 {
@@ -63,6 +90,11 @@ func (t *TUI) handleSlash(cmd string) error {
 		t.openModelPicker()
 		return nil
 	case "/reload":
+		if t.running() {
+			t.scroll.appendRaw(styleSystem, "cannot reload while agent is running")
+			t.markScrollDirty()
+			return nil
+		}
 		return cmdReload(h)
 	case "/cost":
 		cmdCost(h)

@@ -56,7 +56,9 @@ func toolCardExpandedResultLines(b *Block, width int) []string {
 		inner = 1
 	}
 	lines := wrapLine(text, inner)
-	if len(lines) > toolResultExpandedMax {
+	total := len(lines)
+	truncated := total > toolResultExpandedMax
+	if truncated {
 		lines = lines[:toolResultExpandedMax]
 	}
 	start := b.meta.ToolScroll
@@ -73,7 +75,12 @@ func toolCardExpandedResultLines(b *Block, width int) []string {
 	if start >= end {
 		return nil
 	}
-	return lines[start:end]
+	out := lines[start:end]
+	if truncated && end >= len(lines) {
+		remaining := total - toolResultExpandedMax
+		out = append(out, fmt.Sprintf("… %d more lines (↑↓ scroll)", remaining))
+	}
+	return out
 }
 
 // toggleToolExpandInView toggles expand on the focused or last completed tool card in view.

@@ -367,6 +367,9 @@ func (t *TUI) paintCursor(b *strings.Builder, lay layoutSnapshot) {
 	if t.focusRegion == focusConv {
 		return
 	}
+	if _, ok := t.activeOverlay.(*searchOverlay); ok {
+		return
+	}
 	visRow := lay.sr - lay.firstRow
 	if visRow < 0 {
 		visRow = 0
@@ -407,7 +410,13 @@ func (t *TUI) toolSpinnerRows(lay layoutSnapshot) []int {
 func (t *TUI) markAfterEvent(ev agent.OutputEvent) {
 	switch ev.Type {
 	case agent.OutputText, agent.OutputThinking:
-		if rows := t.scroll.streamViewportDirty(t.scrollRows, t.contentWidth()); len(rows) > 0 {
+		viewH := t.convScrollRows()
+		if rows := t.scroll.streamViewportDirty(viewH, t.contentWidth()); len(rows) > 0 {
+			if t.focusRegion == focusConv {
+				for i := range rows {
+					rows[i]++
+				}
+			}
 			t.dirty.markScrollRows(rows...)
 		}
 	case agent.OutputStatus:
@@ -424,6 +433,11 @@ func (t *TUI) markAfterEvent(ev agent.OutputEvent) {
 	case agent.OutputDone:
 		t.scroll.finalizeThinking()
 		t.activeTools = 0
+		if t.turnCancelled {
+			t.turnCancelled = false
+			t.trimScrollbackFromLastUserLocked()
+			t.scroll.appendRaw(styleSystem, "  cancelled")
+		}
 		t.dirty.markStatus()
 		t.dirty.markScrollAll(t.scrollRows)
 	default:

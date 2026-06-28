@@ -22,8 +22,13 @@ func newPickerOverlay(title string, items []pickerItem, current string, onPick f
 		list[i] = filterableListItem{id: it.id, label: it.label, hint: it.hint}
 	}
 	pick := func(id string) bool {
+		if id == "" {
+			return false
+		}
 		if onPick != nil {
-			_ = onPick(id)
+			if err := onPick(id); err != nil {
+				return false
+			}
 		}
 		return true
 	}

@@ -87,6 +87,22 @@ func (s StatusSnapshot) renderHeaderRight() string {
 		b.WriteString(reset)
 		b.WriteString("  ")
 	}
+	if s.WarnContext {
+		b.WriteString(fgYellow)
+		b.WriteString(fmt.Sprintf("%.0f%%⚠", s.ContextPct))
+		b.WriteString(reset)
+		b.WriteString("  ")
+	}
+	if s.ToolCalls > 0 || s.ToolErrors > 0 {
+		b.WriteString(dim)
+		if s.ToolErrors > 0 {
+			b.WriteString(fmt.Sprintf("%dT/%de", s.ToolCalls, s.ToolErrors))
+		} else {
+			b.WriteString(fmt.Sprintf("%dT", s.ToolCalls))
+		}
+		b.WriteString(reset)
+		b.WriteString("  ")
+	}
 	b.WriteString(dim)
 	b.WriteString(time.Now().Format("3:04 PM"))
 	b.WriteString(reset)

@@ -52,10 +52,12 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 
 	if t.hasKeyOverlay() {
-		if k.isCtrlC() || k.Kind == KeyEscape {
-			t.dismissOverlay()
+		if _, isSearch := t.activeOverlay.(*searchOverlay); !isSearch {
+			if k.isCtrlC() || k.Kind == KeyEscape {
+				t.dismissOverlay()
+			}
+			return false, nil
 		}
-		return false, nil
 	}
 
 	if t.focusRegion == focusConv && t.feedConvFocus(k) {
@@ -105,11 +107,17 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		return false, nil
 	}
 
-	if !t.completion.empty() && t.completion.idx >= 0 && k.isEnter() {
-		t.applyCompletion(t.completion.cands[t.completion.idx])
-		t.completion = nil
-		t.markInputDirty()
-		return false, nil
+	if !t.completion.empty() && k.isEnter() {
+		idx := t.completion.idx
+		if idx < 0 && len(t.completion.cands) > 0 {
+			idx = 0
+		}
+		if idx >= 0 && idx < len(t.completion.cands) {
+			t.applyCompletion(t.completion.cands[idx])
+			t.completion = nil
+			t.markInputDirty()
+			return false, nil
+		}
 	}
 
 	if k.Kind == KeyEscape && t.completion != nil && !t.completion.empty() {
@@ -119,6 +127,11 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 
 	if k.isCtrlC() {
+		if t.running() && !t.approving.Load() {
+			t.cancelActiveRunLocked()
+			t.lastCtrlC = time.Now()
+			return false, nil
+		}
 		if t.editor.text() != "" {
 			t.editor.setText("")
 			t.completion = nil
@@ -129,26 +142,31 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 				return true, nil
 			}
 			t.lastCtrlC = now
-			t.setEphemeralHintLocked("Ctrl+C again to exit", 4*time.Second)
+			t.setEphemeralHintLocked("Ctrl+C again to exit", 2*time.Second)
 		}
 		return false, nil
+	}
+
+	viewH := t.scrollRows
+	if t.focusRegion == focusConv {
+		viewH = t.convScrollRows()
 	}
 
 	if k.Kind == KeyCtrl && k.Byte == 20 {
-		if t.scroll.toggleThinkingInView(t.scrollRows, t.contentWidth()) {
+		if t.scroll.toggleThinkingInView(viewH, t.contentWidth()) {
 			t.markScrollDirty()
 		}
 		return false, nil
 	}
 
-	if t.focusRegion == focusConv && k.Kind == KeyCtrl && k.Byte == 5 {
-		if t.scroll.toggleToolExpandInView(t.convScrollRows(), t.contentWidth()) {
+	if k.Kind == KeyCtrl && k.Byte == 5 {
+		if t.scroll.toggleToolExpandInView(viewH, t.contentWidth()) {
 			t.markScrollDirty()
 		}
 		return false, nil
 	}
 
-	if t.completion.empty() && k.Kind == KeyCtrl && k.Byte == 6 {
+	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyCtrl && k.Byte == 6 {
 		t.openSearchLocked()
 		return false, nil
 	}
@@ -158,12 +176,12 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		return false, nil
 	}
 
-	if t.completion.empty() && k.Kind == KeyCtrl && (k.Byte == 16 || k.Byte == 30) {
+	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyCtrl && (k.Byte == 16 || k.Byte == 30) {
 		t.openCommandPalette()
 		return false, nil
 	}
 
-	if t.activeOverlay == nil && k.Kind == KeyCtrl {
+	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyCtrl {
 		switch k.Byte {
 		case 13:
 			t.openModelPicker()
@@ -200,11 +218,6 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 
 	if t.running() && !t.approving.Load() {
-		if k.isCtrlC() {
-			t.cancelActiveRunLocked()
-			t.lastCtrlC = time.Now()
-			return false, nil
-		}
 		if k.isEnter() {
 			return false, nil
 		}

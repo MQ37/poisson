@@ -161,7 +161,7 @@ func (p *filterableListOverlay) feedKey(k Key) (handled bool, done bool, cancel 
 		return true, false, true
 	case k.Kind == KeyBackspace:
 		if trimOverlayFilter(&p.filter) {
-			p.idx = 0
+			p.syncIdxToCurrent()
 		}
 		return true, false, false
 	case k.Kind == KeyRune:
@@ -180,6 +180,20 @@ func (p *filterableListOverlay) feedKey(k Key) (handled bool, done bool, cancel 
 type keyOverlay interface {
 	overlay
 	feedKey(k Key) (handled bool, done bool, cancel bool)
+}
+
+func (p *filterableListOverlay) syncIdxToCurrent() {
+	if p.filter != "" {
+		p.idx = 0
+		return
+	}
+	p.idx = 0
+	for i, it := range p.items {
+		if it.id == p.currentID {
+			p.idx = i
+			return
+		}
+	}
 }
 
 func asKeyOverlay(o overlay) keyOverlay {

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // openBTW opens a floating side-question box (/btw) while the main agent keeps running.
@@ -78,16 +79,22 @@ func (t *TUI) openProviderPicker() {
 
 // openSessionPicker shows recent sessions overlay.
 func (t *TUI) openSessionPicker() {
+	if t.running() {
+		t.setEphemeralHintLocked("cannot switch session while agent is running", 3*time.Second)
+		return
+	}
 	h := tuiCmdHost{t}
 	items, err := pickerSessionItems(h)
 	if err != nil {
-		t.scroll.appendRaw(styleError, "error listing sessions: "+err.Error())
-		t.markScrollDirty()
+		t.setActiveOverlay(newPickerOverlay("Sessions", []pickerItem{
+			{id: "", label: "error: " + err.Error()},
+		}, "", func(string) error { return nil }))
 		return
 	}
 	if len(items) == 0 {
-		t.scroll.appendRaw(styleSystem, "no sessions")
-		t.markScrollDirty()
+		t.setActiveOverlay(newPickerOverlay("Sessions", []pickerItem{
+			{id: "", label: "(no sessions — use /new)"},
+		}, "", func(string) error { return nil }))
 		return
 	}
 	t.setActiveOverlay(newPickerOverlay("Sessions", items, t.sessionID, func(id string) error {
@@ -107,35 +114,34 @@ func (t *TUI) openSearchLocked() {
 	t.focusRegion = focusInput
 	t.setActiveOverlay(newSearchOverlay(
 		func() []ScreenRow {
-			t.mu.Lock()
 			width := t.contentWidth()
 			wrapped, _ := t.scroll.layoutAll(width)
-			t.mu.Unlock()
 			return wrapped
 		},
 		func(globalRow int) {
-			t.mu.Lock()
-			defer t.mu.Unlock()
-			width := t.contentWidth()
-			viewH := t.scrollRows
-			if t.focusRegion == focusConv && t.scrollRows > 1 {
-				viewH = t.scrollRows - 1
-			}
-			wrapped, _ := t.scroll.layoutAll(width)
-			max := len(wrapped) - viewH
-			if max < 0 {
-				max = 0
-			}
-			off := len(wrapped) - globalRow - viewH/2
-			if off < 0 {
-				off = 0
-			}
-			if off > max {
-				off = max
-			}
-			t.scroll.scrollOffset = off
+			t.scrollToSearchMatchLocked(globalRow)
 		},
 	))
+}
+
+// scrollToSearchMatchLocked scrolls so globalRow is near the viewport center.
+// Caller must hold t.mu.
+func (t *TUI) scrollToSearchMatchLocked(globalRow int) {
+	width := t.contentWidth()
+	viewH := t.convScrollRows()
+	wrapped, _ := t.scroll.layoutAll(width)
+	max := len(wrapped) - viewH
+	if max < 0 {
+		max = 0
+	}
+	off := len(wrapped) - globalRow - viewH/2
+	if off < 0 {
+		off = 0
+	}
+	if off > max {
+		off = max
+	}
+	t.scroll.scrollOffset = off
 }
 
 // hasKeyOverlay reports whether a modal that consumes keyboard input is active.
