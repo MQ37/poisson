@@ -112,8 +112,9 @@ func runREPL(noSkills bool) {
 		os.Exit(1)
 	}
 
-	// Set up tools.
-	reg := tools.NewRegistry()
+	// Set up output channel.
+	outputChan := make(chan agent.OutputEvent, 256)
+
 	// Approval callback for dangerous bash commands. It delegates to the TUI
 	// (set below) so the prompt owns stdin exclusively in blocking mode; the
 	// terminal runs raw with a nonblocking Ctrl+C poller otherwise.
@@ -125,19 +126,6 @@ func runREPL(noSkills bool) {
 		return false
 	}
 
-	reg.Register(tools.NewBashTool(cwd, false, approvalFn))
-	reg.Register(tools.NewReadTool(cwd))
-	reg.Register(tools.NewWriteTool(cwd))
-	reg.Register(tools.NewEditTool(cwd))
-	reg.Register(tools.NewSearchTool(cwd))
-	reg.Register(tools.NewLsTool(cwd))
-	reg.Register(tools.NewGlobTool(cwd))
-	reg.Register(tools.NewRecallTool(st))
-
-	// Set up output channel.
-	outputChan := make(chan agent.OutputEvent, 256)
-
-	// Subagent tool (only in parent mode).
 	subOutputFn := func(eventType, text, toolName string, toolInput json.RawMessage) {
 		switch eventType {
 		case "text":
@@ -149,10 +137,14 @@ func runREPL(noSkills bool) {
 	subApprovalFn := func(command, description, workdir, agentName string) bool {
 		return approvalFn(command, description, workdir)
 	}
-	reg.Register(tools.NewSubagentTool(cwd, st, subOutputFn, subApprovalFn))
 
-	// Network tools.
-	reg.Register(tools.NewExaSearchTool())
+	reg := tools.BuildRegistry(tools.BuildOptions{
+		Cwd:         cwd,
+		Store:       st,
+		ApprovalFn:  approvalFn,
+		SubOutput:   subOutputFn,
+		SubApproval: subApprovalFn,
+	})
 
 	// Set up agent.
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
@@ -415,27 +407,12 @@ func runChildMode() {
 		return false
 	}
 
-	// Set up tools — restricted set.
-	reg := tools.NewRegistry()
-	for _, name := range strings.Split(toolsList, ",") {
-		name = strings.TrimSpace(name)
-		switch name {
-		case "read":
-			reg.Register(tools.NewReadTool(cwd))
-		case "write":
-			reg.Register(tools.NewWriteTool(cwd))
-		case "edit":
-			reg.Register(tools.NewEditTool(cwd))
-		case "bash":
-			reg.Register(tools.NewBashTool(cwd, sandbox, approvalFn))
-		case "search":
-			reg.Register(tools.NewSearchTool(cwd))
-		case "ls":
-			reg.Register(tools.NewLsTool(cwd))
-		case "glob":
-			reg.Register(tools.NewGlobTool(cwd))
-		}
-	}
+	reg := tools.BuildRegistry(tools.BuildOptions{
+		Cwd:        cwd,
+		Sandbox:    sandbox,
+		ApprovalFn: approvalFn,
+		Tools:      toolsList,
+	})
 
 	// Run agent with a nil outputChan (we write events ourselves).
 	outputChan := make(chan agent.OutputEvent, 256)
