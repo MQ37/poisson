@@ -265,6 +265,9 @@ func keyFromKitty(code, mods int) (Key, bool) {
 	case 27, kittyKeyEscape:
 		return Key{Kind: KeyEscape}, true
 	case kittyKeyEnter, 13:
+		if ctrl {
+			return Key{Kind: KeyCtrl, Byte: 13}, true
+		}
 		if shift {
 			return Key{Kind: KeyShiftEnter}, true
 		}
@@ -273,6 +276,9 @@ func keyFromKitty(code, mods int) (Key, bool) {
 		return Key{Kind: KeyTab}, true
 	case kittyKeyBackspace, 8, 127:
 		return Key{Kind: KeyBackspace}, true
+	}
+	if ctrl && code >= 1 && code <= 31 {
+		return Key{Kind: KeyCtrl, Byte: byte(code)}, true
 	}
 	if ctrl && ((code >= 'a' && code <= 'z') || (code >= 'A' && code <= 'Z')) {
 		return Key{Kind: KeyCtrl, Byte: byte(code) & 0x1f}, true
