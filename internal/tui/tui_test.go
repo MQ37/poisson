@@ -335,6 +335,21 @@ func TestEditorKittyEnterSubmits(t *testing.T) {
 	}
 }
 
+func TestArrowHistoryAtEditorEdges(t *testing.T) {
+	tui := newTUI(nil, "s-abc", nil)
+	tui.rows = 24
+	tui.cols = 80
+	tui.editor.wrapWidth = 79
+	tui.history = []string{"first", "second"}
+	tui.editor.setText("draft")
+	tui.editor.col = len("draft")
+
+	tui.feed([]byte{27, '[', 'A'}) // up at top of single line
+	if tui.editor.text() != "second" {
+		t.Errorf("up at top = %q, want second", tui.editor.text())
+	}
+}
+
 func TestNavigateHistory(t *testing.T) {
 	tui := newTUI(nil, "s-abc", nil)
 	tui.history = []string{"first", "second", "third"}

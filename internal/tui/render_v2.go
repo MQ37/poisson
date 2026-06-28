@@ -228,11 +228,37 @@ func (t *TUI) paintCompletionOverlay(b *strings.Builder, lay layoutSnapshot) {
 
 // completionLines returns the completion dropdown rows to paint (capped to scrollback).
 func completionLines(t *TUI, c *completion) []string {
-	lines := strings.Split(strings.TrimRight(t.renderCompletion(c), "\n"), "\n")
-	if len(lines) > t.scrollRows {
-		lines = append(lines[:1], lines[len(lines)-(t.scrollRows-1):]...)
+	all := strings.Split(strings.TrimRight(t.renderCompletion(c), "\n"), "\n")
+	if len(all) <= 1 {
+		return all
 	}
-	return lines
+	header := all[0]
+	items := all[1:]
+	maxItems := t.scrollRows - 1
+	if maxItems < 1 {
+		maxItems = 1
+	}
+	if len(items) <= maxItems {
+		return all
+	}
+	start := 0
+	if c.idx >= 0 {
+		if c.idx >= maxItems-1 {
+			start = c.idx - maxItems + 2
+		}
+		end := start + maxItems
+		if end > len(items) {
+			end = len(items)
+			start = end - maxItems
+			if start < 0 {
+				start = 0
+			}
+		}
+		items = items[start:end]
+	} else {
+		items = items[len(items)-maxItems:]
+	}
+	return append([]string{header}, items...)
 }
 
 // paintCompletionZone clears the union of the previous and current overlay
@@ -285,9 +311,19 @@ func (t *TUI) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
 	if t.activeOverlay == nil {
 		return
 	}
-	anchor, lines := t.activeOverlay.render(t.scrollRows, t.cols)
+	var anchor int
+	var lines []string
+	if b, ok := t.activeOverlay.(*btwOverlay); ok {
+		anchor, lines = b.renderWithFrame(t.scrollRows, t.cols, t.renderFrame)
+	} else {
+		anchor, lines = t.activeOverlay.render(t.scrollRows, t.cols)
+	}
+	pinOffset := 0
+	if _, ok := t.activeOverlay.(*searchOverlay); ok && t.focusRegion == focusConv {
+		pinOffset = 1
+	}
 	for i, line := range lines {
-		row := lay.scrollStart + anchor - 1 + i
+		row := lay.scrollStart + anchor - 1 + pinOffset + i
 		if row < lay.scrollStart || row >= lay.scrollStart+t.scrollRows {
 			continue
 		}
@@ -301,12 +337,11 @@ func (t *TUI) paintHeaderRegion(b *strings.Builder, lay layoutSnapshot) {
 	if t.headerRows < 1 {
 		return
 	}
-	rendered := t.status.Render(lay.wrapWidth)
-	lines := strings.Split(rendered, "\r\n")
-	for i := 0; i < t.headerRows && i < len(lines); i++ {
+	line := t.status.RenderHeader(lay.wrapWidth)
+	for i := 0; i < t.headerRows; i++ {
 		b.WriteString(cup(1+i, 1))
 		b.WriteString(clearLine())
-		b.WriteString(truncateToWidth(lines[i], lay.wrapWidth))
+		b.WriteString(truncateToWidth(line, lay.wrapWidth))
 	}
 }
 
@@ -446,6 +481,8 @@ func (t *TUI) markSpinnerTick() {
 		if t.activeOverlay != nil {
 			t.dirty.markOverlay()
 		}
+	} else if _, ok := t.activeOverlay.(*btwOverlay); ok {
+		t.dirty.markOverlay()
 	} else {
 		t.dirty.markStatus()
 	}

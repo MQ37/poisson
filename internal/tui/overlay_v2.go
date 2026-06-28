@@ -97,6 +97,9 @@ func (t *TUI) openSessionPicker() {
 
 // openSearch opens in-scrollback find (Ctrl+F).
 func (t *TUI) openSearch() {
+	t.mu.Lock()
+	t.focusRegion = focusInput
+	t.mu.Unlock()
 	t.setActiveOverlay(newSearchOverlay(
 		func() []ScreenRow {
 			t.mu.Lock()
@@ -145,7 +148,7 @@ func (t *TUI) blocksBackgroundInput() bool {
 		return false
 	}
 	switch t.activeOverlay.(type) {
-	case *searchOverlay, *approvalOverlay:
+	case *searchOverlay:
 		return false
 	}
 	return true
@@ -204,6 +207,10 @@ func (t *TUI) handleKeyOverlay(data []byte) bool {
 	if !handled {
 		return false
 	}
+	if _, ok := t.activeOverlay.(*searchOverlay); ok {
+		t.markScrollDirty()
+	}
+	t.dirty.markOverlay()
 	t.closeOverlayAfter(prev, done, cancel)
 	return true
 }

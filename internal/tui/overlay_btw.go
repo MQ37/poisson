@@ -58,6 +58,10 @@ func (o *btwOverlay) snapshot() (question, answer, errMsg string, processing boo
 }
 
 func (o *btwOverlay) render(scrollRows, cols int) (int, []string) {
+	return o.renderWithFrame(scrollRows, cols, 0)
+}
+
+func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string) {
 	question, answer, errMsg, processing, scroll, maxH := o.snapshot()
 	if maxH < 5 {
 		maxH = 5
@@ -69,13 +73,13 @@ func (o *btwOverlay) render(scrollRows, cols int) (int, []string) {
 	body = append(body, dim+"? "+reset+renderInline(q))
 
 	if processing && answer == "" && errMsg == "" {
-		body = append(body, dim+spinnerChar(0)+" thinking…"+reset)
+		body = append(body, dim+spinnerChar(frame)+" thinking…"+reset)
 	} else if errMsg != "" {
 		body = append(body, fgRed+bold+truncatePlain(errMsg, inner-2)+reset)
 	} else {
 		wrapped := wrapPlain(answer, inner-2)
 		if len(wrapped) == 0 && processing {
-			body = append(body, dim+spinnerChar(0)+" thinking…"+reset)
+			body = append(body, dim+spinnerChar(frame)+" thinking…"+reset)
 		} else {
 			body = append(body, wrapped...)
 		}

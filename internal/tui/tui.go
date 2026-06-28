@@ -74,6 +74,8 @@ type TUI struct {
 	focusRegion focusRegion
 	convUserIdx int // index into scroll.userBlockIndices()
 
+	hintExpiry time.Time // when set, ephemeral status.Hint auto-clears
+
 	// Approval coordination. The input goroutine is the sole stdin reader;
 	// when approval is pending it routes the answer through this channel
 	// instead of feeding it to the editor.
@@ -131,7 +133,7 @@ func newTUI(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent)
 		},
 		dirty:          newDirtyTracker(),
 		inputRows:      3,
-		headerRows:     2,
+		headerRows:     1,
 		statusRows:     0,
 		lastInputRows:  3,
 		done:           make(chan struct{}),
@@ -299,6 +301,7 @@ func (t *TUI) Run() error {
 // true, the input goroutine should exit. It must be called from the input
 // goroutine only.
 func (t *TUI) feed(data []byte) (bool, error) {
+	t.maybeClearHint()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -392,15 +395,6 @@ func (t *TUI) feed(data []byte) (bool, error) {
 		}
 	}
 
-	// While a prompt is running, only Ctrl+C and approval keys are meaningful.
-	if t.running() && !t.approving.Load() {
-		if containsCtrlC(data) {
-			t.cancelActiveRun()
-			t.lastCtrlC = time.Now()
-		}
-		return false, nil
-	}
-
 	// Tab: completion when typing tokens; otherwise toggle conversation focus.
 	if containsTab(data) {
 		t.handleTabKey()
@@ -438,8 +432,7 @@ func (t *TUI) feed(data []byte) (bool, error) {
 				return true, nil
 			}
 			t.lastCtrlC = now
-			t.status.Hint = "Ctrl+C again to exit"
-			t.dirty.markStatus()
+			t.setEphemeralHintLocked("Ctrl+C again to exit", 4*time.Second)
 		}
 		return false, nil
 	}
@@ -454,13 +447,15 @@ func (t *TUI) feed(data []byte) (bool, error) {
 		}
 	}
 
-	// Ctrl+E toggles expand on the nearest tool card in view.
-	for _, b := range data {
-		if b == 5 {
-			if t.scroll.toggleToolExpandInView(t.scrollRows, t.contentWidth()) {
-				t.markScrollDirty()
+	// Ctrl+E toggles tool expand in conversation focus (not in the input editor).
+	if t.focusRegion == focusConv {
+		for _, b := range data {
+			if b == 5 {
+				if t.scroll.toggleToolExpandInView(t.convScrollRows(), t.contentWidth()) {
+					t.markScrollDirty()
+				}
+				return false, nil
 			}
-			return false, nil
 		}
 	}
 
@@ -530,6 +525,29 @@ func (t *TUI) feed(data []byte) (bool, error) {
 				return false, nil
 			}
 		}
+	}
+
+	// Plain ↑/↓ at editor edges browse prompt history (readline-style).
+	if t.completion.empty() && t.activeOverlay == nil && t.focusRegion == focusInput {
+		if isArrowUp(data) && t.editorAtScrollTop() {
+			t.navigateHistory(-1)
+			t.markInputDirty()
+			return false, nil
+		}
+		if isArrowDown(data) && t.editorAtScrollBottom() {
+			t.navigateHistory(1)
+			t.markInputDirty()
+			return false, nil
+		}
+	}
+
+	// While agent is running, allow shortcuts above but not typing or submit.
+	if t.running() && !t.approving.Load() {
+		if containsCtrlC(data) {
+			t.cancelActiveRunLocked()
+			t.lastCtrlC = time.Now()
+		}
+		return false, nil
 	}
 
 	return t.processEditor(data)
@@ -912,7 +930,7 @@ func (t *TUI) recomputeLayout() {
 		wrapWidth = 1
 	}
 	t.editor.wrapWidth = wrapWidth
-	t.headerRows = 2
+	t.headerRows = 1
 	t.statusRows = 0
 	t.inputRows = t.inputHeight(wrapWidth)
 	t.scrollRows = h - t.headerRows - t.inputRows
@@ -1032,9 +1050,9 @@ func (t *TUI) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc int
 
 func (t *TUI) renderHintLine() string {
 	if t.focusRegion == focusConv {
-		return dim + "Tab:input · PgUp/Dn:scroll · Shift+←/→:prompts" + reset
+		return dim + "Tab:input · PgUp/Dn:scroll · Shift+←/→:prompts · Ctrl+E:tool" + reset
 	}
-	base := "Tab:conv · Enter:send · Ctrl+Y:yank · Ctrl+E:tool · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model"
+	base := "Tab:conv · Enter:send · ↑↓:history · Ctrl+Y:yank · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model"
 	if t.status.Hint != "" {
 		return dim + t.status.Hint + " · " + base + reset
 	}
@@ -1101,13 +1119,11 @@ func (t *TUI) yankClipboard() {
 	text := t.scroll.yankText()
 	t.mu.Unlock()
 	if text == "" {
+		t.setEphemeralHint("nothing to yank", 2*time.Second)
 		return
 	}
 	_ = osc52Copy(text)
-	t.mu.Lock()
-	t.status.Hint = "yanked to clipboard"
-	t.dirty.markStatus()
-	t.mu.Unlock()
+	t.setEphemeralHint("yanked to clipboard", 2*time.Second)
 }
 
 func (t *TUI) handleSlash(cmd string) error {

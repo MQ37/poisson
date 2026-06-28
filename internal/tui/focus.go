@@ -1,5 +1,7 @@
 package tui
 
+import "time"
+
 // focusRegion is which part of the TUI receives keyboard input.
 type focusRegion uint8
 
@@ -131,7 +133,8 @@ func (t *TUI) trimScrollbackFromLastUser() {
 	t.markScrollDirty()
 }
 
-// resetSessionView clears scrollback and focus state after switching sessions.
+// resetSessionView clears scrollback and focus state after switching sessions,
+// then replays stored messages so the UI matches the active session.
 func (t *TUI) resetSessionView() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -140,27 +143,53 @@ func (t *TUI) resetSessionView() {
 	t.convUserIdx = 0
 	t.activeOverlay = nil
 	t.completion = nil
+	t.hydrateScrollbackLocked()
 	t.dirty.markFull()
 }
 
-func (t *TUI) cancelActiveRun() {
+func (t *TUI) setEphemeralHintLocked(msg string, d time.Duration) {
+	t.status.Hint = msg
+	t.hintExpiry = time.Now().Add(d)
+	t.dirty.markStatus()
+}
+
+func (t *TUI) setEphemeralHint(msg string, d time.Duration) {
+	t.mu.Lock()
+	t.setEphemeralHintLocked(msg, d)
+	t.mu.Unlock()
+}
+
+func (t *TUI) maybeClearHint() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.status.Hint == "" || t.hintExpiry.IsZero() {
+		return
+	}
+	if time.Now().After(t.hintExpiry) {
+		t.status.Hint = ""
+		t.hintExpiry = time.Time{}
+		t.dirty.markStatus()
+	}
+}
+
+func (t *TUI) cancelActiveRunLocked() {
 	t.cancelMu.Lock()
 	cancel := t.cancelRun
 	t.cancelMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
+	t.setEphemeralHintLocked("cancelled — Ctrl+C again to exit", 4*time.Second)
+}
+
+func (t *TUI) cancelActiveRun() {
 	t.mu.Lock()
-	t.status.Hint = "cancelled — Ctrl+C again to exit"
-	t.dirty.markStatus()
+	t.cancelActiveRunLocked()
 	t.mu.Unlock()
 }
 
 func (t *TUI) flashApprovalHint() {
-	t.mu.Lock()
-	t.status.Hint = "approval: A/y/Enter allow · D/n/Esc deny · Ctrl+C cancel"
-	t.dirty.markStatus()
-	t.mu.Unlock()
+	t.setEphemeralHint("approval: A/y/Enter allow · D/n/Esc deny · Ctrl+C cancel", 3*time.Second)
 }
 
 func containsTab(data []byte) bool {
