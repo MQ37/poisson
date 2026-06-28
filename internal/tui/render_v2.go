@@ -154,6 +154,9 @@ func (t *TUI) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []i
 		if i < len(lay.visible) {
 			line := t.formatScrollLine(lay.visible[i].Text)
 			line = t.applySearchHighlight(i, lay, line)
+			if t.approving.Load() {
+				line = dim + stripANSI(line) + reset
+			}
 			b.WriteString(truncateToWidth(line, lay.wrapWidth))
 		}
 	}

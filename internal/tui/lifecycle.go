@@ -102,6 +102,19 @@ func (t *TUI) Run() error {
 						t.cancelActiveRun()
 						continue
 					}
+					if k.isNavUp() || k.isNavDown() {
+						t.mu.Lock()
+						if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
+							delta := 1
+							if k.isNavUp() {
+								delta = -1
+							}
+							ao.scrollBy(delta)
+							t.dirty.markOverlay()
+						}
+						t.mu.Unlock()
+						continue
+					}
 					allowed, ok := keyApprovalAnswer(k)
 					if ok {
 						t.approvalAnswer <- allowed

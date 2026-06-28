@@ -177,6 +177,53 @@ func TestApprovalBoxEqualWidth(t *testing.T) {
 	}
 }
 
+func TestApprovalOverlayShowsLongScript(t *testing.T) {
+	var cmd strings.Builder
+	for i := 0; i < 40; i++ {
+		cmd.WriteString("echo line")
+		cmd.WriteByte('\n')
+	}
+	o := newApprovalOverlay(cmd.String(), "long summer script")
+	_, lines := o.render(24, 80)
+	plain := stripANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(plain, "echo line") {
+		t.Fatal("expected wrapped command lines in approval box")
+	}
+	if !strings.Contains(plain, "scroll command") {
+		t.Fatal("expected scroll hint for long command")
+	}
+	if len(lines) < 8 {
+		t.Fatalf("expected tall approval box, got %d lines", len(lines))
+	}
+}
+
+func TestApprovalOverlayScrollChangesView(t *testing.T) {
+	var cmd strings.Builder
+	for i := 0; i < 30; i++ {
+		cmd.WriteString("line ")
+		cmd.WriteString(itoa(i))
+		cmd.WriteByte('\n')
+	}
+	o := newApprovalOverlay(cmd.String(), "numbered script")
+	_, before := o.render(12, 80)
+	o.scrollBy(5)
+	_, after := o.render(12, 80)
+	if stripANSI(strings.Join(before, "")) == stripANSI(strings.Join(after, "")) {
+		t.Fatal("scroll should change visible command lines")
+	}
+}
+
+func TestBashInputPreviewMultiline(t *testing.T) {
+	cmd := "cat << 'SCRIPT' > /tmp/x.sh\n#!/bin/bash\necho hi\nSCRIPT"
+	got := stripANSI(bashInputPreview(cmd))
+	if !strings.Contains(got, "cat <<") {
+		t.Fatalf("expected first line in preview, got %q", got)
+	}
+	if !strings.Contains(got, "+3 lines") {
+		t.Fatalf("expected line count suffix, got %q", got)
+	}
+}
+
 func TestOverlayEscapeDismissFallback(t *testing.T) {
 	tui := newTestTUIHelper()
 	tui.activeOverlay = newPaletteOverlay(nil)

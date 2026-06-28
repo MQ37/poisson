@@ -3,9 +3,11 @@ package tui
 import "strings"
 
 // approvalOverlay is a centered allow/deny prompt over the scrollback region.
+// Long commands are wrapped and scrollable with ↑/↓ while approving.
 type approvalOverlay struct {
 	command     string
 	description string
+	scroll      int
 }
 
 func newApprovalOverlay(command, description string) *approvalOverlay {
@@ -15,21 +17,59 @@ func newApprovalOverlay(command, description string) *approvalOverlay {
 	}
 }
 
+func (o *approvalOverlay) scrollBy(delta int) {
+	o.scroll += delta
+	if o.scroll < 0 {
+		o.scroll = 0
+	}
+}
+
 func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 	if scrollRows < 5 || cols < 24 {
 		return 1, o.fallbackLines(cols)
 	}
 
-	width := boxInnerWidth(cols, 68)
+	width := boxInnerWidth(cols, cols-4)
 	inner := width - 6
 	if inner < 12 {
 		inner = 12
 	}
 
+	purpose := dim + "Purpose: " + reset + truncatePlain(o.description, inner-10)
+	sep := dim + strings.Repeat("─", inner) + reset
+
+	cmdLines := wrapPlain("$ "+o.command, inner)
+	if len(cmdLines) == 0 {
+		cmdLines = []string{"$ "}
+	}
+
+	footer := "[A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel"
+	scrollHint := ""
+	maxBody := scrollRows - 6 // top, purpose, sep, footer, bottom + margin
+	if maxBody < 3 {
+		maxBody = 3
+	}
+	if len(cmdLines) > maxBody {
+		scrollHint = dim + "↑↓ scroll command" + reset
+		if o.scroll > len(cmdLines)-maxBody {
+			o.scroll = len(cmdLines) - maxBody
+		}
+		if o.scroll < 0 {
+			o.scroll = 0
+		}
+		cmdLines = cmdLines[o.scroll : o.scroll+maxBody]
+	} else {
+		o.scroll = 0
+	}
+
 	var body []string
-	body = append(body, "$ "+truncatePlain(o.command, inner-4))
-	body = append(body, dim+"Purpose: "+truncatePlain(o.description, inner-10)+reset)
-	body = append(body, "[A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel")
+	body = append(body, purpose)
+	body = append(body, sep)
+	body = append(body, cmdLines...)
+	if scrollHint != "" {
+		body = append(body, scrollHint)
+	}
+	body = append(body, footer)
 
 	var lines []string
 	lines = append(lines, boxTopBorder("approval required", width))
@@ -55,8 +95,10 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 func (o *approvalOverlay) fallbackLines(cols int) []string {
 	var b strings.Builder
 	b.WriteString(fgYellow + bold + "⚠ approval required" + reset + "\n")
-	b.WriteString("  $ " + truncatePlain(o.command, cols-4) + "\n")
-	b.WriteString("  " + dim + "Purpose: " + truncatePlain(o.description, cols-12) + reset + "\n")
+	b.WriteString("  " + dim + "Purpose: " + reset + truncatePlain(o.description, cols-14) + "\n")
+	for _, ln := range wrapPlain("$ "+o.command, cols-4) {
+		b.WriteString("  " + truncatePlain(ln, cols-4) + "\n")
+	}
 	b.WriteString(dim + "  [A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel" + reset)
 	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
 }

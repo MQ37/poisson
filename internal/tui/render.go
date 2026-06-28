@@ -55,6 +55,36 @@ func renderEventString(ev agent.OutputEvent) string {
 	}
 }
 
+// bashInputPreview summarizes a bash command for the tool card body.
+// Multi-line scripts show the first line plus a line count instead of
+// dumping the full heredoc into scrollback.
+func bashInputPreview(command string) string {
+	normalized := strings.ReplaceAll(command, "\r\n", "\n")
+	lines := strings.Split(normalized, "\n")
+	nonEmpty := 0
+	first := ""
+	for _, ln := range lines {
+		s := strings.TrimSpace(ln)
+		if s == "" {
+			continue
+		}
+		nonEmpty++
+		if first == "" {
+			first = s
+		}
+	}
+	if first == "" {
+		return "$ " + previewText(command, 80)
+	}
+	out := "$ " + previewText(first, 80)
+	if nonEmpty > 1 {
+		out += dim + " (+" + itoa(nonEmpty-1) + " lines)" + reset
+	} else if len(command) > 80 {
+		out = "$ " + previewText(command, 80)
+	}
+	return out
+}
+
 func toolInputPreview(toolName string, input []byte) string {
 	if len(input) == 0 {
 		return "..."
@@ -65,7 +95,7 @@ func toolInputPreview(toolName string, input []byte) string {
 			Command string `json:"command"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Command != "" {
-			return "$ " + previewText(in.Command, 100)
+			return bashInputPreview(in.Command)
 		}
 	case "write":
 		var in struct {

@@ -207,7 +207,7 @@ func (t *TUI) cancelActiveRun() {
 }
 
 func (t *TUI) flashApprovalHint() {
-	t.setEphemeralHint("approval: A/y/Enter allow · D/n/Esc deny · Ctrl+C cancel", 3*time.Second)
+	t.setEphemeralHint("approval: A/y/Enter allow · D/n/Esc deny · ↑↓ scroll · Ctrl+C cancel", 3*time.Second)
 }
 
 func containsTab(data []byte) bool {
