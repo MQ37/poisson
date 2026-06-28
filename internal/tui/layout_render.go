@@ -212,14 +212,19 @@ func (t *TUI) writeRaw(s string) {
 	}
 }
 
-func (t *TUI) yankClipboard() {
-	t.mu.Lock()
+// yankClipboardLocked copies yankText to the system clipboard. Caller must hold t.mu.
+func (t *TUI) yankClipboardLocked() {
 	text := t.scroll.yankText()
-	t.mu.Unlock()
 	if text == "" {
-		t.setEphemeralHint("nothing to yank", 2*time.Second)
+		t.setEphemeralHintLocked("nothing to yank", 2*time.Second)
 		return
 	}
 	_ = osc52Copy(text)
-	t.setEphemeralHint("yanked to clipboard", 2*time.Second)
+	t.setEphemeralHintLocked("yanked to clipboard", 2*time.Second)
+}
+
+func (t *TUI) yankClipboard() {
+	t.mu.Lock()
+	t.yankClipboardLocked()
+	t.mu.Unlock()
 }

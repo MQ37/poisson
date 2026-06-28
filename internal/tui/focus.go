@@ -127,23 +127,27 @@ func (t *TUI) scrollViewportRows() int {
 	return t.convScrollRows()
 }
 
-// trimScrollbackFromLastUser removes the last user turn from on-screen scrollback.
-func (t *TUI) trimScrollbackFromLastUser() {
+// trimScrollbackFromLastUserLocked removes the last user turn from scrollback.
+// Caller must hold t.mu.
+func (t *TUI) trimScrollbackFromLastUserLocked() {
 	idxs := t.scroll.userBlockIndices()
 	if len(idxs) == 0 {
 		return
 	}
-	t.mu.Lock()
 	t.scroll.trimFromBlockIndex(idxs[len(idxs)-1])
-	t.mu.Unlock()
 	t.markScrollDirty()
 }
 
-// resetSessionView clears scrollback and focus state after switching sessions,
-// then replays stored messages so the UI matches the active session.
-func (t *TUI) resetSessionView() {
+// trimScrollbackFromLastUser removes the last user turn from on-screen scrollback.
+func (t *TUI) trimScrollbackFromLastUser() {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.trimScrollbackFromLastUserLocked()
+	t.mu.Unlock()
+}
+
+// resetSessionViewLocked clears scrollback and focus after switching sessions.
+// Caller must hold t.mu.
+func (t *TUI) resetSessionViewLocked() {
 	t.scroll = newScrollback(8192)
 	t.focusRegion = focusInput
 	t.convUserIdx = 0
@@ -151,6 +155,14 @@ func (t *TUI) resetSessionView() {
 	t.completion = nil
 	t.hydrateScrollbackLocked()
 	t.dirty.markFull()
+}
+
+// resetSessionView clears scrollback and focus state after switching sessions,
+// then replays stored messages so the UI matches the active session.
+func (t *TUI) resetSessionView() {
+	t.mu.Lock()
+	t.resetSessionViewLocked()
+	t.mu.Unlock()
 }
 
 func (t *TUI) setEphemeralHintLocked(msg string, d time.Duration) {

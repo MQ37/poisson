@@ -149,12 +149,12 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 
 	if t.completion.empty() && k.Kind == KeyCtrl && k.Byte == 6 {
-		t.openSearch()
+		t.openSearchLocked()
 		return false, nil
 	}
 
 	if k.Kind == KeyCtrl && k.Byte == 25 {
-		t.yankClipboard()
+		t.yankClipboardLocked()
 		return false, nil
 	}
 

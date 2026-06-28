@@ -36,7 +36,7 @@ func (t *TUI) handleSlash(cmd string) error {
 		return nil
 	case "/search":
 		if len(parts) == 1 {
-			t.openSearch()
+			t.openSearchLocked()
 			return nil
 		}
 		return cmdSearch(h, parts[1:])

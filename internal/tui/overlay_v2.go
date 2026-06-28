@@ -98,8 +98,13 @@ func (t *TUI) openSessionPicker() {
 // openSearch opens in-scrollback find (Ctrl+F).
 func (t *TUI) openSearch() {
 	t.mu.Lock()
-	t.focusRegion = focusInput
+	t.openSearchLocked()
 	t.mu.Unlock()
+}
+
+// openSearchLocked opens search. Caller must hold t.mu (e.g. feedKey, handleSlash).
+func (t *TUI) openSearchLocked() {
+	t.focusRegion = focusInput
 	t.setActiveOverlay(newSearchOverlay(
 		func() []ScreenRow {
 			t.mu.Lock()

@@ -246,7 +246,7 @@ func switchAgentToSession(h commandHost, sess *store.Session) bool {
 
 func resetHostSessionView(h commandHost) {
 	if th, ok := h.(tuiCmdHost); ok {
-		th.t.resetSessionView()
+		th.t.resetSessionViewLocked()
 	}
 }
 
@@ -300,7 +300,7 @@ func cmdUndo(h commandHost) error {
 
 func trimHostScrollbackFromLastUser(h commandHost) {
 	if th, ok := h.(tuiCmdHost); ok {
-		th.t.trimScrollbackFromLastUser()
+		th.t.trimScrollbackFromLastUserLocked()
 	}
 }
 
