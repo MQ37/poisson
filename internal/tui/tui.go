@@ -248,8 +248,7 @@ func (t *TUI) Run() error {
 			blockBG := t.blocksBackgroundInput()
 			t.mu.Unlock()
 			if !blockBG {
-				viewport := t.scrollViewportRows()
-				if delta, ok := parseScrollInputRaw(buf[:n], viewport); ok {
+				if delta, ok := parseMouseWheelScroll(buf[:n]); ok {
 					t.handleScrollDelta(delta)
 					continue
 				}

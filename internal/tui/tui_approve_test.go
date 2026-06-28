@@ -58,14 +58,9 @@ func TestScrollHandledBeforeApproval(t *testing.T) {
 	}
 	tui.mu.Unlock()
 
-	raw := []byte("\x1b[5~")
-	// Mirrors input-loop order: scroll gestures return early; approval routing
-	// never runs on the same chunk.
-	delta, scrolled := parseScrollInputRaw(raw, tui.scrollRows)
-	if !scrolled || delta <= 0 {
-		t.Fatalf("page up: delta=%d ok=%v", delta, scrolled)
+	if quit, err := tui.feed([]byte("\x1b[5~")); quit || err != nil {
+		t.Fatalf("page up feed quit=%v err=%v", quit, err)
 	}
-	tui.handleScrollDelta(delta)
 	if tui.scroll.scrollOffset == 0 {
 		t.Fatal("expected scroll offset > 0")
 	}

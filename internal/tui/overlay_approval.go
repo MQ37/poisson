@@ -85,16 +85,10 @@ func max0(n int) int {
 // approvalKeyAllowed maps approval input bytes to allow/deny. ok reports
 // whether the chunk contained a recognized approval answer.
 func approvalKeyAllowed(data []byte) (allowed, ok bool) {
-	data = decodeKittyKeys(data)
-	if len(data) == 1 && data[0] == 27 {
-		return false, true
-	}
-	for _, b := range data {
-		switch b {
-		case 'a', 'A', 'y', 'Y', '\r':
-			return true, true
-		case 'd', 'D', 'n', 'N':
-			return false, true
+	var d Decoder
+	for _, k := range d.Push(data) {
+		if a, hit := keyApprovalAnswer(k); hit {
+			return a, true
 		}
 	}
 	return false, false

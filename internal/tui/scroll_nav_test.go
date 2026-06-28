@@ -30,19 +30,23 @@ func TestScrollWithinSingleBlock(t *testing.T) {
 	}
 }
 
-func TestParseScrollInputPageKeys(t *testing.T) {
-	if d, ok := parseScrollInput([]byte("\x1b[5~"), 10); !ok || d != 10 {
+func TestScrollDeltaForKeyPageKeys(t *testing.T) {
+	if d, ok := scrollDeltaForKey(Key{Kind: KeyPageUp}, 10); !ok || d != 10 {
 		t.Fatalf("PageUp = %d %v", d, ok)
 	}
-	if d, ok := parseScrollInput([]byte("\x1b[6~"), 10); !ok || d != -10 {
+	if d, ok := scrollDeltaForKey(Key{Kind: KeyPageDown}, 10); !ok || d != -10 {
 		t.Fatalf("PageDown = %d %v", d, ok)
 	}
 }
 
-func TestParseScrollInputRawKittyPageUp(t *testing.T) {
-	raw := []byte{27, '[', '5', '7', '3', '5', '4', 'u'}
-	if d, ok := parseScrollInputRaw(raw, 12); !ok || d != 12 {
-		t.Fatalf("delta=%d ok=%v", d, ok)
+func TestDecoderKittyPageUpScrollDelta(t *testing.T) {
+	var d Decoder
+	keys := d.Push([]byte{27, '[', '5', '7', '3', '5', '4', 'u'})
+	if len(keys) != 1 || keys[0].Kind != KeyPageUp {
+		t.Fatalf("keys = %v", keys)
+	}
+	if delta, ok := scrollDeltaForKey(keys[0], 12); !ok || delta != 12 {
+		t.Fatalf("delta=%d ok=%v", delta, ok)
 	}
 }
 

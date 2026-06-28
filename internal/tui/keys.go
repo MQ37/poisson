@@ -2,6 +2,24 @@ package tui
 
 import "unicode/utf8"
 
+// Kitty keyboard protocol functional key codes (PUA 57344+).
+const (
+	kittyKeyEscape    = 57344
+	kittyKeyEnter     = 57345
+	kittyKeyTab       = 57346
+	kittyKeyBackspace = 57347
+	kittyKeyDelete    = 57348
+	kittyKeyInsert    = 57349
+	kittyKeyUp        = 57352
+	kittyKeyDown      = 57353
+	kittyKeyPageUp    = 57354
+	kittyKeyPageDown  = 57355
+	kittyKeyKPUp      = 57419
+	kittyKeyKPDown    = 57420
+	kittyKeyKPPageUp  = 57421
+	kittyKeyKPPageDn  = 57422
+)
+
 // KeyKind classifies a single decoded terminal key event.
 type KeyKind int
 

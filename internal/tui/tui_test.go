@@ -381,11 +381,9 @@ func TestKittyPageKeysScrollBack(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		tui.scroll.appendRaw(styleSystem, "line")
 	}
-	kittyPageUp := []byte{27, '[', '5', '7', '3', '5', '4', 'u'}
-	if delta, ok := parseScrollInputRaw(kittyPageUp, tui.scrollRows); !ok || delta != 5 {
-		t.Fatalf("parseScrollInputRaw page up = %d %v", delta, ok)
+	if quit, err := tui.feed([]byte{27, '[', '5', '7', '3', '5', '4', 'u'}); quit || err != nil {
+		t.Fatalf("kitty PageUp feed quit=%v err=%v", quit, err)
 	}
-	tui.handleScrollDelta(5)
 	if tui.scroll.scrollOffset == 0 {
 		t.Fatal("kitty PageUp did not scroll")
 	}

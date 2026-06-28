@@ -8,23 +8,6 @@ import (
 func arrowUpBytes() []byte   { return []byte{27, '[', 'A'} }
 func arrowDownBytes() []byte { return []byte{27, '[', 'B'} }
 
-func TestIsArrowUpKittyCSIu(t *testing.T) {
-	raw := []byte{27, '[', '5', '7', '3', '5', '2', 'u'}
-	if !isArrowUp(raw) {
-		t.Fatal("expected kitty up arrow")
-	}
-	if isArrowDown(raw) {
-		t.Fatal("kitty up should not match down")
-	}
-}
-
-func TestIsArrowDownKittyCSIu(t *testing.T) {
-	raw := []byte{27, '[', '5', '7', '3', '5', '3', 'u'}
-	if !isArrowDown(raw) {
-		t.Fatal("expected kitty down arrow")
-	}
-}
-
 func TestPickerOverlayArrowKeys(t *testing.T) {
 	p := newPickerOverlay("Providers", []pickerItem{
 		{id: "anthropic", label: "anthropic"},
