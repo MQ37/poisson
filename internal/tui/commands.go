@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"poisson/internal/agent"
-	"poisson/internal/auth"
 	"poisson/internal/config"
 	"poisson/internal/provider"
 	"poisson/internal/store"
@@ -232,7 +231,7 @@ func switchAgentToSession(h commandHost, sess *store.Session) bool {
 		return false
 	}
 	a := h.Agent()
-	p := makeProvider(sess.Provider, a.Config())
+	p := provider.NewProviderFromDisk(sess.Provider, a.Config())
 	if p == nil {
 		h.Out(styleError, "unknown provider in session: "+sess.Provider)
 		return false
@@ -317,14 +316,14 @@ func cmdModel(h commandHost, args []string) error {
 		provName := strings.TrimSpace(target)
 		newProv := a.Provider()
 		if provName != a.Provider().ID() {
-			newProv = makeProvider(provName, a.Config())
+			newProv = provider.NewProviderFromDisk(provName, a.Config())
 			if newProv == nil {
 				h.Out(styleError, "unknown provider: "+provName)
 				return nil
 			}
 			a.SetProvider(newProv)
 		}
-		model := defaultModelFor(newProv, a.Config())
+		model := provider.DefaultModel(provName, a.Config())
 		if model == "" {
 			h.Out(styleError, "no default model configured for provider: "+provName)
 			return nil
@@ -340,7 +339,7 @@ func cmdModel(h commandHost, args []string) error {
 		return nil
 	}
 	if provName != a.Provider().ID() {
-		newProv := makeProvider(provName, a.Config())
+		newProv := provider.NewProviderFromDisk(provName, a.Config())
 		if newProv == nil {
 			h.Out(styleError, "unknown provider: "+provName)
 			return nil
@@ -361,7 +360,7 @@ func cmdReload(h commandHost) error {
 		return nil
 	}
 	a.SetConfig(cfg)
-	if p := makeProvider(a.Provider().ID(), cfg); p != nil {
+	if p := provider.NewProviderFromDisk(a.Provider().ID(), cfg); p != nil {
 		a.SetProvider(p)
 	}
 	n, err := a.ReloadSkills()
@@ -457,38 +456,4 @@ func cmdEffort(h commandHost, args []string) error {
 	return nil
 }
 
-// makeProvider creates a provider by name from the config.
-func makeProvider(name string, cfg *config.Config) provider.Provider {
-	authStore, _ := auth.Load()
-	switch name {
-	case "anthropic":
-		return provider.NewAnthropicProvider(authStore, cfg)
-	case "ollama":
-		baseURL := cfg.Ollama.BaseURL
-		if baseURL == "" {
-			baseURL = "http://localhost:11434"
-		}
-		return provider.NewOllamaProvider(baseURL, cfg.Ollama.Model)
-	case "xai":
-		return provider.NewXAIProvider(authStore, cfg)
-	default:
-		return nil
-	}
-}
 
-// defaultModelFor returns the configured default model name for a provider.
-func defaultModelFor(p provider.Provider, cfg *config.Config) string {
-	if cfg == nil || p == nil {
-		return ""
-	}
-	switch p.ID() {
-	case "ollama":
-		return cfg.Ollama.Model
-	case "anthropic":
-		return cfg.Anthropic.Model
-	case "xai":
-		return cfg.XAI.Model
-	default:
-		return ""
-	}
-}

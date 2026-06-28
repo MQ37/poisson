@@ -86,38 +86,9 @@ func runREPL(noSkills bool) {
 	// Load auth.
 	authStore, _ := auth.Load()
 
-	// Determine provider — fall back to ollama if anthropic has no auth.
-	provName := cfg.Provider.Default
-	if provName == "" {
-		provName = "ollama"
-	}
-	if provName == "anthropic" && !auth.IsOAuth(authStore, "anthropic") && auth.GetAPIKey(authStore, "anthropic") == "" && cfg.Anthropic.APIKey == "" {
-		// No anthropic credentials configured — fall back to ollama.
-		provName = "ollama"
-		fmt.Fprintln(os.Stderr, "no anthropic credentials found, using ollama")
-	}
-
-	var prov provider.Provider
-	var model string
-	switch provName {
-	case "anthropic":
-		prov = provider.NewAnthropicProvider(authStore, cfg)
-		model = cfg.Anthropic.Model
-		if model == "" {
-			model = "claude-opus-4-8"
-		}
-	case "xai":
-		prov = provider.NewXAIProvider(authStore, cfg)
-		model = cfg.XAI.Model
-		if model == "" {
-			model = "grok-build"
-		}
-	default:
-		prov = provider.NewOllamaProvider(cfg.Ollama.BaseURL, cfg.Ollama.Model)
-		model = cfg.Ollama.Model
-		if model == "" {
-			model = "glm-5.2:cloud"
-		}
+	prov, provName, model, warn := provider.BootstrapFromConfig(authStore, cfg)
+	if warn != "" {
+		fmt.Fprintln(os.Stderr, warn)
 	}
 
 	// Create or resume session.
