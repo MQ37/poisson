@@ -47,7 +47,7 @@ func TestBTWOverlayEscCancel(t *testing.T) {
 	o := newBTWOverlay("q", 6)
 	cancelled := false
 	o.setCancel(func() { cancelled = true })
-	handled, done, cancel := o.feedKey([]byte{27})
+	handled, done, cancel := o.feedKey(Key{Kind: KeyEscape})
 	if !handled || !done || !cancel {
 		t.Fatalf("esc while processing: handled=%v done=%v cancel=%v", handled, done, cancel)
 	}
@@ -55,7 +55,7 @@ func TestBTWOverlayEscCancel(t *testing.T) {
 		t.Fatal("expected cancel func called")
 	}
 	o.finish(nil)
-	handled, done, cancel = o.feedKey([]byte{27})
+	handled, done, cancel = o.feedKey(Key{Kind: KeyEscape})
 	if !handled || !done || cancel {
 		t.Fatalf("esc when done: handled=%v done=%v cancel=%v", handled, done, cancel)
 	}
@@ -69,12 +69,12 @@ func TestBTWOverlayScroll(t *testing.T) {
 	}
 	o.appendText(strings.Join(lines, "\n"))
 	o.finish(nil)
-	o.feedKey(arrowDownBytes())
+	o.feedKey(keyArrowDown())
 	_, _, _, _, scroll, _ := o.snapshot()
 	if scroll == 0 {
 		t.Fatal("expected scroll down to increase offset")
 	}
-	o.feedKey(arrowUpBytes())
+	o.feedKey(keyArrowUp())
 	_, _, _, _, scroll2, _ := o.snapshot()
 	if scroll2 != 0 {
 		t.Fatalf("scroll = %d after up, want 0", scroll2)

@@ -318,10 +318,7 @@ func (t *TUI) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
 	} else {
 		anchor, lines = t.activeOverlay.render(t.scrollRows, t.cols)
 	}
-	pinOffset := 0
-	if _, ok := t.activeOverlay.(*searchOverlay); ok && t.focusRegion == focusConv {
-		pinOffset = 1
-	}
+	pinOffset := t.overlayPinOffset()
 	for i, line := range lines {
 		row := lay.scrollStart + anchor - 1 + pinOffset + i
 		if row < lay.scrollStart || row >= lay.scrollStart+t.scrollRows {
@@ -329,7 +326,7 @@ func (t *TUI) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
 		}
 		b.WriteString(cup(row, 1))
 		b.WriteString(clearLine())
-		b.WriteString(truncateToWidth(line, lay.wrapWidth))
+		b.WriteString(truncateToWidth(line, t.cols))
 	}
 }
 

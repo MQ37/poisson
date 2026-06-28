@@ -84,44 +84,51 @@ func (s *searchOverlay) render(scrollRows, cols int) (int, []string) {
 	return 1, []string{line}
 }
 
-func (s *searchOverlay) feedKey(data []byte) (handled bool, done bool, cancel bool) {
-	if containsCtrlC(data) {
+func (s *searchOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
+	if k.isCtrlC() {
 		return true, true, true
 	}
-	if isArrowUp(data) {
+	switch k.Kind {
+	case KeyArrowUp, KeyShiftArrowUp:
 		s.next(-1)
 		return true, false, false
-	}
-	if isArrowDown(data) {
+	case KeyArrowDown, KeyShiftArrowDown:
 		s.next(1)
 		return true, false, false
-	}
-	for _, b := range data {
-		if b == 27 && !hasCSI(data) {
-			return true, true, true
-		}
-	}
-	for _, b := range data {
-		if b == 127 || b == 8 {
-			if len(s.query) > 0 {
-				_, size := utf8.DecodeLastRuneInString(s.query)
-				s.query = s.query[:len(s.query)-size]
-				s.updateMatches(true)
-			}
-			return true, false, false
-		}
-	}
-	for _, r := range string(data) {
-		if r == '\r' || r == '\n' || r == '\t' {
-			continue
-		}
-		if unicode.IsPrint(r) {
-			s.query += string(r)
+	case KeyEscape:
+		return true, true, true
+	case KeyBackspace:
+		if len(s.query) > 0 {
+			_, size := utf8.DecodeLastRuneInString(s.query)
+			s.query = s.query[:len(s.query)-size]
 			s.updateMatches(true)
-			return true, false, false
 		}
+		return true, false, false
+	case KeyRune:
+		if unicode.IsPrint(k.Rune) {
+			s.query += string(k.Rune)
+			s.updateMatches(true)
+		}
+		return true, false, false
+	case KeyPaste:
+		s.appendPaste(k.Text)
+		return true, false, false
 	}
 	return true, false, false
+}
+
+func (s *searchOverlay) appendPaste(text string) bool {
+	changed := false
+	for _, r := range text {
+		if unicode.IsPrint(r) {
+			s.query += string(r)
+			changed = true
+		}
+	}
+	if changed {
+		s.updateMatches(true)
+	}
+	return changed
 }
 
 // highlightSearchMatch wraps the first case-insensitive query hit, preserving existing ANSI.

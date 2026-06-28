@@ -33,24 +33,26 @@ func TestPickerOverlayArrowKeys(t *testing.T) {
 	if p.idx != 0 {
 		t.Fatalf("idx=%d", p.idx)
 	}
-	handled, _, _ := p.feedKey(arrowDownBytes())
+	handled, _, _ := p.feedKey(keyArrowDown())
 	if !handled || p.idx != 1 {
 		t.Fatalf("down: handled=%v idx=%d", handled, p.idx)
 	}
-	handled, _, _ = p.feedKey(arrowUpBytes())
+	handled, _, _ = p.feedKey(keyArrowUp())
 	if !handled || p.idx != 0 {
 		t.Fatalf("up: handled=%v idx=%d", handled, p.idx)
 	}
-	kittyDown := []byte{27, '[', '5', '7', '3', '5', '3', 'u'}
-	handled, _, _ = p.feedKey(kittyDown)
-	if !handled || p.idx != 1 {
-		t.Fatalf("kitty down: handled=%v idx=%d", handled, p.idx)
+	var d Decoder
+	for _, k := range d.Push([]byte{27, '[', '5', '7', '3', '5', '3', 'u'}) {
+		handled, _, _ = p.feedKey(k)
+		if !handled || p.idx != 1 {
+			t.Fatalf("kitty down: handled=%v idx=%d", handled, p.idx)
+		}
 	}
 }
 
 func TestPaletteOverlayArrowKeys(t *testing.T) {
 	p := newPaletteOverlay(nil)
-	handled, _, _ := p.feedKey(arrowDownBytes())
+	handled, _, _ := p.feedKey(keyArrowDown())
 	if !handled || p.idx != 1 {
 		t.Fatalf("palette down: handled=%v idx=%d", handled, p.idx)
 	}
@@ -69,7 +71,7 @@ func TestHandleKeyOverlayPreservesChainedPicker(t *testing.T) {
 	pal.filter = "providers"
 	pal.idx = 0
 	tui.activeOverlay = pal
-	if !tui.handleKeyOverlay([]byte{'\r'}) {
+	if !tui.handleKeyOverlay(Key{Kind: KeyEnter}) {
 		t.Fatal("enter not handled")
 	}
 	if tui.activeOverlay == nil {
@@ -96,7 +98,7 @@ func TestPaletteQuitPropagates(t *testing.T) {
 		}
 	}
 	tui.activeOverlay = pal
-	if !tui.handleKeyOverlay([]byte{'\r'}) {
+	if !tui.handleKeyOverlay(Key{Kind: KeyEnter}) {
 		t.Fatal("enter not handled")
 	}
 	if !tui.overlayQuit.Load() {
@@ -106,7 +108,7 @@ func TestPaletteQuitPropagates(t *testing.T) {
 
 func TestSearchOverlayAcceptsLetterN(t *testing.T) {
 	s := newSearchOverlay(func() []ScreenRow { return nil }, nil)
-	handled, _, _ := s.feedKey([]byte{'n'})
+	handled, _, _ := s.feedKey(Key{Kind: KeyRune, Rune: 'n'})
 	if !handled {
 		t.Fatal("expected handled")
 	}
@@ -117,7 +119,7 @@ func TestSearchOverlayAcceptsLetterN(t *testing.T) {
 
 func TestSearchOverlayCtrlCDismisses(t *testing.T) {
 	s := newSearchOverlay(func() []ScreenRow { return nil }, nil)
-	handled, done, cancel := s.feedKey([]byte{3})
+	handled, done, cancel := s.feedKey(Key{Kind: KeyCtrl, Byte: 3})
 	if !handled || !done || !cancel {
 		t.Fatalf("handled=%v done=%v cancel=%v", handled, done, cancel)
 	}

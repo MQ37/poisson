@@ -125,21 +125,20 @@ func (p *pickerOverlay) clickRow(lineInOverlay int) (handled bool, done bool) {
 	return true, true
 }
 
-func (p *pickerOverlay) feedKey(data []byte) (handled bool, done bool, cancel bool) {
-	if isArrowUp(data) {
+func (p *pickerOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
+	switch {
+	case k.isNavUp():
 		if p.idx > 0 {
 			p.idx--
 		}
 		return true, false, false
-	}
-	if isArrowDown(data) {
+	case k.isNavDown():
 		vis := p.filtered()
 		if p.idx < len(vis)-1 {
 			p.idx++
 		}
 		return true, false, false
-	}
-	if containsSubmitKey(data) {
+	case k.isEnter():
 		vis := p.filtered()
 		if len(vis) == 0 {
 			return true, false, true
@@ -148,38 +147,29 @@ func (p *pickerOverlay) feedKey(data []byte) (handled bool, done bool, cancel bo
 			_ = p.onPick(vis[p.idx].id)
 		}
 		return true, true, false
-	}
-	for _, b := range data {
-		if b == 27 && !hasCSI(data) {
-			return true, false, true
-		}
-	}
-	if containsBackspace(data) {
+	case k.Kind == KeyEscape:
+		return true, false, true
+	case k.Kind == KeyBackspace:
 		if trimOverlayFilter(&p.filter) {
 			p.idx = 0
 		}
 		return true, false, false
-	}
-	if appendOverlayFilter(&p.filter, data) {
-		p.idx = 0
+	case k.Kind == KeyRune:
+		if appendOverlayFilterRune(&p.filter, k.Rune) {
+			p.idx = 0
+		}
+		return true, false, false
+	case k.Kind == KeyPaste:
+		appendOverlayFilterText(&p.filter, k.Text, &p.idx)
 		return true, false, false
 	}
 	return false, false, false
 }
 
-func containsBackspace(data []byte) bool {
-	for _, b := range data {
-		if b == 8 || b == 127 {
-			return true
-		}
-	}
-	return false
-}
-
 // keyOverlay is an overlay that consumes keyboard input until done/cancel.
 type keyOverlay interface {
 	overlay
-	feedKey(data []byte) (handled bool, done bool, cancel bool)
+	feedKey(k Key) (handled bool, done bool, cancel bool)
 }
 
 func asKeyOverlay(o overlay) keyOverlay {

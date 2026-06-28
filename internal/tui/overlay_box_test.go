@@ -51,3 +51,21 @@ func TestPickerClickRowSelects(t *testing.T) {
 		t.Fatalf("handled=%v done=%v picked=%q", handled, done, picked)
 	}
 }
+
+func TestBoxLinesEqualWidth(t *testing.T) {
+	body := []string{"  alpha", fgCyan + bold + "▶ beta" + reset}
+	_, lines := renderBoxedList("Models (ollama)", "", body, 24, 80, 72)
+	if len(lines) < 3 {
+		t.Fatal("expected box lines")
+	}
+	w0 := visibleWidth(lines[0])
+	for i, ln := range lines {
+		w := visibleWidth(ln)
+		if w != w0 {
+			t.Fatalf("line %d width %d != top width %d: %q", i, w, w0, stripANSI(ln))
+		}
+		if w > 80 {
+			t.Fatalf("line %d exceeds cols: %d", i, w)
+		}
+	}
+}

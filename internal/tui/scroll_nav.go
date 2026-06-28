@@ -70,30 +70,24 @@ func isPageDown(data []byte) bool {
 
 // isArrowUp reports a plain Up-arrow (legacy CSI or kitty CSI-u).
 func isArrowUp(data []byte) bool {
-	data = decodeKittyKeys(data)
-	for _, seq := range [][]byte{
-		[]byte("\x1b[A"), []byte("\x1bOA"),
-		[]byte("\x1b[1;1A"), []byte("\x1b[1A"),
-	} {
-		if indexOf(data, seq) >= 0 {
+	var d Decoder
+	for _, k := range d.Push(data) {
+		if k.Kind == KeyArrowUp {
 			return true
 		}
 	}
-	return isKittyArrowKey(data, kittyKeyUp, kittyKeyKPUp)
+	return false
 }
 
 // isArrowDown reports a plain Down-arrow (legacy CSI or kitty CSI-u).
 func isArrowDown(data []byte) bool {
-	data = decodeKittyKeys(data)
-	for _, seq := range [][]byte{
-		[]byte("\x1b[B"), []byte("\x1bOB"),
-		[]byte("\x1b[1;1B"), []byte("\x1b[1B"),
-	} {
-		if indexOf(data, seq) >= 0 {
+	var d Decoder
+	for _, k := range d.Push(data) {
+		if k.Kind == KeyArrowDown {
 			return true
 		}
 	}
-	return isKittyArrowKey(data, kittyKeyDown, kittyKeyKPDown)
+	return false
 }
 
 // isKittyArrowKey matches kitty keyboard protocol arrow keys (plain, no ctrl/alt).
@@ -102,7 +96,7 @@ func isKittyArrowKey(data []byte, codes ...int) bool {
 		if data[i] != 27 || i+1 >= len(data) || data[i+1] != '[' {
 			continue
 		}
-		code, mods, final, n := parseKittyKey(data[i:])
+		code, mods, _, final, n := parseKittyKey(data[i:])
 		if n == 0 || final != 'u' {
 			continue
 		}

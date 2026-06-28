@@ -142,32 +142,29 @@ func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string
 	return anchor, out
 }
 
-func (o *btwOverlay) feedKey(data []byte) (handled bool, done bool, cancel bool) {
-	if isArrowUp(data) {
+func (o *btwOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
+	switch {
+	case k.isNavUp():
 		o.mu.Lock()
 		if o.scroll > 0 {
 			o.scroll--
 		}
 		o.mu.Unlock()
 		return true, false, false
-	}
-	if isArrowDown(data) {
+	case k.isNavDown():
 		o.mu.Lock()
 		o.scroll++
 		o.mu.Unlock()
 		return true, false, false
-	}
-	for _, b := range data {
-		if b == 27 && !hasCSI(data) {
-			o.mu.Lock()
-			proc := o.processing
-			c := o.cancel
-			o.mu.Unlock()
-			if proc && c != nil {
-				c()
-			}
-			return true, true, proc
+	case k.Kind == KeyEscape:
+		o.mu.Lock()
+		proc := o.processing
+		c := o.cancel
+		o.mu.Unlock()
+		if proc && c != nil {
+			c()
 		}
+		return true, true, proc
 	}
 	return false, false, false
 }

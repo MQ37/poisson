@@ -20,17 +20,15 @@ func resolveApprovalPurpose(command, description string) string {
 	return "(no description provided)"
 }
 
-func appendOverlayFilter(filter *string, data []byte) bool {
-	for _, r := range string(decodeKittyKeys(data)) {
-		if r == '\r' || r == '\n' || r == '\t' {
-			continue
-		}
-		if unicode.IsPrint(r) {
-			*filter += string(r)
-			return true
-		}
+func appendOverlayFilterRune(filter *string, r rune) bool {
+	if r == '\r' || r == '\n' || r == '\t' {
+		return false
 	}
-	return false
+	if !unicode.IsPrint(r) {
+		return false
+	}
+	*filter += string(r)
+	return true
 }
 
 func trimOverlayFilter(filter *string) bool {
@@ -40,4 +38,17 @@ func trimOverlayFilter(filter *string) bool {
 	}
 	*filter = string(runes[:len(runes)-1])
 	return true
+}
+
+func appendOverlayFilterText(filter *string, text string, resetIdx *int) bool {
+	changed := false
+	for _, r := range text {
+		if appendOverlayFilterRune(filter, r) {
+			changed = true
+		}
+	}
+	if changed && resetIdx != nil {
+		*resetIdx = 0
+	}
+	return changed
 }

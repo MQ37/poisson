@@ -247,100 +247,6 @@ func (e *editor) insertNewline() {
 	e.col = 0
 }
 
-// decodeKittyKeys translates kitty-keyboard-protocol CSI-u sequences into the
-// raw byte equivalents the rest of the input pipeline already understands.
-// Non-'u' sequences (arrows, Home/End, bracketed-paste markers) pass through
-// unchanged. This lets us enable the kitty protocol — so Shift+Enter is
-// distinguishable from Enter — without teaching every key handler the CSI-u
-// encoding. Shift+Enter maps to '\n' (newline, same as Ctrl+J); plain Enter to
-// '\r' (submit); Ctrl+<letter> to its C0 control byte; Backspace to 0x7f.
-func decodeKittyKeys(data []byte) []byte {
-	if indexOf(data, []byte{27, '['}) < 0 {
-		return data // no CSI at all — fast path
-	}
-	out := make([]byte, 0, len(data))
-	i := 0
-	for i < len(data) {
-		if data[i] == 27 && i+1 < len(data) && data[i+1] == '[' {
-			// Bracketed paste markers must survive verbatim for the editor.
-			if hasPrefix(data[i:], pasteStartV2) || hasPrefix(data[i:], pasteEndV2) {
-				out = append(out, data[i:i+len(pasteStartV2)]...)
-				i += len(pasteStartV2)
-				continue
-			}
-			if code, mods, final, n := parseKittyKey(data[i:]); n > 0 && final == 'u' {
-				if b, ok := kittyToLegacyCSI(code, mods); ok {
-					out = append(out, b...)
-				} else if b, ok := kittyToBytes(code, mods); ok {
-					out = append(out, b...)
-				}
-				i += n
-				continue
-			}
-			// Other CSI sequence (arrows, etc.) — copy verbatim to its final byte.
-			j := i + 2
-			for j < len(data) && (data[j] < 0x40 || data[j] > 0x7e) {
-				j++
-			}
-			if j < len(data) {
-				j++
-			}
-			out = append(out, data[i:j]...)
-			i = j
-			continue
-		}
-		out = append(out, data[i])
-		i++
-	}
-	return out
-}
-
-// kittyToBytes maps a kitty key (code, mods) to the raw bytes the editor
-// expects. ok is false for keys with no raw equivalent (they're dropped).
-func kittyToBytes(code, mods int) ([]byte, bool) {
-	m := mods - 1
-	if m < 0 {
-		m = 0
-	}
-	shift := m&1 != 0
-	ctrl := m&4 != 0
-	switch code {
-	case 13: // Enter / Return
-		if shift {
-			return []byte{'\n'}, true // Shift+Enter → newline (like Ctrl+J)
-		}
-		return []byte{'\r'}, true // Enter → submit
-	case 8, 127: // Backspace
-		return []byte{127}, true
-	case 9: // Tab
-		return []byte{9}, true
-	case 27: // Escape
-		return []byte{27}, true
-	case kittyKeyEscape:
-		return []byte{27}, true
-	case kittyKeyEnter:
-		if shift {
-			return []byte{'\n'}, true
-		}
-		return []byte{'\r'}, true
-	case kittyKeyTab:
-		return []byte{9}, true
-	case kittyKeyBackspace:
-		return []byte{127}, true
-	}
-	if ctrl && ((code >= 'a' && code <= 'z') || (code >= 'A' && code <= 'Z')) {
-		return []byte{byte(code) & 0x1f}, true
-	}
-	// Kitty functional keys live in the PUA range — never treat as text.
-	if code >= 57344 && code < 63744 {
-		return nil, false
-	}
-	if !ctrl && code >= 32 && code != 127 {
-		return []byte(string(rune(code))), true
-	}
-	return nil, false
-}
-
 // runeByteIndex converts a rune column to a byte index in s. col is clamped
 // to [0, runeCount(s)].
 func runeByteIndex(s string, col int) int {
@@ -451,6 +357,73 @@ func (e *editor) feed(data []byte) (string, bool) {
 	return "", false
 }
 
+// applyKey handles one normalized key event. Returns (submitted, quit).
+func (e *editor) applyKey(k Key) (string, bool) {
+	switch k.Kind {
+	case KeyEnter:
+		return e.text(), false
+	case KeyShiftEnter:
+		e.insertNewline()
+	case KeyPaste:
+		e.insertText(k.Text)
+	case KeyRune:
+		e.insertRune(k.Rune)
+	case KeyBackspace:
+		e.backspace()
+	case KeyArrowUp:
+		e.moveUpScreen(e.wrapWidth)
+	case KeyArrowDown:
+		e.moveDownScreen(e.wrapWidth)
+	case KeyArrowLeft:
+		e.moveLeft()
+	case KeyArrowRight:
+		e.moveRight()
+	case KeyHome:
+		e.moveHomeScreen(e.wrapWidth)
+	case KeyEnd:
+		e.moveEndScreen(e.wrapWidth)
+	case KeyDelete:
+		e.delete()
+	case KeyInsert:
+		// no-op
+	case KeyEscape:
+		// lone Esc — no-op
+	case KeyCtrl:
+		return e.applyCtrlKey(k.Byte)
+	}
+	return "", false
+}
+
+func (e *editor) applyCtrlKey(b byte) (string, bool) {
+	switch b {
+	case 10: // Ctrl+J
+		e.insertNewline()
+	case 11: // Ctrl+K
+		e.lines[e.row] = runeSubstring(e.lines[e.row], 0, e.col)
+	case 21: // Ctrl+U
+		tail := runeSubstring(e.lines[e.row], e.col, e.runeCount(e.row))
+		e.lines[e.row] = tail
+		e.col = 0
+	case 23: // Ctrl+W
+		e.deleteWordBackward()
+	case 1: // Ctrl+A
+		e.moveHomeScreen(e.wrapWidth)
+	case 5: // Ctrl+E
+		e.moveEndScreen(e.wrapWidth)
+	case 4: // Ctrl+D
+		if e.text() != "" {
+			e.delete()
+		} else {
+			return "", true
+		}
+	case 8, 127:
+		e.backspace()
+	default:
+		// ignore other controls
+	}
+	return "", false
+}
+
 // handleEscape parses a CSI / SS3 / OSC sequence starting at data[0]==ESC.
 // Returns bytes consumed and whether the caller should submit (Esc+Enter).
 func (e *editor) handleEscape(data []byte) (int, bool) {
@@ -480,7 +453,7 @@ func (e *editor) handleEscape(data []byte) (int, bool) {
 		// Kitty keyboard protocol: ESC [ <code> ; <mods> <final>
 		// Shift+Enter: code=13, mods=2, final='u' or '~'
 		// Enter with no mods: code=13, mods=1 or absent, final='u'
-		if code, mods, final, n := parseKittyKey(data); n > 0 && (final == 'u' || final == '~') {
+		if code, mods, _, final, n := parseKittyKey(data); n > 0 && (final == 'u' || final == '~') {
 			if code == 13 {
 				if mods == 2 {
 					e.insertNewline()
@@ -534,73 +507,119 @@ func (e *editor) handleEscape(data []byte) (int, bool) {
 	return 2, false
 }
 
-// parseKittyKey parses a CSI sequence of the form
-// ESC [ <code> [ ; <mod1> [ ; <mod2> ] ] <final>.
-// It handles both the kitty keyboard protocol (ESC[13;2u) and the xterm
-// modifyOtherKeys encoding (ESC[27;2;13~) for Shift+Enter.
-// Returns the effective key code, modifier bits, final byte, and total bytes
-// consumed. Returns n==0 if data is not a recognized key sequence.
-func parseKittyKey(data []byte) (code, mods int, final byte, n int) {
-	if len(data) < 4 || data[0] != 27 || data[1] != '[' {
-		return 0, 0, 0, 0
+// parseKittyKey parses kitty CSI-u (ESC [ … u) and xterm modifyOtherKeys
+// (ESC [ … ~) sequences. Kitty encodes event types as a colon suffix on the
+// modifier field (e.g. 57352;1:1u), not a third semicolon-separated field.
+func parseKittyKey(data []byte) (code, mods, event int, final byte, n int) {
+	if len(data) < 3 || data[0] != 27 || data[1] != '[' {
+		return 0, 0, 0, 0, 0
 	}
-	i := 2
-	fields := []int{}
-	for i < len(data) {
-		val := 0
-		hadDigit := false
-		for i < len(data) && data[i] >= '0' && data[i] <= '9' {
-			val = val*10 + int(data[i]-'0')
-			i++
-			hadDigit = true
+	end := -1
+	for i := 2; i < len(data); i++ {
+		if data[i] >= 0x40 && data[i] <= 0x7e {
+			end = i
+			break
 		}
-		fields = append(fields, val)
-		if i >= len(data) {
-			return 0, 0, 0, 0
-		}
-		if data[i] == ';' {
-			i++
-			if i >= len(data) {
-				return 0, 0, 0, 0
-			}
-			if !hadDigit && len(fields) > 0 {
-				// empty field — treat as 0
-			}
-			continue
-		}
-		break
 	}
-	if i >= len(data) {
-		return 0, 0, 0, 0
+	if end < 0 {
+		return 0, 0, 0, 0, 0
 	}
-	final = data[i]
-	if final < 0x40 || final > 0x7e {
-		return 0, 0, 0, 0
-	}
-	n = i + 1
+	final = data[end]
+	n = end + 1
+	body := data[2:end]
 
-	// Determine the effective key code and modifier bits.
-	switch len(fields) {
-	case 0:
-		return 0, 1, final, n
-	case 1:
-		return fields[0], 1, final, n
-	case 2:
-		// kitty: <keycode> ; <mods>
-		mods := fields[1]
-		if mods == 0 {
-			mods = 1
+	switch final {
+	case 'u':
+		code, mods, event = parseKittyUBody(body)
+		return code, mods, event, final, n
+	case '~':
+		if code, mods, ok := parseModifyOtherKeysBody(body); ok {
+			return code, mods, 1, final, n
 		}
-		return fields[0], mods, final, n
-	default:
-		// xterm modifyOtherKeys: <keycode> ; <mods> ; <actualKey>
-		// e.g. ESC[27;2;13~ means Shift+Enter (code 27, mods 2, actual key 13).
-		mods := fields[1]
-		if mods == 0 {
-			mods = 1
-		}
-		return fields[2], mods, final, n
 	}
+	return 0, 0, 0, 0, 0
+}
+
+func parseKittyUBody(body []byte) (code, mods, event int) {
+	parts := strings.Split(string(body), ";")
+	if len(parts) == 0 {
+		return 0, 1, 1
+	}
+	code = parseIntPrefix(parts[0])
+	mods, event = 1, 1
+	if len(parts) >= 2 {
+		if strings.Contains(parts[1], ":") {
+			mods, event = parseModsEventPart(parts[1])
+		} else if len(parts) >= 3 {
+			mods = parseIntPrefix(parts[1])
+			if mods == 0 {
+				mods = 1
+			}
+			event = parseIntPrefix(parts[2])
+			if event == 0 {
+				event = 1
+			}
+		} else {
+			mods, event = parseModsEventPart(parts[1])
+		}
+	}
+	return code, mods, event
+}
+
+func parseModifyOtherKeysBody(body []byte) (code, mods int, ok bool) {
+	parts := strings.Split(string(body), ";")
+	if len(parts) < 3 {
+		return 0, 0, false
+	}
+	mods = parseIntPrefix(parts[1])
+	if mods == 0 {
+		mods = 1
+	}
+	return parseIntPrefix(parts[2]), mods, true
+}
+
+func parseIntPrefix(s string) int {
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		s = s[:i]
+	}
+	n := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			break
+		}
+		n = n*10 + int(s[i]-'0')
+	}
+	return n
+}
+
+func parseModsEventPart(s string) (mods, event int) {
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		mods = parseIntPrefix(s[:i])
+		event = parseIntPrefix(s[i+1:])
+	} else {
+		mods = parseIntPrefix(s)
+		event = 1
+	}
+	if mods == 0 {
+		mods = 1
+	}
+	if event == 0 {
+		event = 1
+	}
+	return mods, event
+}
+
+func csiShiftFromBody(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	parts := strings.Split(string(body), ";")
+	mods, _ := parseModsEventPart(parts[len(parts)-1])
+	m := mods - 1
+	if m < 0 {
+		m = 0
+	}
+	return m&1 != 0
 }
 
 func (e *editor) deleteWordBackward() {

@@ -92,7 +92,7 @@ func parseScrollInputRaw(data []byte, viewHeight int) (delta int, ok bool) {
 		if data[i] != 27 || i+1 >= len(data) || data[i+1] != '[' {
 			continue
 		}
-		code, mods, final, n := parseKittyKey(data[i:])
+		code, mods, _, final, n := parseKittyKey(data[i:])
 		if n == 0 || final != 'u' {
 			continue
 		}

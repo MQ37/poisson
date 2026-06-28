@@ -95,20 +95,26 @@ func (t *TUI) handleTabKey() {
 	t.enterConvFocus()
 }
 
-func (t *TUI) feedConvFocus(data []byte) (handled bool) {
-	if containsTab(data) {
+func (t *TUI) feedConvFocus(k Key) (handled bool) {
+	if k.Kind == KeyTab {
 		t.handleTabKey()
 		return true
 	}
-	if delta, ok := parseScrollInputRaw(data, t.convScrollRows()); ok {
+	if delta, ok := scrollDeltaForKey(k, t.convScrollRows()); ok {
 		t.scrollByDelta(delta)
 		return true
 	}
-	if isShiftArrowLeft(data) {
+	switch k.Kind {
+	case KeyArrowUp:
+		t.scrollByDelta(1)
+		return true
+	case KeyArrowDown:
+		t.scrollByDelta(-1)
+		return true
+	case KeyShiftArrowLeft:
 		t.stepConvPrompt(-1)
 		return true
-	}
-	if isShiftArrowRight(data) {
+	case KeyShiftArrowRight:
 		t.stepConvPrompt(1)
 		return true
 	}

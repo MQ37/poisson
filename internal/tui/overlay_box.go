@@ -27,35 +27,41 @@ func boxInnerWidth(cols, maxInner int) int {
 	return inner
 }
 
-func boxTopBorder(title string, inner int) string {
+func boxTopBorder(title string, width int) string {
 	titlePlain := stripANSI(title)
 	prefix := "╭─ " + titlePlain + " "
-	fill := inner - visibleWidth(prefix) - 1
+	fill := width - visibleWidth(prefix) - 1
 	if fill < 0 {
 		fill = 0
 	}
 	return fgYellow + bold + prefix + strings.Repeat("─", fill) + "╮" + reset
 }
 
-func boxBottomBorder(inner int) string {
-	return fgYellow + bold + "╰" + strings.Repeat("─", inner) + "╯" + reset
+func boxBottomBorder(width int) string {
+	fill := width - 2
+	if fill < 0 {
+		fill = 0
+	}
+	return fgYellow + bold + "╰" + strings.Repeat("─", fill) + "╯" + reset
 }
 
-func boxBodyLine(inner int, content string) string {
-	pad := inner - 2 - visibleWidth(content)
+func boxBodyLine(width int, content string) string {
+	inner := width - 6 // │ + two spaces each side
+	if inner < 0 {
+		inner = 0
+	}
+	if visibleWidth(content) > inner {
+		content = truncateToWidth(content, inner)
+	}
+	pad := inner - visibleWidth(content)
 	if pad < 0 {
 		pad = 0
 	}
 	return fgYellow + bold + "│" + reset + "  " + content + strings.Repeat(" ", pad) + "  " + fgYellow + bold + "│" + reset
 }
 
-func boxFooterLine(inner int) string {
-	hint := dim + overlayFooterHint + reset
-	pad := inner - 2 - visibleWidth(hint)
-	if pad < 0 {
-		pad = 0
-	}
-	return fgYellow + bold + "│" + reset + "  " + hint + strings.Repeat(" ", pad) + "  " + fgYellow + bold + "│" + reset
+func boxFooterLine(width int) string {
+	return boxBodyLine(width, dim+overlayFooterHint+reset)
 }
 
 // renderBoxedList draws a bordered list modal centered in the scroll region.
@@ -72,20 +78,20 @@ func renderBoxedList(title, filter string, body []string, scrollRows, cols, maxI
 		return chrome, lines
 	}
 
-	inner := boxInnerWidth(cols, maxInner)
+	width := boxInnerWidth(cols, maxInner)
 
 	var lines []string
-	lines = append(lines, boxTopBorder(title, inner))
+	lines = append(lines, boxTopBorder(title, width))
 	if filter != "" {
-		lines = append(lines, boxBodyLine(inner, dim+"filter: "+filter+reset))
+		lines = append(lines, boxBodyLine(width, dim+"filter: "+filter+reset))
 	}
 	chrome.itemLine0 = len(lines)
 	for _, ln := range body {
-		lines = append(lines, boxBodyLine(inner, ln))
+		lines = append(lines, boxBodyLine(width, ln))
 	}
 	chrome.itemCount = len(body)
-	lines = append(lines, boxFooterLine(inner))
-	lines = append(lines, boxBottomBorder(inner))
+	lines = append(lines, boxFooterLine(width))
+	lines = append(lines, boxBottomBorder(width))
 
 	height := len(lines)
 	anchor := (scrollRows-height)/2 + 1

@@ -19,12 +19,11 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 	if scrollRows < 5 || cols < 24 {
 		return 1, o.fallbackLines(cols)
 	}
-	inner := cols - 4
-	if inner > 68 {
-		inner = 68
-	}
-	if inner < 20 {
-		inner = cols - 2
+
+	width := boxInnerWidth(cols, 68)
+	inner := width - 6
+	if inner < 12 {
+		inner = 12
 	}
 
 	var body []string
@@ -32,7 +31,14 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 	body = append(body, dim+"Purpose: "+truncatePlain(o.description, inner-10)+reset)
 	body = append(body, "[A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel")
 
-	height := len(body) + 2 // top + bottom border
+	var lines []string
+	lines = append(lines, boxTopBorder("approval required", width))
+	for _, ln := range body {
+		lines = append(lines, boxBodyLine(width, ln))
+	}
+	lines = append(lines, boxBottomBorder(width))
+
+	height := len(lines)
 	anchor := (scrollRows-height)/2 + 1
 	if anchor < 1 {
 		anchor = 1
@@ -43,20 +49,6 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 			anchor = 1
 		}
 	}
-
-	top := "╭─ approval required " + strings.Repeat("─", max0(inner-20)) + "╮"
-	bot := "╰" + strings.Repeat("─", inner) + "╯"
-	lines := []string{
-		fgYellow + bold + top + reset,
-	}
-	for _, ln := range body {
-		pad := inner - 2 - visibleWidth(ln)
-		if pad < 0 {
-			pad = 0
-		}
-		lines = append(lines, fgYellow+bold+"│"+reset+"  "+ln+strings.Repeat(" ", pad)+"  "+fgYellow+bold+"│"+reset)
-	}
-	lines = append(lines, fgYellow+bold+bot+reset)
 	return anchor, lines
 }
 

@@ -37,9 +37,12 @@ func (t *TUI) handleMouseClick(row int) {
 	if lo := asListClickOverlay(t.activeOverlay); lo != nil {
 		chrome := lo.listChrome()
 		scrollStart := t.headerRows + 1
-		lineInOverlay := row - scrollStart - chrome.anchor + 1
+		lineInOverlay := row - scrollStart - chrome.anchor + 1 - t.overlayPinOffset()
 		prev := t.activeOverlay
 		if handled, done := lo.clickRow(lineInOverlay); handled {
+			if !done {
+				t.dirty.markFull()
+			}
 			t.closeOverlayAfter(prev, done, false)
 		}
 		return

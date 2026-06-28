@@ -197,20 +197,44 @@ func (t *TUI) closeOverlayAfter(prev overlay, done, cancel bool) {
 	}
 }
 
-func (t *TUI) handleKeyOverlay(data []byte) bool {
+// overlayPinOffset is extra scroll rows reserved for the pinned prompt in conv focus.
+func (t *TUI) overlayPinOffset() int {
+	if t.focusRegion == focusConv {
+		return 1
+	}
+	return 0
+}
+
+func (t *TUI) handleOverlayPaste(k Key) bool {
+	switch o := t.activeOverlay.(type) {
+	case *searchOverlay:
+		return o.appendPaste(k.Text)
+	case *pickerOverlay:
+		return appendOverlayFilterText(&o.filter, k.Text, &o.idx)
+	case *paletteOverlay:
+		return appendOverlayFilterText(&o.filter, k.Text, &o.idx)
+	}
+	return false
+}
+
+func (t *TUI) handleKeyOverlay(k Key) bool {
 	ko := asKeyOverlay(t.activeOverlay)
 	if ko == nil {
 		return false
 	}
 	prev := t.activeOverlay
-	handled, done, cancel := ko.feedKey(data)
+	handled, done, cancel := ko.feedKey(k)
 	if !handled {
 		return false
 	}
 	if _, ok := t.activeOverlay.(*searchOverlay); ok {
 		t.markScrollDirty()
+	} else if !done && !cancel {
+		// Full repaint so boxed modal rows (selection marker, filter) update reliably.
+		t.dirty.markFull()
+	} else {
+		t.dirty.markOverlay()
 	}
-	t.dirty.markOverlay()
 	t.closeOverlayAfter(prev, done, cancel)
 	return true
 }

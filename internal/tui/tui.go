@@ -50,6 +50,7 @@ type TUI struct {
 	editor *editor
 	status StatusSnapshot
 	dirty  dirtyTracker
+	keyDec Decoder
 
 	renderFrame    int
 	activeTools    int
@@ -243,7 +244,10 @@ func (t *TUI) Run() error {
 				continue
 			}
 			// Don't scroll scrollback behind modal overlays or approval.
-			if !t.blocksBackgroundInput() {
+			t.mu.Lock()
+			blockBG := t.blocksBackgroundInput()
+			t.mu.Unlock()
+			if !blockBG {
 				viewport := t.scrollViewportRows()
 				if delta, ok := parseScrollInputRaw(buf[:n], viewport); ok {
 					t.handleScrollDelta(delta)
@@ -252,27 +256,28 @@ func (t *TUI) Run() error {
 			}
 			// If an approval prompt is active, route recognized answers to the
 			// approval channel instead of feeding them to the editor.
-			if t.approving.Load() {
-				data := decodeKittyKeys(buf[:n])
-				if containsCtrlC(data) {
-					t.cancelActiveRun()
+			for _, k := range t.keyDec.Push(buf[:n]) {
+				if t.approving.Load() {
+					if k.isCtrlC() {
+						t.cancelActiveRun()
+						continue
+					}
+					allowed, ok := keyApprovalAnswer(k)
+					if ok {
+						t.approvalAnswer <- allowed
+					} else {
+						t.flashApprovalHint()
+					}
 					continue
 				}
-				allowed, ok := approvalKeyAllowed(data)
-				if ok {
-					t.approvalAnswer <- allowed
-				} else {
-					t.flashApprovalHint()
+				quit, err := t.feedKey(k)
+				if err != nil {
+					t.appendError(err)
+					continue
 				}
-				continue
-			}
-			quit, err := t.feed(decodeKittyKeys(buf[:n]))
-			if err != nil {
-				t.appendError(err)
-				continue
-			}
-			if quit {
-				return
+				if quit {
+					return
+				}
 			}
 		}
 	}()
@@ -297,15 +302,23 @@ func (t *TUI) Run() error {
 	}
 }
 
-// feed handles one chunk of input bytes. It returns (quit, error). If quit is
-// true, the input goroutine should exit. It must be called from the input
-// goroutine only.
+// feed decodes bytes via the shared key decoder and dispatches each event.
+// Tests may call this directly; the input loop uses feedKey per decoded key.
 func (t *TUI) feed(data []byte) (bool, error) {
+	for _, k := range t.keyDec.Push(data) {
+		if quit, err := t.feedKey(k); quit || err != nil {
+			return quit, err
+		}
+	}
+	return false, nil
+}
+
+// feedKey handles one normalized key event. It returns (quit, error).
+func (t *TUI) feedKey(k Key) (bool, error) {
 	t.maybeClearHint()
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Ensure wrapWidth is set so editor movements use the correct grid.
 	if t.editor.wrapWidth < 1 && t.cols > 0 {
 		w := t.cols - 1
 		if w < 1 {
@@ -314,14 +327,20 @@ func (t *TUI) feed(data []byte) (bool, error) {
 		t.editor.wrapWidth = w
 	}
 
-	// Block paste into the editor while a modal overlay or approval is active.
 	if t.blocksBackgroundInput() || t.hasKeyOverlay() {
-		if t.editor.paste || (len(data) >= 6 && data[0] == 27 && data[1] == '[' && data[2] == '2' && data[3] == '0' && data[4] == '0' && data[5] == '~') {
+		if k.Kind == KeyPaste {
+			if t.handleOverlayPaste(k) {
+				if _, ok := t.activeOverlay.(*searchOverlay); ok {
+					t.markScrollDirty()
+				} else {
+					t.dirty.markFull()
+				}
+			}
 			return false, nil
 		}
 	}
 
-	if t.handleKeyOverlay(data) {
+	if t.handleKeyOverlay(k) {
 		if t.overlayQuit.Load() {
 			t.overlayQuit.Store(false)
 			return true, nil
@@ -329,99 +348,74 @@ func (t *TUI) feed(data []byte) (bool, error) {
 		return false, nil
 	}
 
-	// While a key-driven overlay is open, swallow keys that weren't handled above
-	// so they don't reach the editor or scrollback. Ctrl+C dismisses the overlay.
 	if t.hasKeyOverlay() {
-		if containsCtrlC(data) {
+		if k.isCtrlC() || k.Kind == KeyEscape {
 			t.dismissOverlay()
 		}
 		return false, nil
 	}
 
-	// Conversation focus: Tab returns to input; PgUp/Dn scroll; Shift+←/→ prompts.
-	// Unhandled keys (Ctrl+C, Ctrl+P, …) fall through to normal routing.
-	if t.focusRegion == focusConv && t.feedConvFocus(data) {
+	if t.focusRegion == focusConv && t.feedConvFocus(k) {
 		return false, nil
 	}
 
-	// Expanded tool result scroll (↑↓) and Esc collapse.
 	w := t.contentWidth()
 	if t.scroll.focusedToolExpanded(w) {
-		if isArrowUp(data) {
+		switch k.Kind {
+		case KeyArrowUp:
 			if t.scroll.scrollFocusedTool(w, -1) {
 				t.markScrollDirty()
 			}
 			return false, nil
-		}
-		if isArrowDown(data) {
+		case KeyArrowDown:
 			if t.scroll.scrollFocusedTool(w, 1) {
 				t.markScrollDirty()
 			}
 			return false, nil
 		}
 	}
-	for _, b := range data {
-		if b == 27 && !hasCSI(data) {
-			if t.scroll.collapseFocusedTool() {
-				t.markScrollDirty()
-				return false, nil
-			}
-		}
+	if k.Kind == KeyEscape && t.scroll.collapseFocusedTool() {
+		t.markScrollDirty()
+		return false, nil
 	}
 
-	// Arrow up/down cycle through completion while it's open (before scrollback).
 	if !t.completion.empty() {
-		for i, b := range data {
-			if b == 27 && i+2 < len(data) && data[i+1] == '[' {
-				switch data[i+2] {
-				case 'A':
-					t.completion.cycle(-1)
-					t.markInputDirty()
-					return false, nil
-				case 'B':
-					t.completion.cycle(+1)
-					t.markInputDirty()
-					return false, nil
-				}
-			}
-		}
-	}
-
-	// Scrollback navigation (PgUp/Dn, wheel, shift+arrows) — not plain arrows.
-	if delta, ok := parseScrollInputRaw(data, t.scrollRows); ok {
-		if isShiftArrowScroll(data) || isPageUp(data) || isPageDown(data) {
-			t.scrollByDelta(delta)
+		switch k.Kind {
+		case KeyArrowUp:
+			t.completion.cycle(-1)
+			t.markInputDirty()
+			return false, nil
+		case KeyArrowDown:
+			t.completion.cycle(+1)
+			t.markInputDirty()
 			return false, nil
 		}
 	}
 
-	// Tab: completion when typing tokens; otherwise toggle conversation focus.
-	if containsTab(data) {
+	if delta, ok := scrollDeltaForKey(k, t.scrollRows); ok {
+		t.scrollByDelta(delta)
+		return false, nil
+	}
+
+	if k.Kind == KeyTab {
 		t.handleTabKey()
 		return false, nil
 	}
 
-	// Enter accepts the current completion selection when the dropdown is open.
-	if !t.completion.empty() && t.completion.idx >= 0 && containsSubmitKey(data) {
+	if !t.completion.empty() && t.completion.idx >= 0 && k.isEnter() {
 		t.applyCompletion(t.completion.cands[t.completion.idx])
 		t.completion = nil
 		t.markInputDirty()
 		return false, nil
 	}
 
-	// Escape: dismiss the completion dropdown if open.
-	for _, b := range data {
-		if b == 27 {
-			if t.completion != nil && !t.completion.empty() && !hasCSI(data) {
-				t.completion = nil
-				t.markInputDirty()
-				return false, nil
-			}
-		}
+	if k.Kind == KeyEscape && t.completion != nil && !t.completion.empty() {
+		t.completion = nil
+		t.markInputDirty()
+		return false, nil
 	}
 
-	// Ctrl+C: clear editor / exit when idle.
-	if containsCtrlC(data) {
+	if k.isCtrlC() {
 		if t.editor.text() != "" {
 			t.editor.setText("")
 			t.completion = nil
@@ -437,125 +431,89 @@ func (t *TUI) feed(data []byte) (bool, error) {
 		return false, nil
 	}
 
-	// Ctrl+T toggles collapse on the nearest thinking block in view.
-	for _, b := range data {
-		if b == 20 {
-			if t.scroll.toggleThinkingInView(t.scrollRows, t.contentWidth()) {
-				t.markScrollDirty()
-			}
+	if k.Kind == KeyCtrl && k.Byte == 20 {
+		if t.scroll.toggleThinkingInView(t.scrollRows, t.contentWidth()) {
+			t.markScrollDirty()
+		}
+		return false, nil
+	}
+
+	if t.focusRegion == focusConv && k.Kind == KeyCtrl && k.Byte == 5 {
+		if t.scroll.toggleToolExpandInView(t.convScrollRows(), t.contentWidth()) {
+			t.markScrollDirty()
+		}
+		return false, nil
+	}
+
+	if t.completion.empty() && k.Kind == KeyCtrl && k.Byte == 6 {
+		t.openSearch()
+		return false, nil
+	}
+
+	if k.Kind == KeyCtrl && k.Byte == 25 {
+		t.yankClipboard()
+		return false, nil
+	}
+
+	if t.completion.empty() && k.Kind == KeyCtrl && (k.Byte == 16 || k.Byte == 30) {
+		t.openCommandPalette()
+		return false, nil
+	}
+
+	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyCtrl {
+		switch k.Byte {
+		case 13:
+			t.openModelPicker()
 			return false, nil
-		}
-	}
-
-	// Ctrl+E toggles tool expand in conversation focus (not in the input editor).
-	if t.focusRegion == focusConv {
-		for _, b := range data {
-			if b == 5 {
-				if t.scroll.toggleToolExpandInView(t.convScrollRows(), t.contentWidth()) {
-					t.markScrollDirty()
-				}
-				return false, nil
-			}
-		}
-	}
-
-	// Ctrl+F scrollback search.
-	if t.completion.empty() {
-		for _, b := range data {
-			if b == 6 {
-				t.openSearch()
-				return false, nil
-			}
-		}
-	}
-
-	// Ctrl+Y yank last assistant block (or focused tool result) to clipboard.
-	for _, b := range data {
-		if b == 25 {
-			t.yankClipboard()
+		case 19:
+			t.openSessionPicker()
 			return false, nil
-		}
-	}
-
-	// Ctrl+P command palette (when no completion dropdown).
-	if t.completion.empty() {
-		for _, b := range data {
-			if b == 16 {
-				t.openCommandPalette()
-				return false, nil
-			}
-		}
-	}
-
-	// Ctrl+. shortcuts palette (Grok-style).
-	if t.completion.empty() {
-		for _, b := range data {
-			if b == 30 {
-				t.openCommandPalette()
-				return false, nil
-			}
-		}
-	}
-
-	// Ctrl+M model picker, Ctrl+S session picker.
-	if t.completion.empty() && t.activeOverlay == nil {
-		for _, b := range data {
-			if b == 13 {
-				t.openModelPicker()
-				return false, nil
-			}
-			if b == 19 {
-				t.openSessionPicker()
-				return false, nil
-			}
-		}
-	}
-
-	// History navigation (Ctrl+R / Ctrl+N) when no completion dropdown.
-	if t.completion.empty() && t.activeOverlay == nil {
-		for _, b := range data {
-			if b == 18 {
-				t.navigateHistory(-1)
-				t.markInputDirty()
-				return false, nil
-			}
-			if b == 14 {
-				t.navigateHistory(1)
-				t.markInputDirty()
-				return false, nil
-			}
-		}
-	}
-
-	// Plain ↑/↓ at editor edges browse prompt history (readline-style).
-	if t.completion.empty() && t.activeOverlay == nil && t.focusRegion == focusInput {
-		if isArrowUp(data) && t.editorAtScrollTop() {
+		case 18:
 			t.navigateHistory(-1)
 			t.markInputDirty()
 			return false, nil
-		}
-		if isArrowDown(data) && t.editorAtScrollBottom() {
+		case 14:
 			t.navigateHistory(1)
 			t.markInputDirty()
 			return false, nil
 		}
 	}
 
-	// While agent is running, allow shortcuts above but not typing or submit.
-	if t.running() && !t.approving.Load() {
-		if containsCtrlC(data) {
-			t.cancelActiveRunLocked()
-			t.lastCtrlC = time.Now()
+	if t.completion.empty() && t.activeOverlay == nil && t.focusRegion == focusInput {
+		switch k.Kind {
+		case KeyArrowUp:
+			if t.editorAtScrollTop() {
+				t.navigateHistory(-1)
+				t.markInputDirty()
+			}
+			return false, nil
+		case KeyArrowDown:
+			if t.editorAtScrollBottom() {
+				t.navigateHistory(1)
+				t.markInputDirty()
+			}
+			return false, nil
 		}
-		return false, nil
 	}
 
-	return t.processEditor(data)
+	if t.running() && !t.approving.Load() {
+		if k.isCtrlC() {
+			t.cancelActiveRunLocked()
+			t.lastCtrlC = time.Now()
+			return false, nil
+		}
+		if k.isEnter() {
+			return false, nil
+		}
+		return t.processEditorKey(k)
+	}
+
+	return t.processEditorKey(k)
 }
 
-// processEditor feeds data to the editor and handles the result (submit/quit).
-func (t *TUI) processEditor(data []byte) (bool, error) {
-	submitted, quit := t.editor.feed(data)
+// processEditorKey applies one key to the editor and handles submit/quit.
+func (t *TUI) processEditorKey(k Key) (bool, error) {
+	submitted, quit := t.editor.applyKey(k)
 	if submitted != "" {
 		t.completion = nil
 		if err := t.submit(submitted); err != nil {
@@ -574,6 +532,16 @@ func (t *TUI) processEditor(data []byte) (bool, error) {
 	}
 	t.refreshCompletion()
 	t.markInputDirty()
+	return false, nil
+}
+
+// processEditor feeds legacy raw bytes to the editor (tests only).
+func (t *TUI) processEditor(data []byte) (bool, error) {
+	for _, k := range (&Decoder{}).Push(data) {
+		if quit, err := t.processEditorKey(k); quit || err != nil {
+			return quit, err
+		}
+	}
 	return false, nil
 }
 
@@ -937,6 +905,7 @@ func (t *TUI) recomputeLayout() {
 	if t.scrollRows < 3 {
 		t.scrollRows = 3
 	}
+	t.scroll.clampScrollOffset(t.convScrollRows(), t.contentWidth())
 }
 
 func (t *TUI) installResize() {
