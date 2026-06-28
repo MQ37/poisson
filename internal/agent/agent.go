@@ -15,6 +15,7 @@ import (
 	"poisson/internal/config"
 	"poisson/internal/project"
 	"poisson/internal/provider"
+	"poisson/internal/skills"
 	"poisson/internal/store"
 	"poisson/internal/tools"
 )
@@ -75,6 +76,9 @@ type Agent struct {
 	// pendingResults holds the text of tool results appended in the current
 	// iteration, used by ShouldCompact to estimate new tokens.
 	pendingResults []string
+
+	skillsEnabled bool
+	skills        []skills.Skill
 }
 
 // NewAgent creates an Agent ready to process prompts for the given session.
@@ -140,6 +144,63 @@ func (a *Agent) SetModel(model string) {
 
 // SetConfig swaps the config (for /reload).
 func (a *Agent) SetConfig(cfg *config.Config) { a.config = cfg }
+
+// SetSkills configures skill discovery for the system prompt and skill tool.
+// When enabled is false, skills are cleared and the skill tool is removed.
+func (a *Agent) SetSkills(enabled bool, sk []skills.Skill) {
+	a.skillsEnabled = enabled
+	if !enabled || len(sk) == 0 {
+		a.skills = nil
+		if a.tools != nil {
+			a.tools.Unregister("skill")
+		}
+		return
+	}
+	a.skills = append([]skills.Skill(nil), sk...)
+	if a.tools != nil {
+		a.tools.Register(tools.NewSkillTool(a.skills))
+	}
+}
+
+// SkillsEnabled reports whether skill loading is active for this process.
+func (a *Agent) SkillsEnabled() bool { return a.skillsEnabled }
+
+// Skills returns the current skill list (may be nil).
+func (a *Agent) Skills() []skills.Skill {
+	if len(a.skills) == 0 {
+		return nil
+	}
+	return append([]skills.Skill(nil), a.skills...)
+}
+
+// ReloadSkills rediscovers ~/.poisson/skills and refreshes prompt + skill tool.
+func (a *Agent) ReloadSkills() (int, error) {
+	if !a.skillsEnabled {
+		a.skills = nil
+		if a.tools != nil {
+			a.tools.Unregister("skill")
+		}
+		return 0, nil
+	}
+	sk, err := skills.Discover()
+	if err != nil {
+		return 0, err
+	}
+	a.SetSkills(true, sk)
+	return len(sk), nil
+}
+
+// ReloadConfigDependentTools updates tools gated on runtime config (e.g. fetch).
+func (a *Agent) ReloadConfigDependentTools() {
+	if a.tools == nil || a.config == nil {
+		return
+	}
+	if tools.IsOllamaReachable(a.config) {
+		a.tools.Register(tools.NewFetchTool(a.config.Ollama.BaseURL))
+	} else {
+		a.tools.Unregister("fetch")
+	}
+}
 
 // Provider returns the current provider.
 func (a *Agent) Provider() provider.Provider { return a.provider }
@@ -457,10 +518,15 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 			toolNames = append(toolNames, td.Name)
 		}
 	}
+	var skillsText string
+	if a.skillsEnabled && len(a.skills) > 0 {
+		skillsText = skills.FormatSkillsForPrompt(a.skills)
+	}
 	sysPrompt := project.BuildSystemPrompt(project.BuildSystemPromptOptions{
 		Cwd:          sess.Cwd,
 		ToolNames:    toolNames,
 		ContextFiles: contextFiles,
+		SkillsText:   skillsText,
 	})
 
 	var systemBlocks []provider.SystemBlock

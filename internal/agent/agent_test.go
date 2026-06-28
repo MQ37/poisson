@@ -12,6 +12,7 @@ import (
 
 	"poisson/internal/config"
 	"poisson/internal/provider"
+	"poisson/internal/skills"
 	"poisson/internal/store"
 	"poisson/internal/testutil"
 	"poisson/internal/tools"
@@ -175,6 +176,41 @@ func TestBuildRequest(t *testing.T) {
 	}
 	if len(req.Tools) == 0 {
 		t.Fatal("expected tool definitions, got 0")
+	}
+}
+
+func TestBuildRequestIncludesSkills(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	reg := newTestRegistry(testutil.TempDir(t))
+	cfg := newTestConfig()
+	agent := NewAgent(s, newFakeProvider(), reg, cfg, sessionID, nil, nil)
+	agent.SetSkills(true, []skills.Skill{{Name: "review", Description: "Review code"}})
+
+	req, err := agent.buildRequest()
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if !strings.Contains(req.System[0].Text, "Available skills:") {
+		t.Fatalf("system prompt missing skills section: %q", req.System[0].Text)
+	}
+	if !strings.Contains(req.System[0].Text, "review") {
+		t.Fatalf("system prompt missing skill name: %q", req.System[0].Text)
+	}
+}
+
+func TestBuildRequestSkillsDisabled(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	agent := NewAgent(s, newFakeProvider(), nil, newTestConfig(), sessionID, nil, nil)
+	agent.SetSkills(false, []skills.Skill{{Name: "review", Description: "x"}})
+
+	req, err := agent.buildRequest()
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
+	}
+	if strings.Contains(req.System[0].Text, "Available skills:") {
+		t.Fatalf("skills should be omitted when disabled")
 	}
 }
 

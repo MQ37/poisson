@@ -27,22 +27,31 @@ func main() {
 		return
 	}
 
-	if len(os.Args) < 2 {
-		runREPL()
+	noSkills := false
+	var cmdArgs []string
+	for _, a := range os.Args[1:] {
+		if a == "--no-skills" {
+			noSkills = true
+			continue
+		}
+		cmdArgs = append(cmdArgs, a)
+	}
+	if len(cmdArgs) == 0 {
+		runREPL(noSkills)
 		return
 	}
 
-	switch os.Args[1] {
+	switch cmdArgs[0] {
 	case "login":
-		cmdLogin(os.Args[2:])
+		cmdLogin(cmdArgs[1:])
 	case "logout":
-		cmdLogout(os.Args[2:])
+		cmdLogout(cmdArgs[1:])
 	case "-v", "--version", "version":
 		fmt.Println("poisson", version)
 	case "sessions":
 		cmdSessions()
 	case "cost":
-		cmdCost(os.Args[2:])
+		cmdCost(cmdArgs[1:])
 	default:
 		fmt.Println("poisson", version)
 		fmt.Println("usage: Poisson [command] [options]")
@@ -56,7 +65,7 @@ func main() {
 }
 
 // runREPL starts the interactive REPL.
-func runREPL() {
+func runREPL(noSkills bool) {
 	// Load config.
 	cfg, err := config.Load()
 	if err != nil {
@@ -171,20 +180,22 @@ func runREPL() {
 	}
 	reg.Register(tools.NewSubagentTool(cwd, st, subOutputFn, subApprovalFn))
 
-	// Skills.
-	skillList, _ := skills.Discover()
-	if len(skillList) > 0 {
-		reg.Register(tools.NewSkillTool(skillList))
-	}
-
 	// Network tools.
 	reg.Register(tools.NewExaSearchTool())
-	if tools.IsOllamaReachable(cfg) {
-		reg.Register(tools.NewFetchTool(cfg.Ollama.BaseURL))
-	}
 
 	// Set up agent.
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
+
+	var skillList []skills.Skill
+	if !noSkills {
+		var err error
+		skillList, err = skills.Discover()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skills discover: %v\n", err)
+		}
+	}
+	a.SetSkills(!noSkills, skillList)
+	a.ReloadConfigDependentTools()
 
 	// Run TUI.
 	t := tui.NewTUI(a, sessionID, outputChan)
@@ -458,6 +469,7 @@ func runChildMode() {
 	// Run agent with a nil outputChan (we write events ourselves).
 	outputChan := make(chan agent.OutputEvent, 256)
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
+	a.SetSkills(false, nil)
 
 	// Drain outputChan and write to stdout as JSON lines.
 	go func() {

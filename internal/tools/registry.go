@@ -25,6 +25,13 @@ func (r *Registry) Register(tool Tool) {
 	r.tools[tool.Name()] = tool
 }
 
+// Unregister removes a tool by name. No-op if missing.
+func (r *Registry) Unregister(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.tools, name)
+}
+
 // Get returns the named tool, or (nil, false) if not registered.
 func (r *Registry) Get(name string) (Tool, bool) {
 	r.mu.RLock()

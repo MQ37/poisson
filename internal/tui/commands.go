@@ -364,7 +364,17 @@ func cmdReload(h commandHost) error {
 	if p := makeProvider(a.Provider().ID(), cfg); p != nil {
 		a.SetProvider(p)
 	}
-	h.Out(styleSystem, "reloaded config")
+	n, err := a.ReloadSkills()
+	if err != nil {
+		h.Out(styleError, "reloaded config; skills error: "+err.Error())
+		return nil
+	}
+	a.ReloadConfigDependentTools()
+	if a.SkillsEnabled() {
+		h.Out(styleSystem, fmt.Sprintf("reloaded: config, provider, %d skills (AGENTS.md on next message)", n))
+	} else {
+		h.Out(styleSystem, "reloaded: config, provider (AGENTS.md on next message)")
+	}
 	return nil
 }
 
