@@ -232,12 +232,11 @@ func TestOllamaStreamUsesV1ChatCompletions(t *testing.T) {
 }
 
 func TestOllamaUsageFallsBackToRequestEstimateWhenPromptZero(t *testing.T) {
-	p := NewOllamaProvider("http://localhost:11434", "test")
 	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n" +
 		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":0,\"completion_tokens\":62}}\n\n" +
 		"data: [DONE]\n\n"
 	ch := make(chan StreamEvent, 16)
-	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, 42)
+	go pumpOllamaSSETest(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, 42)
 
 	var done *Usage
 	for ev := range ch {
@@ -266,12 +265,11 @@ func TestEstimateOllamaRequestTokens(t *testing.T) {
 }
 
 func TestOllamaUsageFromOpenAIUsageChunk(t *testing.T) {
-	p := NewOllamaProvider("http://localhost:11434", "test")
 	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n" +
 		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":177,\"completion_tokens\":46}}\n\n" +
 		"data: [DONE]\n\n"
 	ch := make(chan StreamEvent, 16)
-	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, 0)
+	go pumpOllamaSSETest(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, 0)
 
 	var done *Usage
 	for ev := range ch {
@@ -288,12 +286,11 @@ func TestOllamaUsageFromOpenAIUsageChunk(t *testing.T) {
 }
 
 func TestOllamaToolCallGetsSyntheticID(t *testing.T) {
-	p := NewOllamaProvider("http://localhost:11434", "test")
 	sse := "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":2,\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"main.go\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n" +
 		"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1}}\n\n" +
 		"data: [DONE]\n\n"
 	ch := make(chan StreamEvent, 16)
-	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, 0)
+	go pumpOllamaSSETest(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, 0)
 
 	var start *ToolCall
 	var stop *ToolCall

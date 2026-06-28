@@ -90,16 +90,10 @@ func TestXAIStreamText(t *testing.T) {
 }
 
 func TestXAISSEParseText(t *testing.T) {
-	// Test the SSE parser directly by feeding it canned data.
-	p := NewXAIProvider(
-		auth.AuthStore{"xai": {Type: "oauth", Access: "tok", Expires: 9999999999999}},
-		config.DefaultConfig(),
-	)
-
 	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"hello from grok\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n"
 
 	ch := make(chan StreamEvent, 64)
-	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+	go pumpXAISSETest(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
 
 	var text string
 	var done *Usage
@@ -125,15 +119,10 @@ func TestXAISSEParseText(t *testing.T) {
 }
 
 func TestXAISSEParseReasoningTokens(t *testing.T) {
-	p := NewXAIProvider(
-		auth.AuthStore{"xai": {Type: "oauth", Access: "tok", Expires: 9999999999999}},
-		config.DefaultConfig(),
-	)
-
 	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":131,\"completion_tokens\":3,\"completion_tokens_details\":{\"reasoning_tokens\":762},\"total_tokens\":896}}\n\ndata: [DONE]\n\n"
 
 	ch := make(chan StreamEvent, 64)
-	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+	go pumpXAISSETest(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
 
 	var done *Usage
 	for ev := range ch {
@@ -150,15 +139,10 @@ func TestXAISSEParseReasoningTokens(t *testing.T) {
 }
 
 func TestXAISSEParseUsageOnlyChunk(t *testing.T) {
-	p := NewXAIProvider(
-		auth.AuthStore{"xai": {Type: "oauth", Access: "tok", Expires: 9999999999999}},
-		config.DefaultConfig(),
-	)
-
 	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"completion_tokens_details\":{\"reasoning_tokens\":8},\"total_tokens\":20}}\n\ndata: [DONE]\n\n"
 
 	ch := make(chan StreamEvent, 64)
-	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+	go pumpXAISSETest(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
 
 	var done *Usage
 	for ev := range ch {
@@ -175,15 +159,10 @@ func TestXAISSEParseUsageOnlyChunk(t *testing.T) {
 }
 
 func TestXAISSEParseToolCall(t *testing.T) {
-	p := NewXAIProvider(
-		auth.AuthStore{"xai": {Type: "oauth", Access: "tok", Expires: 9999999999999}},
-		config.DefaultConfig(),
-	)
-
 	sse := "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"main.go\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":10}}\n\ndata: [DONE]\n\n"
 
 	ch := make(chan StreamEvent, 64)
-	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+	go pumpXAISSETest(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
 
 	var toolCalls []*ToolCall
 	var done *Usage
@@ -217,11 +196,6 @@ func TestXAISSEParseToolCall(t *testing.T) {
 }
 
 func TestXAISSEParseInterleavedToolCalls(t *testing.T) {
-	p := NewXAIProvider(
-		auth.AuthStore{"xai": {Type: "oauth", Access: "tok", Expires: 9999999999999}},
-		config.DefaultConfig(),
-	)
-
 	sse := `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read","arguments":""}},{"index":1,"id":"call_2","type":"function","function":{"name":"write","arguments":""}}]},"finish_reason":null}]}
 
 data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"a"}},{"index":1,"function":{"arguments":"{\"path\":\"b"}}]},"finish_reason":null}]}
@@ -235,7 +209,7 @@ data: [DONE]
 `
 
 	ch := make(chan StreamEvent, 64)
-	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+	go pumpXAISSETest(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
 
 	got := map[string]string{}
 	for ev := range ch {

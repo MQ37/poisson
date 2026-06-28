@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,4 +24,23 @@ func newFakeSSEServer(response string) *fakeSSEServer {
 		io.Copy(w, strings.NewReader(response))
 	}))
 	return f
+}
+
+func pumpXAISSETest(ctx context.Context, body io.ReadCloser, ch chan<- StreamEvent) {
+	pumpOpenAIChatCompletionsSSE(ctx, body, ch, openaiSSEConfig{
+		ConvertUsage: func(u *openaiSSEUsage, _ int) *Usage { return convertXAIUsage(u) },
+		ErrPrefix:    "xAI",
+	})
+}
+
+func pumpOllamaSSETest(ctx context.Context, body io.ReadCloser, ch chan<- StreamEvent, inputEstimate int) {
+	pumpOpenAIChatCompletionsSSE(ctx, body, ch, openaiSSEConfig{
+		InputEstimate:          inputEstimate,
+		ConvertUsage:           convertOllamaUsage,
+		EmitToolDeltas:         true,
+		AllowNameOnlyToolStart: true,
+		FailOnParseError:       true,
+		EnsureDoneOnEOF:        true,
+		ErrPrefix:              "ollama",
+	})
 }

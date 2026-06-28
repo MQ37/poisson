@@ -1,14 +1,12 @@
 package provider
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"sort"
 	"strings"
 
 	"poisson/internal/auth"
@@ -104,7 +102,12 @@ func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry i
 	}
 
 	ch := make(chan StreamEvent, 64)
-	go p.pumpSSE(ctx, resp.Body, ch)
+	go pumpOpenAIChatCompletionsSSE(ctx, resp.Body, ch, openaiSSEConfig{
+		ConvertUsage: func(u *openaiSSEUsage, _ int) *Usage {
+			return convertXAIUsage(u)
+		},
+		ErrPrefix: "xAI",
+	})
 	return ch, nil
 }
 
@@ -243,16 +246,7 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 	return ar
 }
 
-type xaiAPIUsage struct {
-	PromptTokens            int `json:"prompt_tokens"`
-	CompletionTokens        int `json:"completion_tokens"`
-	TotalTokens             int `json:"total_tokens"`
-	CompletionTokensDetails struct {
-		ReasoningTokens int `json:"reasoning_tokens"`
-	} `json:"completion_tokens_details"`
-}
-
-func convertXAIUsage(u *xaiAPIUsage) *Usage {
+func convertXAIUsage(u *openaiSSEUsage) *Usage {
 	if u == nil {
 		return nil
 	}
@@ -261,146 +255,4 @@ func convertXAIUsage(u *xaiAPIUsage) *Usage {
 		output = totalOutput
 	}
 	return &Usage{InputTokens: u.PromptTokens, OutputTokens: output}
-}
-
-// pumpSSE reads the OpenAI-compatible SSE stream and converts to StreamEvents.
-func (p *XAIProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<- StreamEvent) {
-	defer close(ch)
-	defer body.Close()
-
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
-
-	toolCalls := make(map[int]*ToolCall)
-	toolInputBuffers := make(map[int]*bytes.Buffer)
-	finishSeen := false
-	doneSent := false
-	sendDone := func(usage *Usage) bool {
-		select {
-		case <-ctx.Done():
-			return false
-		case ch <- StreamEvent{Type: EventDone, Usage: usage}:
-			doneSent = true
-			return true
-		}
-	}
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" || strings.HasPrefix(line, ": ") {
-			continue
-		}
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			if finishSeen && !doneSent {
-				sendDone(&Usage{})
-			}
-			return
-		}
-
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
-						Index    int    `json:"index"`
-						ID       string `json:"id"`
-						Type     string `json:"type"`
-						Function struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
-						} `json:"function"`
-					} `json:"tool_calls"`
-				} `json:"delta"`
-				FinishReason *string `json:"finish_reason"`
-			} `json:"choices"`
-			Usage *xaiAPIUsage `json:"usage"`
-		}
-		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
-		}
-
-		// xAI sends final usage as a separate chunk when stream_options.include_usage=true.
-		if len(chunk.Choices) == 0 {
-			if usage := convertXAIUsage(chunk.Usage); usage != nil {
-				sendDone(usage)
-				return
-			}
-			continue
-		}
-
-		delta := chunk.Choices[0].Delta
-
-		// Text delta.
-		if delta.Content != "" {
-			select {
-			case <-ctx.Done():
-				return
-			case ch <- StreamEvent{Type: EventTextDelta, Text: delta.Content}:
-			}
-		}
-
-		// Tool calls.
-		for _, tc := range delta.ToolCalls {
-			idx := tc.Index
-			if tc.ID != "" {
-				call := &ToolCall{ID: tc.ID, Name: tc.Function.Name}
-				toolCalls[idx] = call
-				toolInputBuffers[idx] = &bytes.Buffer{}
-				select {
-				case <-ctx.Done():
-					return
-				case ch <- StreamEvent{Type: EventToolUseStart, ToolCall: call}:
-				}
-			}
-			if tc.Function.Arguments != "" {
-				buf := toolInputBuffers[idx]
-				if buf == nil {
-					buf = &bytes.Buffer{}
-					toolInputBuffers[idx] = buf
-				}
-				buf.WriteString(tc.Function.Arguments)
-			}
-		}
-
-		// Finish reason.
-		if chunk.Choices[0].FinishReason != nil {
-			finishSeen = true
-			if len(toolCalls) > 0 {
-				idxs := make([]int, 0, len(toolCalls))
-				for idx := range toolCalls {
-					idxs = append(idxs, idx)
-				}
-				sort.Ints(idxs)
-				for _, idx := range idxs {
-					call := toolCalls[idx]
-					if buf := toolInputBuffers[idx]; buf != nil {
-						call.Input = json.RawMessage(buf.Bytes())
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case ch <- StreamEvent{Type: EventToolUseStop, ToolCall: call}:
-					}
-				}
-				toolCalls = make(map[int]*ToolCall)
-				toolInputBuffers = make(map[int]*bytes.Buffer)
-			}
-			if usage := convertXAIUsage(chunk.Usage); usage != nil {
-				sendDone(usage)
-				return
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil && ctx.Err() == nil {
-		select {
-		case ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("sse read: %w", err)}:
-		default:
-		}
-	}
 }
