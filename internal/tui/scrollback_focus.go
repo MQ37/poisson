@@ -28,10 +28,17 @@ func (s *scrollback) blockGlobalStart(blockIdx, width int) int {
 	return cumulative[blockIdx]
 }
 
-// scrollBlockToTop positions blockIdx at the top of the viewport (viewHeight rows).
-func (s *scrollback) scrollBlockToTop(blockIdx, viewHeight, width int) {
+// scrollBlockToTop positions blockIdx in the viewport. skipTopRows leaves room
+// above the block (e.g. conv-focus pinned prompt).
+func (s *scrollback) scrollBlockToTop(blockIdx, viewHeight, width, skipTopRows int) {
 	if viewHeight < 1 {
 		viewHeight = 1
+	}
+	if skipTopRows < 0 {
+		skipTopRows = 0
+	}
+	if skipTopRows >= viewHeight {
+		skipTopRows = viewHeight - 1
 	}
 	wrapped, _ := s.layoutAll(width)
 	if len(wrapped) == 0 {
@@ -43,7 +50,7 @@ func (s *scrollback) scrollBlockToTop(blockIdx, viewHeight, width int) {
 	if max < 0 {
 		max = 0
 	}
-	off := len(wrapped) - viewHeight - target
+	off := len(wrapped) - viewHeight - target + skipTopRows
 	if off < 0 {
 		off = 0
 	}

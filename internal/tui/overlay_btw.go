@@ -85,17 +85,20 @@ func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string
 		}
 	}
 
-	footer := ""
-	if processing {
-		footer = dim + "Esc cancel" + reset
-	} else {
-		footer = dim + "Esc close · ↑↓ scroll" + reset
-	}
-
 	maxBody := maxH - 4
 	if maxBody < 1 {
 		maxBody = 1
 	}
+	needsScroll := len(body) > maxBody
+	footer := ""
+	if processing {
+		footer = dim + "Esc cancel" + reset
+	} else if needsScroll {
+		footer = dim + "Esc close · ↑↓ scroll" + reset
+	} else {
+		footer = dim + "Esc close" + reset
+	}
+
 	if len(body) > maxBody {
 		if scroll > len(body)-maxBody {
 			scroll = len(body) - maxBody

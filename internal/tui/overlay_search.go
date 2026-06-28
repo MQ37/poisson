@@ -134,7 +134,7 @@ func (s *searchOverlay) appendPaste(text string) bool {
 	return changed
 }
 
-// highlightSearchMatch wraps the first case-insensitive query hit, preserving existing ANSI.
+// highlightSearchMatch wraps every case-insensitive query hit on the plain line.
 func highlightSearchMatch(line, query, pre, post string) string {
 	if query == "" {
 		return line
@@ -142,14 +142,25 @@ func highlightSearchMatch(line, query, pre, post string) string {
 	plain := stripANSI(line)
 	lower := strings.ToLower(plain)
 	q := strings.ToLower(strings.TrimSpace(query))
-	idx := strings.Index(lower, q)
-	if idx < 0 {
+	if q == "" {
 		return line
 	}
-	before := plain[:idx]
-	match := plain[idx : idx+len(q)]
-	after := plain[idx+len(q):]
-	return pre + before + bold + match + post + after + reset
+	var b strings.Builder
+	pos := 0
+	for {
+		idx := strings.Index(lower[pos:], q)
+		if idx < 0 {
+			b.WriteString(plain[pos:])
+			break
+		}
+		idx += pos
+		b.WriteString(plain[pos:idx])
+		b.WriteString(pre)
+		b.WriteString(plain[idx : idx+len(q)])
+		b.WriteString(post)
+		pos = idx + len(q)
+	}
+	return b.String() + reset
 }
 
 func (s *searchOverlay) next(dir int) {

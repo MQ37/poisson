@@ -15,7 +15,7 @@ func TestScrollBlockToTop(t *testing.T) {
 	if len(idxs) != 2 {
 		t.Fatalf("user blocks = %d", len(idxs))
 	}
-	s.scrollBlockToTop(idxs[0], 8, 40)
+	s.scrollBlockToTop(idxs[0], 8, 40, 0)
 	if s.scrollOffset == 0 {
 		t.Fatal("expected scroll up to show first prompt")
 	}

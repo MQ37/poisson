@@ -2,14 +2,15 @@ package tui
 
 import "strings"
 
-const overlayFooterHint = "↑↓ move · Enter · Esc · click · Ctrl+C"
+const overlayFooterHint = "↑↓ move · Enter row · Esc · Ctrl+C"
 
 // listBoxChrome records layout from the last render for mouse hit-testing.
 type listBoxChrome struct {
-	anchor    int
-	itemLine0 int
-	itemCount int
-	itemStart int // index in filtered list of first visible row
+	anchor     int
+	itemLine0  int
+	itemCount  int
+	itemStart  int // index in filtered list of first visible row
+	totalLines int
 }
 
 // boxInnerWidth picks a centered modal width from terminal cols.
@@ -105,6 +106,7 @@ func renderBoxedList(title, filter string, body []string, scrollRows, cols, maxI
 		}
 	}
 	chrome.anchor = anchor
+	chrome.totalLines = len(lines)
 
 	out := make([]string, len(lines))
 	for i, ln := range lines {

@@ -57,6 +57,10 @@ func (t *TUI) handleMouseClick(row int) {
 				t.dirty.markFull()
 			}
 			t.closeOverlayAfter(prev, done, false)
+			return
+		}
+		if chrome.totalLines > 0 && (lineInOverlay < 0 || lineInOverlay >= chrome.totalLines) {
+			t.dismissOverlay()
 		}
 		return
 	}

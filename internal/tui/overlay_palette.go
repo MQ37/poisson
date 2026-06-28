@@ -17,7 +17,7 @@ var paletteCommands = []paletteItem{
 	{"/providers", "provider picker"},
 	{"/cost", "token cost breakdown"},
 	{"/clear", "clear scrollback"},
-	{"/search", "find in scrollback (Ctrl+F)"},
+	{"/search", "find in scrollback; /search <q> searches all sessions"},
 	{"/compact", "compact context now"},
 	{"/fork", "fork session"},
 	{"/undo", "undo last turn"},

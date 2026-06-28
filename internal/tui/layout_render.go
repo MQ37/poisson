@@ -150,7 +150,7 @@ func (t *TUI) renderHintLine() string {
 	if t.focusRegion == focusConv {
 		return dim + "Tab:input · PgUp/Dn:scroll · Shift+←/→:prompts · Ctrl+E:tool" + reset
 	}
-	base := "Tab:conv · Enter:send · ↑↓:history · Ctrl+Y:yank · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model · Ctrl+D:exit"
+	base := "Tab:conv · Enter:send · ↑↓:history · Ctrl+Y:yank last reply · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model · Ctrl+D:exit"
 	if t.status.Hint != "" {
 		return dim + t.status.Hint + " · " + base + reset
 	}
@@ -165,6 +165,7 @@ func (t *TUI) scrollByDelta(delta int) {
 		t.scroll.scrollDown(-delta)
 	}
 	t.scroll.clampScrollOffset(t.convScrollRows(), t.contentWidth())
+	t.syncConvUserIdxFromScrollLocked()
 	t.markScrollDirty()
 }
 

@@ -32,8 +32,9 @@ func (t *TUI) pinnedPromptLine(width int) string {
 	if text == "" {
 		text = "(empty)"
 	}
-	label := truncatePlain(text, width-6)
-	return fgYellow + bold + "› " + reset + fgCyan + label + reset
+	turn := dim + "turn " + itoa(t.convUserIdx+1) + "/" + itoa(len(idxs)) + " · " + reset
+	label := truncatePlain(text, width-18)
+	return fgYellow + bold + "› " + reset + turn + fgCyan + label + reset
 }
 
 func (t *TUI) enterConvFocus() {
@@ -59,7 +60,7 @@ func (t *TUI) scrollToConvPrompt() {
 	if t.convUserIdx >= len(idxs) {
 		t.convUserIdx = len(idxs) - 1
 	}
-	t.scroll.scrollBlockToTop(idxs[t.convUserIdx], t.convScrollRows(), t.contentWidth())
+	t.scroll.scrollBlockToTop(idxs[t.convUserIdx], t.convScrollRows(), t.contentWidth(), 1)
 }
 
 func (t *TUI) stepConvPrompt(dir int) {
@@ -224,6 +225,66 @@ func (t *TUI) cancelActiveRun() {
 
 func (t *TUI) flashApprovalHint() {
 	t.setEphemeralHint("approval: A/y/Enter allow · D/n/Esc deny · ↑↓ scroll · Ctrl+C cancel", 3*time.Second)
+}
+
+func (t *TUI) flashOverlayHintLocked() {
+	t.setEphemeralHintLocked("close overlay first (Esc)", 2*time.Second)
+}
+
+// prepareShutdownLocked cancels overlays and any in-flight agent turn before exit.
+// Caller must hold t.mu.
+func (t *TUI) prepareShutdownLocked() {
+	t.cancelOverlayWork()
+	t.activeOverlay = nil
+	t.cancelMu.Lock()
+	cancel := t.cancelRun
+	t.cancelMu.Unlock()
+	if cancel != nil {
+		t.turnCancelled = true
+		cancel()
+	}
+}
+
+// waitForAgentStop blocks briefly until the agent goroutine finishes after shutdown.
+func (t *TUI) waitForAgentStop() {
+	t.mu.Lock()
+	t.prepareShutdownLocked()
+	t.mu.Unlock()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		t.mu.Lock()
+		busy := t.status.Thinking
+		t.mu.Unlock()
+		if !busy {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// syncConvUserIdxFromScrollLocked updates the pinned turn from the viewport top.
+// Caller must hold t.mu.
+func (t *TUI) syncConvUserIdxFromScrollLocked() {
+	if t.focusRegion != focusConv {
+		return
+	}
+	idxs := t.scroll.userBlockIndices()
+	if len(idxs) == 0 {
+		return
+	}
+	w := t.contentWidth()
+	viewH := t.convScrollRows()
+	_, start, _ := t.scroll.viewportRange(viewH, w)
+	chosen := 0
+	for i, bi := range idxs {
+		if t.scroll.blockGlobalStart(bi, w) <= start {
+			chosen = i
+		}
+	}
+	if chosen != t.convUserIdx {
+		t.convUserIdx = chosen
+		t.dirty.markScrollRows(0)
+	}
 }
 
 func containsTab(data []byte) bool {

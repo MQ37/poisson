@@ -129,6 +129,7 @@ func (t *TUI) Run() error {
 					continue
 				}
 				if quit {
+					t.waitForAgentStop()
 					return
 				}
 			}

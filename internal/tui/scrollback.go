@@ -368,13 +368,37 @@ func truncateToWidth(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	plain := stripANSI(s)
-	runes := []rune(plain)
-	if len(runes) <= width {
+	if visibleWidth(s) <= width {
 		return s
 	}
 	if width == 1 {
 		return "…"
 	}
-	return string(runes[:width-1]) + "…"
+	var b strings.Builder
+	vis := 0
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b && i+1 < len(s) {
+			j := i + 2
+			for j < len(s) {
+				c := s[j]
+				if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+					j++
+					break
+				}
+				j++
+			}
+			b.WriteString(s[i:j])
+			i = j
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		if vis >= width-1 {
+			b.WriteString("…")
+			return b.String()
+		}
+		b.WriteString(s[i : i+size])
+		vis++
+		i += size
+	}
+	return b.String()
 }

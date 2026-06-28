@@ -213,6 +213,24 @@ func TestApprovalOverlayScrollChangesView(t *testing.T) {
 	}
 }
 
+func TestHighlightSearchMatchAllOccurrences(t *testing.T) {
+	got := stripANSI(highlightSearchMatch("foo bar foo", "foo", "[", "]"))
+	if strings.Count(got, "[foo]") != 2 {
+		t.Fatalf("expected 2 highlights, got %q", got)
+	}
+}
+
+func TestTruncateToWidthPreservesANSI(t *testing.T) {
+	s := fgRed + "hello" + reset + " world"
+	got := truncateToWidth(s, 8)
+	if !strings.Contains(got, fgRed) {
+		t.Fatalf("expected color preserved: %q", got)
+	}
+	if visibleWidth(got) > 8 {
+		t.Fatalf("too wide: %q (%d)", got, visibleWidth(got))
+	}
+}
+
 func TestBashInputPreviewMultiline(t *testing.T) {
 	cmd := "cat << 'SCRIPT' > /tmp/x.sh\n#!/bin/bash\necho hi\nSCRIPT"
 	got := stripANSI(bashInputPreview(cmd))

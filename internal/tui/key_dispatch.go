@@ -30,6 +30,13 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		t.editor.wrapWidth = w
 	}
 
+	// Cancel in-flight agent before overlay dismiss or editor shortcuts.
+	if k.isCtrlC() && t.running() && !t.approving.Load() {
+		t.cancelActiveRunLocked()
+		t.lastCtrlC = time.Now()
+		return false, nil
+	}
+
 	if t.blocksBackgroundInput() || t.hasKeyOverlay() {
 		if k.Kind == KeyPaste {
 			if t.handleOverlayPaste(k) {
@@ -46,6 +53,7 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	if t.handleKeyOverlay(k) {
 		if t.overlayQuit.Load() {
 			t.overlayQuit.Store(false)
+			t.prepareShutdownLocked()
 			return true, nil
 		}
 		return false, nil
@@ -55,6 +63,8 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		if _, isSearch := t.activeOverlay.(*searchOverlay); !isSearch {
 			if k.isCtrlC() || k.Kind == KeyEscape {
 				t.dismissOverlay()
+			} else {
+				t.flashOverlayHintLocked()
 			}
 			return false, nil
 		}
@@ -127,11 +137,6 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 
 	if k.isCtrlC() {
-		if t.running() && !t.approving.Load() {
-			t.cancelActiveRunLocked()
-			t.lastCtrlC = time.Now()
-			return false, nil
-		}
 		if t.editor.text() != "" {
 			t.editor.setText("")
 			t.completion = nil
@@ -139,6 +144,7 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		} else {
 			now := time.Now()
 			if !t.lastCtrlC.IsZero() && now.Sub(t.lastCtrlC) <= 2*time.Second {
+				t.prepareShutdownLocked()
 				return true, nil
 			}
 			t.lastCtrlC = now
@@ -244,6 +250,7 @@ func (t *TUI) processEditorKey(k Key) (bool, error) {
 		return false, nil
 	}
 	if quit {
+		t.prepareShutdownLocked()
 		return true, nil
 	}
 	t.refreshCompletion()

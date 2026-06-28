@@ -88,6 +88,29 @@ func TestFeedKeySearchTypeDoesNotDeadlock(t *testing.T) {
 	}
 }
 
+func TestFeedKeyCtrlCCancelsWhileRunningWithModalOpen(t *testing.T) {
+	tui := newTestTUIHelper()
+	tui.status.Thinking = true
+	tui.setActiveOverlay(newPickerOverlay("test", []pickerItem{{id: "a", label: "a"}}, "", nil))
+	cancelled := make(chan struct{}, 1)
+	tui.cancelMu.Lock()
+	tui.cancelRun = func() { cancelled <- struct{}{} }
+	tui.cancelMu.Unlock()
+
+	_, err := tui.feedKey(Key{Kind: KeyCtrl, Byte: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Ctrl+C with modal open should cancel agent, not only dismiss overlay")
+	}
+	if tui.activeOverlay == nil {
+		t.Fatal("overlay should stay open after cancel (not dismissed)")
+	}
+}
+
 func TestFeedKeyCtrlCCancelsWhileRunning(t *testing.T) {
 	tui := newTestTUIHelper()
 	tui.status.Thinking = true

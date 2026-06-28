@@ -176,6 +176,9 @@ func (t *TUI) cancelOverlayWork() {
 }
 
 func (t *TUI) setActiveOverlay(o overlay) {
+	if t.activeOverlay != nil {
+		t.setEphemeralHintLocked("replaced open overlay", 2*time.Second)
+	}
 	t.cancelOverlayWork()
 	t.activeOverlay = o
 	t.dirty.markFull()
