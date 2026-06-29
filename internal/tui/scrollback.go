@@ -113,6 +113,11 @@ func (s *scrollback) appendRaw(style LineStyle, text string) {
 	s.trim()
 }
 
+// streamViewportDirty returns scroll-region row indices to repaint after a
+// streaming append. When pinned to the bottom (scrollOffset == 0), the entire
+// visible viewport is repainted so tail growth that shifts viewStart upward
+// (chat taller than the window) does not leave stale rows above a lone live
+// last line. Returns nil when the user has scrolled up.
 func (s *scrollback) streamViewportDirty(height, width int) []int {
 	if height < 1 || width < 1 || len(s.blocks) == 0 || s.scrollOffset > 0 {
 		return nil
@@ -130,17 +135,11 @@ func (s *scrollback) streamViewportDirty(height, width int) []int {
 	if viewLen < 1 {
 		return nil
 	}
-	prev := s.lastStreamWrapCount
-	grew := viewLen > prev
-	s.lastStreamWrapCount = viewLen
-	if prev == 0 || grew {
-		rows := make([]int, viewLen)
-		for i := range rows {
-			rows[i] = i
-		}
-		return rows
+	rows := make([]int, viewLen)
+	for i := range rows {
+		rows[i] = i
 	}
-	return []int{viewLen - 1}
+	return rows
 }
 
 func sanitizeControls(s string) string {

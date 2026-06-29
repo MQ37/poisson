@@ -156,6 +156,34 @@ func TestScrollbackStreamViewportDirtyPinned(t *testing.T) {
 	}
 }
 
+func TestScrollbackStreamViewportDirtyOverflowRepaintsFullViewport(t *testing.T) {
+	s := newScrollback(1024)
+	// Separate one-line blocks so total wrapped rows exceed the viewport.
+	for i := 0; i < 20; i++ {
+		s.appendRaw(styleSystem, "filler row "+strings.Repeat("x", 8)+itoa(i))
+	}
+	viewH := 10
+	width := 40
+	wrapped, _ := s.layoutAll(width)
+	if len(wrapped) <= viewH {
+		t.Fatalf("test setup: wrapped %d rows, need > %d", len(wrapped), viewH)
+	}
+	rows := s.streamViewportDirty(viewH, width)
+	if len(rows) != viewH {
+		t.Fatalf("overflow viewport dirty = %d rows, want %d (%v)", len(rows), viewH, rows)
+	}
+	for i := 0; i < viewH; i++ {
+		if rows[i] != i {
+			t.Fatalf("row %d = %d, want %d", i, rows[i], i)
+		}
+	}
+	s.append(StyledLine{Style: styleAssistant, Text: " streaming tail"})
+	rows = s.streamViewportDirty(viewH, width)
+	if len(rows) != viewH {
+		t.Fatalf("after tail stream dirty = %d rows, want %d", len(rows), viewH)
+	}
+}
+
 func TestScrollbackSanitizesControls(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendRaw(styleSystem, "a\tb\x1bc\x7fd")
