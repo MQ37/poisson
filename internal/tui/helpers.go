@@ -45,23 +45,3 @@ func expandAtFiles(input string) (string, error) {
 	return result, nil
 }
 
-func renderHelp() string {
-	return strings.TrimRight(`Slash commands:
-  /help        Show this help
-  /quit        Exit Poisson
-  /clear       Clear scrollback
-  /new         Start a new session
-  /resume <id> Resume a session
-  /sessions    Session picker
-  /search <q>  Search across sessions (no args: find in scrollback)
-  /fork [seq]  Fork the current session
-  /undo        Undo the last turn
-  /compact     Compact context now
-  /model <m>   Switch provider/model (no args: picker)
-  /providers   Provider picker
-  /effort <l>  Set thinking effort (low|medium|high|xhigh|max)
-  /reload      Reload config and skills
-  /cost        Show session cost
-  /btw <q>     Side question in floating box
-  Tab          Focus conversation · Ctrl+F find · Ctrl+P palette`, "\n")
-}

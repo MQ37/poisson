@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// btwOverlay is a full-width floating box for side questions (/btw).
+// btwOverlay is a floating top-right box for side questions (/btw).
 type btwOverlay struct {
 	mu         sync.Mutex
 	question   string
@@ -19,8 +19,8 @@ type btwOverlay struct {
 }
 
 func newBTWOverlay(question string, maxHeight int) *btwOverlay {
-	if maxHeight < 5 {
-		maxHeight = 5
+	if maxHeight < 4 {
+		maxHeight = 4
 	}
 	return &btwOverlay{
 		question:   question,
@@ -63,10 +63,19 @@ func (o *btwOverlay) render(scrollRows, cols int) (int, []string) {
 
 func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string) {
 	question, answer, errMsg, processing, scroll, maxH := o.snapshot()
-	if maxH < 5 {
-		maxH = 5
+	if maxH < 4 {
+		maxH = 4
 	}
-	inner := boxInnerWidth(cols, cols-4)
+	inner := cols / 2
+	if inner > 52 {
+		inner = 52
+	}
+	if inner < 20 {
+		inner = cols - 4
+		if inner < 12 {
+			inner = 12
+		}
+	}
 
 	var body []string
 	q := truncatePlain(question, inner-2)
@@ -85,7 +94,7 @@ func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string
 		}
 	}
 
-	maxBody := maxH - 4
+	maxBody := maxH - 3
 	if maxBody < 1 {
 		maxBody = 1
 	}
@@ -111,38 +120,39 @@ func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string
 		scroll = 0
 	}
 
+	boxW := inner + 2
+	title := "─ btw "
+	fill := boxW - visibleWidth("╭"+title+"╮")
+	if fill < 0 {
+		fill = 0
+	}
+	top := fgGray + "╭" + title + strings.Repeat("─", fill) + "╮" + reset
+	bot := fgGray + "╰" + strings.Repeat("─", inner) + "╯" + reset
+
 	var lines []string
-	lines = append(lines, boxTopBorder("btw", inner))
+	lines = append(lines, alignRight(top, cols))
 	for _, ln := range body {
-		lines = append(lines, boxBodyLine(inner, ln))
+		pad := inner - visibleWidth(ln)
+		if pad < 0 {
+			ln = truncateToWidth(ln, inner)
+			pad = inner - visibleWidth(ln)
+		}
+		if pad < 0 {
+			pad = 0
+		}
+		row := fgGray + "│" + reset + " " + ln + strings.Repeat(" ", pad) + " " + fgGray + "│" + reset
+		lines = append(lines, alignRight(row, cols))
 	}
 	if footer != "" {
-		lines = append(lines, boxBodyLine(inner, footer))
-	}
-	lines = append(lines, boxBottomBorder(inner))
-
-	height := len(lines)
-	// Lower-center: sit in the bottom half of the scroll region.
-	anchor := scrollRows - height - 1
-	lowerMid := scrollRows/2 + 1
-	if anchor < lowerMid {
-		anchor = lowerMid
-	}
-	if anchor < 1 {
-		anchor = 1
-	}
-	if anchor+height-1 > scrollRows {
-		anchor = scrollRows - height + 1
-		if anchor < 1 {
-			anchor = 1
+		pad := inner - visibleWidth(footer)
+		if pad < 0 {
+			pad = 0
 		}
+		row := fgGray + "│" + reset + " " + footer + strings.Repeat(" ", pad) + " " + fgGray + "│" + reset
+		lines = append(lines, alignRight(row, cols))
 	}
-
-	out := make([]string, len(lines))
-	for i, ln := range lines {
-		out[i] = truncateToWidth(ln, cols)
-	}
-	return anchor, out
+	lines = append(lines, alignRight(bot, cols))
+	return 1, lines
 }
 
 func (o *btwOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
@@ -170,6 +180,14 @@ func (o *btwOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
 		return true, true, proc
 	}
 	return false, false, false
+}
+
+func alignRight(line string, cols int) string {
+	w := visibleWidth(line)
+	if w >= cols {
+		return truncateToWidth(line, cols)
+	}
+	return strings.Repeat(" ", cols-w) + line
 }
 
 func wrapPlain(text string, width int) []string {

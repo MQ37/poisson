@@ -506,6 +506,11 @@ func (t *TUI) markScrollDirty() {
 		h = 1
 	}
 	t.dirty.markScrollAll(h)
+	if pin := t.convPinRows(); pin > 0 {
+		for i := 0; i < pin; i++ {
+			t.dirty.markScrollRows(i)
+		}
+	}
 	if t.activeOverlay != nil {
 		t.dirty.markOverlay()
 	}

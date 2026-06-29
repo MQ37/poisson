@@ -30,8 +30,27 @@ func (o *approvalOverlay) clampScroll() {
 	}
 }
 
+func approvalPurposeLines(description string, inner int) []string {
+	wrapW := inner - 10
+	if wrapW < 8 {
+		wrapW = 8
+	}
+	wrapped := wrapPlain(description, wrapW)
+	if len(wrapped) == 0 {
+		return []string{dim + "Purpose: " + reset + description}
+	}
+	lines := make([]string, len(wrapped))
+	lines[0] = dim + "Purpose: " + reset + wrapped[0]
+	indent := strings.Repeat(" ", 10)
+	for i := 1; i < len(wrapped); i++ {
+		lines[i] = indent + wrapped[i]
+	}
+	return lines
+}
+
 func (o *approvalOverlay) bodyLines(inner int) (purpose, sep string, cmdLines []string, scrollHint string, maxBody int) {
-	purpose = dim + "Purpose: " + reset + truncatePlain(o.description, inner-10)
+	purposeLines := approvalPurposeLines(o.description, inner)
+	purpose = purposeLines[0]
 	sep = dim + strings.Repeat("─", inner) + reset
 	cmdLines = approvalCommandLines(o.command, inner)
 	if len(cmdLines) == 0 {
@@ -68,7 +87,7 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 		maxBody = 3
 	}
 
-	purpose := dim + "Purpose: " + reset + truncatePlain(o.description, inner-10)
+	purposeLines := approvalPurposeLines(o.description, inner)
 	wd := ""
 	if strings.TrimSpace(o.workdir) != "" {
 		wd = dim + "cwd: " + reset + truncatePlain(o.workdir, inner-6)
@@ -92,7 +111,7 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 	footer := "[A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel"
 
 	var body []string
-	body = append(body, purpose)
+	body = append(body, purposeLines...)
 	if wd != "" {
 		body = append(body, wd)
 	}
@@ -127,7 +146,13 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 func (o *approvalOverlay) fallbackLines(cols int) []string {
 	var b strings.Builder
 	b.WriteString(fgYellow + bold + "⚠ approval required" + reset + "\n")
-	b.WriteString("  " + dim + "Purpose: " + reset + truncatePlain(o.description, cols-14) + "\n")
+	for i, ln := range approvalPurposeLines(o.description, cols-4) {
+		prefix := "  "
+		if i > 0 {
+			prefix = "    "
+		}
+		b.WriteString(prefix + ln + "\n")
+	}
 	if strings.TrimSpace(o.workdir) != "" {
 		b.WriteString("  " + dim + "cwd: " + reset + truncatePlain(o.workdir, cols-10) + "\n")
 	}

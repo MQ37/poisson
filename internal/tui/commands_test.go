@@ -424,6 +424,30 @@ func TestCmdCostEmpty(t *testing.T) {
 	}
 }
 
+func TestCmdCostEphemeralSession(t *testing.T) {
+	testutil.TempHome(t)
+	dir := testutil.TempDir(t)
+	s, err := store.Open(filepath.Join(dir, "ephemeral.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	if err := s.SeedPricing(); err != nil {
+		t.Fatalf("seed pricing: %v", err)
+	}
+	sessionID := store.NewSessionID()
+	cfg := config.DefaultConfig()
+	prov := provider.NewFakeProvider("ollama", []provider.Model{{ID: cfg.Ollama.Model, ContextWindow: 8192}})
+	a := agent.NewAgent(s, prov, tools.NewRegistry(), cfg, sessionID, make(chan agent.OutputEvent, 64), func(_, _, _ string) bool { return false })
+	tui := newTUIWithAgent(a, sessionID)
+
+	cmdCost(cmdHost(tui))
+	out := testScrollOutput(tui)
+	if !strings.Contains(out, "not saved yet") {
+		t.Errorf("expected ephemeral hint, got %q", out)
+	}
+}
+
 // --- /reload ---
 
 func TestCmdReload(t *testing.T) {

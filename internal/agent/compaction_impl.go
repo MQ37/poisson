@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -9,6 +10,9 @@ import (
 	"poisson/internal/provider"
 	"poisson/internal/store"
 )
+
+// ErrNothingToCompact is returned when /compact has no messages to summarize.
+var ErrNothingToCompact = errors.New("nothing to compact")
 
 // compactionSystemPrompt is the handoff summarization prompt from SPEC §13.3.
 const compactionSystemPrompt = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
@@ -57,7 +61,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 		return fmt.Errorf("get messages: %w", err)
 	}
 	if len(msgs) == 0 {
-		return nil
+		return ErrNothingToCompact
 	}
 
 	// 2. Determine how many to summarize (overflow handling).
@@ -78,7 +82,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 	}
 	summarizeCount = adjustCompactionCount(msgs, summarizeCount)
 	if summarizeCount <= 0 {
-		return nil
+		return ErrNothingToCompact
 	}
 
 	toSummarize := msgs[:summarizeCount]

@@ -111,6 +111,34 @@ func (s *scrollback) appendIntroLine(line string) {
 	s.trim()
 }
 
+func (s *scrollback) prependIntroLines(lines []string) {
+	s.stripIntroBlocks()
+	if len(lines) == 0 {
+		return
+	}
+	s.lastStreamWrapCount = 0
+	newBlocks := make([]Block, 0, len(lines))
+	for _, ln := range lines {
+		newBlocks = append(newBlocks, s.newBlock(blockIntro, ln))
+	}
+	s.blocks = append(newBlocks, s.blocks...)
+	s.totalAdded += len(lines)
+	s.trim()
+}
+
+func (s *scrollback) stripIntroBlocks() {
+	if len(s.blocks) == 0 {
+		return
+	}
+	out := s.blocks[:0]
+	for _, b := range s.blocks {
+		if b.kind != blockIntro {
+			out = append(out, b)
+		}
+	}
+	s.blocks = out
+}
+
 func (s *scrollback) appendRaw(style LineStyle, text string) {
 	s.lastStreamWrapCount = 0
 	for _, ln := range splitLines(stripANSI(text)) {

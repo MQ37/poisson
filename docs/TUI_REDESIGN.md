@@ -91,11 +91,8 @@ Skip: full TUI integration tests. Manual smoke test instead:
 ~6-8 hours implementation + 2 hours test rewrite + 1 hour manual smoke.
 Plan to land in 3 commits:
 
-1. Add scrollback + alt-screen scaffold; render old events into it (no
-   input change yet). Verify parity with readline mode.
-2. Multi-line input + new keybindings; keep old single-line path as
-   fallback if Enter=submit during migration.
+1. Add scrollback + alt-screen scaffold; render old events into it.
+2. Multi-line input + new keybindings.
 3. Status bar split + live token counters.
 
-Flag flipping: `POISSON_TUI=classic` to revert to readline for the
-release window.
+The alt-screen TUI in `internal/tui/` is the only interactive REPL.

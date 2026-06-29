@@ -42,7 +42,7 @@ func parseHydratedToolResult(b msgBlock) (content, errMsg string) {
 // refreshScrollbackFromStoreLocked rebuilds on-screen scrollback from the store.
 // Caller must hold t.mu.
 func (t *TUI) refreshScrollbackFromStoreLocked() {
-	t.scroll = newScrollback(8192)
+	t.clearScrollbackKeepIntroLocked()
 	t.hydrateScrollbackLocked()
 	t.markFullDirty()
 }

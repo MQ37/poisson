@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"poisson/internal/auth"
+	"poisson/internal/store"
 )
 
 // pickerItem is one row in a picker overlay.
@@ -79,12 +81,17 @@ func pickerModelItems(h commandHost) ([]pickerItem, error) {
 
 func pickerSessionItems(h commandHost) ([]pickerItem, error) {
 	a := h.Agent()
+	curID := h.SessionID()
 	sessions, err := a.Store().ListSessions(20, 0)
 	if err != nil {
 		return nil, err
 	}
-	items := make([]pickerItem, 0, len(sessions))
+	items := make([]pickerItem, 0, len(sessions)+1)
+	curFound := false
 	for _, sess := range sessions {
+		if sess.ID == curID {
+			curFound = true
+		}
 		msgCount := 0
 		if msgs, err := a.Store().GetMessages(sess.ID); err == nil {
 			msgCount = len(msgs)
@@ -99,6 +106,19 @@ func pickerSessionItems(h commandHost) ([]pickerItem, error) {
 			label: label,
 			hint:  fmt.Sprintf("%s  %d msgs  %s/%s", date, msgCount, sess.Provider, sess.Model),
 		})
+	}
+	if curID != "" && !curFound {
+		if _, err := a.Store().GetSession(curID); errors.Is(err, store.ErrNotFound) {
+			label := curID
+			if len(label) > 12 {
+				label = label[:12] + "…"
+			}
+			items = append([]pickerItem{{
+				id:    curID,
+				label: label,
+				hint:  fmt.Sprintf("current · unsaved · %s/%s", a.Provider().ID(), a.Model()),
+			}}, items...)
+		}
 	}
 	return items, nil
 }

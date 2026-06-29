@@ -16,8 +16,14 @@ func (t *TUI) recomputeLayout() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	w, h, err := term.GetSize(t.fd)
-	if err != nil || w < 40 || h < 10 {
+	if err != nil {
 		w, h = 80, 24
+	}
+	if w < 20 {
+		w = 20
+	}
+	if h < 8 {
+		h = 8
 	}
 	t.rows = h
 	t.cols = w
@@ -150,7 +156,7 @@ func (t *TUI) renderHintLine() string {
 	if t.focusRegion == focusConv {
 		return dim + "Tab:input · PgUp/Dn:scroll · Shift+←/→:prompts · Ctrl+E:tool" + reset
 	}
-	base := "Tab:conv · Enter:send · ↑↓:history · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model · Ctrl+D:exit"
+	base := "Tab:conv · Enter:send · Ctrl+F:find · Ctrl+P:palette · Ctrl+T:think · Ctrl+E:tool · Ctrl+Y:yank · Ctrl+C:cancel"
 	if t.status.Hint != "" {
 		return dim + t.status.Hint + " · " + base + reset
 	}

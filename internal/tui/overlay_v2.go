@@ -9,15 +9,18 @@ import (
 // openBTW opens a floating side-question box (/btw) while the main agent keeps running.
 func (t *TUI) openBTW(question string) {
 	t.cancelOverlayWork()
-	maxH := t.scrollRows * 2 / 5
-	if maxH < 10 {
-		maxH = 10
+	maxH := t.scrollRows * 15 / 100
+	if maxH < 4 {
+		maxH = 4
+	}
+	if maxH > t.scrollRows/3 {
+		maxH = t.scrollRows / 3
 	}
 	if maxH > t.scrollRows-2 {
 		maxH = t.scrollRows - 2
 	}
-	if maxH < 5 {
-		maxH = 5
+	if maxH < 4 {
+		maxH = 4
 	}
 	o := newBTWOverlay(question, maxH)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -55,8 +58,8 @@ func (t *TUI) runBTW(ctx context.Context, o *btwOverlay, question string) {
 
 // openModelPicker shows an interactive model picker overlay.
 func (t *TUI) openModelPicker() {
-	if t.running() {
-		t.setEphemeralHintLocked("cannot change model while agent is running", 3*time.Second)
+	if t.sessionBusyLocked() {
+		t.setEphemeralHintLocked("cannot change model while agent is running or compacting", 3*time.Second)
 		return
 	}
 	h := tuiCmdHost{t}
@@ -74,8 +77,8 @@ func (t *TUI) openModelPicker() {
 
 // openProviderPicker shows provider switcher overlay.
 func (t *TUI) openProviderPicker() {
-	if t.running() {
-		t.setEphemeralHintLocked("cannot change provider while agent is running", 3*time.Second)
+	if t.sessionBusyLocked() {
+		t.setEphemeralHintLocked("cannot change provider while agent is running or compacting", 3*time.Second)
 		return
 	}
 	h := tuiCmdHost{t}
@@ -87,8 +90,8 @@ func (t *TUI) openProviderPicker() {
 
 // openSessionPicker shows recent sessions overlay.
 func (t *TUI) openSessionPicker() {
-	if t.running() {
-		t.setEphemeralHintLocked("cannot switch session while agent is running", 3*time.Second)
+	if t.sessionBusyLocked() {
+		t.setEphemeralHintLocked("cannot switch session while agent is running or compacting", 3*time.Second)
 		return
 	}
 	h := tuiCmdHost{t}

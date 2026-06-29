@@ -15,10 +15,27 @@ const (
 
 // InstallStartupIntro paints the welcome chart into scrollback (visible inside the TUI).
 func (t *TUI) InstallStartupIntro(version, provider, model string) {
-	for _, line := range poissonIntroANSILines(version, provider, model) {
-		t.scroll.appendIntroLine(line)
+	t.startupIntro = startupIntroMeta{
+		version: version, provider: provider, model: model, installed: true,
 	}
+	t.prependStartupIntroLocked()
 	t.introScrollTop = true
+}
+
+// prependStartupIntroLocked inserts the welcome chart at the top of scrollback.
+// Caller must hold t.mu when invoked from locked paths.
+func (t *TUI) prependStartupIntroLocked() {
+	if !t.startupIntro.installed {
+		return
+	}
+	lines := poissonIntroANSILines(t.startupIntro.version, t.startupIntro.provider, t.startupIntro.model)
+	t.scroll.prependIntroLines(lines)
+}
+
+// clearScrollbackKeepIntroLocked replaces scrollback content but keeps the welcome chart.
+func (t *TUI) clearScrollbackKeepIntroLocked() {
+	t.scroll = newScrollback(8192)
+	t.prependStartupIntroLocked()
 }
 
 func poissonIntroANSILines(version, provider, model string) []string {

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"strings"
+
+	"poisson/internal/agent"
 )
 
 func (t *TUI) handleSlash(cmd string) error {
@@ -16,12 +18,12 @@ func (t *TUI) handleSlash(cmd string) error {
 	case "/quit", "/q":
 		return errQuitSentinel
 	case "/clear":
-		if t.compacting.Load() {
-			t.scroll.appendRaw(styleSystem, "cannot clear while compacting")
+		if t.sessionBusyLocked() {
+			t.scroll.appendRaw(styleSystem, "cannot clear while agent is running or compacting")
 			t.markScrollDirty()
 			return nil
 		}
-		t.scroll = newScrollback(8192)
+		t.clearScrollbackKeepIntroLocked()
 		t.markFullDirty()
 		t.scroll.appendRaw(styleSystem, "display cleared (session history unchanged)")
 		t.markScrollDirty()
@@ -91,49 +93,48 @@ func (t *TUI) handleSlash(cmd string) error {
 			t.mu.Lock()
 			defer t.mu.Unlock()
 			if err != nil {
-				t.scroll.appendRaw(styleError, "compaction failed: "+err.Error())
+				if errors.Is(err, agent.ErrNothingToCompact) {
+					t.scroll.appendRaw(styleSystem, "nothing to compact")
+				} else {
+					t.scroll.appendRaw(styleError, "compaction failed: "+err.Error())
+				}
 				t.markScrollDirty()
 				return
 			}
-			t.scroll = newScrollback(8192)
+			t.clearScrollbackKeepIntroLocked()
 			t.hydrateScrollbackLocked()
 			t.markFullDirty()
 		}()
 		return nil
 	case "/model":
-		if len(parts) == 1 {
-			if t.running() {
-				t.scroll.appendRaw(styleSystem, "cannot change model while agent is running")
-				t.markScrollDirty()
-				return nil
-			}
-			t.openModelPicker()
+		if t.sessionBusyLocked() {
+			t.scroll.appendRaw(styleSystem, "cannot change model while agent is running or compacting")
+			t.markScrollDirty()
 			return nil
 		}
-		if t.running() {
-			t.scroll.appendRaw(styleSystem, "cannot change model while agent is running")
-			t.markScrollDirty()
+		if len(parts) == 1 {
+			t.openModelPicker()
 			return nil
 		}
 		return cmdModel(h, parts[1:])
 	case "/providers":
-		if t.running() {
-			t.scroll.appendRaw(styleSystem, "cannot change provider while agent is running")
+		if t.sessionBusyLocked() {
+			t.scroll.appendRaw(styleSystem, "cannot change provider while agent is running or compacting")
 			t.markScrollDirty()
 			return nil
 		}
 		t.openProviderPicker()
 		return nil
 	case "/effort":
-		if t.running() && len(parts) > 1 {
-			t.scroll.appendRaw(styleSystem, "cannot change effort while agent is running")
+		if t.sessionBusyLocked() && len(parts) > 1 {
+			t.scroll.appendRaw(styleSystem, "cannot change effort while agent is running or compacting")
 			t.markScrollDirty()
 			return nil
 		}
 		return cmdEffort(h, parts[1:])
 	case "/reload":
-		if t.running() {
-			t.scroll.appendRaw(styleSystem, "cannot reload while agent is running")
+		if t.sessionBusyLocked() {
+			t.scroll.appendRaw(styleSystem, "cannot reload while agent is running or compacting")
 			t.markScrollDirty()
 			return nil
 		}

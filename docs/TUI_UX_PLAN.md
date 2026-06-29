@@ -1,13 +1,12 @@
 # Poisson TUI UX — Comprehensive Implementation Plan
 
-Agent-oriented plan for bringing the v2 split-screen TUI (`internal/tui/tui_v2.go`)
+Agent-oriented plan for bringing the split-screen TUI (`internal/tui/tui.go`)
 to parity with — and beyond — modern agent CLIs (Grok Build, Claude Code, Cursor
 Agent). Each work package (PR) is sized for a single implementer agent with a
 follow-up review pass.
 
-**Baseline:** v2 TUI is implemented and default (`POISSON_TUI=classic` reverts to
-readline). ~6,100 LoC in `internal/tui/`. See `docs/TUI_REDESIGN.md` for the
-original v2 scaffold spec.
+**Baseline:** alt-screen TUI is the only REPL. ~6,100 LoC in `internal/tui/`.
+See `docs/TUI_REDESIGN.md` for the original scaffold spec.
 
 **Status (2026-06-27):**
 
@@ -50,7 +49,7 @@ From `docs/SPEC.md` §1 and project conventions:
 3. **Single stdin reader** — the input goroutine owns stdin; approval routes through
    `approvalAnswer` channel (already in v2).
 4. **Serialized terminal writes** — all output through `t.writeRaw()` / render goroutine.
-5. **Classic fallback** — `POISSON_TUI=classic` must keep working until explicitly removed.
+5. **Single TUI** — only the alt-screen REPL ships; no readline fallback.
 6. **No commit until user says so** — agents stage changes; orchestrator commits.
 
 ---
@@ -74,15 +73,15 @@ From `docs/SPEC.md` §1 and project conventions:
 
 | Feature | File(s) | Notes |
 |---------|---------|-------|
-| Alt-screen lifecycle | `tui_v2.go`, `palette.go` | `?1049h`, kitty keyboard, bracketed paste |
+| Alt-screen lifecycle | `tui.go`, `palette.go` | `?1049h`, kitty keyboard, bracketed paste |
 | Scrollback ring buffer | `scrollback.go` | Streaming merge for assistant/thinking |
 | Multi-line editor | `input.go` | Kitty Enter/Shift+Enter, paste, history |
 | Tab completion | `complete.go` | Prefix match `/commands` + `@files`; dropdown overlay |
 | Status snapshot | `status.go` | 2-row bar; static spinner char when `Thinking` |
-| Slash commands | `commands.go` | Shared classic + v2 via `commandHost` |
-| Approval flow | `tui_v2.go:Approve`, `overlay_approval.go` | Floating modal; blocks on `approvalAnswer` channel |
+| Slash commands | `commands.go` | Shared via `commandHost` |
+| Approval flow | `tui.go:Approve`, `overlay_approval.go` | Floating modal; blocks on `approvalAnswer` channel |
 | Tool previews | `render.go` | `toolInputPreview`, `toolResultPreview` |
-| SIGWINCH resize | `tui_v2.go` | Full re-layout + dirty flag |
+| SIGWINCH resize | `tui.go` | Full re-layout + dirty flag |
 
 ### Known pain points (ranked by user impact)
 
@@ -274,7 +273,7 @@ streaming.
 |--------|------|
 | Create | `internal/tui/dirty.go` |
 | Create | `internal/tui/dirty_test.go` |
-| Modify | `internal/tui/tui_v2.go` — split `render()` into region renderers |
+| Modify | `internal/tui/tui.go` — split `render()` into region renderers |
 | Modify | `internal/tui/scrollback.go` — expose last visible row index for partial updates |
 
 **Implementation steps:**
@@ -324,8 +323,8 @@ streaming.
 | Create | `internal/tui/spinner.go` |
 | Create | `internal/tui/spinner_test.go` |
 | Modify | `internal/tui/status.go` |
-| Modify | `internal/tui/tui_v2.go` — pass `frame int` into status render |
-| Modify | `internal/tui/tui_v2.go` — animate in-flight tool rows |
+| Modify | `internal/tui/tui.go` — pass `frame int` into status render |
+| Modify | `internal/tui/tui.go` — animate in-flight tool rows |
 
 **Implementation steps:**
 
@@ -362,8 +361,8 @@ streaming.
 | Create | `internal/tui/overlay.go` |
 | Create | `internal/tui/overlay_approval.go` |
 | Create | `internal/tui/overlay_test.go` |
-| Modify | `internal/tui/tui_v2.go` — `Approve()` uses overlay, not scrollback append |
-| Modify | `internal/tui/tui_v2.go` — `feed()` routes keys to overlay when active |
+| Modify | `internal/tui/tui.go` — `Approve()` uses overlay, not scrollback append |
+| Modify | `internal/tui/tui.go` — `feed()` routes keys to overlay when active |
 
 **Implementation steps:**
 
@@ -385,7 +384,7 @@ streaming.
 **Acceptance criteria:**
 - [x] Approval box visible without scrolling.
 - [x] Streaming events during approval do not corrupt box (mutex). (overlay paint always restores)
-- [x] `TestApproveAllowDeny` covers classic; v2 overlay path covered by TestV2ApproveLifecycle (N/A update for shared test).
+- [x] `TestApproveLifecycle` covers approval overlay path.
 - [x] Every approval shows a one-line purpose (completed in PR-24).
 
 **Tests:** `overlay_test.go` — box layout at widths 40/80/120, key mapping table.
@@ -410,7 +409,7 @@ tokens, effort, tool call counts, context warning.
 | Modify | `internal/tui/status.go` |
 | Modify | `internal/agent/tokens.go` — extend `OutputStatus` payload if needed |
 | Modify | `internal/store/api_calls.go` — aggregate for status (if not already) |
-| Modify | `internal/tui/tui_v2.go` — `handleEvent(OutputStatus)` |
+| Modify | `internal/tui/tui.go` — `handleEvent(OutputStatus)` |
 
 **Implementation steps:**
 
@@ -448,7 +447,7 @@ code blocks, partial re-render.
 | Create | `internal/tui/block.go` |
 | Create | `internal/tui/block_test.go` |
 | Modify | `internal/tui/scrollback.go` — migrate to `[]Block` (or embed) |
-| Modify | `internal/tui/tui_v2.go` — `handleEvent` creates blocks |
+| Modify | `internal/tui/tui.go` — `handleEvent` creates blocks |
 | Modify | `internal/tui/overlay.go` — overlay stack on tuiV2 |
 
 **Implementation steps:**
@@ -565,8 +564,8 @@ code blocks, partial re-render.
 |--------|------|
 | Modify | `internal/tui/block.go` — `Meta.Collapsed bool` |
 | Create | `internal/tui/thinking.go` |
-| Modify | `internal/tui/tui_v2.go` — keybind `Ctrl+T` toggle focused thinking block |
-| Modify | `internal/tui/tui_v2.go` — mouse click header (if PR-15 landed, else skip) |
+| Modify | `internal/tui/tui.go` — keybind `Ctrl+T` toggle focused thinking block |
+| Modify | `internal/tui/tui.go` — mouse click header (if PR-15 landed, else skip) |
 
 **Implementation steps:**
 
@@ -601,7 +600,7 @@ code blocks, partial re-render.
 |--------|------|
 | Create | `internal/tui/toolcard.go` |
 | Create | `internal/tui/toolcard_test.go` |
-| Modify | `internal/tui/tui_v2.go` — `handleEvent` for tool start/result |
+| Modify | `internal/tui/tui.go` — `handleEvent` for tool start/result |
 | Modify | `internal/tui/render.go` — share preview logic with cards |
 
 **Card layout:**
@@ -646,7 +645,7 @@ code blocks, partial re-render.
 | Create | `internal/tui/fuzzy.go` |
 | Create | `internal/tui/fuzzy_test.go` |
 | Modify | `internal/tui/complete.go` |
-| Modify | `internal/tui/tui_v2.go` — `refreshCompletion` on every editor mutation |
+| Modify | `internal/tui/tui.go` — `refreshCompletion` on every editor mutation |
 
 **Implementation steps:**
 
@@ -679,7 +678,7 @@ code blocks, partial re-render.
 |--------|------|
 | Create | `internal/tui/overlay_picker.go` |
 | Modify | `internal/tui/commands.go` — `/model` with no args opens picker |
-| Modify | `internal/tui/tui_v2.go` — key routing |
+| Modify | `internal/tui/tui.go` — key routing |
 
 **Implementation steps:**
 
@@ -764,7 +763,7 @@ code blocks, partial re-render.
 | Action | Path |
 |--------|------|
 | Create | `internal/tui/overlay_palette.go` |
-| Modify | `internal/tui/tui_v2.go` — `Ctrl+P` opens palette |
+| Modify | `internal/tui/tui.go` — `Ctrl+P` opens palette |
 
 **Implementation steps:**
 
@@ -796,7 +795,7 @@ Grok Build exposes this as a non-blocking floating answer panel.
 | Create | `internal/agent/quickanswer.go` — one-off stream, no session/outputChan |
 | Create | `internal/tui/overlay_btw.go` |
 | Modify | `internal/tui/overlay_v2.go` — `openBTW`, `runBTW` goroutine |
-| Modify | `internal/tui/tui_v2.go` — `/btw` slash handler |
+| Modify | `internal/tui/tui.go` — `/btw` slash handler |
 
 **Implementation steps:**
 
@@ -824,7 +823,7 @@ Grok Build exposes this as a non-blocking floating answer panel.
 Move status from bottom to a single top row: cwd left, `tokens / window` + model + clock right.
 Frees vertical space for scrollback; matches Grok Build chrome.
 
-**Files:** `status.go` (`RenderHeader`), `render_v2.go`, `tui_v2.go`
+**Files:** `status.go` (`RenderHeader`), `render_v2.go`, `tui.go`
 
 **Acceptance criteria:**
 - [x] Row 1 shows cwd and context usage.
@@ -836,7 +835,7 @@ Frees vertical space for scrollback; matches Grok Build chrome.
 
 **Impact:** 6 · **Effort:** 2–3h · **Deps:** PR-22
 
-**Files:** `tui_v2.go` — `›` prompt, compact hint line, `Ctrl+.` → palette
+**Files:** `tui.go` — `›` prompt, compact hint line, `Ctrl+.` → palette
 
 **Acceptance criteria:**
 - [x] First input line shows green `›` prefix.
@@ -852,7 +851,7 @@ Frees vertical space for scrollback; matches Grok Build chrome.
 | Action | Path |
 |--------|------|
 | Create | `internal/tui/mouse.go` |
-| Modify | `internal/tui/tui_v2.go` — enable `?1000h`, parse SGR mouse sequences |
+| Modify | `internal/tui/tui.go` — enable `?1000h`, parse SGR mouse sequences |
 | Modify | `internal/tui/palette.go` — mouse on/off constants |
 
 **Implementation steps:**
@@ -913,7 +912,7 @@ Frees vertical space for scrollback; matches Grok Build chrome.
 | Action | Path |
 |--------|------|
 | Create | `internal/tui/overlay_search.go` |
-| Modify | `internal/tui/tui_v2.go` — `Ctrl+F` |
+| Modify | `internal/tui/tui.go` — `Ctrl+F` |
 
 **Implementation steps:**
 
@@ -940,7 +939,7 @@ Frees vertical space for scrollback; matches Grok Build chrome.
 | Action | Path |
 |--------|------|
 | Create | `internal/tui/clipboard.go` |
-| Modify | `internal/tui/tui_v2.go` — `Ctrl+Y` yank last assistant block |
+| Modify | `internal/tui/tui.go` — `Ctrl+Y` yank last assistant block |
 
 **Implementation steps:**
 
@@ -1033,7 +1032,7 @@ Build-style CLIs surface a one-liner so the user can approve with context.
 |--------|------|
 | Modify | `internal/tools/bash.go` — require `description`; pass to approval callback |
 | Modify | `internal/tui/overlay_approval.go` — always render labeled purpose line |
-| Modify | `internal/tui/tui.go` — classic `Approve()` same layout |
+| Modify | `internal/tui/tui.go` — `Approve()` uses overlay layout |
 | Modify | `internal/tui/overlay_test.go` — layout tests with/without description |
 | Modify | `internal/tools/tools_test.go` — approval receives description |
 
@@ -1042,7 +1041,7 @@ Build-style CLIs surface a one-liner so the user can approve with context.
 1. Bash tool schema: add `description` to `required` alongside `command`.
 2. Tool `Description()` text: tell the model to supply a short one-line purpose
    for every bash invocation (especially commands that may need approval).
-3. Show `$ cmd` + labeled `Purpose: …` (dim) in overlay + classic. If description
+3. Show `$ cmd` + labeled `Purpose: …` (dim) in overlay. If description
    empty at runtime, bash tool synthesizes fallback from guard `reason` before
    calling approval (e.g. `Purpose: destructive command: rm`) or `(no description
    provided)`. Render/UI also defensive fallback.
@@ -1068,7 +1067,7 @@ Build-style CLIs surface a one-liner so the user can approve with context.
 
 **Agent prompt:**
 > Implement PR-24 from docs/TUI_UX_PLAN.md: require bash `description`, show
-> labeled Purpose line in approval modal (v2 + classic). Fallback from guard reason
+> labeled Purpose line in approval modal. Fallback from guard reason
 > if needed. Tests. Commit when done.
 
 ---
@@ -1094,7 +1093,7 @@ cruc run -d /home/mq/workdir/poisson -- \
 1. `go test ./... -race` passes.
 2. `go vet ./...` clean.
 3. No new deps without plan update.
-4. Classic TUI (`POISSON_TUI=classic`) still compiles and runs.
+4. Alt-screen TUI compiles and runs.
 5. Manual smoke (§8) for UX PRs.
 6. Diff scoped to PR files — no drive-by refactors.
 
@@ -1128,7 +1127,7 @@ Run after each phase merge:
 cd /home/mq/workdir/poisson
 go build -o ./px .
 script -q -c './px' /tmp/px-smoke.txt   # exit with /quit
-POISSON_TUI=classic ./px                # classic still works
+./px                                    # alt-screen REPL
 ```
 
 | Check | How |
@@ -1190,7 +1189,7 @@ POISSON_TUI=classic ./px                # classic still works
 |-------|-----|------------|--------|
 | A — Smoothness | 01–04 | 17–22 | ✅ Done |
 | B — Rich content | 05–09 | 39–48 | ✅ Done |
-| C — Interactive | 10–14 | 26–33 | ✅ Done (v2); classic unchanged |
+| C — Interactive | 10–14 | 26–33 | ✅ Done |
 | C+ — Grok parity | 21–23 | 9–13 | ✅ Done (incl. visual polish) |
 | D — Power | 15–20 | 28–35 | ✅ Done |
 | E — Trust polish | 24 | 2–3 | ✅ Done |

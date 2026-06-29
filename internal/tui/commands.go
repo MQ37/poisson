@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -379,6 +380,10 @@ func cmdReload(h commandHost) error {
 func cmdCost(h commandHost) {
 	a := h.Agent()
 	sid := h.SessionID()
+	if _, err := a.Store().GetSession(sid); errors.Is(err, store.ErrNotFound) {
+		h.Out(styleSystem, fmt.Sprintf("session not saved yet — send a message first\n  (ephemeral id: %s)", sid))
+		return
+	}
 	cost, err := a.Store().GetSessionCost(sid)
 	if err != nil {
 		h.Out(styleError, "error reading cost: "+err.Error())

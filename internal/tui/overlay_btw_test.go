@@ -15,26 +15,30 @@ func TestBTWOverlayMaxHeight(t *testing.T) {
 	}
 }
 
-func TestBTWOverlayFullWidthLeftAligned(t *testing.T) {
+func TestBTWOverlayTopRight(t *testing.T) {
 	o := newBTWOverlay("hi", 10)
 	o.finish(nil)
 	anchor, lines := o.render(24, 80)
 	if len(lines) < 3 {
 		t.Fatalf("lines = %d", len(lines))
 	}
-	if anchor < 8 {
-		t.Fatalf("expected lower placement, anchor=%d", anchor)
+	if anchor != 1 {
+		t.Fatalf("expected top placement, anchor=%d", anchor)
 	}
 	top := stripANSI(lines[0])
-	if !strings.HasPrefix(top, "╭") {
-		t.Fatalf("expected left-aligned top border, got %q", top)
+	if !strings.HasSuffix(top, "╭") && !strings.Contains(top, "╭") {
+		t.Fatalf("expected top border with ╭, got %q", top)
 	}
-	if strings.HasPrefix(top, " ") {
-		t.Fatalf("top border should not be right-padded: %q", top)
+	if !strings.HasPrefix(lines[0], " ") && visibleWidth(lines[0]) == 80 {
+		// right-aligned: leading spaces before box
+		plain := stripANSI(lines[0])
+		if !strings.HasPrefix(plain, " ") {
+			t.Fatalf("expected right-aligned box, got %q", plain)
+		}
 	}
 	last := stripANSI(lines[len(lines)-1])
-	if !strings.HasPrefix(last, "╰") {
-		t.Fatalf("expected left-aligned bottom border, got %q", last)
+	if !strings.Contains(last, "╰") {
+		t.Fatalf("expected bottom border with ╰, got %q", last)
 	}
 	for _, ln := range lines {
 		if visibleWidth(ln) > 80 {

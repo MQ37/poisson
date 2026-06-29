@@ -95,6 +95,13 @@ type TUI struct {
 	cancelMu   sync.Mutex
 
 	introScrollTop bool // scroll to welcome chart on first paint
+	startupIntro   startupIntroMeta
+}
+
+// startupIntroMeta holds the welcome chart text source for re-painting after resets.
+type startupIntroMeta struct {
+	version, provider, model string
+	installed                bool
 }
 
 // NewTUI constructs the interactive TUI wired to the given agent and output channel.

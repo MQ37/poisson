@@ -235,7 +235,7 @@ func (t *TUI) trimScrollbackFromLastUser() {
 // resetSessionViewLocked clears scrollback and focus after switching sessions.
 // Caller must hold t.mu.
 func (t *TUI) resetSessionViewLocked() {
-	t.scroll = newScrollback(8192)
+	t.clearScrollbackKeepIntroLocked()
 	t.focusRegion = focusInput
 	t.convUserIdx = 0
 	t.activeOverlay = nil
