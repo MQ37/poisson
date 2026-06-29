@@ -161,6 +161,21 @@ func (s *Store) ApplyCompaction(sessionID string, upToSeq int, summary string) e
 	return tx.Commit()
 }
 
+// MessageIDAtSeq returns the message id at the given seq in a session.
+func (s *Store) MessageIDAtSeq(sessionID string, seq int) (string, error) {
+	var id string
+	err := s.db.QueryRow(
+		`SELECT id FROM messages WHERE session_id = ? AND seq = ? AND deleted_at IS NULL`,
+		sessionID, seq).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("message id at seq: %w", err)
+	}
+	return id, nil
+}
+
 // SetSessionTitle sets the display title for a session.
 func (s *Store) SetSessionTitle(id, title string) error {
 	title = strings.TrimSpace(title)

@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS api_calls (
     cache_read_tokens   INTEGER DEFAULT 0,
     cache_write_tokens  INTEGER DEFAULT 0,
     cost                REAL NOT NULL,
+    is_compaction       INTEGER NOT NULL DEFAULT 0,
     created_at          INTEGER NOT NULL
 );
 
@@ -87,16 +88,6 @@ CREATE TABLE IF NOT EXISTS compactions (
     tokens_after  INTEGER,
     cost          REAL DEFAULT 0.0,
     created_at    INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS model_pricing (
-    provider             TEXT NOT NULL,
-    model                TEXT NOT NULL,
-    input_per_mtok       REAL NOT NULL,
-    output_per_mtok      REAL NOT NULL,
-    cache_read_per_mtok  REAL DEFAULT 0,
-    cache_write_per_mtok REAL DEFAULT 0,
-    PRIMARY KEY (provider, model)
 );
 `
 
@@ -156,6 +147,11 @@ func ensureAPICallsColumns(db *sql.DB) error {
 	if !seen["input_tokens_known"] {
 		if _, err := db.Exec(`ALTER TABLE api_calls ADD COLUMN input_tokens_known INTEGER NOT NULL DEFAULT 1`); err != nil {
 			return fmt.Errorf("migrate api_calls.input_tokens_known: %w", err)
+		}
+	}
+	if !seen["is_compaction"] {
+		if _, err := db.Exec(`ALTER TABLE api_calls ADD COLUMN is_compaction INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return fmt.Errorf("migrate api_calls.is_compaction: %w", err)
 		}
 	}
 	if _, err := db.Exec(`UPDATE api_calls

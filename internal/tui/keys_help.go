@@ -14,7 +14,7 @@ func keybindingLines() []string {
 		"  Ctrl+P / .   Command palette",
 		"  Ctrl+S       Session picker",
 		"  Ctrl+M       Model picker",
-		"  Ctrl+L       Effort picker (low→xhigh)",
+		"  Ctrl+L       Effort picker",
 		"  Ctrl+T       Toggle thinking block",
 		"  Ctrl+E       Expand/collapse tool card",
 		"  Ctrl+C       Cancel turn · twice to exit",
@@ -39,7 +39,7 @@ func renderHelp() string {
   /compact     Compact context now
   /model <m>   Switch provider/model (no args: picker)
   /providers   Provider picker
-  /effort [l]  Effort picker (or set low|medium|high|xhigh)
+  /effort [l]  Effort picker (or set level incl. max)
   /reload      Reload config and skills
   /cost        Show session cost
   /btw <q>     Side question in floating box`, "\n"))

@@ -222,6 +222,12 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		return false, nil
 	}
 
+	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyRune && k.Rune == '.' &&
+		t.editor.text() == "" && t.focusRegion == focusInput {
+		t.openCommandPalette()
+		return false, nil
+	}
+
 	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyCtrl {
 		switch k.Byte {
 		case 12:

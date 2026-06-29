@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"poisson/internal/provider"
 )
 
 func TestPickerOverlayRender(t *testing.T) {
@@ -34,10 +36,19 @@ func TestPickerEffortItems(t *testing.T) {
 	}
 }
 
-func TestIntersectEffortLevels(t *testing.T) {
-	got := intersectEffortLevels([]string{"high", "max"}, effortPickerLevels)
-	if len(got) != 1 || got[0] != "high" {
-		t.Fatalf("got %v, want [high]", got)
+func TestPickerEffortIncludesMax(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	a.SetProvider(provider.NewOllamaProvider("http://localhost:11434", "glm-5.2:cloud"))
+	a.SetModel("glm-5.2:cloud")
+	items := pickerEffortItems(cmdHost(newTUIWithAgent(a, sessionID)))
+	hasMax := false
+	for _, it := range items {
+		if it.id == "max" {
+			hasMax = true
+		}
+	}
+	if !hasMax {
+		t.Fatalf("expected max in effort picker: %v", items)
 	}
 }
 

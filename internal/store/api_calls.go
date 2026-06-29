@@ -20,6 +20,7 @@ type APICall struct {
 	CacheReadTokens    int
 	CacheWriteTokens   int
 	Cost               float64
+	IsCompaction       bool
 	CreatedAt          int64
 }
 
@@ -47,37 +48,43 @@ func (s *Store) RecordAPICall(call *APICall) error {
 	if call.InputTokensUnknown {
 		inputKnown = 0
 	}
+	isCompaction := 0
+	if call.IsCompaction {
+		isCompaction = 1
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO api_calls
 		 (id, session_id, seq, model, input_tokens, input_tokens_known, output_tokens,
-		  cache_read_tokens, cache_write_tokens, cost, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		  cache_read_tokens, cache_write_tokens, cost, is_compaction, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		call.ID, call.SessionID, call.Seq, call.Model,
 		call.InputTokens, inputKnown, call.OutputTokens,
 		call.CacheReadTokens, call.CacheWriteTokens,
-		call.Cost, call.CreatedAt)
+		call.Cost, isCompaction, call.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("record api call: %w", err)
 	}
 	return nil
 }
 
-// GetLastAPICall returns the most recent api_calls row for a session
-// (by created_at desc), or ErrNotFound.
+// GetLastAPICall returns the most recent non-compaction api_calls row for a
+// session (by created_at desc), or ErrNotFound. Compaction summarization rows
+// are excluded — they must not drive context % or auto-compact triggers.
 func (s *Store) GetLastAPICall(sessionID string) (*APICall, error) {
 	row := s.db.QueryRow(
 		`SELECT id, session_id, seq, model, input_tokens, input_tokens_known, output_tokens,
-		        cache_read_tokens, cache_write_tokens, cost, created_at
-		 FROM api_calls WHERE session_id = ?
+		        cache_read_tokens, cache_write_tokens, cost, is_compaction, created_at
+		 FROM api_calls WHERE session_id = ? AND is_compaction = 0
 		 ORDER BY created_at DESC, seq DESC LIMIT 1`, sessionID)
 	var c APICall
-	var inputKnown int
+	var inputKnown, isCompaction int
 	err := row.Scan(
 		&c.ID, &c.SessionID, &c.Seq, &c.Model,
 		&c.InputTokens, &inputKnown, &c.OutputTokens,
 		&c.CacheReadTokens, &c.CacheWriteTokens,
-		&c.Cost, &c.CreatedAt)
+		&c.Cost, &isCompaction, &c.CreatedAt)
 	c.InputTokensUnknown = inputKnown == 0
+	c.IsCompaction = isCompaction != 0
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound

@@ -18,6 +18,8 @@ type SpawnInput struct {
 	Cwd        string
 	SessionID  string
 	Name       string
+	Provider   string
+	Model      string
 	Sandbox    bool
 	ExtraEnv   []string
 	ChildTools []string // tool names available to the child
@@ -64,12 +66,22 @@ func Spawn(input SpawnInput) (*ChildProcess, error) {
 		args = append(args, input.Task)
 	}
 
-	cmd := exec.Command("poisson", args...)
+	bin, err := os.Executable()
+	if err != nil {
+		bin = "px"
+	}
+	cmd := exec.Command(bin, args...)
 	cmd.Dir = input.Cwd
 
 	// Environment: inherit parent env so PATH/HOME/etc. are available.
 	env := append(os.Environ(), input.ExtraEnv...)
-	env = append(env, fmt.Sprintf("POISSON_SUBAGENT_CHILD=1"))
+	env = append(env, "POISSON_SUBAGENT_CHILD=1")
+	if input.Provider != "" {
+		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_PROVIDER=%s", input.Provider))
+	}
+	if input.Model != "" {
+		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_MODEL=%s", input.Model))
+	}
 	if input.Name != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_NAME=%s", input.Name))
 	}

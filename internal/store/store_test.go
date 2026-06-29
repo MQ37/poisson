@@ -60,11 +60,6 @@ func TestOpenAndSchema(t *testing.T) {
 		t.Fatalf("RecordAPICall: %v", err)
 	}
 
-	// model_pricing
-	if err := s.SeedPricing(); err != nil {
-		t.Fatalf("SeedPricing: %v", err)
-	}
-
 }
 
 func TestOpenIdempotent(t *testing.T) {
@@ -73,9 +68,7 @@ func TestOpenIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open 1: %v", err)
 	}
-	if err := s1.SeedPricing(); err != nil {
-		t.Fatalf("SeedPricing 1: %v", err)
-	}
+	mustCreateSession(t, s1, "idem")
 	s1.Close()
 
 	s2, err := Open(dbPath)
@@ -83,16 +76,8 @@ func TestOpenIdempotent(t *testing.T) {
 		t.Fatalf("Open 2: %v", err)
 	}
 	defer s2.Close()
-	// Seeding again must not error (INSERT OR IGNORE).
-	if err := s2.SeedPricing(); err != nil {
-		t.Fatalf("SeedPricing 2: %v", err)
-	}
-	p, err := s2.GetPricing("anthropic", "claude-opus-4-8")
-	if err != nil {
-		t.Fatalf("GetPricing: %v", err)
-	}
-	if p.InputPerMTok != 5.0 {
-		t.Fatalf("input per mtok = %v, want 5.0", p.InputPerMTok)
+	if _, err := s2.GetSession("idem"); err != nil {
+		t.Fatalf("reopen should preserve session: %v", err)
 	}
 }
 
@@ -649,6 +634,30 @@ func TestSearchFiltersCompacted(t *testing.T) {
 
 // ---------- API calls ----------
 
+func TestGetLastAPICallSkipsCompaction(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "ctx")
+
+	if err := s.RecordAPICall(&APICall{
+		SessionID: "ctx", Seq: 1, Model: "m", InputTokens: 100, OutputTokens: 10, Cost: 0.01,
+	}); err != nil {
+		t.Fatalf("main call: %v", err)
+	}
+	if err := s.RecordAPICall(&APICall{
+		SessionID: "ctx", Seq: 2, Model: "m", InputTokens: 9000, OutputTokens: 500, Cost: 0.05,
+		IsCompaction: true,
+	}); err != nil {
+		t.Fatalf("compaction call: %v", err)
+	}
+	last, err := s.GetLastAPICall("ctx")
+	if err != nil {
+		t.Fatalf("GetLastAPICall: %v", err)
+	}
+	if last.InputTokens != 100 {
+		t.Fatalf("last input = %d, want 100 (compaction row skipped)", last.InputTokens)
+	}
+}
+
 func TestAPICallMigrationMarksMinimaxZeroInputUnknown(t *testing.T) {
 	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "test.db")
@@ -765,84 +774,6 @@ func TestAPICalls(t *testing.T) {
 		tb.CacheReadTokens != 2300 || tb.CacheWriteTokens != 600 ||
 		tb.TotalCost != 0.06 || tb.CallCount != 3 {
 		t.Fatalf("token breakdown = %+v", tb)
-	}
-}
-
-// ---------- Pricing ----------
-
-func TestPricing(t *testing.T) {
-	s := newTestStore(t)
-	if err := s.SeedPricing(); err != nil {
-		t.Fatalf("SeedPricing: %v", err)
-	}
-
-	// Anthropic exact match.
-	p, err := s.GetPricing("anthropic", "claude-opus-4-8")
-	if err != nil {
-		t.Fatalf("GetPricing anthropic: %v", err)
-	}
-	if p.InputPerMTok != 5.0 || p.OutputPerMTok != 25.0 || p.CacheReadPerMTok != 0.5 || p.CacheWritePerMTok != 3.0 {
-		t.Fatalf("opus pricing = %+v", p)
-	}
-
-	// xAI exact match.
-	p, err = s.GetPricing("xai", "grok-build")
-	if err != nil {
-		t.Fatalf("GetPricing grok-build: %v", err)
-	}
-	if p.InputPerMTok != 1.0 || p.OutputPerMTok != 2.0 {
-		t.Fatalf("grok-build pricing = %+v", p)
-	}
-
-	// ollama fallback "*".
-	p, err = s.GetPricing("ollama", "qwen3-coder:30b")
-	if err != nil {
-		t.Fatalf("GetPricing ollama: %v", err)
-	}
-	if p.InputPerMTok != 0 || p.OutputPerMTok != 0 {
-		t.Fatalf("ollama pricing = %+v", p)
-	}
-
-	// Unknown provider/model.
-	_, err = s.GetPricing("unknown", "nope")
-	if err != ErrPricingNotFound {
-		t.Fatalf("expected ErrPricingNotFound, got %v", err)
-	}
-}
-
-func TestComputeCost(t *testing.T) {
-	s := newTestStore(t)
-	if err := s.SeedPricing(); err != nil {
-		t.Fatalf("SeedPricing: %v", err)
-	}
-
-	// claude-opus-4-8: 5 input, 25 output, 0.5 cache read, 3 cache write.
-	cost := s.ComputeCost("anthropic", "claude-opus-4-8", 1_000_000, 1_000_000, 0, 0)
-	if !approxEqual(cost, 30.0, 1e-9) {
-		t.Fatalf("cost = %v, want 30.0", cost)
-	}
-
-	cost = s.ComputeCost("anthropic", "claude-opus-4-8", 500_000, 200_000, 100_000, 50_000)
-	if !approxEqual(cost, 7.7, 1e-9) {
-		t.Fatalf("cost = %v, want 7.7", cost)
-	}
-
-	// grok-build: 1 input, 2 output.
-	cost = s.ComputeCost("xai", "grok-build", 1_000_000, 1_000_000, 0, 0)
-	if !approxEqual(cost, 3.0, 1e-9) {
-		t.Fatalf("xai cost = %v, want 3.0", cost)
-	}
-
-	// ollama → 0.
-	cost = s.ComputeCost("ollama", "qwen3-coder:30b", 1_000_000, 1_000_000, 0, 0)
-	if cost != 0 {
-		t.Fatalf("ollama cost = %v, want 0", cost)
-	}
-
-	// Unknown → 0.
-	cost = s.ComputeCost("unknown", "nope", 1_000_000, 1_000_000, 0, 0)
-	if cost != 0 {
-		t.Fatalf("unknown cost = %v, want 0", cost)
 	}
 }
 

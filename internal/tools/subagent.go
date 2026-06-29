@@ -22,15 +22,19 @@ type SubagentApproval func(command, description, workdir, agentName string) bool
 type SubagentTool struct {
 	cwd        string
 	store      *store.Store
+	provider   string
+	model      string
 	outputFn   SubagentOutput
 	approvalFn SubagentApproval
 }
 
 // NewSubagentTool creates a subagent tool.
-func NewSubagentTool(cwd string, st *store.Store, outputFn SubagentOutput, approvalFn SubagentApproval) *SubagentTool {
+func NewSubagentTool(cwd, provider, model string, st *store.Store, outputFn SubagentOutput, approvalFn SubagentApproval) *SubagentTool {
 	return &SubagentTool{
 		cwd:        cwd,
 		store:      st,
+		provider:   provider,
+		model:      model,
 		outputFn:   outputFn,
 		approvalFn: approvalFn,
 	}
@@ -72,22 +76,31 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 
 	// Create a child session in the store.
 	childSessionID := fmt.Sprintf("sub-%d", time.Now().UnixNano())
+	prov := t.provider
+	model := t.model
+	if prov == "" {
+		prov = "ollama"
+	}
+	if model == "" {
+		model = "glm-5.2:cloud"
+	}
 	t.store.CreateSession(&store.Session{
 		ID:         childSessionID,
 		Cwd:        t.cwd,
-		Provider:   "ollama",
-		Model:      "glm-5.2:cloud",
+		Provider:   prov,
+		Model:      model,
 		IsSubagent: true,
 		CreatedAt:  time.Now().Unix(),
 		UpdatedAt:  time.Now().Unix(),
 	})
 
-	// Spawn child Poisson process.
 	child, err := subagent.Spawn(subagent.SpawnInput{
 		Task:      params.Task,
 		Cwd:       t.cwd,
 		SessionID: childSessionID,
 		Name:      agentName,
+		Provider:  prov,
+		Model:     model,
 	})
 	if err != nil {
 		return ToolResult{Error: "failed to spawn subagent: " + err.Error()}, nil

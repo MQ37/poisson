@@ -72,6 +72,22 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 	}
 
 	summarizeCount := adjustCompactionCount(msgs, len(msgs))
+	window := a.ContextWindow()
+	budget := int(float64(window) * 0.65)
+	for summarizeCount > 1 {
+		est := 0
+		for _, m := range msgs[:summarizeCount] {
+			est += a.EstimateTokens(m.Content)
+		}
+		if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil &&
+			sess.CompactionSummary != nil {
+			est += a.EstimateTokens(*sess.CompactionSummary)
+		}
+		if est <= budget {
+			break
+		}
+		summarizeCount = adjustCompactionCount(msgs, summarizeCount/2)
+	}
 	if summarizeCount <= 0 {
 		return ErrNothingToCompact
 	}
@@ -147,22 +163,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 
 	// 7. Record api_call for summarization (exact tokens + cost).
 	if usage != nil {
-		providerID := a.provider.ID()
-		cost := a.store.ComputeCost(providerID, compactionModel,
-			usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
-		call := &store.APICall{
-			SessionID:          a.sessionID,
-			Seq:                a.nextAPICallSeq(),
-			Model:              compactionModel,
-			InputTokens:        usage.InputTokens,
-			InputTokensUnknown: usage.InputTokensUnknown,
-			OutputTokens:       usage.OutputTokens,
-			CacheReadTokens:    usage.CacheReadTokens,
-			CacheWriteTokens:   usage.CacheWriteTokens,
-			Cost:               cost,
-			CreatedAt:          time.Now().Unix(),
-		}
-		_ = a.store.RecordAPICall(call)
+		_ = a.recordCompactionAPICall(compactionModel, usage)
 	}
 
 	// 8. Record compaction row (audit).
@@ -174,7 +175,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 	}
 	compCost := 0.0
 	if usage != nil {
-		compCost = a.store.ComputeCost(a.provider.ID(), compactionModel,
+		compCost = a.computeCost(a.provider.ID(), compactionModel,
 			usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
 	}
 	if err := a.store.RecordCompaction(&store.Compaction{

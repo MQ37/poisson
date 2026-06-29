@@ -15,6 +15,7 @@ import (
 
 	"poisson/internal/config"
 	"poisson/internal/guard"
+	"poisson/internal/pricing"
 	"poisson/internal/project"
 	"poisson/internal/provider"
 	"poisson/internal/skills"
@@ -123,6 +124,8 @@ func (a *Agent) SwitchSession(sessionID string) {
 	a.sessionID = sessionID
 	a.sessionToolCalls = 0
 	a.sessionToolErrors = 0
+	a.effort = ""
+	a.pendingResults = nil
 }
 
 // SetProvider swaps the provider and persists it on the active session.
@@ -207,7 +210,7 @@ func (a *Agent) ReloadConfigDependentTools() {
 	if a.tools == nil || a.config == nil {
 		return
 	}
-	if tools.IsOllamaReachable(a.config) {
+	if a.config.Provider.Default == "ollama" && tools.IsOllamaReachable(a.config) {
 		a.tools.Register(tools.NewFetchTool(a.config.Ollama.BaseURL))
 	} else {
 		a.tools.Unregister("fetch")
@@ -519,9 +522,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		// CHECK COMPACTION
 		if a.shouldCompact() {
 			if err := a.compact(ctx, true); err != nil {
-				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Compaction error: %v", err)})
-				a.sendEvent(OutputEvent{Type: OutputDone})
-				return fmt.Errorf("compaction failed: %w", err)
+				log.Printf("warning: auto-compaction failed: %v", err)
 			}
 		}
 
@@ -730,15 +731,31 @@ func (a *Agent) updateToolCall(toolCalls []provider.ToolCall, updated *provider.
 	toolCalls[len(toolCalls)-1] = *updated
 }
 
+func (a *Agent) computeCost(providerID, model string, input, output, cacheRead, cacheWrite int) float64 {
+	return pricing.ComputeCost(a.config, providerID, model, input, output, cacheRead, cacheWrite)
+}
+
 // recordAPICall records a row in the api_calls table with exact usage and
 // computed cost, and returns the generated ID.
 func (a *Agent) recordAPICall(usage *provider.Usage) (string, error) {
-	model := a.currentModel()
+	return a.recordAPICallFlags(usage, false, "")
+}
+
+func (a *Agent) recordCompactionAPICall(model string, usage *provider.Usage) error {
+	_, err := a.recordAPICallFlags(usage, true, model)
+	return err
+}
+
+func (a *Agent) recordAPICallFlags(usage *provider.Usage, isCompaction bool, modelOverride string) (string, error) {
+	model := modelOverride
+	if model == "" {
+		model = a.currentModel()
+	}
 	providerID := a.provider.ID()
 
 	cacheRead, cacheWrite := usage.CacheReadTokens, usage.CacheWriteTokens
 
-	cost := a.store.ComputeCost(providerID, model,
+	cost := a.computeCost(providerID, model,
 		usage.InputTokens, usage.OutputTokens, cacheRead, cacheWrite)
 
 	seq := a.nextAPICallSeq()
@@ -753,6 +770,7 @@ func (a *Agent) recordAPICall(usage *provider.Usage) (string, error) {
 		CacheReadTokens:    cacheRead,
 		CacheWriteTokens:   cacheWrite,
 		Cost:               cost,
+		IsCompaction:       isCompaction,
 	}
 	if err := a.store.RecordAPICall(call); err != nil {
 		return "", err

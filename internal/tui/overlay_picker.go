@@ -88,10 +88,7 @@ func pickerEffortItems(h commandHost) []pickerItem {
 	a := h.Agent()
 	levels := effortPickerLevels
 	if s, ok := provider.GetModelSettings(a.Provider().ID(), a.Model()); ok && s.SupportsEffort && len(s.EffortLevels) > 0 {
-		levels = intersectEffortLevels(s.EffortLevels, effortPickerLevels)
-		if len(levels) == 0 {
-			levels = effortPickerLevels
-		}
+		levels = append([]string(nil), s.EffortLevels...)
 	}
 	cur := a.Effort()
 	items := make([]pickerItem, len(levels))
@@ -103,20 +100,6 @@ func pickerEffortItems(h commandHost) []pickerItem {
 		items[i] = pickerItem{id: lv, label: lv, hint: hint}
 	}
 	return items
-}
-
-func intersectEffortLevels(supported, allowed []string) []string {
-	set := make(map[string]struct{}, len(supported))
-	for _, s := range supported {
-		set[s] = struct{}{}
-	}
-	var out []string
-	for _, a := range allowed {
-		if _, ok := set[a]; ok {
-			out = append(out, a)
-		}
-	}
-	return out
 }
 
 func pickerSessionItems(h commandHost) ([]pickerItem, error) {

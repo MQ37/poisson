@@ -136,8 +136,12 @@ func defaultConfig() *Config {
 					CacheWritePerMTok: 3.0,
 				},
 			},
-			"xai":    {},
-			"ollama": {},
+			"xai": {
+				"grok-build": {InputPerMTok: 1.0, OutputPerMTok: 2.0},
+			},
+			"ollama": {
+				"*": {},
+			},
 		},
 	}
 }

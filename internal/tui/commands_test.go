@@ -27,9 +27,7 @@ func newTestStoreAndAgent(t *testing.T) (*store.Store, *agent.Agent, string) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if err := s.SeedPricing(); err != nil {
-		t.Fatalf("seed pricing: %v", err)
-	}
+
 
 	sessionID := "test-cmd-session"
 	cfg := config.DefaultConfig()
@@ -468,9 +466,7 @@ func TestCmdCostEphemeralSession(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if err := s.SeedPricing(); err != nil {
-		t.Fatalf("seed pricing: %v", err)
-	}
+
 	sessionID := store.NewSessionID()
 	cfg := config.DefaultConfig()
 	prov := provider.NewFakeProvider("ollama", []provider.Model{{ID: cfg.Ollama.Model, ContextWindow: 8192}})

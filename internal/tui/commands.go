@@ -179,10 +179,14 @@ func cmdFork(h commandHost, args []string) error {
 		return nil
 	}
 	newID := store.NewSessionID()
+	forkPoint := args[0]
+	if msgID, err := s.MessageIDAtSeq(srcID, upToSeq); err == nil && msgID != "" {
+		forkPoint = msgID
+	}
 	if err := s.CreateSession(&store.Session{
 		ID:        newID,
 		ParentID:  &srcID,
-		ForkPoint: &args[0],
+		ForkPoint: &forkPoint,
 		Cwd:       sess.Cwd,
 		Provider:  sess.Provider,
 		Model:     sess.Model,
@@ -196,9 +200,7 @@ func cmdFork(h commandHost, args []string) error {
 		h.Out(styleError, "error cloning messages: "+err.Error())
 		return nil
 	}
-	if sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
-		s.SetCompactionSummary(newID, *sess.CompactionSummary)
-	}
+	copyForkCompactionSummary(s, srcID, upToSeq, newID, sess)
 	newSess, _ := s.GetSession(newID)
 	if !switchAgentToSession(h, newSess) {
 		return nil
@@ -245,9 +247,7 @@ func forkFromLatest(h commandHost) error {
 		h.Out(styleError, "error cloning messages: "+err.Error())
 		return nil
 	}
-	if sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
-		s.SetCompactionSummary(newID, *sess.CompactionSummary)
-	}
+	copyForkCompactionSummary(s, srcID, lastSeq, newID, sess)
 	newSess, _ := s.GetSession(newID)
 	if !switchAgentToSession(h, newSess) {
 		return nil
@@ -256,9 +256,22 @@ func forkFromLatest(h commandHost) error {
 	return nil
 }
 
+func copyForkCompactionSummary(s *store.Store, srcID string, upToSeq int, newID string, sess *store.Session) {
+	if sess == nil || sess.CompactionSummary == nil || strings.TrimSpace(*sess.CompactionSummary) == "" {
+		return
+	}
+	active, err := s.GetMessages(srcID)
+	if err != nil || len(active) == 0 {
+		return
+	}
+	if upToSeq >= active[len(active)-1].Seq {
+		s.SetCompactionSummary(newID, *sess.CompactionSummary)
+	}
+}
+
 func switchAgentToSession(h commandHost, sess *store.Session) bool {
-	if th, ok := h.(tuiCmdHost); ok && th.t.running() {
-		h.Out(styleError, "cannot switch session while agent is running")
+	if th, ok := h.(tuiCmdHost); ok && th.t.sessionBusyLocked() {
+		h.Out(styleError, "cannot switch session while agent is running or compacting")
 		return false
 	}
 	if sess == nil {
@@ -276,6 +289,7 @@ func switchAgentToSession(h commandHost, sess *store.Session) bool {
 	a.SetModel(sess.Model)
 	h.SetSessionID(sess.ID)
 	resetHostSessionView(h)
+	a.UpdateStatus()
 	return true
 }
 
@@ -307,18 +321,6 @@ func cmdUndo(h commandHost) error {
 		return nil
 	}
 	sess, _ := s.GetSession(sid)
-	if sess != nil && sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
-		userTurns := 0
-		for _, m := range msgs {
-			if m.Role == "user" {
-				userTurns++
-			}
-		}
-		if userTurns <= 1 {
-			h.Out(styleError, "cannot undo past compaction point. Use /fork before compacting.")
-			return nil
-		}
-	}
 	count := 0
 	for _, m := range msgs {
 		if m.Seq >= lastUserSeq {

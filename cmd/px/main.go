@@ -81,7 +81,6 @@ func runREPL(noSkills bool) {
 		os.Exit(1)
 	}
 	defer st.Close()
-	st.SeedPricing()
 
 	// Load auth.
 	authStore, _ := auth.Load()
@@ -127,6 +126,8 @@ func runREPL(noSkills bool) {
 		ApprovalFn:  approvalFn,
 		SubOutput:   subOutputFn,
 		SubApproval: subApprovalFn,
+		SubProvider: provName,
+		SubModel:    model,
 	})
 
 	// Set up agent.
@@ -343,25 +344,50 @@ func runChildMode() {
 		os.Exit(1)
 	}
 	defer st.Close()
-	st.SeedPricing()
 
 	// Create or use existing session.
 	if sessionID == "" {
 		sessionID = store.NewSubagentID()
 	}
 	cwd, _ := os.Getwd()
+	childProv := os.Getenv("POISSON_SUBAGENT_PROVIDER")
+	childModel := os.Getenv("POISSON_SUBAGENT_MODEL")
+	if childProv == "" {
+		childProv = cfg.Provider.Default
+	}
+	if childModel == "" {
+		switch childProv {
+		case "anthropic":
+			childModel = cfg.Anthropic.Model
+		case "xai":
+			childModel = cfg.XAI.Model
+		default:
+			childProv = "ollama"
+			childModel = cfg.Ollama.Model
+		}
+	}
 	st.CreateSession(&store.Session{
 		ID:         sessionID,
 		Cwd:        cwd,
-		Provider:   "ollama",
-		Model:      cfg.Ollama.Model,
+		Provider:   childProv,
+		Model:      childModel,
 		IsSubagent: true,
 		CreatedAt:  time.Now().Unix(),
 		UpdatedAt:  time.Now().Unix(),
 	})
 
-	// Set up provider (always ollama in child mode).
-	prov := provider.NewOllamaProvider(cfg.Ollama.BaseURL, cfg.Ollama.Model)
+	authStore, _ := auth.Load()
+	prov, _, _, _ := provider.BootstrapFromConfig(authStore, cfg)
+	if prov == nil || prov.ID() != childProv {
+		switch childProv {
+		case "anthropic":
+			prov = provider.NewAnthropicProvider(authStore, cfg)
+		case "xai":
+			prov = provider.NewXAIProvider(authStore, cfg)
+		default:
+			prov = provider.NewOllamaProvider(cfg.Ollama.BaseURL, childModel)
+		}
+	}
 
 	sandbox := os.Getenv("POISSON_SANDBOX") == "1"
 
@@ -378,17 +404,28 @@ func runChildMode() {
 			"cwd":         workdir,
 			"agent":       os.Getenv("POISSON_SUBAGENT_NAME"),
 		})
-		scanner := bufioNewScanner(os.Stdin)
-		if scanner.Scan() {
-			var resp struct {
-				Type     string `json:"type"`
-				Approved bool   `json:"approved"`
-			}
-			if err := json.Unmarshal(scanner.Bytes(), &resp); err == nil {
-				return resp.Approved
-			}
+		type approvalResp struct {
+			Type     string `json:"type"`
+			Approved bool   `json:"approved"`
 		}
-		return false
+		ch := make(chan bool, 1)
+		go func() {
+			scanner := bufioNewScanner(os.Stdin)
+			if scanner.Scan() {
+				var resp approvalResp
+				if err := json.Unmarshal(scanner.Bytes(), &resp); err == nil {
+					ch <- resp.Approved
+					return
+				}
+			}
+			ch <- false
+		}()
+		select {
+		case approved := <-ch:
+			return approved
+		case <-time.After(30 * time.Second):
+			return false
+		}
 	}
 
 	reg := tools.BuildRegistry(tools.BuildOptions{
@@ -401,6 +438,7 @@ func runChildMode() {
 	// Run agent with a nil outputChan (we write events ourselves).
 	outputChan := make(chan agent.OutputEvent, 256)
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
+	a.SetModel(childModel)
 	a.SetSkills(false, nil)
 
 	// Drain outputChan and write to stdout as JSON lines.

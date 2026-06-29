@@ -18,7 +18,7 @@ func TestHydrateScrollbackFromSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	st.SeedPricing()
+
 
 	sid := "hydrate-test"
 	st.CreateSession(&store.Session{ID: sid, Cwd: ".", Provider: "fake", Model: "m"})

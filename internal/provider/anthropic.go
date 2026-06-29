@@ -54,9 +54,12 @@ func (p *AnthropicProvider) Models() ([]Model, error) {
 // of StreamEvents. It handles both API key and OAuth authentication, and
 // applies stealth transformations when OAuth is active.
 func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (<-chan StreamEvent, error) {
+	return p.streamWithRetry(ctx, req, 0)
+}
+
+func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, retry int) (<-chan StreamEvent, error) {
 	isOAuth := auth.IsOAuth(p.auth, "anthropic")
 
-	// Check for token refresh if OAuth.
 	if isOAuth {
 		entry := p.auth["anthropic"]
 		if auth.IsExpired(entry, 5*60*1000) {
@@ -68,13 +71,13 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (<-chan St
 		}
 	}
 
-	// Apply stealth if OAuth.
+	streamReq := req
 	if isOAuth {
-		p.applyStealth(req)
+		streamReq = cloneRequest(req)
+		p.applyStealth(streamReq)
 	}
 
-	// Build the HTTP request.
-	anthropicReq := p.buildAnthropicRequest(req, isOAuth)
+	anthropicReq := p.buildAnthropicRequest(streamReq, isOAuth)
 	reqBody, err := json.Marshal(anthropicReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -85,25 +88,51 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (<-chan St
 	if err != nil {
 		return nil, err
 	}
-
-	// Set headers.
 	p.setHeaders(httpReq, isOAuth)
 
-	// Send.
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
+
+	if resp.StatusCode == 401 && isOAuth && retry == 0 {
+		resp.Body.Close()
+		entry := p.auth["anthropic"]
+		refreshed, err := auth.RefreshAnthropicToken(entry.Refresh)
+		if err == nil {
+			p.auth["anthropic"] = *refreshed
+			_ = auth.Save(p.auth)
+			return p.streamWithRetry(ctx, req, 1)
+		}
+		return nil, fmt.Errorf("token expired, refresh failed: %w", err)
+	}
+
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		return nil, fmt.Errorf("anthropic API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
-	// Parse SSE stream.
 	ch := make(chan StreamEvent, 64)
 	go p.pumpSSE(ctx, resp.Body, ch)
 	return ch, nil
+}
+
+func cloneRequest(req *Request) *Request {
+	if req == nil {
+		return nil
+	}
+	cp := *req
+	if len(req.System) > 0 {
+		cp.System = append([]SystemBlock(nil), req.System...)
+	}
+	if len(req.Messages) > 0 {
+		cp.Messages = append([]Message(nil), req.Messages...)
+	}
+	if len(req.Tools) > 0 {
+		cp.Tools = append([]ToolDef(nil), req.Tools...)
+	}
+	return &cp
 }
 
 // anthropicRequest is the JSON body sent to the Messages API.
@@ -136,6 +165,7 @@ type anthropicContentBlock struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`   // for tool_result
+	IsError   bool            `json:"is_error,omitempty"`  // for tool_result
 	Thinking  string          `json:"thinking,omitempty"`  // for thinking
 	Signature string          `json:"signature,omitempty"` // for thinking
 	Data      string          `json:"data,omitempty"`      // for redacted_thinking
@@ -215,6 +245,7 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 					resultContent, _ := json.Marshal(cb.ToolResult)
 					blocks = append(blocks, anthropicContentBlock{
 						Type: "tool_result", ToolUseID: cb.ToolCallID, Content: resultContent,
+						IsError: cb.ToolIsError,
 					})
 				}
 				i = j

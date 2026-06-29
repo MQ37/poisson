@@ -29,9 +29,6 @@ func newTestStore(t *testing.T) *store.Store {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if err := s.SeedPricing(); err != nil {
-		t.Fatalf("seed pricing: %v", err)
-	}
 	return s
 }
 

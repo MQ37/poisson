@@ -107,7 +107,18 @@ func (s *Store) AppendMessage(msg *Message) error {
 	}
 	text := extractTextFromContent(msg.Content)
 	if ftsEligible(msg.Role, text) {
-		return s.indexFTS(msg.ID, msg.SessionID, msg.Role, text)
+		if err := s.indexFTS(msg.ID, msg.SessionID, msg.Role, text); err != nil {
+			return err
+		}
+	}
+	return s.touchSession(msg.SessionID)
+}
+
+func (s *Store) touchSession(sessionID string) error {
+	_, err := s.db.Exec(`UPDATE sessions SET updated_at = ? WHERE id = ?`,
+		time.Now().Unix(), sessionID)
+	if err != nil {
+		return fmt.Errorf("touch session: %w", err)
 	}
 	return nil
 }
