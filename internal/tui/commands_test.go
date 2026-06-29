@@ -84,12 +84,8 @@ func TestCmdNew(t *testing.T) {
 	if tui.sessionID == originalID {
 		t.Error("sessionID should have changed")
 	}
-	sess, err := s.GetSession(tui.sessionID)
-	if err != nil {
-		t.Fatalf("get new session: %v", err)
-	}
-	if sess.ID != tui.sessionID {
-		t.Errorf("session ID mismatch")
+	if _, err := s.GetSession(tui.sessionID); err == nil {
+		t.Error("new session should not be persisted until the first message")
 	}
 }
 

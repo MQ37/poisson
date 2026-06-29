@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -250,6 +251,28 @@ func defaultModel(p provider.Provider, cfg *config.Config) string {
 // Effort returns the current thinking effort level.
 func (a *Agent) Effort() string { return a.effort }
 
+// EnsureSession persists the active session row if it does not exist yet.
+// Sessions are created lazily on the first user message, not at process start.
+func (a *Agent) EnsureSession() error {
+	_, err := a.store.GetSession(a.sessionID)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	cwd, _ := os.Getwd()
+	now := time.Now().Unix()
+	return a.store.CreateSession(&store.Session{
+		ID:        a.sessionID,
+		Cwd:       cwd,
+		Provider:  a.provider.ID(),
+		Model:     a.Model(),
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+}
+
 // Prompt appends the user message to the store and runs the turn loop.
 func (a *Agent) Prompt(userInput string) error {
 	return a.PromptWithContext(context.Background(), userInput)
@@ -257,6 +280,12 @@ func (a *Agent) Prompt(userInput string) error {
 
 // PromptWithContext is Prompt with cancellation support.
 func (a *Agent) PromptWithContext(ctx context.Context, userInput string) error {
+	if err := a.EnsureSession(); err != nil {
+		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Session error: %v", err)})
+		a.sendEvent(OutputEvent{Type: OutputDone})
+		return fmt.Errorf("ensure session: %w", err)
+	}
+
 	// INGEST: append user message.
 	content, err := contentBlocksToJSON([]provider.ContentBlock{
 		{Type: "text", Text: userInput},

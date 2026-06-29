@@ -91,26 +91,11 @@ func runREPL(noSkills bool) {
 		fmt.Fprintln(os.Stderr, warn)
 	}
 
-	// Create or resume session.
+	// Ephemeral session id until the user sends the first message.
 	sessionID := store.NewSessionID()
 	cwd, _ := os.Getwd()
 
-	// Print startup banner.
-	fmt.Printf("Poisson %s | %s/%s\n", version, provName, model)
-	fmt.Printf("session: %s\n", sessionID)
-	fmt.Println()
-
-	if err := st.CreateSession(&store.Session{
-		ID:        sessionID,
-		Cwd:       cwd,
-		Provider:  provName,
-		Model:     model,
-		CreatedAt: time.Now().Unix(),
-		UpdatedAt: time.Now().Unix(),
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "error creating session: %v\n", err)
-		os.Exit(1)
-	}
+	tui.PrintStartupIntro(os.Stdout, version, provName, model)
 
 	// Set up output channel.
 	outputChan := make(chan agent.OutputEvent, 256)

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -32,21 +31,10 @@ func (h tuiCmdHost) Out(style LineStyle, s string) {
 	h.t.markScrollDirty()
 }
 
-// cmdNew creates a new session and switches the agent to it.
+// cmdNew switches to a fresh session id. The row is persisted on first message.
 func cmdNew(h commandHost) error {
 	a := h.Agent()
-	s := a.Store()
 	id := store.NewSessionID()
-	cwd, _ := os.Getwd()
-	prov := a.Provider().ID()
-	model := a.Model()
-	if err := s.CreateSession(&store.Session{
-		ID: id, Cwd: cwd, Provider: prov, Model: model,
-		CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix(),
-	}); err != nil {
-		h.Out(styleError, "error creating session: "+err.Error())
-		return nil
-	}
 	a.SwitchSession(id)
 	h.SetSessionID(id)
 	resetHostSessionView(h)

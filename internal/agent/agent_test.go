@@ -129,6 +129,29 @@ func TestEstimateTokens(t *testing.T) {
 	}
 }
 
+func TestEnsureSessionLazyCreate(t *testing.T) {
+	s := newTestStore(t)
+	id := store.NewSessionID()
+	a := NewAgent(s, newFakeProvider(), newTestRegistry(testutil.TempDir(t)), newTestConfig(), id, nil, nil)
+
+	if _, err := s.GetSession(id); err == nil {
+		t.Fatal("session should not exist before first message")
+	}
+	if err := a.EnsureSession(); err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+	sess, err := s.GetSession(id)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.Provider != "fake" {
+		t.Fatalf("session provider = %q, want fake", sess.Provider)
+	}
+	if err := a.EnsureSession(); err != nil {
+		t.Fatalf("EnsureSession second call: %v", err)
+	}
+}
+
 func TestBuildRequest(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
