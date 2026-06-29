@@ -89,6 +89,42 @@ func TestCmdNew(t *testing.T) {
 	}
 }
 
+// --- /name ---
+
+func TestCmdName(t *testing.T) {
+	s, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+
+	if err := cmdName(cmdHost(tui), nil); err != nil {
+		t.Fatalf("cmdName show unset: %v", err)
+	}
+	if out := testScrollOutput(tui); !strings.Contains(out, "title: (unset)") {
+		t.Errorf("expected unset title, got %q", out)
+	}
+
+	if err := cmdName(cmdHost(tui), []string{"Poisson", "experiments"}); err != nil {
+		t.Fatalf("cmdName set: %v", err)
+	}
+	if out := testScrollOutput(tui); !strings.Contains(out, "session title: Poisson experiments") {
+		t.Errorf("expected set confirmation, got %q", out)
+	}
+	got, err := s.GetSession(sessionID)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.Title == nil || *got.Title != "Poisson experiments" {
+		t.Fatalf("title = %v, want %q", got.Title, "Poisson experiments")
+	}
+
+	tui.scroll = newScrollback(1024)
+	if err := cmdName(cmdHost(tui), nil); err != nil {
+		t.Fatalf("cmdName show set: %v", err)
+	}
+	if out := testScrollOutput(tui); !strings.Contains(out, "title: Poisson experiments") {
+		t.Errorf("expected saved title, got %q", out)
+	}
+}
+
 // --- /resume ---
 
 func TestCmdResume(t *testing.T) {

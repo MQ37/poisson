@@ -32,6 +32,40 @@ func (h tuiCmdHost) Out(style LineStyle, s string) {
 	h.t.markScrollDirty()
 }
 
+// cmdName sets or shows the session display title.
+func cmdName(h commandHost, args []string) error {
+	a := h.Agent()
+	sid := h.SessionID()
+	if len(args) == 0 {
+		sess, err := a.Store().GetSession(sid)
+		if err != nil {
+			h.Out(styleSystem, "title: (unsaved session — send a message or /name <title> first)")
+			return nil
+		}
+		if sess.Title != nil && strings.TrimSpace(*sess.Title) != "" {
+			h.Out(styleSystem, "title: "+*sess.Title)
+		} else {
+			h.Out(styleSystem, "title: (unset)")
+		}
+		return nil
+	}
+	title := strings.TrimSpace(strings.Join(args, " "))
+	if title == "" {
+		h.Out(styleSystem, "usage: /name <title>")
+		return nil
+	}
+	if err := a.EnsureSession(); err != nil {
+		h.Out(styleError, "session error: "+err.Error())
+		return nil
+	}
+	if err := a.Store().SetSessionTitle(sid, title); err != nil {
+		h.Out(styleError, "error setting title: "+err.Error())
+		return nil
+	}
+	h.Out(styleSystem, "session title: "+title)
+	return nil
+}
+
 // cmdNew switches to a fresh session id. The row is persisted on first message.
 func cmdNew(h commandHost) error {
 	a := h.Agent()
@@ -58,7 +92,11 @@ func cmdResume(h commandHost, args []string) error {
 	if !switchAgentToSession(h, sess) {
 		return nil
 	}
-	h.Out(styleSystem, fmt.Sprintf("resumed session: %s (%s/%s)", sess.ID, sess.Provider, sess.Model))
+	label := sess.ID
+	if sess.Title != nil && strings.TrimSpace(*sess.Title) != "" {
+		label = *sess.Title + " (" + sess.ID + ")"
+	}
+	h.Out(styleSystem, fmt.Sprintf("resumed session: %s (%s/%s)", label, sess.Provider, sess.Model))
 	return nil
 }
 
@@ -85,8 +123,12 @@ func cmdSessions(h commandHost) {
 		if sess.ID == h.SessionID() {
 			marker = ">"
 		}
+		label := sess.ID
+		if sess.Title != nil && strings.TrimSpace(*sess.Title) != "" {
+			label = *sess.Title
+		}
 		b.WriteString(fmt.Sprintf("%s %s  %s  %d msgs  %s/%s\n",
-			marker, sess.ID, date, msgCount, sess.Provider, sess.Model))
+			marker, label, date, msgCount, sess.Provider, sess.Model))
 	}
 	h.Out(styleSystem, b.String())
 }

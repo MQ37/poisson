@@ -500,6 +500,125 @@ func TestSearchFiltersSoftDeleted(t *testing.T) {
 	}
 }
 
+func ftsRowCount(t *testing.T, s *Store) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM messages_fts`).Scan(&n); err != nil {
+		t.Fatalf("fts count: %v", err)
+	}
+	return n
+}
+
+func toolContent(result string) string {
+	b, _ := json.Marshal([]map[string]string{
+		{"type": "tool_result", "tool_use_id": "t1", "content": result},
+	})
+	return string(b)
+}
+
+func TestFTSSkipsToolMessages(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "fts-tool")
+
+	if err := s.AppendMessage(&Message{SessionID: "fts-tool", Role: "user", Content: textContent("hello user")}); err != nil {
+		t.Fatalf("append user: %v", err)
+	}
+	if err := s.AppendMessage(&Message{SessionID: "fts-tool", Role: "assistant", Content: textContent("hello assistant")}); err != nil {
+		t.Fatalf("append assistant: %v", err)
+	}
+	if err := s.AppendMessage(&Message{SessionID: "fts-tool", Role: "tool", Content: toolContent("tool output uniqueterm")}); err != nil {
+		t.Fatalf("append tool: %v", err)
+	}
+	if n := ftsRowCount(t, s); n != 2 {
+		t.Fatalf("fts rows = %d, want 2 (no tool indexing)", n)
+	}
+	res, err := s.Search("uniqueterm", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(res) != 0 {
+		t.Fatalf("tool text must not be searchable, got %d results", len(res))
+	}
+}
+
+func TestFTSRemovesSoftDeletedRows(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "fts-del")
+
+	if err := s.AppendMessage(&Message{SessionID: "fts-del", Role: "user", Content: textContent("keepme alpha")}); err != nil {
+		t.Fatalf("append 1: %v", err)
+	}
+	if err := s.AppendMessage(&Message{SessionID: "fts-del", Role: "user", Content: textContent("deleteme beta")}); err != nil {
+		t.Fatalf("append 2: %v", err)
+	}
+	if ftsRowCount(t, s) != 2 {
+		t.Fatalf("expected 2 fts rows before delete")
+	}
+	if err := s.SoftDeleteMessages("fts-del", 2); err != nil {
+		t.Fatalf("SoftDeleteMessages: %v", err)
+	}
+	if ftsRowCount(t, s) != 1 {
+		t.Fatalf("fts rows after soft delete = %d, want 1", ftsRowCount(t, s))
+	}
+}
+
+func TestReconcileFTSOnOpen(t *testing.T) {
+	dir := testutil.TempDir(t)
+	path := filepath.Join(dir, "test.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	mustCreateSession(t, s, "reconcile")
+	if err := s.AppendMessage(&Message{SessionID: "reconcile", Role: "tool", Content: toolContent("stale fts")}); err != nil {
+		t.Fatalf("append tool: %v", err)
+	}
+	var toolID string
+	if err := s.db.QueryRow(`SELECT id FROM messages WHERE session_id = 'reconcile' AND role = 'tool'`).Scan(&toolID); err != nil {
+		t.Fatalf("tool id: %v", err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO messages_fts (session_id, message_id, role, content_text) VALUES (?,?,?,?)`,
+		"reconcile", toolID, "tool", "stale fts row"); err != nil {
+		t.Fatalf("inject stale fts: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	if n := ftsRowCount(t, s); n != 0 {
+		t.Fatalf("reconcileFTS left %d stale rows, want 0", n)
+	}
+}
+
+func TestSetSessionTitle(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "title-sess")
+
+	if err := s.SetSessionTitle("title-sess", "  My Project  "); err != nil {
+		t.Fatalf("SetSessionTitle: %v", err)
+	}
+	got, err := s.GetSession("title-sess")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if got.Title == nil || *got.Title != "My Project" {
+		t.Fatalf("title = %v, want %q", got.Title, "My Project")
+	}
+
+	if err := s.SetSessionTitle("title-sess", ""); err != nil {
+		t.Fatalf("clear title: %v", err)
+	}
+	got, _ = s.GetSession("title-sess")
+	if got.Title != nil {
+		t.Fatalf("cleared title = %v, want nil", got.Title)
+	}
+}
+
 func TestSearchFiltersCompacted(t *testing.T) {
 	s := newTestStore(t)
 	mustCreateSession(t, s, "compact-search")

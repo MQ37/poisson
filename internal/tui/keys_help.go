@@ -29,6 +29,7 @@ func renderHelp() string {
   /help        Show this help
   /quit        Exit Poisson
   /clear       Clear scrollback
+  /name <t>    Set session display title
   /new         Start a new session
   /resume <id> Resume a session
   /sessions    Session picker

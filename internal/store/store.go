@@ -124,7 +124,12 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 
-	return &Store{db: db}, nil
+	st := &Store{db: db}
+	if err := st.reconcileFTS(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("reconcile fts: %w", err)
+	}
+	return st, nil
 }
 
 func ensureAPICallsColumns(db *sql.DB) error {

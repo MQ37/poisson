@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"poisson/internal/auth"
@@ -137,13 +138,19 @@ func pickerSessionItems(h commandHost) ([]pickerItem, error) {
 		}
 		date := time.Unix(sess.CreatedAt, 0).Format("2006-01-02")
 		label := sess.ID
-		if len(label) > 12 {
+		if sess.Title != nil && strings.TrimSpace(*sess.Title) != "" {
+			label = *sess.Title
+		} else if len(label) > 12 {
 			label = label[:12] + "…"
+		}
+		hint := fmt.Sprintf("%s  %d msgs  %s/%s", date, msgCount, sess.Provider, sess.Model)
+		if sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
+			hint += " · compacted"
 		}
 		items = append(items, pickerItem{
 			id:    sess.ID,
 			label: label,
-			hint:  fmt.Sprintf("%s  %d msgs  %s/%s", date, msgCount, sess.Provider, sess.Model),
+			hint:  hint,
 		})
 	}
 	if curID != "" && !curFound {

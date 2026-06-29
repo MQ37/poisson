@@ -9,6 +9,7 @@ type paletteItem struct {
 
 var paletteCommands = []paletteItem{
 	{"/help", "show commands"},
+	{"/name", "set session title"},
 	{"/new", "new session"},
 	{"/sessions", "session picker"},
 	{"/resume", "resume session"},

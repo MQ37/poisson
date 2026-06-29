@@ -33,6 +33,8 @@ func (t *TUI) handleSlash(cmd string) error {
 		t.scroll.appendRaw(styleSystem, renderHelp())
 		t.markScrollDirty()
 		return nil
+	case "/name":
+		return cmdName(h, parts[1:])
 	case "/new":
 		if t.sessionBusyLocked() {
 			t.scroll.appendRaw(styleSystem, "cannot create session while agent is running or compacting")

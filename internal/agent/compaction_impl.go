@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -164,14 +165,29 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 		_ = a.store.RecordAPICall(call)
 	}
 
-	// 8. Record compaction row (best-effort audit).
-	_ = a.store.RecordCompaction(&store.Compaction{
+	// 8. Record compaction row (audit).
+	remainingTokens := 0
+	if remain, err := a.store.GetMessages(a.sessionID); err == nil {
+		for _, m := range remain {
+			remainingTokens += a.EstimateTokens(m.Content)
+		}
+	}
+	compCost := 0.0
+	if usage != nil {
+		compCost = a.store.ComputeCost(a.provider.ID(), compactionModel,
+			usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
+	}
+	if err := a.store.RecordCompaction(&store.Compaction{
 		ID:           store.NewSessionID(),
 		SessionID:    a.sessionID,
 		Summary:      summaryText,
 		TokensBefore: estimatedTokens,
+		TokensAfter:  remainingTokens,
+		Cost:         compCost,
 		CreatedAt:    time.Now().Unix(),
-	})
+	}); err != nil {
+		log.Printf("warning: record compaction: %v", err)
+	}
 
 	// 9. Clear pending results.
 	a.pendingResults = nil

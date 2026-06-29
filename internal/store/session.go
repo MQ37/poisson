@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -149,7 +150,31 @@ func (s *Store) ApplyCompaction(sessionID string, upToSeq int, summary string) e
 		sessionID, upToSeq); err != nil {
 		return fmt.Errorf("mark compacted: %w", err)
 	}
+	if _, err := tx.Exec(`
+		DELETE FROM messages_fts
+		WHERE message_id IN (
+			SELECT id FROM messages
+			WHERE session_id = ? AND seq <= ? AND compacted = 1
+		)`, sessionID, upToSeq); err != nil {
+		return fmt.Errorf("purge fts compacted: %w", err)
+	}
 	return tx.Commit()
+}
+
+// SetSessionTitle sets the display title for a session.
+func (s *Store) SetSessionTitle(id, title string) error {
+	title = strings.TrimSpace(title)
+	var titleVal interface{}
+	if title != "" {
+		titleVal = title
+	}
+	_, err := s.db.Exec(
+		`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`,
+		titleVal, time.Now().Unix(), id)
+	if err != nil {
+		return fmt.Errorf("set session title: %w", err)
+	}
+	return nil
 }
 
 // SetCompactionSummary stores the compaction summary on a session and

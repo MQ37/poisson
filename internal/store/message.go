@@ -105,7 +105,11 @@ func (s *Store) AppendMessage(msg *Message) error {
 	if err != nil {
 		return fmt.Errorf("append message: %w", err)
 	}
-	return s.indexFTS(msg.ID, msg.SessionID, msg.Role, extractTextFromContent(msg.Content))
+	text := extractTextFromContent(msg.Content)
+	if ftsEligible(msg.Role, text) {
+		return s.indexFTS(msg.ID, msg.SessionID, msg.Role, text)
+	}
+	return nil
 }
 
 // indexFTS inserts a row into messages_fts.
@@ -154,6 +158,9 @@ func (s *Store) SoftDeleteMessages(sessionID string, fromSeq int) error {
 	if err != nil {
 		return fmt.Errorf("soft delete messages: %w", err)
 	}
+	if err := s.deleteFTSForSoftDeleted(sessionID, fromSeq); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -166,6 +173,9 @@ func (s *Store) MarkCompacted(sessionID string, upToSeq int) error {
 		sessionID, upToSeq)
 	if err != nil {
 		return fmt.Errorf("mark compacted: %w", err)
+	}
+	if err := s.deleteFTSCompactedThrough(sessionID, upToSeq); err != nil {
+		return err
 	}
 	return nil
 }
@@ -221,12 +231,14 @@ func (s *Store) CloneMessages(srcSessionID string, upToSeq int, dstSessionID str
 			return fmt.Errorf("clone messages insert: %w", err)
 		}
 		text := extractTextFromContent(m.Content)
-		if _, err := tx.Exec(
-			`INSERT INTO messages_fts (session_id, message_id, role, content_text)
-			 VALUES (?,?,?,?)`,
-			dstSessionID, newID, m.Role, text); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("clone messages fts: %w", err)
+		if ftsEligible(m.Role, text) {
+			if _, err := tx.Exec(
+				`INSERT INTO messages_fts (session_id, message_id, role, content_text)
+				 VALUES (?,?,?,?)`,
+				dstSessionID, newID, m.Role, text); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("clone messages fts: %w", err)
+			}
 		}
 	}
 	return tx.Commit()

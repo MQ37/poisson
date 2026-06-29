@@ -48,7 +48,7 @@ func (c *completion) reset() { c.idx = -1 }
 // slashCommands is the canonical list exposed to the user. Keep in sync with
 // commands.go.
 var slashCommands = []string{
-	"/quit", "/clear", "/help", "/new", "/resume", "/sessions",
+	"/quit", "/clear", "/help", "/name", "/new", "/resume", "/sessions",
 	"/search", "/fork", "/undo", "/compact", "/model", "/effort",
 	"/providers", "/reload", "/cost", "/btw",
 }
