@@ -6,8 +6,12 @@ import (
 	"time"
 
 	"poisson/internal/auth"
+	"poisson/internal/provider"
 	"poisson/internal/store"
 )
+
+// effortPickerLevels are the effort options shown in the picker UI.
+var effortPickerLevels = []string{"low", "medium", "high", "xhigh"}
 
 // pickerItem is one row in a picker overlay.
 type pickerItem struct {
@@ -77,6 +81,41 @@ func pickerModelItems(h commandHost) ([]pickerItem, error) {
 		}
 	}
 	return items, nil
+}
+
+func pickerEffortItems(h commandHost) []pickerItem {
+	a := h.Agent()
+	levels := effortPickerLevels
+	if s, ok := provider.GetModelSettings(a.Provider().ID(), a.Model()); ok && s.SupportsEffort && len(s.EffortLevels) > 0 {
+		levels = intersectEffortLevels(s.EffortLevels, effortPickerLevels)
+		if len(levels) == 0 {
+			levels = effortPickerLevels
+		}
+	}
+	cur := a.Effort()
+	items := make([]pickerItem, len(levels))
+	for i, lv := range levels {
+		hint := "thinking depth"
+		if cur == lv {
+			hint = "current · " + hint
+		}
+		items[i] = pickerItem{id: lv, label: lv, hint: hint}
+	}
+	return items
+}
+
+func intersectEffortLevels(supported, allowed []string) []string {
+	set := make(map[string]struct{}, len(supported))
+	for _, s := range supported {
+		set[s] = struct{}{}
+	}
+	var out []string
+	for _, a := range allowed {
+		if _, ok := set[a]; ok {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func pickerSessionItems(h commandHost) ([]pickerItem, error) {

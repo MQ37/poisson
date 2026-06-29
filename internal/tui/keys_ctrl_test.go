@@ -28,6 +28,18 @@ func TestDecoderKittyCtrlS(t *testing.T) {
 	}
 }
 
+func TestFeedKeyCtrlLOpensEffortPicker(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+	_, err := tui.feedKey(Key{Kind: KeyCtrl, Byte: 12})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tui.activeOverlay == nil {
+		t.Fatal("expected effort picker overlay")
+	}
+}
+
 func TestFeedKeyCtrlSOpensSessionPicker(t *testing.T) {
 	_, a, sessionID := newTestStoreAndAgent(t)
 	tui := newTUIWithAgent(a, sessionID)

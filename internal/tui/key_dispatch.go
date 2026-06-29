@@ -224,6 +224,9 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 
 	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyCtrl {
 		switch k.Byte {
+		case 12:
+			t.openEffortPicker()
+			return false, nil
 		case 13:
 			t.openModelPicker()
 			return false, nil

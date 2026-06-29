@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"time"
 
 	"poisson/internal/agent"
 )
@@ -126,9 +127,17 @@ func (t *TUI) handleSlash(cmd string) error {
 		t.openProviderPicker()
 		return nil
 	case "/effort":
-		if t.sessionBusyLocked() && len(parts) > 1 {
-			t.scroll.appendRaw(styleSystem, "cannot change effort while agent is running or compacting")
-			t.markScrollDirty()
+		if t.sessionBusyLocked() {
+			if len(parts) > 1 {
+				t.scroll.appendRaw(styleSystem, "cannot change effort while agent is running or compacting")
+				t.markScrollDirty()
+			} else {
+				t.setEphemeralHintLocked("cannot change effort while agent is running or compacting", 3*time.Second)
+			}
+			return nil
+		}
+		if len(parts) == 1 {
+			t.openEffortPicker()
 			return nil
 		}
 		return cmdEffort(h, parts[1:])

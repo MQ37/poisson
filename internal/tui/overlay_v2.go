@@ -88,6 +88,24 @@ func (t *TUI) openProviderPicker() {
 	}))
 }
 
+// openEffortPicker shows thinking-effort level picker (Ctrl+L).
+func (t *TUI) openEffortPicker() {
+	if t.sessionBusyLocked() {
+		t.setEphemeralHintLocked("cannot change effort while agent is running or compacting", 3*time.Second)
+		return
+	}
+	h := tuiCmdHost{t}
+	cur := t.agent.Effort()
+	t.setActiveOverlay(newPickerOverlay("Effort", pickerEffortItems(h), cur, func(id string) error {
+		if err := cmdEffort(h, []string{id}); err != nil {
+			return err
+		}
+		t.status.Effort = id
+		t.dirty.markStatus()
+		return nil
+	}))
+}
+
 // openSessionPicker shows recent sessions overlay.
 func (t *TUI) openSessionPicker() {
 	if t.sessionBusyLocked() {
