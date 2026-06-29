@@ -31,6 +31,7 @@ const (
 	OutputApproval   = "approval"
 	OutputError      = "error"
 	OutputCompacting = "compacting"
+	OutputCompacted  = "compacted"
 	OutputDone       = "done"
 )
 
@@ -444,18 +445,18 @@ func (a *Agent) runTurn(ctx context.Context) error {
 
 		// Persist tool_result messages in start order.
 		for i, result := range results {
-			resultText := result.Content
+			toolBlock := provider.ContentBlock{
+				Type:       "tool_result",
+				ToolCallID: toolCalls[i].ID,
+			}
 			if result.Error != "" {
-				resultText = "Error: " + result.Error
+				toolBlock.ToolIsError = true
+				toolBlock.ToolResult = result.Error
+			} else {
+				toolBlock.ToolResult = result.Content
 			}
 
-			toolContent, err := contentBlocksToJSON([]provider.ContentBlock{
-				{
-					Type:       "tool_result",
-					ToolCallID: toolCalls[i].ID,
-					ToolResult: resultText,
-				},
-			})
+			toolContent, err := contentBlocksToJSON([]provider.ContentBlock{toolBlock})
 			if err != nil {
 				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})
 				a.sendEvent(OutputEvent{Type: OutputDone})
@@ -471,7 +472,11 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				return fmt.Errorf("append tool result message: %w", err)
 			}
 
-			a.pendingResults = append(a.pendingResults, resultText)
+			pending := toolBlock.ToolResult
+			if toolBlock.ToolIsError {
+				pending = "Error: " + pending
+			}
+			a.pendingResults = append(a.pendingResults, pending)
 
 			a.sessionToolCalls++
 			if result.Error != "" {
@@ -484,7 +489,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 
 		// CHECK COMPACTION
 		if a.shouldCompact() {
-			if err := a.compact(ctx); err != nil {
+			if err := a.compact(ctx, true); err != nil {
 				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Compaction error: %v", err)})
 				a.sendEvent(OutputEvent{Type: OutputDone})
 				return fmt.Errorf("compaction failed: %w", err)
@@ -583,6 +588,7 @@ type contentBlockJSON struct {
 	ToolName          string          `json:"tool_name,omitempty"`
 	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
 	ToolResult        string          `json:"tool_result,omitempty"`
+	ToolIsError       bool            `json:"tool_is_error,omitempty"`
 	Thinking          string          `json:"thinking,omitempty"`
 	ThinkingSignature string          `json:"thinking_signature,omitempty"`
 	Redacted          bool            `json:"redacted,omitempty"`
@@ -603,6 +609,7 @@ func contentBlocksToJSON(blocks []provider.ContentBlock) (string, error) {
 			ToolName:          b.ToolName,
 			ToolInput:         b.ToolInput,
 			ToolResult:        b.ToolResult,
+			ToolIsError:       b.ToolIsError,
 			Thinking:          b.Thinking,
 			ThinkingSignature: b.ThinkingSignature,
 			Redacted:          b.Redacted,
@@ -635,6 +642,7 @@ func messageToProvider(msg store.Message) (provider.Message, error) {
 			ToolName:          b.ToolName,
 			ToolInput:         b.ToolInput,
 			ToolResult:        b.ToolResult,
+			ToolIsError:       b.ToolIsError,
 			Thinking:          b.Thinking,
 			ThinkingSignature: b.ThinkingSignature,
 			Redacted:          b.Redacted,

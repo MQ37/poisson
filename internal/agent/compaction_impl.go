@@ -35,18 +35,21 @@ What remains to be done. If the conversation was interrupted mid-task, describe 
 ## Important Details
 Any small but critical details: file paths, error messages, environment quirks, version numbers, or anything that would be hard to rediscover.`
 
-// Compact triggers manual mid-turn compaction (/compact).
+// Compact triggers manual compaction (/compact). Does not emit UI events; the TUI
+// owns scrollback refresh for manual compaction.
 func (a *Agent) Compact() error {
-	return a.compact(context.Background())
+	return a.compact(context.Background(), false)
 }
 
-// compact performs mid-turn compaction of the conversation.
-func (a *Agent) compact(ctx context.Context) error {
+// compact performs mid-turn compaction of the conversation. When notifyUI is
+// true, emits compacting/compacted events for the TUI run loop.
+func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Send "compacting" status event.
-	a.sendEvent(OutputEvent{Type: OutputCompacting, Text: "compacting context..."})
+	if notifyUI {
+		a.sendEvent(OutputEvent{Type: OutputCompacting, Text: "compacting context..."})
+	}
 
 	// 1. Collect active messages.
 	msgs, err := a.store.GetMessages(a.sessionID)
@@ -178,6 +181,10 @@ func (a *Agent) compact(ctx context.Context) error {
 
 	// 9. Clear pending results.
 	a.pendingResults = nil
+
+	if notifyUI {
+		a.sendEvent(OutputEvent{Type: OutputCompacted})
+	}
 
 	return nil
 }

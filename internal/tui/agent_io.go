@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -15,6 +16,10 @@ func (t *TUI) submit(text string) error {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		t.editor.setText("")
+		return nil
+	}
+	if t.compacting.Load() {
+		t.appendErrorLocked(errors.New("cannot submit while compacting"))
 		return nil
 	}
 	if strings.HasPrefix(trimmed, "/") {
@@ -89,7 +94,11 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 	case agent.OutputError:
 		t.scroll.appendRaw(styleError, "error: "+ev.Text)
 	case agent.OutputCompacting:
-		t.scroll.appendRaw(styleCompacting, "  compacting context...")
+		if t.running() {
+			t.scroll.appendRaw(styleCompacting, "  compacting context...")
+		}
+	case agent.OutputCompacted:
+		t.refreshScrollbackFromStoreLocked()
 	case agent.OutputStatus:
 	}
 }
@@ -139,22 +148,26 @@ drained:
 
 	var allowed bool
 	timedOut := false
+	timer := time.NewTimer(approvalTimeout)
+	defer timer.Stop()
 	select {
 	case allowed = <-t.approvalAnswer:
 	case <-t.done:
 		t.mu.Lock()
 		t.activeOverlay = nil
+		t.lastOverlayLines = 0
 		t.mu.Unlock()
 		return false
 	case <-cancelCh:
 		allowed = false
-	case <-time.After(approvalTimeout):
+	case <-timer.C:
 		allowed = false
 		timedOut = true
 	}
 
 	t.mu.Lock()
 	t.activeOverlay = nil
+	t.lastOverlayLines = 0
 	t.scroll.appendRaw(styleSystem, formatApprovalResult(allowed))
 	if timedOut {
 		t.scroll.appendRaw(styleSystem, "  approval timed out")

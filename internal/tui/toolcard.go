@@ -187,6 +187,22 @@ func (s *scrollback) completeToolCall(providerCallID, result, err string, durati
 	s.appendRaw(styleToolResult, toolResultFallback("", result, err))
 }
 
+// finalizeOrphanToolCalls marks replayed tool cards without results as done.
+func (s *scrollback) finalizeOrphanToolCalls() {
+	for i := range s.blocks {
+		b := &s.blocks[i]
+		if b.kind != blockToolCall || b.meta.ToolDone {
+			continue
+		}
+		b.meta.Streaming = false
+		b.meta.ToolDone = true
+		if b.meta.ToolResult == "" {
+			b.meta.ToolResult = "(no result)"
+		}
+		b.invalidateLayout()
+	}
+}
+
 func toolResultFallback(name, result, err string) string {
 	if err != "" {
 		return "  ✗ " + previewText(err, 400)

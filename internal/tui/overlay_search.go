@@ -143,7 +143,8 @@ func (s *searchOverlay) appendPaste(text string) bool {
 	return changed
 }
 
-// highlightSearchMatch wraps every case-insensitive query hit on the plain line.
+// highlightSearchMatch wraps every case-insensitive query hit, preserving a
+// leading ANSI style prefix when present.
 func highlightSearchMatch(line, query, pre, post string) string {
 	if query == "" {
 		return line
@@ -154,7 +155,12 @@ func highlightSearchMatch(line, query, pre, post string) string {
 	if q == "" {
 		return line
 	}
+	stylePrefix := ""
+	if len(line) > len(plain) {
+		stylePrefix = line[:len(line)-len(plain)]
+	}
 	var b strings.Builder
+	b.WriteString(stylePrefix)
 	pos := 0
 	for {
 		idx := strings.Index(lower[pos:], q)

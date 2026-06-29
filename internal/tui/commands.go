@@ -165,6 +165,9 @@ func cmdFork(h commandHost, args []string) error {
 		h.Out(styleError, "error cloning messages: "+err.Error())
 		return nil
 	}
+	if sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
+		s.SetCompactionSummary(newID, *sess.CompactionSummary)
+	}
 	newSess, _ := s.GetSession(newID)
 	if !switchAgentToSession(h, newSess) {
 		return nil
@@ -210,6 +213,9 @@ func forkFromLatest(h commandHost) error {
 	if err := s.CloneMessages(srcID, lastSeq, newID); err != nil {
 		h.Out(styleError, "error cloning messages: "+err.Error())
 		return nil
+	}
+	if sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
+		s.SetCompactionSummary(newID, *sess.CompactionSummary)
 	}
 	newSess, _ := s.GetSession(newID)
 	if !switchAgentToSession(h, newSess) {

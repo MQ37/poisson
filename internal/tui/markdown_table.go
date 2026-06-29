@@ -143,6 +143,11 @@ func fitTableWidths(widths []int, maxWidth int) []int {
 		widths[idx]--
 		total = tableRowWidth(widths)
 	}
+	if tableRowWidth(widths) > maxWidth {
+		for i := range widths {
+			widths[i] = minCol
+		}
+	}
 	return widths
 }
 

@@ -16,6 +16,11 @@ func (t *TUI) handleSlash(cmd string) error {
 	case "/quit", "/q":
 		return errQuitSentinel
 	case "/clear":
+		if t.compacting.Load() {
+			t.scroll.appendRaw(styleSystem, "cannot clear while compacting")
+			t.markScrollDirty()
+			return nil
+		}
 		t.scroll = newScrollback(8192)
 		t.markFullDirty()
 		t.scroll.appendRaw(styleSystem, "display cleared (session history unchanged)")
@@ -26,19 +31,29 @@ func (t *TUI) handleSlash(cmd string) error {
 		t.markScrollDirty()
 		return nil
 	case "/new":
-		if t.running() {
-			t.scroll.appendRaw(styleSystem, "cannot create session while agent is running")
+		if t.sessionBusyLocked() {
+			t.scroll.appendRaw(styleSystem, "cannot create session while agent is running or compacting")
 			t.markScrollDirty()
 			return nil
 		}
 		return cmdNew(h)
 	case "/resume", "/r":
+		if t.compacting.Load() {
+			t.scroll.appendRaw(styleSystem, "cannot switch session while compacting")
+			t.markScrollDirty()
+			return nil
+		}
 		if len(parts) == 1 {
 			t.openSessionPicker()
 			return nil
 		}
 		return cmdResume(h, parts[1:])
 	case "/sessions":
+		if t.compacting.Load() {
+			t.scroll.appendRaw(styleSystem, "cannot switch session while compacting")
+			t.markScrollDirty()
+			return nil
+		}
 		t.openSessionPicker()
 		return nil
 	case "/search":
@@ -48,28 +63,30 @@ func (t *TUI) handleSlash(cmd string) error {
 		}
 		return cmdSearch(h, parts[1:])
 	case "/fork":
-		if t.running() {
-			t.scroll.appendRaw(styleSystem, "cannot fork while agent is running")
+		if t.sessionBusyLocked() {
+			t.scroll.appendRaw(styleSystem, "cannot fork while agent is running or compacting")
 			t.markScrollDirty()
 			return nil
 		}
 		return cmdFork(h, parts[1:])
 	case "/undo":
-		if t.running() {
-			t.scroll.appendRaw(styleSystem, "cannot undo while agent is running")
+		if t.sessionBusyLocked() {
+			t.scroll.appendRaw(styleSystem, "cannot undo while agent is running or compacting")
 			t.markScrollDirty()
 			return nil
 		}
 		return cmdUndo(h)
 	case "/compact":
-		if t.running() {
-			t.scroll.appendRaw(styleSystem, "cannot compact while agent is running")
+		if t.sessionBusyLocked() {
+			t.scroll.appendRaw(styleSystem, "cannot compact while agent is running or compacting")
 			t.markScrollDirty()
 			return nil
 		}
+		t.compacting.Store(true)
 		t.scroll.appendRaw(styleSystem, "  compacting context...")
 		t.markScrollDirty()
 		go func() {
+			defer t.compacting.Store(false)
 			err := t.agent.Compact()
 			t.mu.Lock()
 			defer t.mu.Unlock()

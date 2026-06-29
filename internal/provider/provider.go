@@ -83,7 +83,8 @@ type ContentBlock struct {
 	ToolCallID string          // tool_use + tool_result
 	ToolName   string          // tool_use
 	ToolInput  json.RawMessage // tool_use
-	ToolResult string          // tool_result
+	ToolResult  string // tool_result
+	ToolIsError bool   `json:"tool_is_error,omitempty"` // tool_result: Poisson error flag
 
 	// Anthropic extended-thinking fields (Type == "thinking"). Thinking holds
 	// the reasoning text; ThinkingSignature is the opaque signature that must

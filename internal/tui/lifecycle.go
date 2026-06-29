@@ -31,6 +31,8 @@ func (t *TUI) Run() error {
 
 	// Lifecycle channel. render/input goroutines exit when this is closed.
 	stop := make(chan struct{})
+	readCh := make(chan []byte, 8)
+	readErr := make(chan error, 1)
 
 	// Initial paint before starting goroutines so wrapWidth is set.
 	t.dirty.markFull()
@@ -67,73 +69,86 @@ func (t *TUI) Run() error {
 		}
 	}()
 
+	// Stdin reader: blocking Read runs in its own goroutine so stop can exit promptly.
+	go func() {
+		buf := make([]byte, 65536)
+		for {
+			n, err := os.Stdin.Read(buf)
+			if err != nil {
+				readErr <- err
+				return
+			}
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			select {
+			case readCh <- chunk:
+			case <-stop:
+				return
+			}
+		}
+	}()
+
 	// Input loop.
 	go func() {
 		defer close(t.done)
-		buf := make([]byte, 65536)
 		for {
 			select {
 			case <-stop:
 				return
-			default:
-			}
-			n, err := os.Stdin.Read(buf)
-			if err != nil {
+			case <-readErr:
 				return
-			}
-			if handled := t.handleMouseInput(buf[:n]); handled {
-				continue
-			}
-			// Don't scroll scrollback behind modal overlays or approval.
-			t.mu.Lock()
-			blockBG := t.blocksBackgroundInput()
-			t.mu.Unlock()
-			if !blockBG {
-				if delta, ok := parseMouseWheelScroll(buf[:n]); ok {
-					t.handleScrollDelta(delta)
+			case data := <-readCh:
+				if handled := t.handleMouseInput(data); handled {
 					continue
 				}
-			}
-			// If an approval prompt is active, route recognized answers to the
-			// approval channel instead of feeding them to the editor.
-			for _, k := range t.keyDec.Push(buf[:n]) {
-				if t.approving.Load() {
-					if k.isCtrlC() {
-						t.cancelActiveRun()
+				// Don't scroll scrollback behind modal overlays or approval.
+				t.mu.Lock()
+				blockBG := t.blocksBackgroundInput()
+				t.mu.Unlock()
+				if !blockBG {
+					if delta, ok := parseMouseWheelScroll(data); ok {
+						t.handleScrollDelta(delta)
 						continue
 					}
-					if k.isNavUp() || k.isNavDown() {
-						t.mu.Lock()
-						if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
-							delta := 1
-							if k.isNavUp() {
-								delta = -1
+				}
+				// If an approval prompt is active, route recognized answers to the
+				// approval channel instead of feeding them to the editor.
+				for _, k := range t.keyDec.Push(data) {
+					if t.approving.Load() {
+						if k.isCtrlC() {
+							t.approvalDenyAndMaybeCancelRun()
+							continue
+						}
+						if k.isNavUp() || k.isNavDown() {
+							t.mu.Lock()
+							if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
+								delta := 1
+								if k.isNavUp() {
+									delta = -1
+								}
+								ao.scrollBy(delta)
+								t.dirty.markOverlay()
 							}
-							ao.scrollBy(delta)
-							t.dirty.markOverlay()
+							t.mu.Unlock()
+							continue
 						}
-						t.mu.Unlock()
+						allowed, ok := keyApprovalAnswer(k)
+						if ok {
+							t.approvalAnswer <- allowed
+						} else {
+							t.flashApprovalHint()
+						}
 						continue
 					}
-					allowed, ok := keyApprovalAnswer(k)
-					if ok {
-						select {
-						case t.approvalAnswer <- allowed:
-						default:
-						}
-					} else {
-						t.flashApprovalHint()
+					quit, err := t.feedKey(k)
+					if err != nil {
+						t.appendError(err)
+						continue
 					}
-					continue
-				}
-				quit, err := t.feedKey(k)
-				if err != nil {
-					t.appendError(err)
-					continue
-				}
-				if quit {
-					t.waitForAgentStop()
-					return
+					if quit {
+						t.waitForAgentStop()
+						return
+					}
 				}
 			}
 		}
@@ -156,5 +171,28 @@ func (t *TUI) Run() error {
 			t.markAfterEvent(ev)
 			t.mu.Unlock()
 		}
+	}
+}
+
+// approvalDenyAndMaybeCancelRun rejects the pending approval and cancels an
+// in-flight agent turn when one exists.
+func (t *TUI) approvalDenyAndMaybeCancelRun() {
+	select {
+	case t.approvalAnswer <- false:
+	default:
+		select {
+		case <-t.approvalAnswer:
+		default:
+		}
+		select {
+		case t.approvalAnswer <- false:
+		default:
+		}
+	}
+	t.cancelMu.Lock()
+	cancel := t.cancelRun
+	t.cancelMu.Unlock()
+	if cancel != nil {
+		t.cancelActiveRun()
 	}
 }

@@ -114,7 +114,7 @@ func (s *scrollback) appendRaw(style LineStyle, text string) {
 }
 
 func (s *scrollback) streamViewportDirty(height, width int) []int {
-	if height < 1 || width < 1 || len(s.blocks) == 0 {
+	if height < 1 || width < 1 || len(s.blocks) == 0 || s.scrollOffset > 0 {
 		return nil
 	}
 	wrapped, _ := s.layoutAll(width)
@@ -274,7 +274,7 @@ func (s *scrollback) appendToolCallReplay(id int64, providerCallID, name string,
 		ToolID:         id,
 		ProviderCallID: providerCallID,
 		ToolInput:      append([]byte(nil), input...),
-		Streaming:      true,
+		Streaming:      false,
 	}
 	s.blocks = append(s.blocks, b)
 	s.totalAdded++

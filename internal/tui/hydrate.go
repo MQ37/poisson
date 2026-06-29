@@ -12,8 +12,9 @@ type msgBlock struct {
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 	ToolName   string          `json:"tool_name,omitempty"`
 	ToolInput  json.RawMessage `json:"tool_input,omitempty"`
-	ToolResult string          `json:"tool_result,omitempty"`
-	Thinking   string          `json:"thinking,omitempty"`
+	ToolResult  string `json:"tool_result,omitempty"`
+	ToolIsError bool   `json:"tool_is_error,omitempty"`
+	Thinking    string `json:"thinking,omitempty"`
 }
 
 func parseMessageBlocks(content string) []msgBlock {
@@ -27,11 +28,15 @@ func parseMessageBlocks(content string) []msgBlock {
 	return blocks
 }
 
-func parseHydratedToolResult(raw string) (content, errMsg string) {
-	if strings.HasPrefix(raw, "Error: ") {
-		return raw, strings.TrimPrefix(raw, "Error: ")
+func parseHydratedToolResult(b msgBlock) (content, errMsg string) {
+	if b.ToolIsError {
+		return b.ToolResult, b.ToolResult
 	}
-	return raw, ""
+	// Legacy rows stored errors as "Error: …" prefix.
+	if strings.HasPrefix(b.ToolResult, "Error: ") {
+		return b.ToolResult, strings.TrimPrefix(b.ToolResult, "Error: ")
+	}
+	return b.ToolResult, ""
 }
 
 // refreshScrollbackFromStoreLocked rebuilds on-screen scrollback from the store.
@@ -93,12 +98,13 @@ func (t *TUI) hydrateScrollbackLocked() {
 		case "tool":
 			for _, b := range blocks {
 				if b.Type == "tool_result" {
-					content, errMsg := parseHydratedToolResult(b.ToolResult)
+					content, errMsg := parseHydratedToolResult(b)
 					t.scroll.completeToolCall(b.ToolCallID, content, errMsg, 0)
 				}
 			}
 		}
 	}
+	t.scroll.finalizeOrphanToolCalls()
 	t.scroll.finalizeThinking()
 	t.scroll.scrollToBottom()
 }

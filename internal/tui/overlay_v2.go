@@ -119,6 +119,7 @@ func (t *TUI) openSearch() {
 
 // openSearchLocked opens search. Caller must hold t.mu (e.g. feedKey, handleSlash).
 func (t *TUI) openSearchLocked() {
+	t.searchHadConvFocus = t.focusRegion == focusConv
 	t.focusRegion = focusInput
 	t.setActiveOverlay(newSearchOverlay(
 		func() []ScreenRow {
@@ -195,8 +196,16 @@ func (t *TUI) setActiveOverlay(o overlay) {
 }
 
 func (t *TUI) dismissOverlay() {
+	wasSearch := false
+	if _, ok := t.activeOverlay.(*searchOverlay); ok {
+		wasSearch = true
+	}
 	t.cancelOverlayWork()
 	t.activeOverlay = nil
+	if wasSearch && t.searchHadConvFocus {
+		t.focusRegion = focusConv
+		t.searchHadConvFocus = false
+	}
 	t.dirty.markFull()
 }
 

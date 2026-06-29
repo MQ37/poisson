@@ -1,5 +1,7 @@
 package tui
 
+import "strings"
+
 // handleMouseInput consumes pure mouse reports (wheel + click). Returns true if
 // the input goroutine should skip further processing.
 func (t *TUI) handleMouseInput(data []byte) bool {
@@ -22,16 +24,7 @@ func (t *TUI) handleMouseInput(data []byte) bool {
 				return true
 			}
 		}
-		w := t.contentWidth()
-		if t.scroll.focusedToolExpanded(w) {
-			if t.scroll.scrollFocusedTool(w, delta) {
-				t.markScrollDirty()
-				t.mu.Unlock()
-				return true
-			}
-		}
-		block := t.blocksBackgroundInput()
-		if block {
+		if t.blocksBackgroundInput() {
 			if flo, ok := t.activeOverlay.(*filterableListOverlay); ok {
 				vis := flo.filtered()
 				if delta > 0 && flo.idx > 0 {
@@ -43,11 +36,19 @@ func (t *TUI) handleMouseInput(data []byte) bool {
 				t.mu.Unlock()
 				return true
 			}
+			t.mu.Unlock()
+			return true
+		}
+		w := t.contentWidth()
+		if t.scroll.focusedToolExpanded(w) {
+			if t.scroll.scrollFocusedTool(w, delta) {
+				t.markScrollDirty()
+			}
+			t.mu.Unlock()
+			return true
 		}
 		t.mu.Unlock()
-		if !block {
-			t.handleScrollDelta(delta)
-		}
+		t.handleScrollDelta(delta)
 		return true
 	}
 
@@ -81,10 +82,14 @@ func (t *TUI) handleMouseClick(row int) {
 		return
 	}
 
-	if t.lastCompletionRows > 0 {
-		zoneStart := t.headerRows + t.scrollRows - t.lastCompletionRows + 1
-		zoneEnd := t.headerRows + t.scrollRows
-		if row >= zoneStart && row <= zoneEnd {
+	if t.handleCompletionClick(row) {
+		return
+	}
+
+	if so, ok := t.activeOverlay.(*searchOverlay); ok {
+		anchor, lines := so.render(t.scrollRows, t.cols)
+		searchRow := t.headerRows + 1 + anchor - 1 + t.overlayPinOffset()
+		if row >= searchRow && row < searchRow+len(lines) {
 			return
 		}
 	}
@@ -113,6 +118,37 @@ func (t *TUI) handleMouseClick(row int) {
 	if t.scroll.clickBlockAt(viewH, t.contentWidth(), vi) {
 		t.markScrollDirty()
 	}
+}
+
+// handleCompletionClick selects a completion item when the user clicks the dropdown.
+func (t *TUI) handleCompletionClick(row int) bool {
+	c := t.completion
+	if c == nil || c.empty() || t.lastCompletionRows == 0 {
+		return false
+	}
+	lines := completionLines(t, c)
+	if len(lines) == 0 {
+		return false
+	}
+	anchor := t.headerRows + t.scrollRows - len(lines) + 1
+	if row < anchor || row >= anchor+len(lines) {
+		return false
+	}
+	lineIdx := row - anchor
+	if lineIdx == 0 {
+		return true
+	}
+	plain := stripANSI(lines[lineIdx])
+	plain = strings.TrimSpace(strings.TrimPrefix(plain, "▶"))
+	for _, cand := range c.cands {
+		if plain == cand || strings.HasSuffix(plain, cand) {
+			t.applyCompletion(cand)
+			t.completion = nil
+			t.markInputDirty()
+			return true
+		}
+	}
+	return true
 }
 
 // clickBlockAt toggles thinking collapse or tool expand for the block at

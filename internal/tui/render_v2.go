@@ -109,7 +109,7 @@ func (t *TUI) paintPartial(snap dirtySnapshot, lay layoutSnapshot) {
 		t.paintInputRegion(&b, lay)
 		t.paintCompletionOverlay(&b, lay)
 	}
-	if t.activeOverlay != nil {
+	if t.activeOverlay != nil || t.lastOverlayLines > 0 {
 		t.paintOverlay(&b, lay)
 	}
 	if snap.status {
@@ -135,7 +135,8 @@ func (t *TUI) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []i
 	pinRows := 0
 	if t.focusRegion == focusConv {
 		pinRows = 1
-		if paintAll || len(onlySet) == 0 {
+		_, pinDirty := onlySet[0]
+		if paintAll || len(onlySet) == 0 || pinDirty {
 			b.WriteString(cup(startRow, 1))
 			b.WriteString(clearLine())
 			b.WriteString(truncateToWidth(t.pinnedPromptLine(lay.wrapWidth), lay.wrapWidth))
@@ -152,12 +153,7 @@ func (t *TUI) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []i
 		b.WriteString(cup(screenRow, 1))
 		b.WriteString(clearLine())
 		if i < len(lay.visible) {
-			line := t.formatScrollLine(lay.visible[i].Text)
-			line = t.applySearchHighlight(i, lay, line)
-			if t.approving.Load() {
-				line = dim + stripANSI(line) + reset
-			}
-			b.WriteString(truncateToWidth(line, lay.wrapWidth))
+			b.WriteString(truncateToWidth(t.formatVisibleScrollLine(i, lay), lay.wrapWidth))
 		}
 	}
 }
@@ -292,12 +288,28 @@ func (t *TUI) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, lines 
 				continue
 			}
 		}
-		if vi := row - lay.scrollStart; vi >= 0 && vi < len(lay.visible) {
-			line := t.formatScrollLine(lay.visible[vi].Text)
-			line = t.applySearchHighlight(vi, lay, line)
-			b.WriteString(truncateToWidth(line, lay.wrapWidth))
+		pinRows := 0
+		if t.focusRegion == focusConv {
+			pinRows = 1
+		}
+		if pinRows > 0 && row == lay.scrollStart {
+			b.WriteString(truncateToWidth(t.pinnedPromptLine(lay.wrapWidth), lay.wrapWidth))
+			continue
+		}
+		vi := row - lay.scrollStart - pinRows
+		if vi >= 0 && vi < len(lay.visible) {
+			b.WriteString(truncateToWidth(t.formatVisibleScrollLine(vi, lay), lay.wrapWidth))
 		}
 	}
+}
+
+func (t *TUI) formatVisibleScrollLine(vi int, lay layoutSnapshot) string {
+	line := t.formatScrollLine(lay.visible[vi].Text)
+	line = t.applySearchHighlight(vi, lay, line)
+	if t.approving.Load() {
+		line = dim + stripANSI(line) + reset
+	}
+	return line
 }
 
 func (t *TUI) formatScrollLine(text string) string {
@@ -351,10 +363,17 @@ func (t *TUI) clearOverlayGhostRows(b *strings.Builder, lay layoutSnapshot, star
 		}
 		b.WriteString(cup(row, 1))
 		b.WriteString(clearLine())
-		if vi := row - lay.scrollStart; vi >= 0 && vi < len(lay.visible) {
-			line := t.formatScrollLine(lay.visible[vi].Text)
-			line = t.applySearchHighlight(vi, lay, line)
-			b.WriteString(truncateToWidth(line, lay.wrapWidth))
+		pinRows := 0
+		if t.focusRegion == focusConv {
+			pinRows = 1
+		}
+		if pinRows > 0 && row == lay.scrollStart {
+			b.WriteString(truncateToWidth(t.pinnedPromptLine(lay.wrapWidth), lay.wrapWidth))
+			continue
+		}
+		vi := row - lay.scrollStart - pinRows
+		if vi >= 0 && vi < len(lay.visible) {
+			b.WriteString(truncateToWidth(t.formatVisibleScrollLine(vi, lay), lay.wrapWidth))
 		}
 	}
 }
@@ -456,6 +475,8 @@ func (t *TUI) markAfterEvent(ev agent.OutputEvent) {
 			t.activeTools--
 		}
 		t.dirty.markScrollAll(t.scrollRows)
+	case agent.OutputCompacted:
+		t.dirty.markFull()
 	case agent.OutputDone:
 		t.scroll.finalizeThinking()
 		t.activeTools = 0

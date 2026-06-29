@@ -40,8 +40,23 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 
 	if k.isCtrlC() {
+		if _, ok := t.activeOverlay.(*searchOverlay); ok {
+			t.dismissOverlay()
+			return false, nil
+		}
 		if _, ok := t.activeOverlay.(*btwOverlay); ok {
 			t.dismissOverlay()
+			return false, nil
+		}
+		if t.exitArmed {
+			t.exitArmed = false
+			now := time.Now()
+			if !t.lastCtrlC.IsZero() && now.Sub(t.lastCtrlC) <= 2*time.Second {
+				t.prepareShutdownLocked()
+				return true, nil
+			}
+			t.lastCtrlC = now
+			t.setEphemeralHintLocked("Ctrl+C again to exit", 2*time.Second)
 			return false, nil
 		}
 		if t.running() && !t.approving.Load() {
@@ -90,7 +105,7 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		}
 	}
 
-	if !t.completion.empty() && k.Kind == KeyCtrl {
+	if !t.completion.empty() && k.Kind == KeyCtrl && !k.isCtrlC() {
 		t.flashCompletionHintLocked()
 		return false, nil
 	}
@@ -162,17 +177,6 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 
 	if k.isCtrlC() {
-		if t.exitArmed {
-			t.exitArmed = false
-			now := time.Now()
-			if !t.lastCtrlC.IsZero() && now.Sub(t.lastCtrlC) <= 2*time.Second {
-				t.prepareShutdownLocked()
-				return true, nil
-			}
-			t.lastCtrlC = now
-			t.setEphemeralHintLocked("Ctrl+C again to exit", 2*time.Second)
-			return false, nil
-		}
 		if t.editor.text() != "" {
 			t.editor.setText("")
 			t.completion = nil
