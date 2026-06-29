@@ -33,7 +33,7 @@ func (o *approvalOverlay) clampScroll() {
 func (o *approvalOverlay) bodyLines(inner int) (purpose, sep string, cmdLines []string, scrollHint string, maxBody int) {
 	purpose = dim + "Purpose: " + reset + truncatePlain(o.description, inner-10)
 	sep = dim + strings.Repeat("─", inner) + reset
-	cmdLines = wrapPlain("$ "+o.command, inner)
+	cmdLines = approvalCommandLines(o.command, inner)
 	if len(cmdLines) == 0 {
 		cmdLines = []string{"$ "}
 	}
@@ -75,7 +75,7 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 	}
 	sep := dim + strings.Repeat("─", inner) + reset
 
-	cmdLines := wrapPlain("$ "+o.command, inner)
+	cmdLines := approvalCommandLines(o.command, inner)
 	if len(cmdLines) == 0 {
 		cmdLines = []string{"$ "}
 	}
@@ -131,8 +131,8 @@ func (o *approvalOverlay) fallbackLines(cols int) []string {
 	if strings.TrimSpace(o.workdir) != "" {
 		b.WriteString("  " + dim + "cwd: " + reset + truncatePlain(o.workdir, cols-10) + "\n")
 	}
-	for _, ln := range wrapPlain("$ "+o.command, cols-4) {
-		b.WriteString("  " + truncatePlain(ln, cols-4) + "\n")
+	for _, ln := range approvalCommandLines(o.command, cols-4) {
+		b.WriteString("  " + truncateToWidth(ln, cols-4) + "\n")
 	}
 	b.WriteString(dim + "  [A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel" + reset)
 	return strings.Split(strings.TrimRight(b.String(), "\n"), "\n")

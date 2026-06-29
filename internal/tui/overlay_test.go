@@ -58,15 +58,16 @@ func TestApprovalOverlayShowsPurposeLine(t *testing.T) {
 	foundCmd := false
 	foundPurpose := false
 	for _, ln := range lines {
-		if strings.Contains(ln, "$ rm -rf ./build") {
+		plain := stripANSI(ln)
+		if strings.Contains(plain, "█") && strings.Contains(plain, "$") && strings.Contains(plain, "rm -rf ./build") {
 			foundCmd = true
 		}
-		if strings.Contains(ln, "Purpose:") && strings.Contains(ln, "clean build artifacts") {
+		if strings.Contains(plain, "Purpose:") && strings.Contains(plain, "clean build artifacts") {
 			foundPurpose = true
 		}
 	}
 	if !foundCmd {
-		t.Errorf("expected command line with $ prefix in %v", lines)
+		t.Errorf("expected highlighted command with approval bar in %v", lines)
 	}
 	if !foundPurpose {
 		t.Errorf("expected Purpose: line in %v", lines)

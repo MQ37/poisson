@@ -35,6 +35,12 @@ func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 		inner = 1
 	}
 	for _, ln := range bodyLines {
+		if strings.Contains(ln, "\x1b[") {
+			for _, chunk := range wrapANSI(ln, inner) {
+				chunks = append(chunks, formatToolCardBodyLineANSI(chunk, width))
+			}
+			continue
+		}
 		for _, chunk := range wrapLine(stripANSI(ln), inner) {
 			chunks = append(chunks, fgYellow+formatToolCardBodyLine(chunk, width)+reset)
 		}
@@ -107,12 +113,40 @@ func toolCardFooter(width int) string {
 }
 
 func toolCardBody(toolName string, input []byte, width int) []string {
+	if toolName == "bash" {
+		var in struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Command != "" {
+			inner := width - 4
+			if inner < 1 {
+				inner = 1
+			}
+			return bashToolCommandLines(in.Command, inner)
+		}
+	}
 	preview := toolInputPreview(toolName, input)
 	inner := width - 4
 	if inner < 1 {
 		inner = 1
 	}
 	return wrapLine(preview, inner)
+}
+
+func formatToolCardBodyLineANSI(content string, width int) string {
+	inner := width - 4
+	if inner < 1 {
+		inner = 1
+	}
+	pad := inner - visibleWidth(content)
+	if pad < 0 {
+		content = truncateToWidth(content, inner)
+		pad = inner - visibleWidth(content)
+	}
+	if pad < 0 {
+		pad = 0
+	}
+	return fgYellow + "│ " + reset + content + strings.Repeat(" ", pad) + fgYellow + " │" + reset
 }
 
 // toolCardCollapsedResultLines returns inner (unboxed) result preview rows shown
