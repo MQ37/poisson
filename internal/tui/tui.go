@@ -81,8 +81,10 @@ type TUI struct {
 	overlayQuit    atomic.Bool
 
 	// Submission signaling.
-	lastCtrlC     time.Time
-	turnCancelled bool // set when user cancels an in-flight turn; cleared on OutputDone
+	lastCtrlC        time.Time
+	turnCancelled    bool // set when user cancels an in-flight turn; cleared on OutputDone
+	exitArmed        bool // next Ctrl+C should offer quit after cancel
+	lastOverlayLines int  // rows painted by previous overlay (ghost clear)
 
 	// cancelRun/cancelCtx are set while an agent prompt is in flight. The input
 	// goroutine uses them to cancel a running request (and pending approval) on Ctrl+C.

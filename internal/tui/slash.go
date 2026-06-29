@@ -67,28 +67,53 @@ func (t *TUI) handleSlash(cmd string) error {
 			t.markScrollDirty()
 			return nil
 		}
-		if err := t.agent.Compact(); err != nil {
-			t.scroll.appendRaw(styleError, "compaction failed: "+err.Error())
-			t.markScrollDirty()
-			return nil
-		}
-		t.hydrateScrollbackLocked()
-		t.markFullDirty()
+		t.scroll.appendRaw(styleSystem, "  compacting context...")
+		t.markScrollDirty()
+		go func() {
+			err := t.agent.Compact()
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			if err != nil {
+				t.scroll.appendRaw(styleError, "compaction failed: "+err.Error())
+				t.markScrollDirty()
+				return
+			}
+			t.scroll = newScrollback(8192)
+			t.hydrateScrollbackLocked()
+			t.markFullDirty()
+		}()
 		return nil
 	case "/model":
 		if len(parts) == 1 {
+			if t.running() {
+				t.scroll.appendRaw(styleSystem, "cannot change model while agent is running")
+				t.markScrollDirty()
+				return nil
+			}
 			t.openModelPicker()
+			return nil
+		}
+		if t.running() {
+			t.scroll.appendRaw(styleSystem, "cannot change model while agent is running")
+			t.markScrollDirty()
 			return nil
 		}
 		return cmdModel(h, parts[1:])
 	case "/providers":
+		if t.running() {
+			t.scroll.appendRaw(styleSystem, "cannot change provider while agent is running")
+			t.markScrollDirty()
+			return nil
+		}
 		t.openProviderPicker()
 		return nil
 	case "/effort":
+		if t.running() && len(parts) > 1 {
+			t.scroll.appendRaw(styleSystem, "cannot change effort while agent is running")
+			t.markScrollDirty()
+			return nil
+		}
 		return cmdEffort(h, parts[1:])
-	case "/models":
-		t.openModelPicker()
-		return nil
 	case "/reload":
 		if t.running() {
 			t.scroll.appendRaw(styleSystem, "cannot reload while agent is running")

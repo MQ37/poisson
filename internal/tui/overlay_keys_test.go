@@ -90,7 +90,7 @@ func TestPaletteQuitPropagates(t *testing.T) {
 }
 
 func TestSearchOverlayAcceptsLetterN(t *testing.T) {
-	s := newSearchOverlay(func() []ScreenRow { return nil }, nil)
+	s := newSearchOverlay(func() []ScreenRow { return nil }, nil, nil)
 	handled, _, _ := s.feedKey(Key{Kind: KeyRune, Rune: 'n'})
 	if !handled {
 		t.Fatal("expected handled")
@@ -101,7 +101,7 @@ func TestSearchOverlayAcceptsLetterN(t *testing.T) {
 }
 
 func TestSearchOverlayCtrlCDismisses(t *testing.T) {
-	s := newSearchOverlay(func() []ScreenRow { return nil }, nil)
+	s := newSearchOverlay(func() []ScreenRow { return nil }, nil, nil)
 	handled, done, cancel := s.feedKey(Key{Kind: KeyCtrl, Byte: 3})
 	if !handled || !done || !cancel {
 		t.Fatalf("handled=%v done=%v cancel=%v", handled, done, cancel)
@@ -130,7 +130,7 @@ func TestApproveBufferedAnswerBeforeReceive(t *testing.T) {
 	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger")
+		result <- tui.Approve("rm -rf x", "danger", "")
 	}()
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for !tui.approving.Load() && time.Now().Before(deadline) {

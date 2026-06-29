@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-// feed decodes bytes via the shared key decoder and dispatches each event.
-// Tests may call this directly; the input loop uses feedKey per decoded key.
 func (t *TUI) feed(data []byte) (bool, error) {
 	for _, k := range t.keyDec.Push(data) {
 		if quit, err := t.feedKey(k); quit || err != nil {
@@ -16,7 +14,18 @@ func (t *TUI) feed(data []byte) (bool, error) {
 	return false, nil
 }
 
-// feedKey handles one normalized key event. It returns (quit, error).
+func (t *TUI) searchBlocksEditorKey(k Key) bool {
+	switch k.Kind {
+	case KeyTab, KeyEnter:
+		return true
+	case KeyShiftEnter:
+		return true
+	case KeyRune:
+		return k.Rune == '\n' || k.Rune == '\r'
+	}
+	return false
+}
+
 func (t *TUI) feedKey(k Key) (bool, error) {
 	t.maybeClearHint()
 	t.mu.Lock()
@@ -30,11 +39,16 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		t.editor.wrapWidth = w
 	}
 
-	// Cancel in-flight agent before overlay dismiss or editor shortcuts.
-	if k.isCtrlC() && t.running() && !t.approving.Load() {
-		t.cancelActiveRunLocked()
-		t.lastCtrlC = time.Now()
-		return false, nil
+	if k.isCtrlC() {
+		if _, ok := t.activeOverlay.(*btwOverlay); ok {
+			t.dismissOverlay()
+			return false, nil
+		}
+		if t.running() && !t.approving.Load() {
+			t.cancelActiveRunLocked()
+			t.lastCtrlC = time.Now()
+			return false, nil
+		}
 	}
 
 	if t.blocksBackgroundInput() || t.hasKeyOverlay() {
@@ -59,6 +73,12 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		return false, nil
 	}
 
+	if _, isSearch := t.activeOverlay.(*searchOverlay); isSearch {
+		if t.searchBlocksEditorKey(k) {
+			return false, nil
+		}
+	}
+
 	if t.hasKeyOverlay() {
 		if _, isSearch := t.activeOverlay.(*searchOverlay); !isSearch {
 			if k.isCtrlC() || k.Kind == KeyEscape {
@@ -68,6 +88,11 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 			}
 			return false, nil
 		}
+	}
+
+	if !t.completion.empty() && k.Kind == KeyCtrl {
+		t.flashCompletionHintLocked()
+		return false, nil
 	}
 
 	if t.focusRegion == focusConv && t.feedConvFocus(k) {
@@ -137,6 +162,17 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 
 	if k.isCtrlC() {
+		if t.exitArmed {
+			t.exitArmed = false
+			now := time.Now()
+			if !t.lastCtrlC.IsZero() && now.Sub(t.lastCtrlC) <= 2*time.Second {
+				t.prepareShutdownLocked()
+				return true, nil
+			}
+			t.lastCtrlC = now
+			t.setEphemeralHintLocked("Ctrl+C again to exit", 2*time.Second)
+			return false, nil
+		}
 		if t.editor.text() != "" {
 			t.editor.setText("")
 			t.completion = nil
@@ -174,11 +210,6 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 
 	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyCtrl && k.Byte == 6 {
 		t.openSearchLocked()
-		return false, nil
-	}
-
-	if k.Kind == KeyCtrl && k.Byte == 25 {
-		t.yankClipboardLocked()
 		return false, nil
 	}
 
@@ -233,13 +264,13 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	return t.processEditorKey(k)
 }
 
-// processEditorKey applies one key to the editor and handles submit/quit.
 func (t *TUI) processEditorKey(k Key) (bool, error) {
 	submitted, quit := t.editor.applyKey(k)
 	if submitted != "" {
 		t.completion = nil
 		if err := t.submit(submitted); err != nil {
 			if errors.Is(err, errQuitSentinel) {
+				t.prepareShutdownLocked()
 				return true, nil
 			}
 			t.appendErrorLocked(err)
@@ -258,7 +289,6 @@ func (t *TUI) processEditorKey(k Key) (bool, error) {
 	return false, nil
 }
 
-// processEditor feeds legacy raw bytes to the editor (tests only).
 func (t *TUI) processEditor(data []byte) (bool, error) {
 	for _, k := range (&Decoder{}).Push(data) {
 		if quit, err := t.processEditorKey(k); quit || err != nil {
@@ -268,7 +298,6 @@ func (t *TUI) processEditor(data []byte) (bool, error) {
 	return false, nil
 }
 
-// hasCSI reports whether data contains any CSI sequence (ESC[).
 func hasCSI(data []byte) bool {
 	for i := 0; i+1 < len(data); i++ {
 		if data[i] == 27 && data[i+1] == '[' {
@@ -278,8 +307,6 @@ func hasCSI(data []byte) bool {
 	return false
 }
 
-// containsCtrlC reports whether data contains a Ctrl+C byte outside a
-// bracketed-paste region. A pasted 0x03 should not exit the editor.
 func containsCtrlC(data []byte) bool {
 	inPaste := false
 	for i := 0; i < len(data); i++ {
@@ -301,19 +328,14 @@ func containsCtrlC(data []byte) bool {
 	return false
 }
 
-// containsSubmitKey reports whether data contains a plain Enter/Return key.
-// Handles both \r (raw) and kitty keyboard Enter (ESC[13u or ESC[13;1u).
-// Shift+Enter (ESC[13;2u) does NOT match.
 func containsSubmitKey(data []byte) bool {
 	for i, b := range data {
 		if b == '\r' {
 			return true
 		}
-		// kitty: ESC [ 1 3 u  (plain Enter)
 		if b == 27 && i+4 < len(data) && data[i+1] == '[' && data[i+2] == '1' && data[i+3] == '3' && data[i+4] == 'u' {
 			return true
 		}
-		// kitty: ESC [ 1 3 ; 1 u  (plain Enter, explicit mods)
 		if b == 27 && i+6 < len(data) && data[i+1] == '[' && data[i+2] == '1' && data[i+3] == '3' && data[i+4] == ';' && data[i+5] == '1' && data[i+6] == 'u' {
 			return true
 		}

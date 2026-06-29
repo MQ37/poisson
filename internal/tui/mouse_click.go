@@ -14,6 +14,22 @@ func (t *TUI) handleMouseInput(data []byte) bool {
 
 	if delta, ok := mouseWheelDelta(ev.Button); ok {
 		t.mu.Lock()
+		if t.approving.Load() {
+			if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
+				ao.scrollBy(delta)
+				t.dirty.markOverlay()
+				t.mu.Unlock()
+				return true
+			}
+		}
+		w := t.contentWidth()
+		if t.scroll.focusedToolExpanded(w) {
+			if t.scroll.scrollFocusedTool(w, delta) {
+				t.markScrollDirty()
+				t.mu.Unlock()
+				return true
+			}
+		}
 		block := t.blocksBackgroundInput()
 		if block {
 			if flo, ok := t.activeOverlay.(*filterableListOverlay); ok {
@@ -65,8 +81,18 @@ func (t *TUI) handleMouseClick(row int) {
 		return
 	}
 
+	if t.lastCompletionRows > 0 {
+		zoneStart := t.headerRows + t.scrollRows - t.lastCompletionRows + 1
+		zoneEnd := t.headerRows + t.scrollRows
+		if row >= zoneStart && row <= zoneEnd {
+			return
+		}
+	}
+
 	if t.activeOverlay != nil {
-		return
+		if _, ok := t.activeOverlay.(*searchOverlay); !ok {
+			return
+		}
 	}
 
 	scrollStart := t.headerRows + 1 // 1-based first scroll row

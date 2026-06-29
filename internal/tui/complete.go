@@ -50,7 +50,7 @@ func (c *completion) reset() { c.idx = -1 }
 var slashCommands = []string{
 	"/quit", "/clear", "/help", "/new", "/resume", "/sessions",
 	"/search", "/fork", "/undo", "/compact", "/model", "/effort",
-	"/models", "/providers", "/reload", "/cost", "/btw",
+	"/providers", "/reload", "/cost", "/btw",
 }
 
 // matchSlash returns slash commands matching partial (prefix or fuzzy).

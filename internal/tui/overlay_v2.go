@@ -55,6 +55,10 @@ func (t *TUI) runBTW(ctx context.Context, o *btwOverlay, question string) {
 
 // openModelPicker shows an interactive model picker overlay.
 func (t *TUI) openModelPicker() {
+	if t.running() {
+		t.setEphemeralHintLocked("cannot change model while agent is running", 3*time.Second)
+		return
+	}
 	h := tuiCmdHost{t}
 	items, err := pickerModelItems(h)
 	if err != nil {
@@ -70,6 +74,10 @@ func (t *TUI) openModelPicker() {
 
 // openProviderPicker shows provider switcher overlay.
 func (t *TUI) openProviderPicker() {
+	if t.running() {
+		t.setEphemeralHintLocked("cannot change provider while agent is running", 3*time.Second)
+		return
+	}
 	h := tuiCmdHost{t}
 	cur := t.agent.Provider().ID()
 	t.setActiveOverlay(newPickerOverlay("Providers", pickerProviderItems(h), cur, func(id string) error {
@@ -121,6 +129,7 @@ func (t *TUI) openSearchLocked() {
 		func(globalRow int) {
 			t.scrollToSearchMatchLocked(globalRow)
 		},
+		func() bool { return t.running() },
 	))
 }
 
@@ -179,6 +188,7 @@ func (t *TUI) setActiveOverlay(o overlay) {
 	if t.activeOverlay != nil {
 		t.setEphemeralHintLocked("replaced open overlay", 2*time.Second)
 	}
+	t.clearCompletionLocked()
 	t.cancelOverlayWork()
 	t.activeOverlay = o
 	t.dirty.markFull()

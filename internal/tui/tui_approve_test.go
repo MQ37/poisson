@@ -20,7 +20,7 @@ func TestApproveLifecycle(t *testing.T) {
 	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger")
+		result <- tui.Approve("rm -rf x", "danger", "")
 	}()
 
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -84,7 +84,7 @@ func TestApproveWhileAgentRunning(t *testing.T) {
 	tui.status.Thinking = true
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger")
+		result <- tui.Approve("rm -rf x", "danger", "")
 	}()
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for !tui.approving.Load() && time.Now().Before(deadline) {
@@ -146,7 +146,7 @@ func TestApproveCancelledByRunCancel(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger")
+		result <- tui.Approve("rm -rf x", "danger", "")
 	}()
 
 	deadline := time.Now().Add(500 * time.Millisecond)

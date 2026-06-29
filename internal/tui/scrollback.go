@@ -114,15 +114,19 @@ func (s *scrollback) appendRaw(style LineStyle, text string) {
 }
 
 func (s *scrollback) streamViewportDirty(height, width int) []int {
-	if height < 1 || width < 1 || len(s.blocks) == 0 || s.scrollOffset > 0 {
+	if height < 1 || width < 1 || len(s.blocks) == 0 {
 		return nil
 	}
 	wrapped, _ := s.layoutAll(width)
-	viewStart := len(wrapped) - height
+	viewEnd := len(wrapped) - s.scrollOffset
+	if viewEnd < 1 {
+		return nil
+	}
+	viewStart := viewEnd - height
 	if viewStart < 0 {
 		viewStart = 0
 	}
-	viewLen := len(wrapped) - viewStart
+	viewLen := viewEnd - viewStart
 	if viewLen < 1 {
 		return nil
 	}
@@ -262,24 +266,20 @@ func (s *scrollback) blockRaw(i int) string {
 	return s.blocks[i].raw
 }
 
-// yankText returns plain text for Ctrl+Y clipboard yank: focused tool result
-// when a tool card is expanded, otherwise the last assistant block.
-func (s *scrollback) yankText() string {
-	if s.focusedToolID != 0 {
-		for i := range s.blocks {
-			b := &s.blocks[i]
-			if b.id == s.focusedToolID && b.kind == blockToolCall && b.meta.ToolDone {
-				return toolResultFullText(b)
-			}
-		}
+// appendToolCallReplay adds a completed tool card during session hydrate (no live timer).
+func (s *scrollback) appendToolCallReplay(id int64, providerCallID, name string, input []byte) {
+	b := s.newBlock(blockToolCall, "")
+	b.meta = BlockMeta{
+		ToolName:       name,
+		ToolID:         id,
+		ProviderCallID: providerCallID,
+		ToolInput:      append([]byte(nil), input...),
+		Streaming:      true,
 	}
-	for i := len(s.blocks) - 1; i >= 0; i-- {
-		b := &s.blocks[i]
-		if b.kind == blockAssistant && b.raw != "" {
-			return b.raw
-		}
-	}
-	return ""
+	s.blocks = append(s.blocks, b)
+	s.totalAdded++
+	s.lastStreamWrapCount = 0
+	s.trim()
 }
 
 // wrapLine wraps a single logical line to width runes per chunk (word-aware when

@@ -54,8 +54,12 @@ func tableBlockEnd(lines []string, start int) int {
 	if start >= len(lines) || !isTableRow(lines[start]) {
 		return start
 	}
-	end := start + 1
-	for end < len(lines) && isTableRow(lines[end]) {
+	// GFM tables require a separator row immediately after the header.
+	if start+1 >= len(lines) || !isTableSeparator(lines[start+1]) {
+		return start
+	}
+	end := start + 2
+	for end < len(lines) && isTableRow(lines[end]) && !isTableSeparator(lines[end]) {
 		end++
 	}
 	if end-start < 2 {

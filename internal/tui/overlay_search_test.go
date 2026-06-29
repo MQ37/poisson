@@ -10,7 +10,7 @@ func TestSearchOverlayPreservesMatchIndexOnRender(t *testing.T) {
 		{Text: "beta line"},
 		{Text: "gamma line"},
 	}
-	s := newSearchOverlay(func() []ScreenRow { return rows }, nil)
+	s := newSearchOverlay(func() []ScreenRow { return rows }, nil, nil)
 	s.query = "line"
 	s.updateMatches(true)
 	s.cur = 2

@@ -28,36 +28,6 @@ func TestDecoderKittyCtrlS(t *testing.T) {
 	}
 }
 
-func TestFeedKeyCtrlYDoesNotDeadlock(t *testing.T) {
-	tui := newTestTUIHelper()
-	done := make(chan struct{})
-	go func() {
-		_, _ = tui.feedKey(Key{Kind: KeyCtrl, Byte: 25})
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("Ctrl+Y deadlocked feedKey (mutex re-entry in yankClipboard)")
-	}
-}
-
-func TestFeedKeyCtrlYThenCtrlSDoesNotDeadlock(t *testing.T) {
-	_, a, sessionID := newTestStoreAndAgent(t)
-	tui := newTUIWithAgent(a, sessionID)
-	done := make(chan struct{})
-	go func() {
-		_, _ = tui.feedKey(Key{Kind: KeyCtrl, Byte: 25})
-		_, _ = tui.feedKey(Key{Kind: KeyCtrl, Byte: 19})
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("Ctrl+Y then Ctrl+S deadlocked")
-	}
-}
-
 func TestFeedKeyCtrlSOpensSessionPicker(t *testing.T) {
 	_, a, sessionID := newTestStoreAndAgent(t)
 	tui := newTUIWithAgent(a, sessionID)

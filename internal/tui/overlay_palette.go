@@ -13,7 +13,6 @@ var paletteCommands = []paletteItem{
 	{"/sessions", "session picker"},
 	{"/resume", "resume session"},
 	{"/model", "model picker"},
-	{"/models", "list models"},
 	{"/providers", "provider picker"},
 	{"/cost", "token cost breakdown"},
 	{"/clear", "clear scrollback"},

@@ -121,7 +121,7 @@ func runREPL(noSkills bool) {
 	var approveUI tui.Approver
 	approvalFn := func(command, description, workdir string) bool {
 		if approveUI != nil {
-			return approveUI.Approve(command, description)
+			return approveUI.Approve(command, description, workdir)
 		}
 		return false
 	}

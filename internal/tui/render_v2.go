@@ -312,6 +312,10 @@ func (t *TUI) formatScrollLine(text string) string {
 
 func (t *TUI) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
 	if t.activeOverlay == nil {
+		if t.lastOverlayLines > 0 {
+			t.clearOverlayGhostRows(b, lay, 1, t.lastOverlayLines)
+			t.lastOverlayLines = 0
+		}
 		return
 	}
 	var anchor int
@@ -322,6 +326,10 @@ func (t *TUI) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
 		anchor, lines = t.activeOverlay.render(t.scrollRows, t.cols)
 	}
 	pinOffset := t.overlayPinOffset()
+	height := len(lines)
+	if t.lastOverlayLines > height {
+		t.clearOverlayGhostRows(b, lay, anchor+pinOffset+height, t.lastOverlayLines-height)
+	}
 	for i, line := range lines {
 		row := lay.scrollStart + anchor - 1 + pinOffset + i
 		if row < lay.scrollStart || row >= lay.scrollStart+t.scrollRows {
@@ -330,6 +338,24 @@ func (t *TUI) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
 		b.WriteString(cup(row, 1))
 		b.WriteString(clearLine())
 		b.WriteString(truncateToWidth(line, t.cols))
+	}
+	t.lastOverlayLines = height
+}
+
+// clearOverlayGhostRows erases leftover overlay rows after the overlay shrinks or closes.
+func (t *TUI) clearOverlayGhostRows(b *strings.Builder, lay layoutSnapshot, startRow, count int) {
+	for i := 0; i < count; i++ {
+		row := lay.scrollStart + startRow - 1 + i
+		if row < lay.scrollStart || row >= lay.scrollStart+t.scrollRows {
+			continue
+		}
+		b.WriteString(cup(row, 1))
+		b.WriteString(clearLine())
+		if vi := row - lay.scrollStart; vi >= 0 && vi < len(lay.visible) {
+			line := t.formatScrollLine(lay.visible[vi].Text)
+			line = t.applySearchHighlight(vi, lay, line)
+			b.WriteString(truncateToWidth(line, lay.wrapWidth))
+		}
 	}
 }
 
@@ -367,7 +393,7 @@ func (t *TUI) paintCursor(b *strings.Builder, lay layoutSnapshot) {
 	if t.focusRegion == focusConv {
 		return
 	}
-	if _, ok := t.activeOverlay.(*searchOverlay); ok {
+	if t.approving.Load() || t.blocksBackgroundInput() {
 		return
 	}
 	visRow := lay.sr - lay.firstRow

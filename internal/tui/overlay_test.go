@@ -37,7 +37,7 @@ func TestApprovalKeyAllowedIgnoresArrowCSI(t *testing.T) {
 }
 
 func TestApprovalOverlayRenderFits(t *testing.T) {
-	o := newApprovalOverlay("rm -rf ./build", "dangerous")
+	o := newApprovalOverlay("rm -rf ./build", "dangerous", "")
 	anchor, lines := o.render(20, 80)
 	if anchor < 1 || anchor > 20 {
 		t.Fatalf("anchor = %d", anchor)
@@ -53,7 +53,7 @@ func TestApprovalOverlayRenderFits(t *testing.T) {
 }
 
 func TestApprovalOverlayShowsPurposeLine(t *testing.T) {
-	o := newApprovalOverlay("rm -rf ./build", "clean build artifacts")
+	o := newApprovalOverlay("rm -rf ./build", "clean build artifacts", "")
 	_, lines := o.render(20, 80)
 	foundCmd := false
 	foundPurpose := false
@@ -74,7 +74,7 @@ func TestApprovalOverlayShowsPurposeLine(t *testing.T) {
 }
 
 func TestApprovalOverlayPurposeFallbackGuardReason(t *testing.T) {
-	o := newApprovalOverlay("rm -rf x", "")
+	o := newApprovalOverlay("rm -rf x", "", "")
 	_, lines := o.render(20, 60)
 	found := false
 	for _, ln := range lines {

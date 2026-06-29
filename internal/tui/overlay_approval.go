@@ -7,21 +7,49 @@ import "strings"
 type approvalOverlay struct {
 	command     string
 	description string
+	workdir     string
 	scroll      int
 }
 
-func newApprovalOverlay(command, description string) *approvalOverlay {
+func newApprovalOverlay(command, description, workdir string) *approvalOverlay {
 	return &approvalOverlay{
 		command:     command,
 		description: resolveApprovalPurpose(command, description),
+		workdir:     workdir,
 	}
 }
 
 func (o *approvalOverlay) scrollBy(delta int) {
 	o.scroll += delta
+	o.clampScroll()
+}
+
+func (o *approvalOverlay) clampScroll() {
 	if o.scroll < 0 {
 		o.scroll = 0
 	}
+}
+
+func (o *approvalOverlay) bodyLines(inner int) (purpose, sep string, cmdLines []string, scrollHint string, maxBody int) {
+	purpose = dim + "Purpose: " + reset + truncatePlain(o.description, inner-10)
+	sep = dim + strings.Repeat("─", inner) + reset
+	cmdLines = wrapPlain("$ "+o.command, inner)
+	if len(cmdLines) == 0 {
+		cmdLines = []string{"$ "}
+	}
+	maxBody = 8
+	if len(cmdLines) > maxBody {
+		scrollHint = dim + "↑↓ scroll command" + reset
+		if o.scroll > len(cmdLines)-maxBody {
+			o.scroll = len(cmdLines) - maxBody
+		}
+		o.clampScroll()
+		if o.scroll > len(cmdLines)-maxBody {
+			o.scroll = len(cmdLines) - maxBody
+		}
+		cmdLines = cmdLines[o.scroll : o.scroll+maxBody]
+	}
+	return purpose, sep, cmdLines, scrollHint, maxBody
 }
 
 func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
@@ -35,35 +63,39 @@ func (o *approvalOverlay) render(scrollRows, cols int) (int, []string) {
 		inner = 12
 	}
 
+	maxBody := scrollRows - 7
+	if maxBody < 3 {
+		maxBody = 3
+	}
+
 	purpose := dim + "Purpose: " + reset + truncatePlain(o.description, inner-10)
+	wd := ""
+	if strings.TrimSpace(o.workdir) != "" {
+		wd = dim + "cwd: " + reset + truncatePlain(o.workdir, inner-6)
+	}
 	sep := dim + strings.Repeat("─", inner) + reset
 
 	cmdLines := wrapPlain("$ "+o.command, inner)
 	if len(cmdLines) == 0 {
 		cmdLines = []string{"$ "}
 	}
-
-	footer := "[A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel"
 	scrollHint := ""
-	maxBody := scrollRows - 6 // top, purpose, sep, footer, bottom + margin
-	if maxBody < 3 {
-		maxBody = 3
-	}
 	if len(cmdLines) > maxBody {
 		scrollHint = dim + "↑↓ scroll command" + reset
 		if o.scroll > len(cmdLines)-maxBody {
 			o.scroll = len(cmdLines) - maxBody
 		}
-		if o.scroll < 0 {
-			o.scroll = 0
-		}
+		o.clampScroll()
 		cmdLines = cmdLines[o.scroll : o.scroll+maxBody]
-	} else {
-		o.scroll = 0
 	}
+
+	footer := "[A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel"
 
 	var body []string
 	body = append(body, purpose)
+	if wd != "" {
+		body = append(body, wd)
+	}
 	body = append(body, sep)
 	body = append(body, cmdLines...)
 	if scrollHint != "" {
@@ -96,6 +128,9 @@ func (o *approvalOverlay) fallbackLines(cols int) []string {
 	var b strings.Builder
 	b.WriteString(fgYellow + bold + "⚠ approval required" + reset + "\n")
 	b.WriteString("  " + dim + "Purpose: " + reset + truncatePlain(o.description, cols-14) + "\n")
+	if strings.TrimSpace(o.workdir) != "" {
+		b.WriteString("  " + dim + "cwd: " + reset + truncatePlain(o.workdir, cols-10) + "\n")
+	}
 	for _, ln := range wrapPlain("$ "+o.command, cols-4) {
 		b.WriteString("  " + truncatePlain(ln, cols-4) + "\n")
 	}

@@ -5,6 +5,14 @@ import (
 	"strings"
 )
 
+// extraSafe holds user-configured safe command prefixes (config guard.extra_safe).
+var extraSafe []string
+
+// SetExtraSafe replaces the configurable safe-command list (from config).
+func SetExtraSafe(cmds []string) {
+	extraSafe = append([]string(nil), cmds...)
+}
+
 // IsAllSafe runs the full classification pipeline (SPEC §7.1) and returns
 // true if the command is auto-allowed.
 func IsAllSafe(command string) bool {
@@ -160,14 +168,16 @@ func isSegmentSafe(tokens []string) bool {
 		candidates = append(candidates, cmd+" "+normalizeToken(tokens[1])+" "+normalizeToken(tokens[2]))
 	}
 
-	for _, safe := range SAFE {
+	return matchesSafePrefixes(candidates, SAFE) || matchesSafePrefixes(candidates, extraSafe)
+}
+
+func matchesSafePrefixes(candidates, safeList []string) bool {
+	for _, safe := range safeList {
 		for _, c := range candidates {
 			if c == safe || strings.HasPrefix(c+" ", safe+" ") {
 				return true
 			}
-			// Allow prefix match: "git status" matches "git status --short".
 			if strings.HasPrefix(c, safe) {
-				// Ensure the safe prefix is a full token boundary.
 				if len(c) == len(safe) || c[len(safe)] == ' ' {
 					return true
 				}

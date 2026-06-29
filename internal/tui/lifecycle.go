@@ -117,7 +117,10 @@ func (t *TUI) Run() error {
 					}
 					allowed, ok := keyApprovalAnswer(k)
 					if ok {
-						t.approvalAnswer <- allowed
+						select {
+						case t.approvalAnswer <- allowed:
+						default:
+						}
 					} else {
 						t.flashApprovalHint()
 					}

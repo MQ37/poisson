@@ -19,9 +19,9 @@ func TestMatchSlashFuzzy(t *testing.T) {
 }
 
 func TestRankFuzzyOrdersBetter(t *testing.T) {
-	cands := []string{"/providers", "/model", "/models", "/cost"}
+	cands := []string{"/providers", "/model", "/cost"}
 	got := rankFuzzy("mod", cands, 10)
-	if len(got) < 2 || got[0] != "/model" {
+	if len(got) != 1 || got[0] != "/model" {
 		t.Fatalf("got %v", got)
 	}
 }

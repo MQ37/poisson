@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"poisson/internal/config"
+	"poisson/internal/guard"
 	"poisson/internal/project"
 	"poisson/internal/provider"
 	"poisson/internal/skills"
@@ -91,7 +92,7 @@ func NewAgent(
 	outputChan chan OutputEvent,
 	approvalFn func(command, description, workdir string) bool,
 ) *Agent {
-	return &Agent{
+	a := &Agent{
 		store:      s,
 		provider:   p,
 		tools:      t,
@@ -101,6 +102,10 @@ func NewAgent(
 		approvalFn: approvalFn,
 		model:      defaultModel(p, cfg),
 	}
+	if cfg != nil {
+		guard.SetExtraSafe(cfg.Guard.ExtraSafe)
+	}
+	return a
 }
 
 // --- Session management accessors (for TUI slash commands) ---
@@ -143,7 +148,12 @@ func (a *Agent) SetModel(model string) {
 }
 
 // SetConfig swaps the config (for /reload).
-func (a *Agent) SetConfig(cfg *config.Config) { a.config = cfg }
+func (a *Agent) SetConfig(cfg *config.Config) {
+	a.config = cfg
+	if cfg != nil {
+		guard.SetExtraSafe(cfg.Guard.ExtraSafe)
+	}
+}
 
 // SetSkills configures skill discovery for the system prompt and skill tool.
 // When enabled is false, skills are cleared and the skill tool is removed.
@@ -470,10 +480,13 @@ func (a *Agent) runTurn(ctx context.Context) error {
 
 		}
 
-		// CHECK COMPACTION (stub — Phase 11 will implement full compaction).
+		a.UpdateStatus()
+
+		// CHECK COMPACTION
 		if a.shouldCompact() {
-			if err := a.compact(); err != nil {
+			if err := a.compact(ctx); err != nil {
 				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Compaction error: %v", err)})
+				a.sendEvent(OutputEvent{Type: OutputDone})
 				return fmt.Errorf("compaction failed: %w", err)
 			}
 		}

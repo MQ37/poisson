@@ -22,17 +22,18 @@ func (t *TUI) pinnedPromptLine(width int) string {
 	if len(idxs) == 0 {
 		return dim + "› (no prompts yet)" + reset
 	}
-	if t.convUserIdx < 0 {
-		t.convUserIdx = 0
+	idx := t.convUserIdx
+	if idx < 0 {
+		idx = 0
 	}
-	if t.convUserIdx >= len(idxs) {
-		t.convUserIdx = len(idxs) - 1
+	if idx >= len(idxs) {
+		idx = len(idxs) - 1
 	}
-	text := t.scroll.userPromptText(idxs[t.convUserIdx])
+	text := t.scroll.userPromptText(idxs[idx])
 	if text == "" {
 		text = "(empty)"
 	}
-	turn := dim + "turn " + itoa(t.convUserIdx+1) + "/" + itoa(len(idxs)) + " · " + reset
+	turn := dim + "turn " + itoa(idx+1) + "/" + itoa(len(idxs)) + " · " + reset
 	label := truncatePlain(text, width-18)
 	return fgYellow + bold + "› " + reset + turn + fgCyan + label + reset
 }
@@ -212,9 +213,19 @@ func (t *TUI) cancelActiveRunLocked() {
 	t.cancelMu.Unlock()
 	if cancel != nil {
 		t.turnCancelled = true
+		t.exitArmed = true
 		cancel()
 	}
 	t.setEphemeralHintLocked("cancelled — Ctrl+C again to exit", 2*time.Second)
+}
+
+func (t *TUI) clearCompletionLocked() {
+	t.completion = nil
+	t.lastCompletionRows = 0
+}
+
+func (t *TUI) flashCompletionHintLocked() {
+	t.setEphemeralHintLocked("close completion first (Esc)", 2*time.Second)
 }
 
 func (t *TUI) cancelActiveRun() {
@@ -250,10 +261,10 @@ func (t *TUI) waitForAgentStop() {
 	t.mu.Lock()
 	t.prepareShutdownLocked()
 	t.mu.Unlock()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		t.mu.Lock()
-		busy := t.status.Thinking
+		busy := t.status.Thinking || t.activeTools > 0
 		t.mu.Unlock()
 		if !busy {
 			return

@@ -79,10 +79,10 @@ func TestMatchSlash(t *testing.T) {
 		partial string
 		want    []string
 	}{
-		{"/", []string{"/quit", "/clear", "/help", "/new", "/resume", "/sessions", "/search", "/fork", "/undo", "/compact", "/model", "/effort", "/models", "/providers", "/reload", "/cost", "/btw"}},
-		{"/m", []string{"/model", "/models"}},
-		{"/mo", []string{"/model", "/models"}},
-		{"/mod", []string{"/model", "/models"}},
+		{"/", []string{"/quit", "/clear", "/help", "/new", "/resume", "/sessions", "/search", "/fork", "/undo", "/compact", "/model", "/effort", "/providers", "/reload", "/cost", "/btw"}},
+		{"/m", []string{"/model"}},
+		{"/mo", []string{"/model"}},
+		{"/mod", []string{"/model"}},
 		{"/xyz", nil},
 		{"foo", nil},
 	}
@@ -102,7 +102,7 @@ func TestCommonPrefixCands(t *testing.T) {
 		{nil, ""},
 		{[]string{}, ""},
 		{[]string{"/model"}, "/model"},
-		{[]string{"/model", "/models"}, "/model"},
+		{[]string{"/model", "/mod"}, "/mod"},
 		{[]string{"/a", "/b"}, "/"},
 	}
 	for _, tc := range cases {

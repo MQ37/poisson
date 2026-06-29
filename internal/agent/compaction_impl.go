@@ -37,11 +37,14 @@ Any small but critical details: file paths, error messages, environment quirks, 
 
 // Compact triggers manual mid-turn compaction (/compact).
 func (a *Agent) Compact() error {
-	return a.compact()
+	return a.compact(context.Background())
 }
 
 // compact performs mid-turn compaction of the conversation.
-func (a *Agent) compact() error {
+func (a *Agent) compact(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Send "compacting" status event.
 	a.sendEvent(OutputEvent{Type: OutputCompacting, Text: "compacting context..."})
 
@@ -112,10 +115,10 @@ func (a *Agent) compact() error {
 	}
 
 	// 4. Stream the summary.
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	streamCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	ch, err := a.provider.Stream(ctx, req)
+	ch, err := a.provider.Stream(streamCtx, req)
 	if err != nil {
 		return fmt.Errorf("compaction stream: %w", err)
 	}
@@ -161,21 +164,17 @@ func (a *Agent) compact() error {
 			Cost:               cost,
 			CreatedAt:          time.Now().Unix(),
 		}
-		if err := a.store.RecordAPICall(call); err != nil {
-			return fmt.Errorf("record compaction api call: %w", err)
-		}
+		_ = a.store.RecordAPICall(call)
 	}
 
-	// 8. Record compaction row.
-	if err := a.store.RecordCompaction(&store.Compaction{
+	// 8. Record compaction row (best-effort audit).
+	_ = a.store.RecordCompaction(&store.Compaction{
+		ID:           store.NewSessionID(),
 		SessionID:    a.sessionID,
-		MessageID:    nil, // nullable after undo
 		Summary:      summaryText,
 		TokensBefore: estimatedTokens,
 		CreatedAt:    time.Now().Unix(),
-	}); err != nil {
-		return fmt.Errorf("record compaction: %w", err)
-	}
+	})
 
 	// 9. Clear pending results.
 	a.pendingResults = nil

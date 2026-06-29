@@ -88,7 +88,7 @@ func TestTypingWhileAgentRuns(t *testing.T) {
 
 func TestSearchOverlayPaste(t *testing.T) {
 	tui := newTestTUIHelper()
-	so := newSearchOverlay(func() []ScreenRow { return nil }, nil)
+	so := newSearchOverlay(func() []ScreenRow { return nil }, nil, nil)
 	tui.activeOverlay = so
 
 	_, err := tui.feedKey(Key{Kind: KeyPaste, Text: "foo"})
@@ -161,7 +161,7 @@ func TestModelPickerKittyEscapeDismisses(t *testing.T) {
 }
 
 func TestApprovalBoxEqualWidth(t *testing.T) {
-	o := newApprovalOverlay("rm -rf /tmp/x", "cleanup")
+	o := newApprovalOverlay("rm -rf /tmp/x", "cleanup", "")
 	_, lines := o.render(24, 80)
 	if len(lines) < 3 {
 		t.Fatal("expected boxed approval")
@@ -183,7 +183,7 @@ func TestApprovalOverlayShowsLongScript(t *testing.T) {
 		cmd.WriteString("echo line")
 		cmd.WriteByte('\n')
 	}
-	o := newApprovalOverlay(cmd.String(), "long summer script")
+	o := newApprovalOverlay(cmd.String(), "long summer script", "")
 	_, lines := o.render(24, 80)
 	plain := stripANSI(strings.Join(lines, "\n"))
 	if !strings.Contains(plain, "echo line") {
@@ -204,7 +204,7 @@ func TestApprovalOverlayScrollChangesView(t *testing.T) {
 		cmd.WriteString(itoa(i))
 		cmd.WriteByte('\n')
 	}
-	o := newApprovalOverlay(cmd.String(), "numbered script")
+	o := newApprovalOverlay(cmd.String(), "numbered script", "")
 	_, before := o.render(12, 80)
 	o.scrollBy(5)
 	_, after := o.render(12, 80)

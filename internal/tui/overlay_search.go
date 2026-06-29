@@ -14,10 +14,11 @@ type searchOverlay struct {
 	cur       int
 	rows      func() []ScreenRow
 	scroll    func(globalRow int)
+	running   func() bool
 }
 
-func newSearchOverlay(rows func() []ScreenRow, scroll func(int)) *searchOverlay {
-	return &searchOverlay{rows: rows, scroll: scroll}
+func newSearchOverlay(rows func() []ScreenRow, scroll func(int), running func() bool) *searchOverlay {
+	return &searchOverlay{rows: rows, scroll: scroll, running: running}
 }
 
 func (s *searchOverlay) updateMatches(resetCur bool) {
@@ -61,7 +62,6 @@ func (s *searchOverlay) matchRows() []int {
 }
 
 func (s *searchOverlay) render(scrollRows, cols int) (int, []string) {
-	s.updateMatches(false)
 	q := s.query
 	if q == "" {
 		q = dim + "type to find" + reset
@@ -78,10 +78,14 @@ func (s *searchOverlay) render(scrollRows, cols int) (int, []string) {
 		if len(s.matches) == 0 {
 			count = dim + "  (no matches)" + reset
 		} else {
-			count = dim + "  " + itoa(s.cur+1) + "/" + itoa(len(s.matches)) + " · ↑↓ · Esc" + reset
+			count = dim + "  " + itoa(s.cur+1) + "/" + itoa(len(s.matches)) + " · ↑↓ · Enter jump · Esc" + reset
 		}
 	} else {
-		count = dim + "  · Esc close · Ctrl+C dismiss" + reset
+		hint := " · Esc close · Ctrl+C dismiss"
+		if s.running != nil && s.running() {
+			hint += " · agent running"
+		}
+		count = dim + hint + reset
 	}
 	line := truncateToWidth(label+count, cols)
 	return 1, []string{line}
@@ -97,6 +101,11 @@ func (s *searchOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
 		return true, false, false
 	case KeyArrowDown, KeyShiftArrowDown:
 		s.next(1)
+		return true, false, false
+	case KeyEnter:
+		if len(s.matches) > 0 && s.scroll != nil {
+			s.scroll(s.matches[s.cur])
+		}
 		return true, false, false
 	case KeyEscape:
 		return true, true, true

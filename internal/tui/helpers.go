@@ -57,10 +57,9 @@ func renderHelp() string {
   /fork [seq]  Fork the current session
   /undo        Undo the last turn
   /compact     Compact context now
-  /model <m>   Switch provider/model
+  /model <m>   Switch provider/model (no args: picker)
   /providers   Provider picker
   /effort <l>  Set thinking effort (low|medium|high|xhigh|max)
-  /models      Model picker
   /reload      Reload config and skills
   /cost        Show session cost
   /btw <q>     Side question in floating box

@@ -165,9 +165,6 @@ func cmdFork(h commandHost, args []string) error {
 		h.Out(styleError, "error cloning messages: "+err.Error())
 		return nil
 	}
-	if sess.CompactionSummary != nil {
-		s.SetCompactionSummary(newID, *sess.CompactionSummary)
-	}
 	newSess, _ := s.GetSession(newID)
 	if !switchAgentToSession(h, newSess) {
 		return nil
@@ -213,9 +210,6 @@ func forkFromLatest(h commandHost) error {
 	if err := s.CloneMessages(srcID, lastSeq, newID); err != nil {
 		h.Out(styleError, "error cloning messages: "+err.Error())
 		return nil
-	}
-	if sess.CompactionSummary != nil {
-		s.SetCompactionSummary(newID, *sess.CompactionSummary)
 	}
 	newSess, _ := s.GetSession(newID)
 	if !switchAgentToSession(h, newSess) {
@@ -303,14 +297,14 @@ func cmdUndo(h commandHost) error {
 			s.ClearCompactionSummary(sid)
 		}
 	}
-	trimHostScrollbackFromLastUser(h)
+	refreshHostScrollback(h)
 	h.Out(styleSystem, fmt.Sprintf("undid last turn (%d messages soft-deleted)", count))
 	return nil
 }
 
-func trimHostScrollbackFromLastUser(h commandHost) {
+func refreshHostScrollback(h commandHost) {
 	if th, ok := h.(tuiCmdHost); ok {
-		th.t.trimScrollbackFromLastUserLocked()
+		th.t.refreshScrollbackFromStoreLocked()
 	}
 }
 

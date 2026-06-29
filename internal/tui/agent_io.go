@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"poisson/internal/agent"
 )
+
+const approvalTimeout = 10 * time.Minute
 
 func (t *TUI) submit(text string) error {
 	trimmed := strings.TrimSpace(text)
@@ -35,9 +38,6 @@ func (t *TUI) submit(text string) error {
 	t.scroll.append(StyledLine{Style: styleUser, Text: text})
 	t.editor.setText("")
 
-	// Start the agent turn. feed (our caller) holds t.mu, so we can set
-	// status.Thinking directly. The agent runs in its own goroutine; the Run
-	// loop drains output events.
 	t.status.Thinking = true
 	t.status.Hint = ""
 	t.markScrollDirty()
@@ -66,14 +66,11 @@ func (t *TUI) submit(text string) error {
 				t.mu.Unlock()
 			}
 		}()
-		// The agent sends OutputError on all error paths; the Run loop displays
-		// them. We just wait for completion and clean up.
 		_ = t.agent.PromptWithContext(ctx, expanded)
 	}()
 	return nil
 }
 
-// handleEvent appends agent output to the scrollback. Caller must hold t.mu.
 func (t *TUI) handleEvent(ev agent.OutputEvent) {
 	switch ev.Type {
 	case agent.OutputText:
@@ -89,36 +86,45 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 	case agent.OutputToolResult:
 		t.scroll.completeToolCall(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
 	case agent.OutputApproval:
-		// Approval UI is shown via activeOverlay in Approve().
 	case agent.OutputError:
 		t.scroll.appendRaw(styleError, "error: "+ev.Text)
 	case agent.OutputCompacting:
 		t.scroll.appendRaw(styleCompacting, "  compacting context...")
 	case agent.OutputStatus:
-		// applied in markAfterEvent
 	}
 }
 
 // Approve renders an approval prompt for a dangerous bash command and waits
-// for the user's answer. The input goroutine is the sole stdin reader; it
-// routes the answer through t.approvalAnswer when t.approving is set.
-func (t *TUI) Approve(command, description string) bool {
+// for the user's answer.
+func (t *TUI) Approve(command, description, workdir string) bool {
 	t.approvalMu.Lock()
 	defer t.approvalMu.Unlock()
 
-	select {
-	case <-t.approvalAnswer:
-	default:
+	for {
+		select {
+		case <-t.approvalAnswer:
+		default:
+			goto drained
+		}
 	}
+drained:
 
-	// Signal before paint so the input goroutine routes keys here immediately
-	// (running() would otherwise swallow them during tool execution).
 	t.approving.Store(true)
-	defer t.approving.Store(false)
+	defer func() {
+		t.approving.Store(false)
+		for {
+			select {
+			case <-t.approvalAnswer:
+			default:
+				return
+			}
+		}
+	}()
 
 	t.mu.Lock()
+	t.clearCompletionLocked()
 	t.cancelOverlayWork()
-	t.activeOverlay = newApprovalOverlay(command, description)
+	t.activeOverlay = newApprovalOverlay(command, description, workdir)
 	t.dirty.markFull()
 	t.mu.Unlock()
 
@@ -132,6 +138,7 @@ func (t *TUI) Approve(command, description string) bool {
 	}
 
 	var allowed bool
+	timedOut := false
 	select {
 	case allowed = <-t.approvalAnswer:
 	case <-t.done:
@@ -141,18 +148,22 @@ func (t *TUI) Approve(command, description string) bool {
 		return false
 	case <-cancelCh:
 		allowed = false
+	case <-time.After(approvalTimeout):
+		allowed = false
+		timedOut = true
 	}
 
 	t.mu.Lock()
 	t.activeOverlay = nil
 	t.scroll.appendRaw(styleSystem, formatApprovalResult(allowed))
+	if timedOut {
+		t.scroll.appendRaw(styleSystem, "  approval timed out")
+	}
 	t.markScrollDirty()
 	t.mu.Unlock()
 	return allowed
 }
 
-// navigateHistory loads a previous/next prompt into the editor. dir=-1 is
-// older; dir=+1 is newer.
 func (t *TUI) navigateHistory(dir int) {
 	if len(t.history) == 0 {
 		return

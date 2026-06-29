@@ -31,30 +31,3 @@ func TestOsc52CopyToUnicode(t *testing.T) {
 	}
 }
 
-func TestYankTextLastAssistant(t *testing.T) {
-	s := newScrollback(1024)
-	s.append(StyledLine{Style: styleUser, Text: "question"})
-	s.append(StyledLine{Style: styleAssistant, Text: "answer one"})
-	s.append(StyledLine{Style: styleAssistant, Text: " answer two"})
-	if got := s.yankText(); got != "answer one answer two" {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestYankTextFocusedTool(t *testing.T) {
-	s := newScrollback(1024)
-	s.append(StyledLine{Style: styleAssistant, Text: "ignored when tool focused"})
-	s.appendToolCall(1, "", "bash", toolInputJSON("bash", map[string]string{"command": "echo hi"}))
-	s.completeToolCall("", `{"stdout":"tool output","stderr":"","exitCode":0}`, "", 5)
-	s.focusedToolID = s.blocks[1].id
-	if got := s.yankText(); got != "tool output" {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func TestYankTextEmpty(t *testing.T) {
-	s := newScrollback(1024)
-	if s.yankText() != "" {
-		t.Fatal("expected empty")
-	}
-}

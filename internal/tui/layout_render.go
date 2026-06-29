@@ -6,7 +6,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"golang.org/x/term"
 )
@@ -35,6 +34,7 @@ func (t *TUI) recomputeLayout() {
 		t.scrollRows = 3
 	}
 	t.scroll.clampScrollOffset(t.convScrollRows(), t.contentWidth())
+	t.syncConvUserIdxFromScrollLocked()
 }
 
 func (t *TUI) installResize() {
@@ -150,7 +150,7 @@ func (t *TUI) renderHintLine() string {
 	if t.focusRegion == focusConv {
 		return dim + "Tab:input · PgUp/Dn:scroll · Shift+←/→:prompts · Ctrl+E:tool" + reset
 	}
-	base := "Tab:conv · Enter:send · ↑↓:history · Ctrl+Y:yank last reply · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model · Ctrl+D:exit"
+	base := "Tab:conv · Enter:send · ↑↓:history · Ctrl+F:find · Ctrl+P:palette · Ctrl+S:sessions · Ctrl+M:model · Ctrl+D:exit"
 	if t.status.Hint != "" {
 		return dim + t.status.Hint + " · " + base + reset
 	}
@@ -213,22 +213,4 @@ func (t *TUI) writeRaw(s string) {
 	}
 }
 
-// yankClipboardLocked copies yankText to the system clipboard. Caller must hold t.mu.
-func (t *TUI) yankClipboardLocked() {
-	text := t.scroll.yankText()
-	if text == "" {
-		t.setEphemeralHintLocked("nothing to yank", 2*time.Second)
-		return
-	}
-	if err := osc52Copy(text); err != nil {
-		t.setEphemeralHintLocked("clipboard unavailable", 2*time.Second)
-		return
-	}
-	t.setEphemeralHintLocked("yanked to clipboard", 2*time.Second)
-}
 
-func (t *TUI) yankClipboard() {
-	t.mu.Lock()
-	t.yankClipboardLocked()
-	t.mu.Unlock()
-}

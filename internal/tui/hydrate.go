@@ -1,6 +1,9 @@
 package tui
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // msgBlock mirrors agent content block JSON in the messages table.
 type msgBlock struct {
@@ -24,6 +27,21 @@ func parseMessageBlocks(content string) []msgBlock {
 	return blocks
 }
 
+func parseHydratedToolResult(raw string) (content, errMsg string) {
+	if strings.HasPrefix(raw, "Error: ") {
+		return raw, strings.TrimPrefix(raw, "Error: ")
+	}
+	return raw, ""
+}
+
+// refreshScrollbackFromStoreLocked rebuilds on-screen scrollback from the store.
+// Caller must hold t.mu.
+func (t *TUI) refreshScrollbackFromStoreLocked() {
+	t.scroll = newScrollback(8192)
+	t.hydrateScrollbackLocked()
+	t.markFullDirty()
+}
+
 // hydrateScrollbackLocked replays store messages into scrollback. Caller holds t.mu.
 func (t *TUI) hydrateScrollbackLocked() {
 	if t.agent == nil {
@@ -42,10 +60,14 @@ func (t *TUI) hydrateScrollbackLocked() {
 		blocks := parseMessageBlocks(m.Content)
 		switch m.Role {
 		case "user":
+			var parts []string
 			for _, b := range blocks {
-				if b.Type == "text" && b.Text != "" {
-					t.scroll.append(StyledLine{Style: styleUser, Text: b.Text})
+				if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
+					parts = append(parts, b.Text)
 				}
+			}
+			if len(parts) > 0 {
+				t.scroll.append(StyledLine{Style: styleUser, Text: strings.Join(parts, "\n")})
 			}
 		case "assistant":
 			for _, b := range blocks {
@@ -65,13 +87,14 @@ func (t *TUI) hydrateScrollbackLocked() {
 					if len(input) == 0 {
 						input = json.RawMessage("{}")
 					}
-					t.scroll.appendToolCall(id, b.ToolCallID, b.ToolName, input)
+					t.scroll.appendToolCallReplay(id, b.ToolCallID, b.ToolName, input)
 				}
 			}
 		case "tool":
 			for _, b := range blocks {
 				if b.Type == "tool_result" {
-					t.scroll.completeToolCall(b.ToolCallID, b.ToolResult, "", 0)
+					content, errMsg := parseHydratedToolResult(b.ToolResult)
+					t.scroll.completeToolCall(b.ToolCallID, content, errMsg, 0)
 				}
 			}
 		}
