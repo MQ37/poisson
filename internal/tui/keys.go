@@ -1,6 +1,9 @@
 package tui
 
-import "unicode/utf8"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // Kitty keyboard protocol functional key codes (PUA 57344+).
 const (
@@ -52,6 +55,7 @@ const (
 // Key is one normalized keyboard event after kitty/CSI decoding.
 type Key struct {
 	Kind KeyKind
+	Meta bool   // Alt/Meta modifier (word-wise motion, M-backspace)
 	Rune rune
 	Text string // bracketed paste payload
 	Byte byte   // C0 control for KeyCtrl
@@ -150,7 +154,13 @@ func (d *Decoder) parseOne() (Key, int) {
 			return Key{Kind: KeyEnter}, 2
 		}
 		if seq[1] == 127 || seq[1] == 8 {
-			return Key{Kind: KeyBackspace}, 2
+			return Key{Kind: KeyBackspace, Meta: true}, 2
+		}
+		if seq[1] == 'f' {
+			return Key{Kind: KeyArrowRight, Meta: true}, 2
+		}
+		if seq[1] == 'b' {
+			return Key{Kind: KeyArrowLeft, Meta: true}, 2
 		}
 		// Lone ESC followed by a normal key: emit Escape only so the next byte
 		// is decoded separately (Alt+key stays distinct from a bare Esc).
@@ -221,13 +231,25 @@ func escSeqLen(data []byte) int {
 	}
 }
 
-func keyFromKitty(code, mods int) (Key, bool) {
+func kittyModFlags(mods int) (shift, alt, ctrl bool) {
 	m := mods - 1
 	if m < 0 {
 		m = 0
 	}
-	shift := m&1 != 0
-	ctrl := m&4 != 0
+	return m&1 != 0, m&2 != 0, m&4 != 0
+}
+
+func csiModFlagsFromBody(body []byte) (shift, alt, ctrl bool) {
+	if len(body) == 0 {
+		return false, false, false
+	}
+	parts := strings.Split(string(body), ";")
+	mods, _ := parseModsEventPart(parts[len(parts)-1])
+	return kittyModFlags(mods)
+}
+
+func keyFromKitty(code, mods int) (Key, bool) {
+	shift, alt, ctrl := kittyModFlags(mods)
 
 	switch code {
 	case kittyKeyUp, kittyKeyKPUp:
@@ -244,12 +266,12 @@ func keyFromKitty(code, mods int) (Key, bool) {
 		if shift {
 			return Key{Kind: KeyShiftArrowLeft}, true
 		}
-		return Key{Kind: KeyArrowLeft}, true
+		return Key{Kind: KeyArrowLeft, Meta: alt}, true
 	case 57351: // RIGHT
 		if shift {
 			return Key{Kind: KeyShiftArrowRight}, true
 		}
-		return Key{Kind: KeyArrowRight}, true
+		return Key{Kind: KeyArrowRight, Meta: alt}, true
 	case kittyKeyPageUp, kittyKeyKPPageUp:
 		return Key{Kind: KeyPageUp}, true
 	case kittyKeyPageDown, kittyKeyKPPageDn:
@@ -275,6 +297,9 @@ func keyFromKitty(code, mods int) (Key, bool) {
 	case kittyKeyTab, 9:
 		return Key{Kind: KeyTab}, true
 	case kittyKeyBackspace, 8, 127:
+		if alt {
+			return Key{Kind: KeyBackspace, Meta: true}, true
+		}
 		return Key{Kind: KeyBackspace}, true
 	}
 	if ctrl && code >= 1 && code <= 31 {
@@ -349,28 +374,28 @@ func keyFromCSI(seq []byte) (Key, bool) {
 }
 
 func keyFromCSIArrow(seq []byte, final byte) (Key, bool) {
-	shift := csiShiftFromBody(seq[2 : len(seq)-1])
+	shift, alt, _ := csiModFlagsFromBody(seq[2 : len(seq)-1])
 	switch final {
 	case 'A':
 		if shift {
 			return Key{Kind: KeyShiftArrowUp}, true
 		}
-		return Key{Kind: KeyArrowUp}, true
+		return Key{Kind: KeyArrowUp, Meta: alt}, true
 	case 'B':
 		if shift {
 			return Key{Kind: KeyShiftArrowDown}, true
 		}
-		return Key{Kind: KeyArrowDown}, true
+		return Key{Kind: KeyArrowDown, Meta: alt}, true
 	case 'C':
 		if shift {
 			return Key{Kind: KeyShiftArrowRight}, true
 		}
-		return Key{Kind: KeyArrowRight}, true
+		return Key{Kind: KeyArrowRight, Meta: alt}, true
 	case 'D':
 		if shift {
 			return Key{Kind: KeyShiftArrowLeft}, true
 		}
-		return Key{Kind: KeyArrowLeft}, true
+		return Key{Kind: KeyArrowLeft, Meta: alt}, true
 	case 'H':
 		return Key{Kind: KeyHome}, true
 	case 'F':

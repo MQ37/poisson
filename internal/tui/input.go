@@ -369,15 +369,27 @@ func (e *editor) applyKey(k Key) (string, bool) {
 	case KeyRune:
 		e.insertRune(k.Rune)
 	case KeyBackspace:
-		e.backspace()
+		if k.Meta {
+			e.deleteWordBackward()
+		} else {
+			e.backspace()
+		}
 	case KeyArrowUp:
 		e.moveUpScreen(e.wrapWidth)
 	case KeyArrowDown:
 		e.moveDownScreen(e.wrapWidth)
 	case KeyArrowLeft:
-		e.moveLeft()
+		if k.Meta {
+			e.moveWordLeft()
+		} else {
+			e.moveLeft()
+		}
 	case KeyArrowRight:
-		e.moveRight()
+		if k.Meta {
+			e.moveWordRight()
+		} else {
+			e.moveRight()
+		}
 	case KeyHome:
 		e.moveHomeScreen(e.wrapWidth)
 	case KeyEnd:
@@ -620,6 +632,47 @@ func csiShiftFromBody(body []byte) bool {
 		m = 0
 	}
 	return m&1 != 0
+}
+
+func (e *editor) moveWordLeft() {
+	if e.col == 0 {
+		if e.row == 0 {
+			return
+		}
+		e.row--
+		e.col = e.runeCount(e.row)
+	}
+	row := e.lines[e.row]
+	runes := []rune(row)
+	col := e.col
+	if col > 0 {
+		col--
+	}
+	for col > 0 && (runes[col] == ' ' || runes[col] == '\t') {
+		col--
+	}
+	for col > 0 && runes[col-1] != ' ' && runes[col-1] != '\t' {
+		col--
+	}
+	e.col = col
+}
+
+func (e *editor) moveWordRight() {
+	row := e.lines[e.row]
+	runes := []rune(row)
+	col := e.col
+	for col < len(runes) && runes[col] != ' ' && runes[col] != '\t' {
+		col++
+	}
+	for col < len(runes) && (runes[col] == ' ' || runes[col] == '\t') {
+		col++
+	}
+	if col >= len(runes) && e.row < len(e.lines)-1 {
+		e.row++
+		e.col = 0
+		return
+	}
+	e.col = col
 }
 
 func (e *editor) deleteWordBackward() {

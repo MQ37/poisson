@@ -149,6 +149,9 @@ func (t *TUI) handleTabKey() {
 }
 
 func (t *TUI) feedConvFocus(k Key) (handled bool) {
+	if k.Meta && (k.Kind == KeyBackspace || k.Kind == KeyArrowLeft || k.Kind == KeyArrowRight) {
+		return false
+	}
 	if k.Kind == KeyTab {
 		t.handleTabKey()
 		return true
