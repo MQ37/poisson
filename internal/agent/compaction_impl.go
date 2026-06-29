@@ -64,23 +64,13 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 		return ErrNothingToCompact
 	}
 
-	// 2. Determine how many to summarize (overflow handling).
-	window := a.ContextWindow()
-	threshold50 := window / 2
+	// 2. Summarize the entire active conversation.
 	estimatedTokens := 0
 	for _, m := range msgs {
 		estimatedTokens += a.EstimateTokens(m.Content)
 	}
 
-	summarizeCount := len(msgs)
-	if estimatedTokens > threshold50 {
-		// Summarize only the oldest half.
-		summarizeCount = len(msgs) / 2
-		if summarizeCount < 1 {
-			summarizeCount = 1
-		}
-	}
-	summarizeCount = adjustCompactionCount(msgs, summarizeCount)
+	summarizeCount := adjustCompactionCount(msgs, len(msgs))
 	if summarizeCount <= 0 {
 		return ErrNothingToCompact
 	}

@@ -53,7 +53,7 @@ func newTestSession(t *testing.T, s *store.Store, model string) string {
 func newTestConfig() *config.Config {
 	return &config.Config{
 		Provider:   config.ProviderConfig{Default: "fake"},
-		Compaction: config.CompactionConfig{Threshold: 0.8},
+		Compaction: config.CompactionConfig{Threshold: 0.85},
 	}
 }
 
@@ -288,9 +288,28 @@ func TestShouldCompact(t *testing.T) {
 		t.Errorf("ShouldCompact() = false, want true (100 > 0.01 * 8192)")
 	}
 
-	cfg.Compaction.Threshold = 0.8
+	cfg.Compaction.Threshold = 0.85
 	if agent.ShouldCompact() {
-		t.Errorf("ShouldCompact() with 0.8 = true, want false")
+		t.Errorf("ShouldCompact() with 0.85 = true, want false")
+	}
+}
+
+func TestShouldCompactAtThreshold(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cfg := newTestConfig()
+	cfg.Compaction.Threshold = 0.85
+	agent := NewAgent(s, newFakeProvider(), nil, cfg, sessionID, nil, nil)
+
+	// 85% of 8192 = 6963.2 → ceil triggers at 6964.
+	if err := s.RecordAPICall(&store.APICall{
+		SessionID: sessionID, Seq: 1, Model: "test-model",
+		InputTokens: 6964, OutputTokens: 10,
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if !agent.ShouldCompact() {
+		t.Error("ShouldCompact() = false at 85% context, want true")
 	}
 }
 

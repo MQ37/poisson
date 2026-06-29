@@ -33,7 +33,7 @@ func (a *Agent) ContextTokens() (int, int) {
 // ShouldCompact returns true if the estimated token usage for the next
 // request exceeds the configured threshold fraction of the context window:
 //
-//	last_input_tokens + estimated_new_tokens > threshold * context_window
+//	last_input_tokens + estimated_new_tokens >= threshold * context_window
 //
 // estimated_new_tokens is derived from the tool result texts appended in the
 // current iteration (pendingResults).
@@ -51,7 +51,7 @@ func (a *Agent) ShouldCompact() bool {
 	}
 	threshold := a.config.Compaction.Threshold
 	if threshold <= 0 {
-		threshold = 0.8
+		threshold = 0.85
 	}
 
 	estimatedNew := 0
@@ -59,7 +59,7 @@ func (a *Agent) ShouldCompact() bool {
 		estimatedNew += a.EstimateTokens(text)
 	}
 
-	return float64(last.InputTokens+estimatedNew) > threshold*float64(window)
+	return float64(last.InputTokens+estimatedNew) >= threshold*float64(window)
 }
 
 // EstimateTokens returns a rough token count for a text string: len(text)/4.

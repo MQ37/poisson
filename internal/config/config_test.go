@@ -46,8 +46,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.XAI.Model != "grok-build" {
 		t.Errorf("XAI.Model = %q", cfg.XAI.Model)
 	}
-	if cfg.Compaction.Threshold != 0.8 {
-		t.Errorf("Compaction.Threshold = %v, want 0.8", cfg.Compaction.Threshold)
+	if cfg.Compaction.Threshold != 0.85 {
+		t.Errorf("Compaction.Threshold = %v, want 0.85", cfg.Compaction.Threshold)
 	}
 	if cfg.Compaction.Model != "" {
 		t.Errorf("Compaction.Model = %q, want empty", cfg.Compaction.Model)

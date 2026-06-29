@@ -110,7 +110,7 @@ func defaultConfig() *Config {
 			Model:   "glm-5.2:cloud",
 		},
 		Compaction: CompactionConfig{
-			Threshold: 0.8,
+			Threshold: 0.85,
 			Model:     "",
 		},
 		Stealth: StealthConfig{
@@ -167,7 +167,7 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # model = "glm-5.2:cloud"
 
 [compaction]
-# threshold = 0.8                # fraction of context window (0.0–1.0)
+# threshold = 0.85               # fraction of context window (0.0–1.0)
 # model = ""                     # model for summarization (default: session model)
 
 [stealth]
