@@ -45,6 +45,9 @@ func TestConvFocusPinnedPrompt(t *testing.T) {
 	if !strings.Contains(line, bgBlue) {
 		t.Fatalf("pinned line should use full-width background: %q", stripANSI(line))
 	}
+	if !strings.Contains(line, fgYellow) {
+		t.Fatalf("pinned turn label should use high-contrast yellow on dark theme: %q", stripANSI(line))
+	}
 	if visibleWidth(line) != 60 {
 		t.Fatalf("pinned line width = %d, want 60", visibleWidth(line))
 	}
@@ -111,4 +114,16 @@ func TestConvFocusCtrlCFallthrough(t *testing.T) {
 
 func containsPlain(hay, needle string) bool {
 	return strings.Contains(stripANSI(hay), needle)
+}
+
+func TestFillWidthBGPadsFullWidth(t *testing.T) {
+	content := bold + fgYellow + "turn 1/2" + reset
+	line := fillWidthBG(bgBlue, content, 40)
+	if visibleWidth(line) != 40 {
+		t.Fatalf("visible width = %d, want 40", visibleWidth(line))
+	}
+	// Leading band + re-apply before padding (content ends with reset).
+	if strings.Count(line, bgBlue) < 2 {
+		t.Fatalf("expected bg re-applied before padding: %q", line)
+	}
 }

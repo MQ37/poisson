@@ -136,7 +136,7 @@ func (t *TUI) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []i
 	for pr := 0; pr < pinRows; pr++ {
 		_, pinDirty := onlySet[pr]
 		if paintAll || pinDirty {
-			t.paintConvPinRow(b, startRow+pr, lay.wrapWidth)
+			t.paintConvPinRow(b, startRow+pr, t.cols)
 		}
 	}
 	contentRows := t.scrollRows - pinRows
@@ -287,7 +287,7 @@ func (t *TUI) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, lines 
 		}
 		pinRows := t.convPinRows()
 		if pinRows > 0 && row == lay.scrollStart {
-			t.paintConvPinRow(b, row, lay.wrapWidth)
+			t.paintConvPinRow(b, row, t.cols)
 			continue
 		}
 		vi := row - lay.scrollStart - pinRows
@@ -365,7 +365,7 @@ func (t *TUI) clearOverlayGhostRows(b *strings.Builder, lay layoutSnapshot, star
 		b.WriteString(clearLine())
 		pinRows := t.convPinRows()
 		if pinRows > 0 && row == lay.scrollStart {
-			t.paintConvPinRow(b, row, lay.wrapWidth)
+			t.paintConvPinRow(b, row, t.cols)
 			continue
 		}
 		vi := row - lay.scrollStart - pinRows

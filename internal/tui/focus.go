@@ -47,13 +47,28 @@ func (t *TUI) offsetConvDirtyRows(rows []int) []int {
 	return out
 }
 
+func convHeaderTurnStyle() string {
+	if themeName == "light" {
+		return bold + fgBlue
+	}
+	return bold + fgYellow
+}
+
+func convHeaderPromptStyle() string {
+	if themeName == "light" {
+		return bold + fgBlack
+	}
+	// Bright white reads clearly on the dark blue band; fgBlack/fgCyan do not.
+	return bold + "\x1b[97m"
+}
+
 func (t *TUI) pinnedPromptLine(width int) string {
 	if width < 1 {
 		width = 1
 	}
 	idxs := t.scroll.userBlockIndices()
 	if len(idxs) == 0 {
-		return fillWidthBG(bgBlue, dim+"(no prompts yet)"+reset, width)
+		return fillWidthBG(bgBlue, convHeaderPromptStyle()+"(no prompts yet)", width)
 	}
 	idx := t.convUserIdx
 	if idx < 0 {
@@ -72,7 +87,7 @@ func (t *TUI) pinnedPromptLine(width int) string {
 		avail = 1
 	}
 	prompt := truncatePlain(text, avail)
-	body := bold + fgBlack + turn + reset + bgBlue + "  " + fgCyan + prompt + reset
+	body := convHeaderTurnStyle() + turn + "  " + convHeaderPromptStyle() + prompt
 	return fillWidthBG(bgBlue, body, width)
 }
 
@@ -86,7 +101,8 @@ func fillWidthBG(bg, content string, width int) string {
 	if pad < 0 {
 		pad = 0
 	}
-	return bg + content + strings.Repeat(" ", pad) + reset
+	// Re-apply bg before padding: embedded resets must not leave the tail uncolored.
+	return bg + content + bg + strings.Repeat(" ", pad) + reset
 }
 
 func (t *TUI) enterConvFocus() {
