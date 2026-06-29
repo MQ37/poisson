@@ -93,6 +93,8 @@ type TUI struct {
 	cancelCtx  context.Context
 	cancelRun  context.CancelFunc
 	cancelMu   sync.Mutex
+
+	introScrollTop bool // scroll to welcome chart on first paint
 }
 
 // NewTUI constructs the interactive TUI wired to the given agent and output channel.

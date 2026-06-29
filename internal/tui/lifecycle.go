@@ -16,6 +16,10 @@ func (t *TUI) Run() error {
 	}
 	t.oldState = oldState
 	t.recomputeLayout()
+	if t.introScrollTop {
+		t.introScrollTop = false
+		t.scroll.scrollToTop(t.convScrollRows(), t.contentWidth())
+	}
 
 	// Wire terminal mode.
 	t.writeRaw(altScreenOn + hideCursor + bracketedOn + kittyKbOn + mouseOn)

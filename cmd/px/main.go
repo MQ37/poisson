@@ -95,8 +95,6 @@ func runREPL(noSkills bool) {
 	sessionID := store.NewSessionID()
 	cwd, _ := os.Getwd()
 
-	tui.PrintStartupIntro(os.Stdout, version, provName, model)
-
 	// Set up output channel.
 	outputChan := make(chan agent.OutputEvent, 256)
 
@@ -147,6 +145,7 @@ func runREPL(noSkills bool) {
 
 	// Run TUI.
 	t := tui.NewTUI(a, sessionID, outputChan)
+	t.InstallStartupIntro(version, provName, model)
 	approveUI = t
 	runErr := t.Run()
 	if runErr != nil {

@@ -16,6 +16,7 @@ const (
 	blockError
 	blockCompacting
 	blockApproval
+	blockIntro // startup splash; raw may contain inline ANSI
 )
 
 // BlockMeta holds optional metadata for rich rendering (tool cards, collapse, etc.).
@@ -144,6 +145,10 @@ func (b *Block) layoutPlain(width int) []ScreenRow {
 		rows = layoutThinking(b, width, 0)
 	case blockToolCall:
 		rows = layoutToolCard(b, width, 0)
+	case blockIntro:
+		for _, chunk := range wrapANSI(b.raw, width) {
+			rows = append(rows, ScreenRow{Text: chunk + reset, Tag: RowTag{BlockID: b.id, RowIdx: len(rows)}})
+		}
 	default:
 		prefix := kindStylePrefix(b.kind)
 		var chunks []string

@@ -104,6 +104,13 @@ func (s *scrollback) append(line StyledLine) {
 	s.appendBlock(styleToKind(line.Style), line.Text)
 }
 
+func (s *scrollback) appendIntroLine(line string) {
+	s.lastStreamWrapCount = 0
+	s.blocks = append(s.blocks, s.newBlock(blockIntro, line))
+	s.totalAdded++
+	s.trim()
+}
+
 func (s *scrollback) appendRaw(style LineStyle, text string) {
 	s.lastStreamWrapCount = 0
 	for _, ln := range splitLines(stripANSI(text)) {
@@ -253,6 +260,21 @@ func (s *scrollback) scrollDown(n int) {
 }
 
 func (s *scrollback) scrollToBottom() { s.scrollOffset = 0 }
+
+func (s *scrollback) scrollToTop(height, width int) {
+	if height < 1 {
+		height = 1
+	}
+	if width < 1 {
+		width = 1
+	}
+	wrapped, _ := s.layoutAll(width)
+	max := len(wrapped) - height
+	if max < 0 {
+		max = 0
+	}
+	s.scrollOffset = max
+}
 
 // blockCount returns the number of logical blocks (for tests).
 func (s *scrollback) blockCount() int { return len(s.blocks) }
