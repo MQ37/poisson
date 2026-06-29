@@ -132,14 +132,11 @@ func (t *TUI) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []i
 			onlySet[r] = struct{}{}
 		}
 	}
-	pinRows := 0
-	if t.focusRegion == focusConv {
-		pinRows = 1
-		_, pinDirty := onlySet[0]
-		if paintAll || len(onlySet) == 0 || pinDirty {
-			b.WriteString(cup(startRow, 1))
-			b.WriteString(clearLine())
-			b.WriteString(truncateToWidth(t.pinnedPromptLine(lay.wrapWidth), lay.wrapWidth))
+	pinRows := t.convPinRows()
+	for pr := 0; pr < pinRows; pr++ {
+		_, pinDirty := onlySet[pr]
+		if paintAll || pinDirty {
+			t.paintConvPinRow(b, startRow+pr, lay.wrapWidth)
 		}
 	}
 	contentRows := t.scrollRows - pinRows
@@ -288,12 +285,9 @@ func (t *TUI) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, lines 
 				continue
 			}
 		}
-		pinRows := 0
-		if t.focusRegion == focusConv {
-			pinRows = 1
-		}
+		pinRows := t.convPinRows()
 		if pinRows > 0 && row == lay.scrollStart {
-			b.WriteString(truncateToWidth(t.pinnedPromptLine(lay.wrapWidth), lay.wrapWidth))
+			t.paintConvPinRow(b, row, lay.wrapWidth)
 			continue
 		}
 		vi := row - lay.scrollStart - pinRows
@@ -301,6 +295,12 @@ func (t *TUI) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, lines 
 			b.WriteString(truncateToWidth(t.formatVisibleScrollLine(vi, lay), lay.wrapWidth))
 		}
 	}
+}
+
+func (t *TUI) paintConvPinRow(b *strings.Builder, row, width int) {
+	b.WriteString(cup(row, 1))
+	b.WriteString(clearLine())
+	b.WriteString(t.pinnedPromptLine(width))
 }
 
 func (t *TUI) formatVisibleScrollLine(vi int, lay layoutSnapshot) string {
@@ -363,12 +363,9 @@ func (t *TUI) clearOverlayGhostRows(b *strings.Builder, lay layoutSnapshot, star
 		}
 		b.WriteString(cup(row, 1))
 		b.WriteString(clearLine())
-		pinRows := 0
-		if t.focusRegion == focusConv {
-			pinRows = 1
-		}
+		pinRows := t.convPinRows()
 		if pinRows > 0 && row == lay.scrollStart {
-			b.WriteString(truncateToWidth(t.pinnedPromptLine(lay.wrapWidth), lay.wrapWidth))
+			t.paintConvPinRow(b, row, lay.wrapWidth)
 			continue
 		}
 		vi := row - lay.scrollStart - pinRows
@@ -457,12 +454,7 @@ func (t *TUI) markAfterEvent(ev agent.OutputEvent) {
 	case agent.OutputText, agent.OutputThinking:
 		viewH := t.convScrollRows()
 		if rows := t.scroll.streamViewportDirty(viewH, t.contentWidth()); len(rows) > 0 {
-			if t.focusRegion == focusConv {
-				for i := range rows {
-					rows[i]++
-				}
-			}
-			t.dirty.markScrollRows(rows...)
+			t.dirty.markScrollRows(t.offsetConvDirtyRows(rows)...)
 		}
 	case agent.OutputStatus:
 		t.applyStatus(ev)
@@ -530,12 +522,7 @@ func (t *TUI) markInputDirty() {
 func (t *TUI) markSpinnerTick() {
 	t.mu.Lock()
 	lay := t.prepareLayout()
-	rows := t.toolSpinnerRows(lay)
-	if t.focusRegion == focusConv {
-		for i := range rows {
-			rows[i]++
-		}
-	}
+	rows := t.offsetConvDirtyRows(t.toolSpinnerRows(lay))
 	t.mu.Unlock()
 	if len(rows) > 0 {
 		t.dirty.markScrollRows(rows...)

@@ -6,6 +6,21 @@ import (
 	"testing"
 )
 
+func TestOffsetConvDirtyRowsIncludesPin(t *testing.T) {
+	tui := newTUI(nil, "s1", nil)
+	tui.focusRegion = focusConv
+	got := tui.offsetConvDirtyRows([]int{0, 1, 2})
+	want := []int{0, 1, 2, 3}
+	if len(got) != len(want) {
+		t.Fatalf("rows = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("rows[%d] = %d, want %d (%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestConvFocusPinnedPrompt(t *testing.T) {
 	tui := newTUI(nil, "s1", nil)
 	tui.writer = io.Discard
@@ -26,6 +41,12 @@ func TestConvFocusPinnedPrompt(t *testing.T) {
 	line := tui.pinnedPromptLine(60)
 	if !containsPlain(line, "second prompt") {
 		t.Fatalf("pinned line = %q", stripANSI(line))
+	}
+	if !strings.Contains(line, bgBlue) {
+		t.Fatalf("pinned line should use full-width background: %q", stripANSI(line))
+	}
+	if visibleWidth(line) != 60 {
+		t.Fatalf("pinned line width = %d, want 60", visibleWidth(line))
 	}
 }
 

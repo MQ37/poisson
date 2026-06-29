@@ -105,12 +105,8 @@ func (t *TUI) handleMouseClick(row int) {
 	if row < scrollStart || row > scrollEnd {
 		return
 	}
-	pinRows := 0
-	viewH := t.scrollRows
-	if t.focusRegion == focusConv {
-		pinRows = 1
-		viewH = t.convScrollRows()
-	}
+	pinRows := t.convPinRows()
+	viewH := t.convScrollRows()
 	vi := row - scrollStart - pinRows
 	if vi < 0 {
 		return

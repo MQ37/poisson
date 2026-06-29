@@ -230,12 +230,9 @@ func (t *TUI) closeOverlayAfter(prev overlay, done, cancel bool) {
 	}
 }
 
-// overlayPinOffset is extra scroll rows reserved for the pinned prompt in conv focus.
+// overlayPinOffset is extra scroll rows reserved for the conv turn header band.
 func (t *TUI) overlayPinOffset() int {
-	if t.focusRegion == focusConv {
-		return 1
-	}
-	return 0
+	return t.convPinRows()
 }
 
 func (t *TUI) handleOverlayPaste(k Key) bool {

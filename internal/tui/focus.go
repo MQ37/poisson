@@ -1,6 +1,9 @@
 package tui
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // focusRegion is which part of the TUI receives keyboard input.
 type focusRegion uint8
@@ -10,17 +13,47 @@ const (
 	focusConv
 )
 
+// convPinRows is the number of scroll-region rows reserved for the conv-focus
+// turn header band (full-width background, not part of scrollback content).
+func (t *TUI) convPinRows() int {
+	if t.focusRegion == focusConv {
+		return 1
+	}
+	return 0
+}
+
 func (t *TUI) convScrollRows() int {
-	if t.focusRegion == focusConv && t.scrollRows > 1 {
-		return t.scrollRows - 1
+	pin := t.convPinRows()
+	if t.scrollRows > pin {
+		return t.scrollRows - pin
 	}
 	return t.scrollRows
 }
 
+// offsetConvDirtyRows shifts content dirty indices below the pin band and always
+// includes the pin row(s) so the header repaints on every partial scroll update.
+func (t *TUI) offsetConvDirtyRows(rows []int) []int {
+	pin := t.convPinRows()
+	if pin == 0 || len(rows) == 0 {
+		return rows
+	}
+	out := make([]int, 0, pin+len(rows))
+	for i := 0; i < pin; i++ {
+		out = append(out, i)
+	}
+	for _, r := range rows {
+		out = append(out, r+pin)
+	}
+	return out
+}
+
 func (t *TUI) pinnedPromptLine(width int) string {
+	if width < 1 {
+		width = 1
+	}
 	idxs := t.scroll.userBlockIndices()
 	if len(idxs) == 0 {
-		return dim + "› (no prompts yet)" + reset
+		return fillWidthBG(bgBlue, dim+"(no prompts yet)"+reset, width)
 	}
 	idx := t.convUserIdx
 	if idx < 0 {
@@ -33,9 +66,27 @@ func (t *TUI) pinnedPromptLine(width int) string {
 	if text == "" {
 		text = "(empty)"
 	}
-	turn := dim + "turn " + itoa(idx+1) + "/" + itoa(len(idxs)) + " · " + reset
-	label := truncatePlain(text, width-18)
-	return fgYellow + bold + "› " + reset + turn + fgCyan + label + reset
+	turn := "turn " + itoa(idx+1) + "/" + itoa(len(idxs))
+	avail := width - visibleWidth(turn) - 2
+	if avail < 1 {
+		avail = 1
+	}
+	prompt := truncatePlain(text, avail)
+	body := bold + fgBlack + turn + reset + bgBlue + "  " + fgCyan + prompt + reset
+	return fillWidthBG(bgBlue, body, width)
+}
+
+// fillWidthBG paints content on a full-width background band (pads with spaces).
+func fillWidthBG(bg, content string, width int) string {
+	pad := width - visibleWidth(content)
+	if pad < 0 {
+		content = truncateToWidth(content, width)
+		pad = width - visibleWidth(content)
+	}
+	if pad < 0 {
+		pad = 0
+	}
+	return bg + content + strings.Repeat(" ", pad) + reset
 }
 
 func (t *TUI) enterConvFocus() {
