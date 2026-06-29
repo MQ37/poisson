@@ -39,6 +39,15 @@ func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 			chunks = append(chunks, fgYellow+formatToolCardBodyLine(chunk, width)+reset)
 		}
 	}
+	if b.meta.ToolDone && !b.meta.Expanded {
+		style := fgGray
+		if b.meta.ToolError != "" {
+			style = fgRed
+		}
+		for _, ln := range toolCardCollapsedResultLines(b, width) {
+			chunks = append(chunks, style+toolCardBodyLine(ln, width)+reset)
+		}
+	}
 	if b.meta.ToolDone && b.meta.Expanded {
 		for _, ln := range toolCardExpandedResultLines(b, width) {
 			style := fgGray
@@ -49,9 +58,6 @@ func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 		}
 	}
 	chunks = append(chunks, fgYellow+toolCardFooter(width)+reset)
-	if b.meta.ToolDone && !b.meta.Expanded {
-		chunks = append(chunks, toolCardResultLine(b, width)+reset)
-	}
 	rows := make([]ScreenRow, len(chunks))
 	for i, chunk := range chunks {
 		rows[i] = ScreenRow{Text: chunk, Tag: RowTag{BlockID: b.id, RowIdx: i}}
@@ -109,37 +115,47 @@ func toolCardBody(toolName string, input []byte, width int) []string {
 	return wrapLine(preview, inner)
 }
 
-func toolCardResultLine(b *Block, width int) string {
+// toolCardCollapsedResultLines returns inner (unboxed) result preview rows shown
+// inside the card before the footer when the tool is done but not expanded.
+func toolCardCollapsedResultLines(b *Block, width int) []string {
 	text := toolResultFullText(b)
 	preview := previewText(text, toolResultCollapsedBytes)
-	inner := width - 8
-	if inner < 10 {
-		inner = width - 4
+	inner := width - 4
+	if inner < 1 {
+		inner = 1
 	}
 	lines := wrapLine(preview, inner)
 	if len(lines) > toolResultCollapsedLines {
 		lines = lines[:toolResultCollapsedLines]
 	}
-	body := strings.Join(lines, " ")
-	var summary string
-	if b.meta.ToolError != "" {
-		summary = "  ✗ " + body
-	} else {
-		summary = "  ✓ " + body
+	if len(lines) == 0 {
+		lines = []string{""}
 	}
+	prefix := "✓ "
+	if b.meta.ToolError != "" {
+		prefix = "✗ "
+	}
+	lines[0] = prefix + strings.TrimSpace(lines[0])
+	for i := 1; i < len(lines); i++ {
+		lines[i] = "  " + strings.TrimSpace(lines[i])
+	}
+	last := len(lines) - 1
+	suffix := ""
 	if b.meta.DurationMs > 0 {
-		summary += fmt.Sprintf(" · %.1fs", float64(b.meta.DurationMs)/1000)
+		suffix = fmt.Sprintf(" · %.1fs", float64(b.meta.DurationMs)/1000)
 	}
 	hint := ""
 	if toolResultNeedsExpand(b) {
-		hint = dim + " · click/Ctrl+E" + reset
+		hint = " · click/Ctrl+E"
 	}
-	avail := width - visibleWidth(hint)
-	if avail < 12 {
-		avail = width
+	avail := inner - visibleWidth(suffix+hint)
+	if avail < 4 {
+		avail = inner
+		suffix = ""
 		hint = ""
 	}
-	return fgGray + truncateToWidth(summary, avail) + hint + reset
+	lines[last] = truncateToWidth(lines[last], avail) + suffix + hint
+	return lines
 }
 
 // appendToolCall adds a tool invocation block.

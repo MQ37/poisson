@@ -39,10 +39,23 @@ func TestToolCardComplete(t *testing.T) {
 	if !b.meta.ToolDone || b.meta.ToolResult != "package main" {
 		t.Fatalf("meta = %+v", b.meta)
 	}
-	rows := b.layoutPlain(50)
+	rows := layoutToolCard(&b, 50, 0)
 	last := stripANSI(rows[len(rows)-1].Text)
-	if !strings.Contains(last, "✓") {
-		t.Fatalf("result %q", last)
+	if !strings.HasPrefix(last, "╰") {
+		t.Fatalf("last row should be footer, got %q", last)
+	}
+	foundResult := false
+	for _, row := range rows {
+		plain := stripANSI(row.Text)
+		if strings.Contains(plain, "✓") && strings.Contains(plain, "package main") {
+			if !strings.HasPrefix(plain, "│") {
+				t.Fatalf("result should be inside box: %q", plain)
+			}
+			foundResult = true
+		}
+	}
+	if !foundResult {
+		t.Fatal("expected boxed result row")
 	}
 }
 
@@ -75,9 +88,56 @@ func TestToolCardExpandHint(t *testing.T) {
 		},
 	}
 	rows := layoutToolCard(&b, 60, 0)
-	last := stripANSI(rows[len(rows)-1].Text)
-	if !strings.Contains(last, "Ctrl+E") {
-		t.Fatalf("expected expand hint: %q", last)
+	foundHint := false
+	for _, row := range rows {
+		plain := stripANSI(row.Text)
+		if strings.Contains(plain, "Ctrl+E") {
+			if !strings.HasPrefix(plain, "│") {
+				t.Fatalf("expand hint should be inside box: %q", plain)
+			}
+			foundHint = true
+		}
+	}
+	if !foundHint {
+		t.Fatal("expected expand hint inside tool card")
+	}
+}
+
+func TestToolCardCollapsedResultInsideBox(t *testing.T) {
+	b := Block{
+		id:   6,
+		kind: blockToolCall,
+		meta: BlockMeta{
+			ToolName:   "bash",
+			ToolDone:   true,
+			ToolResult: `{"stdout":"LONG BASH COMMAND EXTRAVAGANZA","stderr":"","exitCode":0}`,
+		},
+	}
+	rows := layoutToolCard(&b, 60, 0)
+	footerIdx := -1
+	for i, row := range rows {
+		if strings.HasPrefix(stripANSI(row.Text), "╰") {
+			footerIdx = i
+		}
+	}
+	if footerIdx < 1 {
+		t.Fatal("expected footer row")
+	}
+	found := false
+	for i := 1; i < footerIdx; i++ {
+		plain := stripANSI(rows[i].Text)
+		if strings.Contains(plain, "LONG BASH COMMAND") {
+			if !strings.HasPrefix(plain, "│") {
+				t.Fatalf("result outside box at row %d: %q", i, plain)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected collapsed result inside card")
+	}
+	for i := footerIdx + 1; i < len(rows); i++ {
+		t.Fatalf("unexpected row after footer: %q", stripANSI(rows[i].Text))
 	}
 }
 
