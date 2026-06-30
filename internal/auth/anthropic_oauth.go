@@ -171,7 +171,7 @@ func exchangeAnthropicCode(code, verifier, redirectURI string) (*AuthEntry, erro
 		"redirect_uri":  redirectURI,
 		"code_verifier": verifier,
 	}
-	return postTokenRequest(anthropicTokenURL, body)
+	return postTokenRequest(anthropicTokenURL, body, "")
 }
 
 // RefreshAnthropicToken refreshes an expired access token.
@@ -181,11 +181,11 @@ func RefreshAnthropicToken(refreshToken string) (*AuthEntry, error) {
 		"client_id":     anthropicClientID,
 		"refresh_token": refreshToken,
 	}
-	return postTokenRequest(anthropicTokenURL, body)
+	return postTokenRequest(anthropicTokenURL, body, refreshToken)
 }
 
 // postTokenRequest sends a token exchange/refresh request and parses the response.
-func postTokenRequest(tokenURL string, body map[string]string) (*AuthEntry, error) {
+func postTokenRequest(tokenURL string, body map[string]string, keepRefresh string) (*AuthEntry, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -219,10 +219,14 @@ func postTokenRequest(tokenURL string, body map[string]string) (*AuthEntry, erro
 		return nil, fmt.Errorf("decode token response: %w", err)
 	}
 
+	refresh := tokenResp.RefreshToken
+	if refresh == "" {
+		refresh = keepRefresh
+	}
 	return &AuthEntry{
 		Type:    "oauth",
 		Access:  tokenResp.AccessToken,
-		Refresh: tokenResp.RefreshToken,
+		Refresh: refresh,
 		Expires: nowMillis() + int64(tokenResp.ExpiresIn)*1000 - 5*60*1000,
 	}, nil
 }

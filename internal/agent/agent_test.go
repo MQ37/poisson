@@ -310,27 +310,25 @@ func TestShouldCompactAtThreshold(t *testing.T) {
 	}
 }
 
-func TestShouldCompactWithPendingResults(t *testing.T) {
+func TestShouldCompactUsesMessageEstimateWhenLower(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
 	cfg := newTestConfig()
-	cfg.Compaction.Threshold = 0.1
+	cfg.Compaction.Threshold = 0.85
 	agent := NewAgent(s, newFakeProvider(), nil, cfg, sessionID, nil, nil)
 
 	if err := s.RecordAPICall(&store.APICall{
 		SessionID: sessionID, Seq: 1, Model: "test-model",
-		InputTokens: 500, OutputTokens: 10,
+		InputTokens: 7000, OutputTokens: 10,
 	}); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-
-	if agent.ShouldCompact() {
-		t.Errorf("ShouldCompact() = true, want false (500 < 819.2)")
+	if err := s.ApplyCompaction(sessionID, 1, "summary"); err != nil {
+		t.Fatalf("compact: %v", err)
 	}
-
-	agent.pendingResults = []string{strings.Repeat("x", 2000)}
-	if !agent.ShouldCompact() {
-		t.Errorf("ShouldCompact() = false, want true (500 + 500 > 819.2)")
+	used, _ := agent.ContextTokens()
+	if used >= 7000 {
+		t.Fatalf("context after compaction = %d, want << 7000", used)
 	}
 }
 

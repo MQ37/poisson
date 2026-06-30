@@ -34,8 +34,6 @@ func renderHelp() string {
   /resume <id> Resume a session
   /sessions    Session picker
   /search <q>  Search across sessions (no args: find in scrollback)
-  /fork [seq]  Fork the current session
-  /undo        Undo the last turn
   /compact     Compact context now
   /model <m>   Switch provider/model (no args: picker)
   /providers   Provider picker

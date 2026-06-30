@@ -241,6 +241,7 @@ func (t *TUI) resetSessionViewLocked() {
 	t.activeOverlay = nil
 	t.completion = nil
 	t.hydrateScrollbackLocked()
+	t.syncHeaderFromAgentLocked()
 	t.dirty.markFull()
 }
 

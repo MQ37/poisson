@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"time"
+
 	"poisson/internal/provider"
 	"poisson/internal/store"
 )
@@ -22,11 +24,19 @@ func (a *Agent) ContextTokens() (int, int) {
 
 // estimateActiveContextTokens estimates tokens for the next request.
 func (a *Agent) estimateActiveContextTokens() int {
+	estimated := a.estimateMessagesTokens()
 	last, err := a.store.GetLastAPICall(a.sessionID)
-	if err == nil && !last.InputTokensUnknown && last.InputTokens > 0 {
-		return last.InputTokens
+	if err != nil {
+		return estimated
 	}
-	return a.estimateMessagesTokens()
+	if last.InputTokensUnknown || last.InputTokens == 0 {
+		return estimated
+	}
+	// After compaction active messages shrink; trust the lower estimate.
+	if estimated < last.InputTokens {
+		return estimated
+	}
+	return last.InputTokens
 }
 
 func (a *Agent) estimateMessagesTokens() int {
@@ -45,10 +55,12 @@ func (a *Agent) estimateMessagesTokens() int {
 	return total
 }
 
-// ShouldCompact returns true if the estimated token usage for the next
-// request exceeds the configured threshold fraction of the context window.
+// ShouldCompact returns true if estimated context exceeds the threshold.
 func (a *Agent) ShouldCompact() bool {
 	if a.config == nil {
+		return false
+	}
+	if !a.compactBackoffUntil.IsZero() && time.Now().Before(a.compactBackoffUntil) {
 		return false
 	}
 	window := a.ContextWindow()
@@ -60,16 +72,16 @@ func (a *Agent) ShouldCompact() bool {
 		threshold = 0.85
 	}
 
-	estimated := a.estimateActiveContextTokens()
-	for _, text := range a.pendingResults {
-		estimated += a.EstimateTokens(text)
+	estimated := a.estimateMessagesTokens()
+	if last, err := a.store.GetLastAPICall(a.sessionID); err == nil &&
+		!last.InputTokensUnknown && last.InputTokens > estimated {
+		estimated = last.InputTokens
 	}
 
 	return float64(estimated) >= threshold*float64(window)
 }
 
 // EstimateTokens returns a rough token count for a text string: len(text)/4.
-// This is only used for compaction triggering, never stored.
 func (a *Agent) EstimateTokens(text string) int {
 	return len(text) / 4
 }

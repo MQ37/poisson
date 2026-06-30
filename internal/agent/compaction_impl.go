@@ -190,8 +190,10 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 		log.Printf("warning: record compaction: %v", err)
 	}
 
-	// 9. Clear pending results.
+	// 9. Clear pending results and compaction backoff.
 	a.pendingResults = nil
+	a.compactBackoffUntil = time.Time{}
+	a.UpdateStatus()
 
 	if notifyUI {
 		a.sendEvent(OutputEvent{Type: OutputCompacted})

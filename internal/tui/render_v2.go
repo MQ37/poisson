@@ -70,7 +70,7 @@ func (t *TUI) paint(snap dirtySnapshot) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.status.Model = modelLabel(t.agent)
+	t.syncHeaderFromAgentLocked()
 	if t.status.Branch == "" {
 		t.status.Branch = gitBranch(t.status.Cwd)
 	}

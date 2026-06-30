@@ -15,10 +15,8 @@ type BuildOptions struct {
 	Store       *store.Store
 	Sandbox     bool
 	ApprovalFn  ApprovalFn
-	SubOutput      SubagentOutput
-	SubApproval    SubagentApproval
-	SubProvider    string
-	SubModel       string
+	SubOutput   SubagentOutput
+	SubApproval SubagentApproval
 	// Tools is a comma-separated allowlist for child mode. Empty registers the
 	// full parent tool set.
 	Tools string
@@ -82,8 +80,19 @@ func BuildRegistry(opts BuildOptions) *Registry {
 		reg.Register(NewRecallTool(opts.Store))
 	}
 	if opts.Store != nil && opts.SubOutput != nil && opts.SubApproval != nil {
-		reg.Register(NewSubagentTool(opts.Cwd, opts.SubProvider, opts.SubModel, opts.Store, opts.SubOutput, opts.SubApproval))
+		reg.Register(NewSubagentTool(opts.Cwd, opts.Store, opts.SubOutput, opts.SubApproval))
 	}
 	reg.Register(NewExaSearchTool())
 	return reg
+}
+
+// BindSubagentRuntime wires live provider/model resolvers on the subagent tool.
+func BindSubagentRuntime(reg *Registry, providerFn, modelFn func() string) {
+	t, ok := reg.Get("subagent")
+	if !ok {
+		return
+	}
+	if st, ok := t.(*SubagentTool); ok {
+		st.SetRuntime(providerFn, modelFn)
+	}
 }

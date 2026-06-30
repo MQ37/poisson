@@ -160,115 +160,6 @@ func cmdSearch(h commandHost, args []string) error {
 	return nil
 }
 
-// cmdFork forks the current session up to a given sequence.
-func cmdFork(h commandHost, args []string) error {
-	a := h.Agent()
-	s := a.Store()
-	srcID := h.SessionID()
-	if len(args) == 0 {
-		return forkFromLatest(h)
-	}
-	var upToSeq int
-	if n, err := fmt.Sscanf(args[0], "%d", &upToSeq); n != 1 || err != nil || upToSeq < 0 {
-		h.Out(styleSystem, "usage: /fork [message-seq]")
-		return nil
-	}
-	sess, err := s.GetSession(srcID)
-	if err != nil {
-		h.Out(styleError, "error: cannot get current session")
-		return nil
-	}
-	newID := store.NewSessionID()
-	forkPoint := args[0]
-	if msgID, err := s.MessageIDAtSeq(srcID, upToSeq); err == nil && msgID != "" {
-		forkPoint = msgID
-	}
-	if err := s.CreateSession(&store.Session{
-		ID:        newID,
-		ParentID:  &srcID,
-		ForkPoint: &forkPoint,
-		Cwd:       sess.Cwd,
-		Provider:  sess.Provider,
-		Model:     sess.Model,
-		CreatedAt: time.Now().Unix(),
-		UpdatedAt: time.Now().Unix(),
-	}); err != nil {
-		h.Out(styleError, "error creating fork: "+err.Error())
-		return nil
-	}
-	if err := s.CloneMessages(srcID, upToSeq, newID); err != nil {
-		h.Out(styleError, "error cloning messages: "+err.Error())
-		return nil
-	}
-	copyForkCompactionSummary(s, srcID, upToSeq, newID, sess)
-	newSess, _ := s.GetSession(newID)
-	if !switchAgentToSession(h, newSess) {
-		return nil
-	}
-	h.Out(styleSystem, fmt.Sprintf("forked to new session: %s (%s/%s)", newID, newSess.Provider, newSess.Model))
-	return nil
-}
-
-// forkFromLatest forks up to the most recent message.
-func forkFromLatest(h commandHost) error {
-	a := h.Agent()
-	s := a.Store()
-	srcID := h.SessionID()
-	msgs, err := s.GetMessages(srcID)
-	if err != nil {
-		h.Out(styleError, "error getting messages")
-		return nil
-	}
-	if len(msgs) == 0 {
-		h.Out(styleSystem, "nothing to fork (session is empty)")
-		return nil
-	}
-	lastSeq := msgs[len(msgs)-1].Seq
-	newID := store.NewSessionID()
-	sess, err := s.GetSession(srcID)
-	if err != nil {
-		h.Out(styleError, "error getting current session")
-		return nil
-	}
-	if err := s.CreateSession(&store.Session{
-		ID:        newID,
-		ParentID:  &srcID,
-		ForkPoint: &msgs[len(msgs)-1].ID,
-		Cwd:       sess.Cwd,
-		Provider:  sess.Provider,
-		Model:     sess.Model,
-		CreatedAt: time.Now().Unix(),
-		UpdatedAt: time.Now().Unix(),
-	}); err != nil {
-		h.Out(styleError, "error creating fork: "+err.Error())
-		return nil
-	}
-	if err := s.CloneMessages(srcID, lastSeq, newID); err != nil {
-		h.Out(styleError, "error cloning messages: "+err.Error())
-		return nil
-	}
-	copyForkCompactionSummary(s, srcID, lastSeq, newID, sess)
-	newSess, _ := s.GetSession(newID)
-	if !switchAgentToSession(h, newSess) {
-		return nil
-	}
-	h.Out(styleSystem, fmt.Sprintf("forked to new session: %s (%s/%s)", newID, newSess.Provider, newSess.Model))
-	return nil
-}
-
-func copyForkCompactionSummary(s *store.Store, srcID string, upToSeq int, newID string, sess *store.Session) {
-	if sess == nil || sess.CompactionSummary == nil || strings.TrimSpace(*sess.CompactionSummary) == "" {
-		return
-	}
-	active, err := s.GetMessages(srcID)
-	if err != nil || len(active) == 0 {
-		return
-	}
-	if upToSeq >= active[len(active)-1].Seq {
-		s.SetCompactionSummary(newID, *sess.CompactionSummary)
-	}
-}
-
 func switchAgentToSession(h commandHost, sess *store.Session) bool {
 	if th, ok := h.(tuiCmdHost); ok && th.t.sessionBusyLocked() {
 		h.Out(styleError, "cannot switch session while agent is running or compacting")
@@ -289,61 +180,12 @@ func switchAgentToSession(h commandHost, sess *store.Session) bool {
 	a.SetModel(sess.Model)
 	h.SetSessionID(sess.ID)
 	resetHostSessionView(h)
-	a.UpdateStatus()
 	return true
 }
 
 func resetHostSessionView(h commandHost) {
 	if th, ok := h.(tuiCmdHost); ok {
 		th.t.resetSessionViewLocked()
-	}
-}
-
-// cmdUndo soft-deletes the last user turn.
-func cmdUndo(h commandHost) error {
-	a := h.Agent()
-	s := a.Store()
-	sid := h.SessionID()
-	msgs, err := s.GetMessages(sid)
-	if err != nil {
-		h.Out(styleError, "error: "+err.Error())
-		return nil
-	}
-	var lastUserSeq int = -1
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "user" {
-			lastUserSeq = msgs[i].Seq
-			break
-		}
-	}
-	if lastUserSeq == -1 {
-		h.Out(styleSystem, "no user message to undo")
-		return nil
-	}
-	sess, _ := s.GetSession(sid)
-	count := 0
-	for _, m := range msgs {
-		if m.Seq >= lastUserSeq {
-			count++
-		}
-	}
-	if err := s.SoftDeleteMessages(sid, lastUserSeq); err != nil {
-		h.Out(styleError, "error undoing: "+err.Error())
-		return nil
-	}
-	if sess != nil && sess.CompactionSummary != nil {
-		if remaining, _ := s.GetMessages(sid); len(remaining) == 0 {
-			s.ClearCompactionSummary(sid)
-		}
-	}
-	refreshHostScrollback(h)
-	h.Out(styleSystem, fmt.Sprintf("undid last turn (%d messages soft-deleted)", count))
-	return nil
-}
-
-func refreshHostScrollback(h commandHost) {
-	if th, ok := h.(tuiCmdHost); ok {
-		th.t.refreshScrollbackFromStoreLocked()
 	}
 }
 
@@ -372,6 +214,7 @@ func cmdModel(h commandHost, args []string) error {
 			return nil
 		}
 		a.SetModel(model)
+		a.ReloadConfigDependentTools()
 		h.Out(styleSystem, fmt.Sprintf("model: %s/%s", provName, model))
 		return nil
 	}
@@ -390,6 +233,7 @@ func cmdModel(h commandHost, args []string) error {
 		a.SetProvider(newProv)
 	}
 	a.SetModel(modelName)
+	a.ReloadConfigDependentTools()
 	h.Out(styleSystem, fmt.Sprintf("model: %s/%s", provName, modelName))
 	return nil
 }

@@ -22,22 +22,26 @@ type SubagentApproval func(command, description, workdir, agentName string) bool
 type SubagentTool struct {
 	cwd        string
 	store      *store.Store
-	provider   string
-	model      string
+	providerFn func() string
+	modelFn    func() string
 	outputFn   SubagentOutput
 	approvalFn SubagentApproval
 }
 
 // NewSubagentTool creates a subagent tool.
-func NewSubagentTool(cwd, provider, model string, st *store.Store, outputFn SubagentOutput, approvalFn SubagentApproval) *SubagentTool {
+func NewSubagentTool(cwd string, st *store.Store, outputFn SubagentOutput, approvalFn SubagentApproval) *SubagentTool {
 	return &SubagentTool{
 		cwd:        cwd,
 		store:      st,
-		provider:   provider,
-		model:      model,
 		outputFn:   outputFn,
 		approvalFn: approvalFn,
 	}
+}
+
+// SetRuntime supplies live provider/model resolvers (called at spawn time).
+func (t *SubagentTool) SetRuntime(providerFn, modelFn func() string) {
+	t.providerFn = providerFn
+	t.modelFn = modelFn
 }
 
 func (t *SubagentTool) Name() string { return "subagent" }
@@ -76,13 +80,16 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 
 	// Create a child session in the store.
 	childSessionID := fmt.Sprintf("sub-%d", time.Now().UnixNano())
-	prov := t.provider
-	model := t.model
-	if prov == "" {
-		prov = "ollama"
+	prov, model := "ollama", "glm-5.2:cloud"
+	if t.providerFn != nil {
+		if p := t.providerFn(); p != "" {
+			prov = p
+		}
 	}
-	if model == "" {
-		model = "glm-5.2:cloud"
+	if t.modelFn != nil {
+		if m := t.modelFn(); m != "" {
+			model = m
+		}
 	}
 	t.store.CreateSession(&store.Session{
 		ID:         childSessionID,

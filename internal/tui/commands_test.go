@@ -222,7 +222,6 @@ func TestCmdSessions(t *testing.T) {
 func TestCmdSessionsEmpty(t *testing.T) {
 	_, a, sessionID := newTestStoreAndAgent(t)
 	tui := newTUIWithAgent(a, sessionID)
-	cmdUndo(cmdHost(tui))
 	dir := testutil.TempDir(t)
 	dbPath := filepath.Join(dir, "empty.db")
 	s, err := store.Open(dbPath)
@@ -273,95 +272,6 @@ func TestCmdSearchNoQuery(t *testing.T) {
 	cmdSearch(cmdHost(tui), nil)
 	if out := testScrollOutput(tui); !strings.Contains(out, "usage") {
 		t.Errorf("expected usage, got %q", out)
-	}
-}
-
-// --- /fork ---
-
-func TestCmdForkLatest(t *testing.T) {
-	s, a, sessionID := newTestStoreAndAgent(t)
-	tui := newTUIWithAgent(a, sessionID)
-
-	s.AppendMessage(&store.Message{
-		SessionID: sessionID,
-		Role:      "user",
-		Content:   `{"text":"fork me"}`,
-	})
-
-	cmdFork(cmdHost(tui), nil)
-	out := testScrollOutput(tui)
-	if !strings.Contains(out, "forked to new session") {
-		t.Errorf("expected fork message, got %q", out)
-	}
-	if tui.sessionID == sessionID {
-		t.Error("session should have switched")
-	}
-	forkedMsgs, err := s.GetMessages(tui.sessionID)
-	if err != nil {
-		t.Fatalf("get forked messages: %v", err)
-	}
-	if len(forkedMsgs) == 0 {
-		t.Error("forked session should have messages")
-	}
-}
-
-func TestCmdForkEmptySession(t *testing.T) {
-	_, a, sessionID := newTestStoreAndAgent(t)
-	tui := newTUIWithAgent(a, sessionID)
-
-	cmdFork(cmdHost(tui), nil)
-	if out := testScrollOutput(tui); !strings.Contains(out, "nothing to fork") {
-		t.Errorf("expected empty fork message, got %q", out)
-	}
-}
-
-func TestCmdForkRejectsInvalidSeq(t *testing.T) {
-	_, a, sessionID := newTestStoreAndAgent(t)
-	tui := newTUIWithAgent(a, sessionID)
-
-	cmdFork(cmdHost(tui), []string{"abc"})
-	if out := testScrollOutput(tui); !strings.Contains(out, "usage") {
-		t.Fatalf("expected usage, got %q", out)
-	}
-	if tui.sessionID != sessionID {
-		t.Fatalf("session changed on invalid fork: %q", tui.sessionID)
-	}
-}
-
-// --- /undo ---
-
-func TestCmdUndo(t *testing.T) {
-	s, a, sessionID := newTestStoreAndAgent(t)
-	tui := newTUIWithAgent(a, sessionID)
-
-	s.AppendMessage(&store.Message{SessionID: sessionID, Role: "user", Content: `{"text":"hi"}`})
-	s.AppendMessage(&store.Message{SessionID: sessionID, Role: "assistant", Content: `{"text":"hello"}`})
-	tui.scroll.append(StyledLine{Style: styleUser, Text: "hi"})
-	tui.scroll.append(StyledLine{Style: styleAssistant, Text: "hello"})
-
-	cmdUndo(cmdHost(tui))
-	out := testScrollOutput(tui)
-	if !strings.Contains(out, "undid last turn") {
-		t.Errorf("expected undo message, got %q", out)
-	}
-	if strings.Contains(out, "hello") {
-		t.Errorf("undo should trim assistant reply from scrollback, got %q", out)
-	}
-	msgs, _ := s.GetMessages(sessionID)
-	if len(msgs) != 0 {
-		t.Errorf("expected messages soft-deleted, got %d", len(msgs))
-	}
-}
-
-func TestCmdUndoNoUserMessage(t *testing.T) {
-	s, a, sessionID := newTestStoreAndAgent(t)
-	tui := newTUIWithAgent(a, sessionID)
-
-	s.AppendMessage(&store.Message{SessionID: sessionID, Role: "assistant", Content: `{"text":"only assistant"}`})
-
-	cmdUndo(cmdHost(tui))
-	if out := testScrollOutput(tui); !strings.Contains(out, "no user message") {
-		t.Errorf("expected no user message message, got %q", out)
 	}
 }
 

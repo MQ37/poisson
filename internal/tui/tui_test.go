@@ -79,7 +79,7 @@ func TestMatchSlash(t *testing.T) {
 		partial string
 		want    []string
 	}{
-		{"/", []string{"/quit", "/clear", "/help", "/name", "/new", "/resume", "/sessions", "/search", "/fork", "/undo", "/compact", "/model", "/effort", "/providers", "/reload", "/cost", "/btw"}},
+		{"/", []string{"/quit", "/clear", "/help", "/name", "/new", "/resume", "/sessions", "/search", "/compact", "/model", "/effort", "/providers", "/reload", "/cost", "/btw"}},
 		{"/m", []string{"/model"}},
 		{"/mo", []string{"/model"}},
 		{"/mod", []string{"/model"}},

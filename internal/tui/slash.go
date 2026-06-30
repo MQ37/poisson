@@ -67,20 +67,6 @@ func (t *TUI) handleSlash(cmd string) error {
 			return nil
 		}
 		return cmdSearch(h, parts[1:])
-	case "/fork":
-		if t.sessionBusyLocked() {
-			t.scroll.appendRaw(styleSystem, "cannot fork while agent is running or compacting")
-			t.markScrollDirty()
-			return nil
-		}
-		return cmdFork(h, parts[1:])
-	case "/undo":
-		if t.sessionBusyLocked() {
-			t.scroll.appendRaw(styleSystem, "cannot undo while agent is running or compacting")
-			t.markScrollDirty()
-			return nil
-		}
-		return cmdUndo(h)
 	case "/compact":
 		if t.sessionBusyLocked() {
 			t.scroll.appendRaw(styleSystem, "cannot compact while agent is running or compacting")
@@ -106,6 +92,9 @@ func (t *TUI) handleSlash(cmd string) error {
 			}
 			t.clearScrollbackKeepIntroLocked()
 			t.hydrateScrollbackLocked()
+			t.agent.UpdateStatus()
+			t.syncHeaderFromAgentLocked()
+			t.dirty.markStatus()
 			t.markFullDirty()
 		}()
 		return nil

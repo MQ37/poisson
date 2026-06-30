@@ -49,7 +49,7 @@ func (c *completion) reset() { c.idx = -1 }
 // commands.go.
 var slashCommands = []string{
 	"/quit", "/clear", "/help", "/name", "/new", "/resume", "/sessions",
-	"/search", "/fork", "/undo", "/compact", "/model", "/effort",
+	"/search", "/compact", "/model", "/effort",
 	"/providers", "/reload", "/cost", "/btw",
 }
 

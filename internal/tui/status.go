@@ -11,6 +11,7 @@ import (
 // of the split-screen TUI. It is updated from OutputStatus events.
 type StatusSnapshot struct {
 	SessionID      string
+	Title          string
 	Cwd            string
 	Branch         string
 	Model          string
@@ -51,6 +52,10 @@ func (s StatusSnapshot) renderHeaderLeft() string {
 	cwd := shortenPath(s.Cwd, 36)
 	if cwd == "" {
 		cwd = "."
+	}
+	if s.Title != "" {
+		title := shortenPath(s.Title, 28)
+		return dim + " " + fgBlue + title + dim + " · " + reset + fgBlue + cwd + reset
 	}
 	return dim + " " + fgBlue + cwd + reset
 }

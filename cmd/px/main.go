@@ -126,12 +126,11 @@ func runREPL(noSkills bool) {
 		ApprovalFn:  approvalFn,
 		SubOutput:   subOutputFn,
 		SubApproval: subApprovalFn,
-		SubProvider: provName,
-		SubModel:    model,
 	})
 
 	// Set up agent.
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
+	tools.BindSubagentRuntime(reg, func() string { return a.Provider().ID() }, func() string { return a.Model() })
 
 	var skillList []skills.Skill
 	if !noSkills {
@@ -390,9 +389,8 @@ func runChildMode() {
 	}
 
 	sandbox := os.Getenv("POISSON_SANDBOX") == "1"
+	var approvalBroker childApprovalBroker
 
-	// Approval: write to stdout, read from stdin. Must be defined before tool
-	// registration so bash gets the callback (not nil).
 	approvalFn := func(command, description, workdir string) bool {
 		if sandbox {
 			return true
@@ -404,28 +402,7 @@ func runChildMode() {
 			"cwd":         workdir,
 			"agent":       os.Getenv("POISSON_SUBAGENT_NAME"),
 		})
-		type approvalResp struct {
-			Type     string `json:"type"`
-			Approved bool   `json:"approved"`
-		}
-		ch := make(chan bool, 1)
-		go func() {
-			scanner := bufioNewScanner(os.Stdin)
-			if scanner.Scan() {
-				var resp approvalResp
-				if err := json.Unmarshal(scanner.Bytes(), &resp); err == nil {
-					ch <- resp.Approved
-					return
-				}
-			}
-			ch <- false
-		}()
-		select {
-		case approved := <-ch:
-			return approved
-		case <-time.After(30 * time.Second):
-			return false
-		}
+		return approvalBroker.wait(30 * time.Second)
 	}
 
 	reg := tools.BuildRegistry(tools.BuildOptions{
@@ -441,19 +418,21 @@ func runChildMode() {
 	a.SetModel(childModel)
 	a.SetSkills(false, nil)
 
-	// Drain outputChan and write to stdout as JSON lines.
+	var toolCount int
+	var outputText strings.Builder
 	go func() {
 		for ev := range outputChan {
 			switch ev.Type {
 			case agent.OutputText:
+				outputText.WriteString(ev.Text)
 				writeChildEvent(map[string]interface{}{"type": "text", "text": ev.Text})
 			case agent.OutputToolStart:
+				toolCount++
 				writeChildEvent(map[string]interface{}{"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput})
 			}
 		}
 	}()
 
-	// Run the prompt.
 	success := true
 	if err := a.Prompt(task); err != nil {
 		writeChildEvent(map[string]interface{}{"type": "error", "error": err.Error()})
@@ -461,11 +440,18 @@ func runChildMode() {
 	}
 	close(outputChan)
 
-	// Write done event.
-	writeChildEvent(map[string]interface{}{
-		"type":    "done",
-		"success": success,
-	})
+	ctxUsed, _ := a.ContextTokens()
+	done := map[string]interface{}{
+		"type":          "done",
+		"success":       success,
+		"toolCount":     toolCount,
+		"turns":         1,
+		"contextTokens": ctxUsed,
+	}
+	if outputText.Len() > 0 {
+		done["text"] = outputText.String()
+	}
+	writeChildEvent(done)
 }
 
 func writeChildEvent(event map[string]interface{}) {

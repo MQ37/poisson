@@ -76,7 +76,7 @@ func loginXAIDeviceCode() (*AuthEntry, error) {
 		}
 
 		if resp.StatusCode == 200 {
-			entry, parseErr := parseXAITokenResponse(resp.Body)
+			entry, parseErr := parseXAITokenResponse(resp.Body, "")
 			resp.Body.Close()
 			return entry, parseErr
 		}
@@ -124,11 +124,11 @@ func RefreshXAIToken(refreshToken string) (*AuthEntry, error) {
 		return nil, fmt.Errorf("refresh HTTP %d: %s", resp.StatusCode, string(raw))
 	}
 
-	return parseXAITokenResponse(resp.Body)
+	return parseXAITokenResponse(resp.Body, refreshToken)
 }
 
 // parseXAITokenResponse parses the token response.
-func parseXAITokenResponse(body io.Reader) (*AuthEntry, error) {
+func parseXAITokenResponse(body io.Reader, keepRefresh string) (*AuthEntry, error) {
 	var tokenResp struct {
 		AccessToken  string `json:"access_token"`
 		RefreshToken string `json:"refresh_token"`
@@ -137,10 +137,14 @@ func parseXAITokenResponse(body io.Reader) (*AuthEntry, error) {
 	if err := json.NewDecoder(body).Decode(&tokenResp); err != nil {
 		return nil, fmt.Errorf("decode token response: %w", err)
 	}
+	refresh := tokenResp.RefreshToken
+	if refresh == "" {
+		refresh = keepRefresh
+	}
 	return &AuthEntry{
 		Type:    "oauth",
 		Access:  tokenResp.AccessToken,
-		Refresh: tokenResp.RefreshToken,
+		Refresh: refresh,
 		Expires: nowMillis() + int64(tokenResp.ExpiresIn)*1000 - 5*60*1000,
 	}, nil
 }

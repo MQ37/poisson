@@ -77,9 +77,11 @@ type Agent struct {
 	sessionToolCalls  int
 	sessionToolErrors int
 
-	// pendingResults holds the text of tool results appended in the current
-	// iteration, used by ShouldCompact to estimate new tokens.
+	// pendingResults holds in-flight tool result text before persistence (legacy).
 	pendingResults []string
+
+	// compactBackoffUntil suppresses auto-compaction retries after a failure.
+	compactBackoffUntil time.Time
 
 	skillsEnabled bool
 	skills        []skills.Skill
@@ -210,7 +212,7 @@ func (a *Agent) ReloadConfigDependentTools() {
 	if a.tools == nil || a.config == nil {
 		return
 	}
-	if a.config.Provider.Default == "ollama" && tools.IsOllamaReachable(a.config) {
+	if a.provider.ID() == "ollama" && tools.IsOllamaReachable(a.config) {
 		a.tools.Register(tools.NewFetchTool(a.config.Ollama.BaseURL))
 	} else {
 		a.tools.Unregister("fetch")
@@ -519,10 +521,11 @@ func (a *Agent) runTurn(ctx context.Context) error {
 
 		a.UpdateStatus()
 
-		// CHECK COMPACTION
+		a.pendingResults = nil
 		if a.shouldCompact() {
 			if err := a.compact(ctx, true); err != nil {
 				log.Printf("warning: auto-compaction failed: %v", err)
+				a.compactBackoffUntil = time.Now().Add(90 * time.Second)
 			}
 		}
 
