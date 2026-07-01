@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -27,14 +29,24 @@ func (t *TUI) Run() error {
 
 	// Restore terminal on any exit path — including panic — so the user's
 	// shell isn't left in raw alt-screen with kitty keyboard enabled.
-	defer func() {
-		t.stopped.Store(true)
-		t.writeRaw(mouseOff + kittyKbOff + bracketedOff + showCursor + altScreenOff)
-		_ = term.Restore(t.fd, t.oldState)
-	}()
+	defer t.restoreTerminal()
 
 	// Lifecycle channel. render/input goroutines exit when this is closed.
 	stop := make(chan struct{})
+
+	// SIGTERM/SIGHUP (kill, ssh disconnect) bypass the defer, so restore the
+	// terminal explicitly before exiting — otherwise the shell is left raw.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		select {
+		case <-sigCh:
+			t.restoreTerminal()
+			os.Exit(1)
+		case <-stop:
+			signal.Stop(sigCh)
+		}
+	}()
 	readCh := make(chan []byte, 8)
 	readErr := make(chan error, 1)
 
@@ -176,6 +188,14 @@ func (t *TUI) Run() error {
 			t.mu.Unlock()
 		}
 	}
+}
+
+// restoreTerminal reverts raw mode and all terminal features. Safe to call
+// more than once — the deferred cleanup and the signal handler may both run.
+func (t *TUI) restoreTerminal() {
+	t.stopped.Store(true)
+	t.writeRaw(mouseOff + kittyKbOff + bracketedOff + showCursor + altScreenOff)
+	_ = term.Restore(t.fd, t.oldState)
 }
 
 // approvalDenyAndMaybeCancelRun rejects the pending approval and cancels an
