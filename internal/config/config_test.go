@@ -130,9 +130,6 @@ cc_entrypoint = "custom"
 cch_salt = "abcdef"
 cch_positions = [1, 2, 3, 99]
 
-[guard]
-extra_safe = ["make", "cargo build", "just"]
-
 [tui]
 theme = "light"
 show_tokens = false
@@ -183,16 +180,6 @@ show_cost = false
 		for i, p := range wantPos {
 			if cfg.Stealth.CCHPositions[i] != p {
 				t.Errorf("CCHPositions[%d] = %d", i, cfg.Stealth.CCHPositions[i])
-			}
-		}
-	}
-	wantSafe := []string{"make", "cargo build", "just"}
-	if len(cfg.Guard.ExtraSafe) != len(wantSafe) {
-		t.Errorf("ExtraSafe = %v, want %v", cfg.Guard.ExtraSafe, wantSafe)
-	} else {
-		for i, s := range wantSafe {
-			if cfg.Guard.ExtraSafe[i] != s {
-				t.Errorf("ExtraSafe[%d] = %q, want %q", i, cfg.Guard.ExtraSafe[i], s)
 			}
 		}
 	}

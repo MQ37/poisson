@@ -52,11 +52,6 @@ type StealthConfig struct {
 	CCHPositions []int
 }
 
-// GuardConfig extends the bash guard safe-list.
-type GuardConfig struct {
-	ExtraSafe []string
-}
-
 // TUIConfig controls REPL display.
 type TUIConfig struct {
 	Theme      string // dark | light
@@ -72,7 +67,6 @@ type Config struct {
 	Ollama     OllamaConfig
 	Compaction CompactionConfig
 	Stealth    StealthConfig
-	Guard      GuardConfig
 	TUI        TUIConfig
 	// Pricing is keyed [provider][model] → Pricing.
 	Pricing map[string]map[string]Pricing
@@ -118,9 +112,6 @@ func defaultConfig() *Config {
 			CCEntrypoint: "sdk-cli",
 			CCHSalt:      "59cf53e54c78",
 			CCHPositions: []int{4, 7, 20},
-		},
-		Guard: GuardConfig{
-			ExtraSafe: nil,
 		},
 		TUI: TUIConfig{
 			Theme:      "dark",
@@ -180,10 +171,6 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # cc_entrypoint = "sdk-cli"
 # cch_salt = "59cf53e54c78"
 # cch_positions = [4, 7, 20]     # character positions sampled from first user msg
-
-[guard]
-# Commands in addition to the built-in safe-list that auto-allow.
-# extra_safe = ["make", "cargo build"]
 
 [tui]
 # theme = "dark"                 # dark | light
@@ -304,14 +291,6 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 			return nil, fmt.Errorf("stealth.cch_positions: %w", err)
 		}
 		cfg.Stealth.CCHPositions = pos
-	}
-
-	if v, ok := lookup(m, "guard", "extra_safe"); ok {
-		extra, err := asStringArray(v)
-		if err != nil {
-			return nil, fmt.Errorf("guard.extra_safe: %w", err)
-		}
-		cfg.Guard.ExtraSafe = extra
 	}
 
 	if v, ok := lookup(m, "tui", "theme"); ok {
@@ -451,18 +430,3 @@ func asIntArray(v interface{}) ([]int, error) {
 	return out, nil
 }
 
-func asStringArray(v interface{}) ([]string, error) {
-	arr, ok := v.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("expected array, got %T", v)
-	}
-	out := make([]string, 0, len(arr))
-	for _, e := range arr {
-		s, ok := e.(string)
-		if !ok {
-			return nil, fmt.Errorf("expected string in array, got %T", e)
-		}
-		out = append(out, s)
-	}
-	return out, nil
-}

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"poisson/internal/config"
-	"poisson/internal/guard"
 	"poisson/internal/pricing"
 	"poisson/internal/project"
 	"poisson/internal/provider"
@@ -111,9 +110,6 @@ func NewAgent(
 		approvalFn: approvalFn,
 		model:      defaultModel(p, cfg),
 	}
-	if cfg != nil {
-		guard.SetExtraSafe(cfg.Guard.ExtraSafe)
-	}
 	return a
 }
 
@@ -161,9 +157,6 @@ func (a *Agent) SetModel(model string) {
 // SetConfig swaps the config (for /reload).
 func (a *Agent) SetConfig(cfg *config.Config) {
 	a.config = cfg
-	if cfg != nil {
-		guard.SetExtraSafe(cfg.Guard.ExtraSafe)
-	}
 }
 
 // SetSkills configures skill discovery for the system prompt and skill tool.
