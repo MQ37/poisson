@@ -30,8 +30,9 @@ type BlockMeta struct {
 	ToolDone   bool
 	Expanded   bool // tool result body expanded (PR-16)
 	ToolScroll int  // scroll offset inside expanded result
-	Collapsed  bool
-	Streaming  bool // true while assistant/thinking/tool stream is in flight
+	Collapsed        bool
+	ThinkingRedacted bool
+	Streaming        bool // true while assistant/thinking/tool stream is in flight
 	StartedAt  time.Time
 	DurationMs int64
 }

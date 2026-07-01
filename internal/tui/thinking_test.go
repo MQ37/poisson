@@ -45,18 +45,41 @@ func TestThinkingFinalizeMultilineSingleBlock(t *testing.T) {
 	}
 }
 
-func TestThinkingToggleInView(t *testing.T) {
+func TestThinkingToggleLast(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendBlock(blockThinking, "long thought")
 	s.finalizeThinking()
 	if !s.blocks[0].meta.Collapsed {
 		t.Fatal("expected collapsed")
 	}
-	if !s.toggleThinkingInView(5, 40) {
+	if !s.toggleLastThinking() {
 		t.Fatal("toggle failed")
 	}
 	if s.blocks[0].meta.Collapsed {
 		t.Fatal("expected expanded after toggle")
+	}
+}
+
+func TestThinkingToggleLastWhileStreaming(t *testing.T) {
+	s := newScrollback(1024)
+	s.appendBlock(blockThinking, "still going")
+	if !s.toggleLastThinking() {
+		t.Fatal("toggle failed while streaming")
+	}
+	if !s.blocks[0].meta.Collapsed || !s.blocks[0].meta.Streaming {
+		t.Fatalf("meta = %+v", s.blocks[0].meta)
+	}
+}
+
+func TestThinkingRedactedCollapsed(t *testing.T) {
+	b := Block{
+		id:   3,
+		kind: blockThinking,
+		meta: BlockMeta{ThinkingRedacted: true, Collapsed: true},
+	}
+	rows := layoutThinking(&b, 40, 0)
+	if len(rows) != 1 || !strings.Contains(stripANSI(rows[0].Text), "redacted") {
+		t.Fatalf("got %q", rows[0].Text)
 	}
 }
 

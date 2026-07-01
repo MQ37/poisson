@@ -82,7 +82,14 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		t.scroll.finalizeThinking()
 		t.scroll.append(StyledLine{Style: styleAssistant, Text: ev.Text})
 	case agent.OutputThinking:
-		t.scroll.append(StyledLine{Style: styleThinking, Text: ev.Text})
+		if ev.ThinkingRedacted {
+			t.scroll.appendThinkingRedacted()
+		} else {
+			t.scroll.append(StyledLine{Style: styleThinking, Text: ev.Text})
+		}
+		if t.scroll.pinned() {
+			t.scroll.scrollToBottom()
+		}
 	case agent.OutputToolStart:
 		t.scroll.finalizeThinking()
 		id := t.nextToolID
@@ -98,7 +105,10 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 			t.scroll.appendRaw(styleCompacting, "  compacting context...")
 		}
 	case agent.OutputCompacted:
-		t.refreshScrollbackFromStoreLocked()
+		t.appendCompactionNoticeLocked(ev.CompactionTokensBefore, ev.CompactionTokensAfter)
+		t.agent.UpdateStatus()
+		t.syncHeaderFromAgentLocked()
+		t.dirty.markStatus()
 	case agent.OutputStatus:
 	}
 }

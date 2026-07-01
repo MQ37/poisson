@@ -1,6 +1,9 @@
 package store
 
-import "fmt"
+import (
+	"database/sql"
+	"fmt"
+)
 
 // Compaction is a record of a compaction event.
 type Compaction struct {
@@ -25,6 +28,27 @@ func (s *Store) RecordCompaction(c *Compaction) error {
 		return fmt.Errorf("record compaction: %w", err)
 	}
 	return nil
+}
+
+// GetLastCompaction returns the most recent compaction record for a session.
+func (s *Store) GetLastCompaction(sessionID string) (*Compaction, error) {
+	var c Compaction
+	var messageID sql.NullString
+	err := s.db.QueryRow(`SELECT id, session_id, message_id, summary, tokens_before, tokens_after, cost, created_at
+		FROM compactions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`, sessionID).
+		Scan(&c.ID, &c.SessionID, &messageID, &c.Summary,
+			&c.TokensBefore, &c.TokensAfter, &c.Cost, &c.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get last compaction: %w", err)
+	}
+	if messageID.Valid {
+		v := messageID.String
+		c.MessageID = &v
+	}
+	return &c, nil
 }
 
 // nilIfEmpty returns nil for a *string that's empty or nil.

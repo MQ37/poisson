@@ -101,7 +101,7 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		}
 	}
 
-	if !t.completion.empty() && k.Kind == KeyCtrl && !k.isCtrlC() {
+	if !t.completion.empty() && k.Kind == KeyCtrl && !k.isCtrlC() && k.Byte != 20 {
 		t.flashCompletionHintLocked()
 		return false, nil
 	}
@@ -189,16 +189,16 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		return false, nil
 	}
 
-	viewH := t.scrollRows
-	if t.focusRegion == focusConv {
-		viewH = t.convScrollRows()
-	}
-
 	if k.Kind == KeyCtrl && k.Byte == 20 {
-		if t.scroll.toggleThinkingInView(viewH, t.contentWidth()) {
+		if t.scroll.toggleLastThinking() {
 			t.markScrollDirty()
 		}
 		return false, nil
+	}
+
+	viewH := t.scrollRows
+	if t.focusRegion == focusConv {
+		viewH = t.convScrollRows()
 	}
 
 	if k.Kind == KeyCtrl && k.Byte == 5 {

@@ -62,6 +62,19 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	if text == "" && streamingKinds[kind] {
+		if kind == blockThinking {
+			if len(s.blocks) > 0 && s.blocks[len(s.blocks)-1].kind == blockThinking {
+				s.markThinkingStreaming()
+				return
+			}
+			b := s.newBlock(kind, "")
+			b.meta.Streaming = true
+			b.meta.StartedAt = time.Now()
+			s.blocks = append(s.blocks, b)
+			s.markThinkingStreaming()
+			s.totalAdded++
+			s.trim()
+		}
 		return
 	}
 	if streamingKinds[kind] {

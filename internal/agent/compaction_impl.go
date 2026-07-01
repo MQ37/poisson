@@ -196,7 +196,11 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 	a.UpdateStatus()
 
 	if notifyUI {
-		a.sendEvent(OutputEvent{Type: OutputCompacted})
+		a.sendEvent(OutputEvent{
+			Type:                   OutputCompacted,
+			CompactionTokensBefore: estimatedTokens,
+			CompactionTokensAfter:  remainingTokens,
+		})
 	}
 
 	return nil

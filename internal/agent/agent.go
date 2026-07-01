@@ -59,6 +59,10 @@ type OutputEvent struct {
 	ToolCalls         int             // status
 	ToolErrors        int             // status
 	Effort            string          // status
+
+	CompactionTokensBefore int // compacted
+	CompactionTokensAfter  int // compacted
+	ThinkingRedacted       bool // thinking (opaque redacted block)
 }
 
 // Agent runs the turn loop for a single session.
@@ -367,6 +371,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				redactedThinking = append(redactedThinking, provider.ContentBlock{
 					Type: "thinking", Redacted: true, ThinkingSignature: ev.Text,
 				})
+				a.sendEvent(OutputEvent{Type: OutputThinking, ThinkingRedacted: true})
 
 			case provider.EventToolUseStart:
 				if ev.ToolCall != nil {

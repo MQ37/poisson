@@ -458,11 +458,13 @@ func (t *TUI) toolSpinnerRows(lay layoutSnapshot) []int {
 
 func (t *TUI) markAfterEvent(ev agent.OutputEvent) {
 	switch ev.Type {
-	case agent.OutputText, agent.OutputThinking:
+	case agent.OutputText:
 		viewH := t.convScrollRows()
 		if rows := t.scroll.streamViewportDirty(viewH, t.contentWidth()); len(rows) > 0 {
 			t.dirty.markScrollRows(t.offsetConvDirtyRows(rows)...)
 		}
+	case agent.OutputThinking:
+		t.markScrollDirty()
 	case agent.OutputStatus:
 		t.applyStatus(ev)
 		t.dirty.markStatus()
@@ -475,7 +477,7 @@ func (t *TUI) markAfterEvent(ev agent.OutputEvent) {
 		}
 		t.dirty.markScrollAll(t.scrollRows)
 	case agent.OutputCompacted:
-		t.dirty.markFull()
+		t.dirty.markStatus()
 	case agent.OutputDone:
 		t.scroll.finalizeThinking()
 		t.activeTools = 0

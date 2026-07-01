@@ -40,6 +40,23 @@ func TestFeedKeyCtrlLOpensEffortPicker(t *testing.T) {
 	}
 }
 
+func TestFeedKeyCtrlTTogglesThinking(t *testing.T) {
+	tui := newTestTUIHelper()
+	tui.scroll.appendBlock(blockThinking, "secret reasoning")
+	tui.scroll.finalizeThinking()
+	if !tui.scroll.blocks[0].meta.Collapsed {
+		t.Fatal("expected collapsed thinking")
+	}
+
+	_, err := tui.feedKey(Key{Kind: KeyCtrl, Byte: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tui.scroll.blocks[0].meta.Collapsed {
+		t.Fatal("Ctrl+T should expand last thinking block")
+	}
+}
+
 func TestFeedKeyCtrlSOpensSessionPicker(t *testing.T) {
 	_, a, sessionID := newTestStoreAndAgent(t)
 	tui := newTUIWithAgent(a, sessionID)

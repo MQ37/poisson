@@ -30,11 +30,23 @@ func formatThinkingDuration(ms int64) string {
 	return fmt.Sprintf("%.1fs", float64(ms)/1000)
 }
 
+func formatThinkingRedactedCollapsed() string {
+	return dim + italic + "▸ thinking (redacted)" + reset
+}
+
 // layoutThinking renders a thinking block (collapsed, streaming, or expanded).
 func layoutThinking(b *Block, width int, _ int) []ScreenRow {
 	prefix := kindStylePrefix(blockThinking)
-	if b.meta.Collapsed && !b.meta.Streaming {
-		text := prefix + formatThinkingCollapsed(len([]rune(b.raw)), b.meta.DurationMs) + reset
+	if b.meta.ThinkingRedacted {
+		text := prefix + formatThinkingRedactedCollapsed() + reset
+		return []ScreenRow{{Text: text, Tag: RowTag{BlockID: b.id, RowIdx: 0}}}
+	}
+	if b.meta.Collapsed {
+		dur := b.meta.DurationMs
+		if b.meta.Streaming && !b.meta.StartedAt.IsZero() {
+			dur = time.Since(b.meta.StartedAt).Milliseconds()
+		}
+		text := prefix + formatThinkingCollapsed(len([]rune(b.raw)), dur) + reset
 		return []ScreenRow{{Text: text, Tag: RowTag{BlockID: b.id, RowIdx: 0}}}
 	}
 	var chunks []string
@@ -93,38 +105,33 @@ func (s *scrollback) markThinkingStreaming() {
 	tail.invalidateLayout()
 }
 
-// toggleThinkingInView toggles collapse on the last thinking block in the viewport.
-func (s *scrollback) toggleThinkingInView(height, width int) bool {
-	if height < 1 || width < 1 || len(s.blocks) == 0 {
-		return false
-	}
-	wrapped, start, end := s.viewportRange(height, width)
-	if len(wrapped) == 0 {
-		return false
-	}
-	seen := map[int64]struct{}{}
-	for i := end - 1; i >= start; i-- {
-		if i < 0 || i >= len(wrapped) {
+// toggleLastThinking toggles collapse on the most recent thinking block.
+func (s *scrollback) toggleLastThinking() bool {
+	for i := len(s.blocks) - 1; i >= 0; i-- {
+		b := &s.blocks[i]
+		if b.kind != blockThinking {
 			continue
 		}
-		id := wrapped[i].Tag.BlockID
-		if _, ok := seen[id]; ok {
-			continue
+		if b.meta.ThinkingRedacted {
+			return false
 		}
-		seen[id] = struct{}{}
-		for j := range s.blocks {
-			if s.blocks[j].id != id || s.blocks[j].kind != blockThinking {
-				continue
-			}
-			if s.blocks[j].meta.Streaming {
-				return false
-			}
-			s.blocks[j].meta.Collapsed = !s.blocks[j].meta.Collapsed
-			s.blocks[j].invalidateLayout()
-			return true
-		}
+		b.meta.Collapsed = !b.meta.Collapsed
+		b.invalidateLayout()
+		return true
 	}
 	return false
+}
+
+// appendThinkingRedacted adds a collapsed redacted-thinking placeholder block.
+func (s *scrollback) appendThinkingRedacted() {
+	b := s.newBlock(blockThinking, "")
+	b.meta.ThinkingRedacted = true
+	b.meta.Collapsed = true
+	b.meta.Streaming = false
+	s.blocks = append(s.blocks, b)
+	s.totalAdded++
+	s.lastStreamWrapCount = 0
+	s.trim()
 }
 
 func thinkingSpinnerRows(visible []ScreenRow) []int {

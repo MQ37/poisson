@@ -15,6 +15,7 @@ type msgBlock struct {
 	ToolResult  string `json:"tool_result,omitempty"`
 	ToolIsError bool   `json:"tool_is_error,omitempty"`
 	Thinking    string `json:"thinking,omitempty"`
+	Redacted    bool   `json:"redacted,omitempty"`
 }
 
 func parseMessageBlocks(content string) []msgBlock {
@@ -78,7 +79,9 @@ func (t *TUI) hydrateScrollbackLocked() {
 			for _, b := range blocks {
 				switch b.Type {
 				case "thinking":
-					if b.Thinking != "" {
+					if b.Redacted {
+						t.scroll.appendThinkingRedacted()
+					} else if b.Thinking != "" {
 						t.scroll.append(StyledLine{Style: styleThinking, Text: b.Thinking})
 					}
 				case "text":

@@ -90,12 +90,14 @@ func (t *TUI) handleSlash(cmd string) error {
 				t.markScrollDirty()
 				return
 			}
-			t.clearScrollbackKeepIntroLocked()
-			t.hydrateScrollbackLocked()
+			before, after := 0, 0
+			if c, err := t.agent.Store().GetLastCompaction(t.sessionID); err == nil && c != nil {
+				before, after = c.TokensBefore, c.TokensAfter
+			}
+			t.appendCompactionNoticeLocked(before, after)
 			t.agent.UpdateStatus()
 			t.syncHeaderFromAgentLocked()
 			t.dirty.markStatus()
-			t.markFullDirty()
 		}()
 		return nil
 	case "/model":
