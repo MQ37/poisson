@@ -87,16 +87,16 @@ func TestApprovalOverlayShowsPurposeLine(t *testing.T) {
 	}
 }
 
-func TestApprovalOverlayPurposeFallbackGuardReason(t *testing.T) {
+func TestApprovalOverlayPurposePlaceholderWhenNoDescription(t *testing.T) {
 	o := newApprovalOverlay("rm -rf x", "", "")
 	lines := o.renderInputPanel(8, 60)
 	found := false
 	for _, ln := range lines {
-		if strings.Contains(ln, "Purpose:") && strings.Contains(ln, "destructive command") {
+		if strings.Contains(ln, "Purpose:") && strings.Contains(ln, "(no description provided)") {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("expected guard reason in Purpose line, got %v", lines)
+		t.Errorf("expected placeholder purpose line, got %v", lines)
 	}
 }

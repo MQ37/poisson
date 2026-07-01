@@ -8,7 +8,7 @@ type approvalOverlay struct {
 	command     string
 	description string
 	workdir     string
-	risk        string // "", "pending", "low", "medium", "high"
+	risk        string // "pending", "low", "medium", "high", "failed"
 	scroll      int
 }
 
@@ -23,7 +23,7 @@ func newApprovalOverlay(command, description, workdir string) *approvalOverlay {
 
 func (o *approvalOverlay) setRisk(risk string) {
 	if risk == "" {
-		risk = "unknown"
+		risk = "failed"
 	}
 	o.risk = risk
 }
@@ -38,6 +38,8 @@ func approvalRiskLine(risk string) string {
 		return fgYellow + bold + "Risk: MEDIUM" + reset
 	case "high":
 		return fgRed + bold + "Risk: HIGH" + reset
+	case "failed":
+		return fgRed + bold + "Risk: classification FAILED — review manually" + reset
 	default:
 		return dim + "Risk: unknown" + reset
 	}

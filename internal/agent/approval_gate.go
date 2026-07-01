@@ -10,8 +10,12 @@ const approvalRiskTimeout = 45 * time.Second
 // HumanApprovalFunc prompts the user after risk assessment when auto-allow does not apply.
 type HumanApprovalFunc func(command, description, workdir string, risk BashRisk) bool
 
-// WrapRiskGatedApproval returns an approval callback that runs risk assessment first.
-// Only BashRiskLow is auto-allowed; medium, high, and unknown require HumanApprovalFunc.
+// WrapRiskGatedApproval returns an approval callback that classifies the
+// command with the LLM. It auto-approves ONLY when the LLM itself returned
+// "low"; medium, high, and any failed or ambiguous classification (provider
+// error, timeout, unparseable output) fall through to the human. The
+// deterministic guard is never consulted for the auto-approve decision, so a
+// failed classification can never silently allow a command.
 func WrapRiskGatedApproval(a *Agent, ask HumanApprovalFunc) func(command, description, workdir string) bool {
 	return func(command, description, workdir string) bool {
 		var risk BashRisk = BashRiskUnknown

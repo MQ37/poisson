@@ -204,7 +204,9 @@ func bashRiskLabel(risk agent.BashRisk) string {
 }
 
 func (t *TUI) assessApprovalRisk(ctx context.Context, overlay *approvalOverlay, command, description, workdir string) {
-	risk := "unknown"
+	// Default to "failed": if the LLM can't classify (error/timeout/ambiguous),
+	// the overlay must say so and the human must decide.
+	risk := "failed"
 	if t.agent != nil {
 		switch t.agent.AssessBashRisk(ctx, command, description, workdir) {
 		case agent.BashRiskLow:

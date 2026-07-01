@@ -4,18 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
-
-	"poisson/internal/guard"
 )
 
-// BashTool executes bash commands, gated by the bash guard.
+// BashTool executes bash commands, gated by the LLM risk classifier via approvalFn.
 type BashTool struct {
 	cwd        string
 	sandbox    bool
@@ -80,31 +77,20 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		}
 	}
 
-	// Guard: unless sandbox, classify the command and working directory.
+	// Every command is gated: approvalFn runs the LLM risk classifier, which
+	// auto-approves only an LLM "low" and routes everything else (including a
+	// failed classification) to the human. Sandbox mode skips the gate.
 	if !t.sandbox {
-		safe, reason := guard.Classify(in.Command)
-		if safe {
-			if sensitive, sreason := guard.IsSensitiveDir(dir); sensitive {
-				safe = false
-				reason = sreason
-			}
+		purpose := in.Description
+		if purpose == "" {
+			purpose = "(no description provided)"
 		}
-		if !safe {
-			// Use provided description; fallback from guard reason if empty at approval time (PR-24).
-			purpose := in.Description
-			if purpose == "" {
-				purpose = reason
-				if purpose == "" {
-					purpose = "(no description provided)"
-				}
-			}
-			approved := false
-			if t.approvalFn != nil {
-				approved = t.approvalFn(in.Command, purpose, dir)
-			}
-			if !approved {
-				return ToolResult{Error: fmt.Sprintf("command denied (not safe: %s)", reason)}, nil
-			}
+		approved := false
+		if t.approvalFn != nil {
+			approved = t.approvalFn(in.Command, purpose, dir)
+		}
+		if !approved {
+			return ToolResult{Error: "command denied"}, nil
 		}
 	}
 

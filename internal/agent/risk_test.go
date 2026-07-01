@@ -122,7 +122,7 @@ func TestAssessBashRiskThinkingOnly(t *testing.T) {
 	}
 }
 
-func TestAssessBashRiskGuardFallbackRmdir(t *testing.T) {
+func TestAssessBashRiskLLMFailureUnknown(t *testing.T) {
 	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
 	fp.SetResponses([][]provider.StreamEvent{
 		provider.FakeErrorResponse(context.DeadlineExceeded),
@@ -137,9 +137,11 @@ func TestAssessBashRiskGuardFallbackRmdir(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// LLM failure must not fall back to the deterministic guard — it returns
+	// unknown, which the approval gate routes to the human.
 	got := a.AssessBashRisk(ctx, "rmdir empty_dir", "remove empty directory", "/tmp/proj")
-	if got != BashRiskHigh {
-		t.Fatalf("AssessBashRisk(rmdir) = %q, want high from guard fallback", got)
+	if got != BashRiskUnknown {
+		t.Fatalf("AssessBashRisk(rmdir) on LLM failure = %q, want unknown", got)
 	}
 }
 

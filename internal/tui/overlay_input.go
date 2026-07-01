@@ -3,8 +3,6 @@ package tui
 import (
 	"strings"
 	"unicode"
-
-	"poisson/internal/guard"
 )
 
 const boxListMaxInner = 72
@@ -13,9 +11,6 @@ const boxListMaxInner = 72
 func resolveApprovalPurpose(command, description string) string {
 	if strings.TrimSpace(description) != "" {
 		return description
-	}
-	if _, reason := guard.Classify(command); reason != "" {
-		return reason
 	}
 	return "(no description provided)"
 }

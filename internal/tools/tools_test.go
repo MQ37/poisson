@@ -462,11 +462,23 @@ func TestGlob_Doublestar(t *testing.T) {
 	}
 }
 
-func TestBashTool_SafeCommand(t *testing.T) {
+// TestBashTool_NoAllowlist verifies there is no deterministic allowlist: even a
+// trivially safe command is gated through approvalFn (denied without approval,
+// runs when approved).
+func TestBashTool_NoAllowlist(t *testing.T) {
 	dir := testutil.TempDir(t)
-	b := NewBashTool(dir, false, nil)
 
-	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+	denied := NewBashTool(dir, false, nil)
+	res, _ := denied.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "echo hello",
+		"description": "print hello",
+	}))
+	if res.Error == "" {
+		t.Fatal("expected safe command to be gated (no allowlist), got auto-run")
+	}
+
+	b := NewBashTool(dir, false, func(_, _, _ string) bool { return true })
+	res, _ = b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "echo hello",
 		"description": "print hello",
 	}))
@@ -588,10 +600,10 @@ func TestBashTool_PromptsForApproval(t *testing.T) {
 	}
 }
 
-// TestBashTool_MissingDescFallsBackToGuardReason verifies PR-24: a gated bash call
-// without description still reaches approval using fallback synthesized from
-// guard reason (so Purpose: line always populated).
-func TestBashTool_MissingDescFallsBackToGuardReason(t *testing.T) {
+// TestBashTool_MissingDescFallback verifies a gated call without a description
+// still reaches approval with a placeholder purpose (the guard-reason fallback
+// was removed together with the deterministic allowlist).
+func TestBashTool_MissingDescFallback(t *testing.T) {
 	dir := testutil.TempDir(t)
 	var gotDesc string
 	called := false
@@ -604,13 +616,12 @@ func TestBashTool_MissingDescFallsBackToGuardReason(t *testing.T) {
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command": "rm -rf foo",
-		// deliberately no description -> should fallback to reason
 	}))
 	if !called {
-		t.Fatal("approvalFn must be called with fallback purpose even if no description")
+		t.Fatal("approvalFn must be called even without a description")
 	}
-	if gotDesc == "" || !strings.Contains(gotDesc, "destructive") {
-		t.Errorf("approval got fallback desc %q, want reason containing 'destructive'", gotDesc)
+	if gotDesc != "(no description provided)" {
+		t.Errorf("approval got purpose %q, want placeholder", gotDesc)
 	}
 	if res.Error == "" {
 		t.Error("expected denial after approval returned false")

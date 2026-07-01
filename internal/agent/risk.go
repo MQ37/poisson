@@ -84,10 +84,11 @@ Rules:
 
 No explanation. One word only.`
 
-// AssessBashRisk asks the active provider to rate command risk. On failure or
-// ambiguous output, falls back to guard heuristics before returning unknown.
+// AssessBashRisk asks the active provider (LLM) to rate command risk. It never
+// consults the deterministic guard: on failure or ambiguous output it returns
+// BashRiskUnknown, which the approval gate treats as "must ask the human".
 func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdir string) BashRisk {
-	return a.AssessBashRiskEval(ctx, command, description, workdir, BashRiskEvalFull).Risk
+	return a.AssessBashRiskEval(ctx, command, description, workdir, BashRiskEvalLLM).Risk
 }
 
 // AssessBashRiskEval runs risk assessment in full, llm-only, or guard-only mode.
