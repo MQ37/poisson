@@ -143,6 +143,13 @@ func TestIsAllSafe_EdgeCases(t *testing.T) {
 	if IsAllSafe("git status; rm -rf /") {
 		t.Error("expected unsafe for compound command with semicolon")
 	}
+	// Newline is a command separator too — must not hide the second command.
+	if IsAllSafe("echo hi\nrm -rf ~/data") {
+		t.Error("expected unsafe for newline-separated destructive command")
+	}
+	if IsAllSafe("ls\ngit push --force") {
+		t.Error("expected unsafe for newline-separated mutating git")
+	}
 	// Pipe into safe command is fine.
 	if !IsAllSafe("git status | head -5") {
 		t.Error("expected safe for pipe into head")

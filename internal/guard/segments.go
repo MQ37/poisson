@@ -3,7 +3,7 @@ package guard
 import "strings"
 
 // Segments splits a bash command string into individual command segments
-// at the following separators: ;, |, &&, ||, |(), &().
+// at the following separators: ;, newline, |, &&, ||, |(), &().
 //
 // Quoted strings (single and double) are not split.
 // Parentheses nesting is tracked so that |() / &() subshell separators are
@@ -84,6 +84,14 @@ func Segments(cmd string) []string {
 			}
 			// ; separator
 			if c == ';' {
+				flush(&segs, &cur)
+				i++
+				continue
+			}
+			// newline separator — bash terminates a command at a newline just
+			// like ';'. Without this, "echo hi\nrm -rf x" is one segment and only
+			// the first token (echo) is classified, hiding the rm.
+			if c == '\n' {
 				flush(&segs, &cur)
 				i++
 				continue
