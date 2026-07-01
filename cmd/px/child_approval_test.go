@@ -1,11 +1,79 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"os"
 	"testing"
 	"time"
 )
+
+// TestChildApprovalBrokerSerializesConcurrent verifies two concurrent approval
+// round-trips are paired with the correct responses: emitAndWait keeps a single
+// approval outstanding, so the second request is only emitted after the first
+// is answered.
+func TestChildApprovalBrokerSerializesConcurrent(t *testing.T) {
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdin, oldStdout := os.Stdin, os.Stdout
+	os.Stdin, os.Stdout = inR, outW
+	t.Cleanup(func() { os.Stdin, os.Stdout = oldStdin, oldStdout })
+
+	var broker childApprovalBroker
+	type res struct {
+		id       string
+		approved bool
+	}
+	results := make(chan res, 2)
+	emit := func(id string) {
+		approved := broker.emitAndWait(map[string]interface{}{"type": "approval_request", "command": id})
+		results <- res{id, approved}
+	}
+	go emit("A")
+	go emit("B")
+
+	scanner := bufio.NewScanner(outR)
+	readCmd := func() string {
+		if !scanner.Scan() {
+			t.Fatal("no request emitted")
+		}
+		var ev struct {
+			Command string `json:"command"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &ev); err != nil {
+			t.Fatalf("parse request: %v", err)
+		}
+		return ev.Command
+	}
+	respond := func(approved bool) {
+		data, _ := json.Marshal(map[string]interface{}{"type": "approval_response", "approved": approved})
+		if _, err := inW.Write(append(data, '\n')); err != nil {
+			t.Fatalf("write response: %v", err)
+		}
+	}
+
+	first := readCmd()
+	respond(true)
+	if r := <-results; r.id != first || !r.approved {
+		t.Fatalf("first: emitted %q, got %+v", first, r)
+	}
+
+	second := readCmd()
+	respond(false)
+	if r := <-results; r.id != second || r.approved {
+		t.Fatalf("second: emitted %q, got %+v", second, r)
+	}
+
+	if first == second {
+		t.Fatalf("both goroutines emitted %q", first)
+	}
+}
 
 func TestChildApprovalBrokerFIFO(t *testing.T) {
 	r, w, err := os.Pipe()

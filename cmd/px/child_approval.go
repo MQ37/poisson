@@ -4,17 +4,28 @@ import (
 	"encoding/json"
 	"os"
 	"sync"
-	"time"
 )
 
-const childApprovalTimeout = 30 * time.Second
-
 // childApprovalBroker serializes stdin reads for bash approval in child mode.
-// Approval requests are queued FIFO; each waits up to childApprovalTimeout.
+// Approval requests are queued FIFO; each waits indefinitely for a response.
+// The parent (which owns the human prompt) has no timeout, so neither do we;
+// stdin EOF or a killed process is the only way out.
 type childApprovalBroker struct {
-	mu      sync.Mutex
-	queue   []chan bool
-	started bool
+	mu       sync.Mutex
+	serialMu sync.Mutex
+	queue    []chan bool
+	started  bool
+}
+
+// emitAndWait sends one approval request to the parent and blocks for its
+// response. serialMu keeps a single approval outstanding, so the FIFO queue
+// never holds more than one waiter — otherwise concurrent bash approvals in a
+// turn could be paired with each other's responses.
+func (b *childApprovalBroker) emitAndWait(req map[string]interface{}) bool {
+	b.serialMu.Lock()
+	defer b.serialMu.Unlock()
+	writeChildEvent(req)
+	return b.wait()
 }
 
 func (b *childApprovalBroker) start() {
@@ -60,33 +71,13 @@ func (b *childApprovalBroker) denyAllWaiters() {
 	b.queue = nil
 }
 
-// wait blocks until the next approval_response is received for this request.
+// wait blocks until the next approval_response is received for this request,
+// or the stdin reader hits EOF (parent gone) and denies all waiters.
 func (b *childApprovalBroker) wait() bool {
 	b.start()
 	respCh := make(chan bool, 1)
 	b.mu.Lock()
 	b.queue = append(b.queue, respCh)
 	b.mu.Unlock()
-
-	timer := time.NewTimer(childApprovalTimeout)
-	defer timer.Stop()
-
-	select {
-	case approved := <-respCh:
-		return approved
-	case <-timer.C:
-		b.removeWaiter(respCh)
-		return false
-	}
-}
-
-func (b *childApprovalBroker) removeWaiter(ch chan bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for i, w := range b.queue {
-		if w == ch {
-			b.queue = append(b.queue[:i], b.queue[i+1:]...)
-			return
-		}
-	}
+	return <-respCh
 }

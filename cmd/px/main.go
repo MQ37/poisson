@@ -421,7 +421,7 @@ func runChildMode() {
 		if sandbox {
 			return true
 		}
-		writeChildEvent(map[string]interface{}{
+		return approvalBroker.emitAndWait(map[string]interface{}{
 			"type":        "approval_request",
 			"command":     command,
 			"description": description,
@@ -429,7 +429,6 @@ func runChildMode() {
 			"risk":        string(risk),
 			"agent":       os.Getenv("POISSON_SUBAGENT_NAME"),
 		})
-		return approvalBroker.wait()
 	}
 	approvalFn := func(command, description, workdir string) bool {
 		if sandbox {
