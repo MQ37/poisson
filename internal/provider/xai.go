@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"sync"
 
 	"poisson/internal/auth"
 	"poisson/internal/config"
@@ -17,6 +19,7 @@ import (
 // (OpenAI-compatible endpoint).
 type XAIProvider struct {
 	auth   auth.AuthStore
+	authMu sync.Mutex
 	config *config.Config
 	client *http.Client
 }
@@ -48,18 +51,22 @@ func (p *XAIProvider) Stream(ctx context.Context, req *Request) (<-chan StreamEv
 }
 
 func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry int) (<-chan StreamEvent, error) {
-	// Check for token refresh.
+	// Guard all auth-map access: concurrent Stream calls (parallel bash-risk
+	// assessments) would otherwise race on the shared map and crash the process.
+	p.authMu.Lock()
 	entry, ok := p.auth["xai"]
-	if !ok || entry.Type != "oauth" {
-		return nil, fmt.Errorf("no xAI OAuth credentials — run: px login xai")
-	}
-	if auth.IsExpired(entry, 5*60*1000) {
-		refreshed, err := auth.RefreshXAIToken(entry.Refresh)
-		if err == nil {
+	if ok && entry.Type == "oauth" && auth.IsExpired(entry, 5*60*1000) {
+		if refreshed, err := auth.RefreshXAIToken(entry.Refresh); err == nil {
 			p.auth["xai"] = *refreshed
-			_ = auth.Save(p.auth)
+			if serr := auth.Save(p.auth); serr != nil {
+				log.Printf("warning: save xai auth after refresh: %v", serr)
+			}
 			entry = *refreshed
 		}
+	}
+	p.authMu.Unlock()
+	if !ok || entry.Type != "oauth" {
+		return nil, fmt.Errorf("no xAI OAuth credentials — run: px login xai")
 	}
 
 	// Build OpenAI-compatible request body.
@@ -86,10 +93,16 @@ func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry i
 	// Handle 401 with refresh + retry.
 	if resp.StatusCode == 401 && retry == 0 {
 		resp.Body.Close()
+		p.authMu.Lock()
 		refreshed, err := auth.RefreshXAIToken(entry.Refresh)
 		if err == nil {
 			p.auth["xai"] = *refreshed
-			_ = auth.Save(p.auth)
+			if serr := auth.Save(p.auth); serr != nil {
+				log.Printf("warning: save xai auth after refresh: %v", serr)
+			}
+		}
+		p.authMu.Unlock()
+		if err == nil {
 			return p.streamWithRetry(ctx, req, 1)
 		}
 		return nil, fmt.Errorf("token expired, refresh failed: %w", err)
@@ -250,6 +263,8 @@ func convertXAIUsage(u *openaiSSEUsage) *Usage {
 	if u == nil {
 		return nil
 	}
+	// xAI reports reasoning_tokens disjoint from completion_tokens (they sum to
+	// total-prompt), so add them. total-prompt is a floor for when either is missing.
 	output := u.CompletionTokens + u.CompletionTokensDetails.ReasoningTokens
 	if totalOutput := u.TotalTokens - u.PromptTokens; totalOutput > output {
 		output = totalOutput

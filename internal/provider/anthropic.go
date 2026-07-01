@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"sync"
 
 	"poisson/internal/auth"
 	"poisson/internal/config"
@@ -21,6 +23,7 @@ import (
 type AnthropicProvider struct {
 	baseURL string
 	auth    auth.AuthStore
+	authMu  sync.Mutex
 	config  *config.Config
 	client  *http.Client
 }
@@ -58,18 +61,19 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (<-chan St
 }
 
 func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, retry int) (<-chan StreamEvent, error) {
+	// Guard all auth-map access: concurrent Stream calls (parallel bash-risk
+	// assessments) would otherwise race on the shared map and crash the process.
+	p.authMu.Lock()
 	isOAuth := auth.IsOAuth(p.auth, "anthropic")
-
-	if isOAuth {
-		entry := p.auth["anthropic"]
-		if auth.IsExpired(entry, 5*60*1000) {
-			refreshed, err := auth.RefreshAnthropicToken(entry.Refresh)
-			if err == nil {
-				p.auth["anthropic"] = *refreshed
-				_ = auth.Save(p.auth)
+	if isOAuth && auth.IsExpired(p.auth["anthropic"], 5*60*1000) {
+		if refreshed, err := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh); err == nil {
+			p.auth["anthropic"] = *refreshed
+			if serr := auth.Save(p.auth); serr != nil {
+				log.Printf("warning: save anthropic auth after refresh: %v", serr)
 			}
 		}
 	}
+	p.authMu.Unlock()
 
 	streamReq := req
 	if isOAuth {
@@ -97,11 +101,16 @@ func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, r
 
 	if resp.StatusCode == 401 && isOAuth && retry == 0 {
 		resp.Body.Close()
-		entry := p.auth["anthropic"]
-		refreshed, err := auth.RefreshAnthropicToken(entry.Refresh)
+		p.authMu.Lock()
+		refreshed, err := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh)
 		if err == nil {
 			p.auth["anthropic"] = *refreshed
-			_ = auth.Save(p.auth)
+			if serr := auth.Save(p.auth); serr != nil {
+				log.Printf("warning: save anthropic auth after refresh: %v", serr)
+			}
+		}
+		p.authMu.Unlock()
+		if err == nil {
 			return p.streamWithRetry(ctx, req, 1)
 		}
 		return nil, fmt.Errorf("token expired, refresh failed: %w", err)
@@ -317,9 +326,13 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool) {
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("anthropic-version", "2023-06-01")
 
+	p.authMu.Lock()
+	access := p.auth["anthropic"].Access
+	apiKey := auth.GetAPIKey(p.auth, "anthropic")
+	p.authMu.Unlock()
+
 	if isOAuth {
-		entry := p.auth["anthropic"]
-		req.Header.Set("Authorization", "Bearer "+entry.Access)
+		req.Header.Set("Authorization", "Bearer "+access)
 		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
 		if p.config != nil {
 			req.Header.Set("user-agent", "claude-cli/"+p.config.Stealth.CCVersion)
@@ -328,7 +341,6 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool) {
 		}
 		req.Header.Set("x-app", "cli")
 	} else {
-		apiKey := auth.GetAPIKey(p.auth, "anthropic")
 		if apiKey == "" && p.config != nil {
 			apiKey = p.config.Anthropic.APIKey
 		}
@@ -353,6 +365,7 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 	// at EventDone, otherwise input/cache tokens are recorded as 0 (breaking
 	// cost, context %%, and auto-compaction).
 	var startInput, startCacheRead, startCacheWrite int
+	doneSent := false
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -520,6 +533,7 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 			case <-ctx.Done():
 				return
 			case ch <- StreamEvent{Type: EventDone, Usage: usage}:
+				doneSent = true
 			}
 
 		case "message_stop":
@@ -541,10 +555,21 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 		}
 	}
 
-	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+	if err := scanner.Err(); err != nil {
+		if ctx.Err() == nil {
+			select {
+			case ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("sse read: %w", err)}:
+			case <-ctx.Done():
+			}
+		}
+		return
+	}
+	// Clean EOF before message_delta/message_stop means the turn was truncated;
+	// surface an error so it isn't recorded as a successful, zero-cost turn.
+	if !doneSent && ctx.Err() == nil {
 		select {
-		case ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("sse read: %w", err)}:
-		default:
+		case ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic: stream ended before completion")}:
+		case <-ctx.Done():
 		}
 	}
 }
