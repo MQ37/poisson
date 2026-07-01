@@ -62,6 +62,14 @@ func TestOpenAndSchema(t *testing.T) {
 
 }
 
+func TestAppendMessageRequiresSession(t *testing.T) {
+	s := newTestStore(t)
+	err := s.AppendMessage(&Message{SessionID: "missing-session", Role: "user", Content: textContent("hi")})
+	if err == nil {
+		t.Fatal("expected foreign key error when session does not exist")
+	}
+}
+
 func TestOpenIdempotent(t *testing.T) {
 	dbPath := filepath.Join(testutil.TempDir(t), "idem.db")
 	s1, err := Open(dbPath)

@@ -74,6 +74,42 @@ func TestHandleMouseClickScrollRegion(t *testing.T) {
 	}
 }
 
+func TestApprovalMouseWheelScrollDirection(t *testing.T) {
+	tui := newTUI(nil, "s1", nil)
+	tui.approving.Store(true)
+	var cmd strings.Builder
+	for i := 0; i < 40; i++ {
+		cmd.WriteString("echo line")
+		cmd.WriteByte('\n')
+	}
+	ao := newApprovalOverlay(cmd.String(), "test", "")
+	tui.activeOverlay = ao
+
+	// Wheel up (btn 64) → earlier command lines → lower scroll index.
+	if !tui.handleMouseInput([]byte("\x1b[<64;10;20M")) {
+		t.Fatal("wheel should be consumed during approval")
+	}
+	if ao.scroll != 0 {
+		t.Fatalf("wheel up at scroll=0 should stay 0, got %d", ao.scroll)
+	}
+
+	ao.scroll = 10
+	if !tui.handleMouseInput([]byte("\x1b[<64;10;20M")) {
+		t.Fatal("wheel up should be consumed")
+	}
+	if ao.scroll != 7 {
+		t.Fatalf("wheel up: scroll = %d, want 7", ao.scroll)
+	}
+
+	// Wheel down (btn 65) → later command lines → higher scroll index.
+	if !tui.handleMouseInput([]byte("\x1b[<65;10;20M")) {
+		t.Fatal("wheel down should be consumed")
+	}
+	if ao.scroll != 10 {
+		t.Fatalf("wheel down: scroll = %d, want 10", ao.scroll)
+	}
+}
+
 func TestHandleMouseClickIgnoresHeader(t *testing.T) {
 	tui := newTUI(nil, "s1", nil)
 	tui.headerRows = 1

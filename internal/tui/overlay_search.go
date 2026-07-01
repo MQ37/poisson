@@ -143,39 +143,82 @@ func (s *searchOverlay) appendPaste(text string) bool {
 	return changed
 }
 
-// highlightSearchMatch wraps every case-insensitive query hit, preserving a
-// leading ANSI style prefix when present.
+// highlightSearchMatch wraps every case-insensitive query hit while preserving
+// inline ANSI styling (bash highlights, markdown colors, etc.).
 func highlightSearchMatch(line, query, pre, post string) string {
 	if query == "" {
 		return line
 	}
-	plain := stripANSI(line)
-	lower := strings.ToLower(plain)
 	q := strings.ToLower(strings.TrimSpace(query))
 	if q == "" {
 		return line
 	}
-	stylePrefix := ""
-	if len(line) > len(plain) {
-		stylePrefix = line[:len(line)-len(plain)]
-	}
-	var b strings.Builder
-	b.WriteString(stylePrefix)
+	plain := stripANSI(line)
+	lower := strings.ToLower(plain)
+	var spans [][2]int
 	pos := 0
 	for {
 		idx := strings.Index(lower[pos:], q)
 		if idx < 0 {
-			b.WriteString(plain[pos:])
 			break
 		}
 		idx += pos
-		b.WriteString(plain[pos:idx])
-		b.WriteString(pre)
-		b.WriteString(plain[idx : idx+len(q)])
-		b.WriteString(post)
+		spans = append(spans, [2]int{idx, idx + len(q)})
 		pos = idx + len(q)
 	}
-	return b.String() + reset
+	if len(spans) == 0 {
+		return line
+	}
+	return highlightPlainSpans(line, spans, pre, post)
+}
+
+func highlightPlainSpans(line string, spans [][2]int, pre, post string) string {
+	var b strings.Builder
+	spanIdx := 0
+	plainIdx := 0
+	inSpan := false
+
+	for i := 0; i < len(line); {
+		if !inSpan && spanIdx < len(spans) && plainIdx == spans[spanIdx][0] {
+			b.WriteString(pre)
+			inSpan = true
+		}
+
+		if line[i] == 0x1b && i+1 < len(line) {
+			j := i + 2
+			for j < len(line) {
+				c := line[j]
+				if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') {
+					j++
+					break
+				}
+				j++
+			}
+			b.WriteString(line[i:j])
+			i = j
+			continue
+		}
+
+		_, size := utf8.DecodeRuneInString(line[i:])
+		if size <= 0 {
+			size = 1
+		}
+		b.WriteString(line[i : i+size])
+		plainIdx += 1
+		i += size
+
+		if inSpan && spanIdx < len(spans) && plainIdx == spans[spanIdx][1] {
+			b.WriteString(post)
+			inSpan = false
+			spanIdx++
+		}
+	}
+
+	if inSpan {
+		b.WriteString(post)
+	}
+	b.WriteString(reset)
+	return b.String()
 }
 
 func (s *searchOverlay) next(dir int) {

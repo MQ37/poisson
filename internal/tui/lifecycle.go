@@ -131,7 +131,7 @@ func (t *TUI) Run() error {
 									delta = -1
 								}
 								ao.scrollBy(delta)
-								t.dirty.markOverlay()
+								t.dirty.markInput()
 							}
 							t.mu.Unlock()
 							continue

@@ -121,54 +121,71 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	var childErr string
 
 	for {
+		type readResult struct {
+			ev  *subagent.ChildEvent
+			err error
+		}
+		readCh := make(chan readResult, 1)
+		go func() {
+			ev, err := child.ReadEvent()
+			readCh <- readResult{ev: ev, err: err}
+		}()
+
 		select {
 		case <-ctx.Done():
+			child.Kill()
 			return ToolResult{Content: output.String(), Error: "subagent cancelled"}, nil
-		default:
-		}
-
-		ev, err := child.ReadEvent()
-		if err != nil {
-			break
-		}
-		if ev == nil {
-			continue
-		}
-
-		switch ev.Type {
-		case "text":
-			output.WriteString(ev.Text)
-			if t.outputFn != nil {
-				t.outputFn("text", ev.Text, "", nil)
+		case res := <-readCh:
+			if res.err != nil {
+				if ctx.Err() != nil {
+					child.Kill()
+					return ToolResult{Content: output.String(), Error: "subagent cancelled"}, nil
+				}
+				if res.err.Error() != "" {
+					childErr = res.err.Error()
+				}
+				goto done
+			}
+			ev := res.ev
+			if ev == nil {
+				continue
 			}
 
-		case "tool":
-			if t.outputFn != nil {
-				t.outputFn("tool_start", "", ev.Tool, ev.ToolInput)
-			}
-			toolCount++
-
-		case "approval_request":
-			approved := false
-			if t.approvalFn != nil {
-				approved = t.approvalFn(ev.Command, ev.Description, ev.Cwd, ev.Agent)
-			}
-			child.SendApprovalSafe(approved)
-
-		case "done":
-			success = ev.Success
-			turns = ev.Turns
-			if ev.Text != "" {
+			switch ev.Type {
+			case "text":
 				output.WriteString(ev.Text)
-			}
-			if ev.Error != "" {
-				childErr = ev.Error
-			}
-			goto done
+				if t.outputFn != nil {
+					t.outputFn("text", ev.Text, "", nil)
+				}
 
-		case "error":
-			childErr = ev.Error
-			goto done
+			case "tool":
+				if t.outputFn != nil {
+					t.outputFn("tool_start", "", ev.Tool, ev.ToolInput)
+				}
+				toolCount++
+
+			case "approval_request":
+				approved := false
+				if t.approvalFn != nil {
+					approved = t.approvalFn(ev.Command, ev.Description, ev.Cwd, ev.Agent)
+				}
+				child.SendApprovalSafe(approved)
+
+			case "done":
+				success = ev.Success
+				turns = ev.Turns
+				if ev.Text != "" {
+					output.WriteString(ev.Text)
+				}
+				if ev.Error != "" {
+					childErr = ev.Error
+				}
+				goto done
+
+			case "error":
+				childErr = ev.Error
+				goto done
+			}
 		}
 	}
 

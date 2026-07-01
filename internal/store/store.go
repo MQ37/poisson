@@ -20,6 +20,7 @@ type Store struct {
 const schemaSQL = `
 PRAGMA journal_mode = WAL;
 PRAGMA busy_timeout = 5000;
+PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS sessions (
     id                  TEXT PRIMARY KEY,
@@ -109,6 +110,10 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 	if err := ensureAPICallsColumns(db); err != nil {
 		db.Close()

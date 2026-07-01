@@ -18,8 +18,9 @@ func (t *TUI) handleMouseInput(data []byte) bool {
 		t.mu.Lock()
 		if t.approving.Load() {
 			if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
-				ao.scrollBy(delta)
-				t.dirty.markOverlay()
+				// Wheel-up shows earlier command lines (opposite of scrollback delta).
+				ao.scrollBy(-delta)
+				t.dirty.markInput()
 				t.mu.Unlock()
 				return true
 			}

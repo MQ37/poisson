@@ -10,7 +10,7 @@ import (
 	"poisson/internal/agent"
 )
 
-const approvalTimeout = 10 * time.Minute
+
 
 func (t *TUI) submit(text string) error {
 	trimmed := strings.TrimSpace(text)
@@ -104,8 +104,9 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 }
 
 // Approve renders an approval prompt for a dangerous bash command and waits
-// for the user's answer.
-func (t *TUI) Approve(command, description, workdir string) bool {
+// for the user's answer. When risk is already known, the overlay shows it
+// immediately without a second LLM call.
+func (t *TUI) Approve(command, description, workdir string, risk agent.BashRisk) bool {
 	t.approvalMu.Lock()
 	defer t.approvalMu.Unlock()
 
@@ -133,7 +134,11 @@ drained:
 	t.mu.Lock()
 	t.clearCompletionLocked()
 	t.cancelOverlayWork()
-	t.activeOverlay = newApprovalOverlay(command, description, workdir)
+	overlay := newApprovalOverlay(command, description, workdir)
+	if r := bashRiskLabel(risk); r != "" {
+		overlay.setRisk(r)
+	}
+	t.activeOverlay = overlay
 	t.dirty.markFull()
 	t.mu.Unlock()
 
@@ -141,15 +146,20 @@ drained:
 	runCtx := t.cancelCtx
 	t.cancelMu.Unlock()
 
+	var riskCancel context.CancelFunc
+	if risk == agent.BashRiskUnknown || risk == "" {
+		var riskCtx context.Context
+		riskCtx, riskCancel = context.WithTimeout(context.Background(), 45*time.Second)
+		go t.assessApprovalRisk(riskCtx, overlay, command, description, workdir)
+		defer riskCancel()
+	}
+
 	var cancelCh <-chan struct{}
 	if runCtx != nil {
 		cancelCh = runCtx.Done()
 	}
 
 	var allowed bool
-	timedOut := false
-	timer := time.NewTimer(approvalTimeout)
-	defer timer.Stop()
 	select {
 	case allowed = <-t.approvalAnswer:
 	case <-t.done:
@@ -160,21 +170,53 @@ drained:
 		return false
 	case <-cancelCh:
 		allowed = false
-	case <-timer.C:
-		allowed = false
-		timedOut = true
 	}
 
 	t.mu.Lock()
 	t.activeOverlay = nil
 	t.lastOverlayLines = 0
-	t.scroll.appendRaw(styleSystem, formatApprovalResult(allowed))
-	if timedOut {
-		t.scroll.appendRaw(styleSystem, "  approval timed out")
-	}
 	t.markScrollDirty()
 	t.mu.Unlock()
 	return allowed
+}
+
+func bashRiskLabel(risk agent.BashRisk) string {
+	switch risk {
+	case agent.BashRiskLow:
+		return "low"
+	case agent.BashRiskMedium:
+		return "medium"
+	case agent.BashRiskHigh:
+		return "high"
+	default:
+		return ""
+	}
+}
+
+func (t *TUI) assessApprovalRisk(ctx context.Context, overlay *approvalOverlay, command, description, workdir string) {
+	risk := "unknown"
+	if t.agent != nil {
+		switch t.agent.AssessBashRisk(ctx, command, description, workdir) {
+		case agent.BashRiskLow:
+			risk = "low"
+		case agent.BashRiskMedium:
+			risk = "medium"
+		case agent.BashRiskHigh:
+			risk = "high"
+		}
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.approving.Load() {
+		return
+	}
+	ao, ok := t.activeOverlay.(*approvalOverlay)
+	if !ok || ao != overlay {
+		return
+	}
+	ao.setRisk(risk)
+	t.dirty.markInput()
 }
 
 func (t *TUI) navigateHistory(dir int) {

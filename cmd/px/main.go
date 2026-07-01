@@ -101,11 +101,18 @@ func runREPL(noSkills bool) {
 	// (set below) so the prompt owns stdin exclusively in blocking mode; the
 	// terminal runs raw with a nonblocking Ctrl+C poller otherwise.
 	var approveUI tui.Approver
-	approvalFn := func(command, description, workdir string) bool {
+	var agentRef *agent.Agent
+	humanApproval := func(command, description, workdir string, risk agent.BashRisk) bool {
 		if approveUI != nil {
-			return approveUI.Approve(command, description, workdir)
+			return approveUI.Approve(command, description, workdir, risk)
 		}
 		return false
+	}
+	approvalFn := func(command, description, workdir string) bool {
+		if agentRef != nil {
+			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(command, description, workdir)
+		}
+		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
 
 	subOutputFn := func(eventType, text, toolName string, toolInput json.RawMessage) {
@@ -130,6 +137,7 @@ func runREPL(noSkills bool) {
 
 	// Set up agent.
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
+	agentRef = a
 	tools.BindSubagentRuntime(reg, func() string { return a.Provider().ID() }, func() string { return a.Model() })
 
 	var skillList []skills.Skill
@@ -391,7 +399,8 @@ func runChildMode() {
 	sandbox := os.Getenv("POISSON_SANDBOX") == "1"
 	var approvalBroker childApprovalBroker
 
-	approvalFn := func(command, description, workdir string) bool {
+	var childAgentRef *agent.Agent
+	humanChildApproval := func(command, description, workdir string, risk agent.BashRisk) bool {
 		if sandbox {
 			return true
 		}
@@ -400,9 +409,19 @@ func runChildMode() {
 			"command":     command,
 			"description": description,
 			"cwd":         workdir,
+			"risk":        string(risk),
 			"agent":       os.Getenv("POISSON_SUBAGENT_NAME"),
 		})
-		return approvalBroker.wait(30 * time.Second)
+		return approvalBroker.wait()
+	}
+	approvalFn := func(command, description, workdir string) bool {
+		if sandbox {
+			return true
+		}
+		if childAgentRef != nil {
+			return agent.WrapRiskGatedApproval(childAgentRef, humanChildApproval)(command, description, workdir)
+		}
+		return humanChildApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
 
 	reg := tools.BuildRegistry(tools.BuildOptions{
@@ -415,6 +434,7 @@ func runChildMode() {
 	// Run agent with a nil outputChan (we write events ourselves).
 	outputChan := make(chan agent.OutputEvent, 256)
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
+	childAgentRef = a
 	a.SetModel(childModel)
 	a.SetSkills(false, nil)
 

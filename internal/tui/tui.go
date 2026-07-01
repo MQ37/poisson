@@ -22,6 +22,20 @@ func (t *TUI) contentWidth() int {
 	return w
 }
 
+// inputPromptCols is the visible width of the green "› " on the first input row.
+const inputPromptCols = 2
+
+// inputWrapWidth is how many text runes fit per wrapped input row. The first row
+// also renders the prompt, so text must stay cols-1-prompt wide to avoid
+// spilling past the terminal edge.
+func inputWrapWidth(cols int) int {
+	w := cols - 1 - inputPromptCols
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
 // TUI is the split-screen alt-screen REPL.
 type TUI struct {
 	agent     *agent.Agent
@@ -35,7 +49,7 @@ type TUI struct {
 	mu         sync.Mutex
 	rows       int // total terminal rows
 	cols       int // total terminal cols
-	headerRows int // Grok-style top strip (cwd · tokens · time)
+	headerRows int // Grok-style top strip (cwd · tokens · model)
 	scrollRows int // rows allotted to scrollback
 	inputRows  int // rows for multi-line input
 	statusRows int // legacy; 0 (status moved to headerRows)
@@ -162,7 +176,25 @@ func modelLabel(a *agent.Agent) string {
 // inputHeight returns how many screen rows the input currently needs.
 // Caps at a third of total rows so the scrollback stays readable.
 func (t *TUI) inputHeight(width int) int {
-	n := totalVisualLines(t.editor, width) + 2 // +1 separator, +1 hint
+	if t.approving.Load() {
+		n := t.rows * 2 / 5
+		if n < 8 {
+			n = 8
+		}
+		max := t.rows - t.headerRows - 3
+		if max < 6 {
+			max = 6
+		}
+		if n > max {
+			n = max
+		}
+		return n
+	}
+	visual := totalVisualLines(t.editor, width)
+	n := visual + 2 // +1 separator, +1 hint
+	if visual > 1 && n < 6 {
+		n = 6 // show multiple wrapped rows (3 body lines + chrome)
+	}
 	if n < 4 {
 		n = 4
 	}

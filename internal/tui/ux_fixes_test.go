@@ -162,17 +162,16 @@ func TestModelPickerKittyEscapeDismisses(t *testing.T) {
 
 func TestApprovalBoxEqualWidth(t *testing.T) {
 	o := newApprovalOverlay("rm -rf /tmp/x", "cleanup", "")
-	_, lines := o.render(24, 80)
-	if len(lines) < 3 {
-		t.Fatal("expected boxed approval")
+	lines := o.renderInputPanel(10, 80)
+	if len(lines) != 10 {
+		t.Fatalf("expected 10 panel lines, got %d", len(lines))
 	}
-	w0 := visibleWidth(lines[0])
 	for i, ln := range lines {
-		if visibleWidth(ln) != w0 {
-			t.Fatalf("line %d width mismatch: %q", i, stripANSI(ln))
+		if visibleWidth(ln) != 80 {
+			t.Fatalf("line %d width %d, want full terminal width 80: %q", i, visibleWidth(ln), stripANSI(ln))
 		}
 	}
-	if !strings.Contains(stripANSI(lines[0]), "approval required") {
+	if !strings.Contains(stripANSI(lines[0]), "Approval required") {
 		t.Fatalf("title missing: %q", lines[0])
 	}
 }
@@ -184,7 +183,7 @@ func TestApprovalOverlayShowsLongScript(t *testing.T) {
 		cmd.WriteByte('\n')
 	}
 	o := newApprovalOverlay(cmd.String(), "long summer script", "")
-	_, lines := o.render(24, 80)
+	lines := o.renderInputPanel(12, 80)
 	plain := stripANSI(strings.Join(lines, "\n"))
 	if !strings.Contains(plain, "echo line") {
 		t.Fatal("expected wrapped command lines in approval box")
@@ -192,8 +191,8 @@ func TestApprovalOverlayShowsLongScript(t *testing.T) {
 	if !strings.Contains(plain, "scroll command") {
 		t.Fatal("expected scroll hint for long command")
 	}
-	if len(lines) < 8 {
-		t.Fatalf("expected tall approval box, got %d lines", len(lines))
+	if len(lines) != 12 {
+		t.Fatalf("expected 12-line input panel, got %d lines", len(lines))
 	}
 }
 
@@ -205,9 +204,9 @@ func TestApprovalOverlayScrollChangesView(t *testing.T) {
 		cmd.WriteByte('\n')
 	}
 	o := newApprovalOverlay(cmd.String(), "numbered script", "")
-	_, before := o.render(12, 80)
+	before := o.renderInputPanel(10, 80)
 	o.scrollBy(5)
-	_, after := o.render(12, 80)
+	after := o.renderInputPanel(10, 80)
 	if stripANSI(strings.Join(before, "")) == stripANSI(strings.Join(after, "")) {
 		t.Fatal("scroll should change visible command lines")
 	}
@@ -217,6 +216,18 @@ func TestHighlightSearchMatchAllOccurrences(t *testing.T) {
 	got := stripANSI(highlightSearchMatch("foo bar foo", "foo", "[", "]"))
 	if strings.Count(got, "[foo]") != 2 {
 		t.Fatalf("expected 2 highlights, got %q", got)
+	}
+}
+
+func TestHighlightSearchMatchPreservesInlineANSI(t *testing.T) {
+	line := bashDangerStyle() + "rm" + reset + " -rf " + bashSafeStyle() + "build" + reset
+	got := stripANSI(highlightSearchMatch(line, "rm", "[", "]"))
+	if got != "[rm] -rf build" {
+		t.Fatalf("highlight shifted with inline ANSI: got %q", got)
+	}
+	got2 := stripANSI(highlightSearchMatch(line, "build", "[", "]"))
+	if got2 != "rm -rf [build]" {
+		t.Fatalf("highlight shifted on second span: got %q", got2)
 	}
 }
 

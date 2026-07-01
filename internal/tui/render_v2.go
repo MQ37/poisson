@@ -24,10 +24,7 @@ type layoutSnapshot struct {
 }
 
 func (t *TUI) prepareLayout() layoutSnapshot {
-	wrapWidth := t.cols - 1
-	if wrapWidth < 1 {
-		wrapWidth = 1
-	}
+	wrapWidth := inputWrapWidth(t.cols)
 	t.editor.wrapWidth = wrapWidth
 	wantedInput := t.inputHeight(wrapWidth)
 	if wantedInput != t.lastInputRows {
@@ -175,6 +172,13 @@ func animateToolLine(text string, frame int) string {
 }
 
 func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
+	if t.approving.Load() {
+		if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
+			t.paintApprovalInputRegion(b, lay, ao)
+			return
+		}
+	}
+
 	b.WriteString(cup(lay.inputTop, 1))
 	b.WriteString(clearLine())
 	if header := t.renderInputHeader(); header != "" {
@@ -305,11 +309,7 @@ func (t *TUI) paintConvPinRow(b *strings.Builder, row, width int) {
 
 func (t *TUI) formatVisibleScrollLine(vi int, lay layoutSnapshot) string {
 	line := t.formatScrollLine(lay.visible[vi].Text)
-	line = t.applySearchHighlight(vi, lay, line)
-	if t.approving.Load() {
-		line = dim + stripANSI(line) + reset
-	}
-	return line
+	return t.applySearchHighlight(vi, lay, line)
 }
 
 func (t *TUI) formatScrollLine(text string) string {
@@ -323,6 +323,13 @@ func (t *TUI) formatScrollLine(text string) string {
 }
 
 func (t *TUI) paintOverlay(b *strings.Builder, lay layoutSnapshot) {
+	if _, ok := t.activeOverlay.(*approvalOverlay); ok {
+		if t.lastOverlayLines > 0 {
+			t.clearOverlayGhostRows(b, lay, 1, t.lastOverlayLines)
+			t.lastOverlayLines = 0
+		}
+		return
+	}
 	if t.activeOverlay == nil {
 		if t.lastOverlayLines > 0 {
 			t.clearOverlayGhostRows(b, lay, 1, t.lastOverlayLines)

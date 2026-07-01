@@ -55,6 +55,30 @@ func TestExpandAtFilesNoMatch(t *testing.T) {
 	}
 }
 
+func TestExpandAtFilesTooLarge(t *testing.T) {
+	dir := testutil.TempDir(t)
+	path := filepath.Join(dir, "big.txt")
+	if err := os.WriteFile(path, make([]byte, maxAtFileBytes+1), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := expandAtFiles("@" + path)
+	if err == nil {
+		t.Fatal("expected error for oversized file")
+	}
+}
+
+func TestExpandAtFilesBinary(t *testing.T) {
+	dir := testutil.TempDir(t)
+	path := filepath.Join(dir, "bin.dat")
+	if err := os.WriteFile(path, []byte{0x00, 'a', 'b'}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := expandAtFiles("@" + path)
+	if err == nil {
+		t.Fatal("expected error for binary file")
+	}
+}
+
 func TestExpandAtFilesFenceEscalation(t *testing.T) {
 	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "nested.md")
@@ -260,15 +284,32 @@ func TestMoveDownScreen(t *testing.T) {
 // TestRenderLongInputProducesMultipleScreenRows reproduces the bug the user
 // hit: with cols=80, a 200-char single line must produce ≥3 wrapped chunks
 // rendered across 3 body rows.
+func TestInputWrapWidthAccountsForPrompt(t *testing.T) {
+	if got := inputWrapWidth(80); got != 77 {
+		t.Fatalf("inputWrapWidth(80) = %d, want 77", got)
+	}
+}
+
+func TestRenderInputScreenRowFitsTerminal(t *testing.T) {
+	tui := &TUI{cols: 80}
+	longLine := strings.Repeat("x", 120)
+	screenLines := wrapLines([]string{longLine}, inputWrapWidth(80))
+	row := tui.renderInputScreenRow(0, screenLines, 0, 10)
+	if w := visibleWidth(row); w > 80 {
+		t.Fatalf("first input row visible width %d exceeds cols 80", w)
+	}
+}
+
 func TestRenderLongInputProducesMultipleScreenRows(t *testing.T) {
 	longLine := strings.Repeat("x", 200)
-	e := &editor{lines: []string{longLine}, row: 0, col: 0, wrapWidth: 79}
+	wrap := inputWrapWidth(80)
+	e := &editor{lines: []string{longLine}, row: 0, col: 0, wrapWidth: wrap}
 	chunks := wrapLines(e.lines, e.wrapWidth)
 	if len(chunks) < 3 {
-		t.Fatalf("expected ≥3 wrapped chunks for 200-char line at width 79, got %d", len(chunks))
+		t.Fatalf("expected ≥3 wrapped chunks for 200-char line at width %d, got %d", wrap, len(chunks))
 	}
-	if got := len(chunks[0]); got != 79 {
-		t.Errorf("chunk[0] length = %d, want 79", got)
+	if got := utf8.RuneCountInString(chunks[0]); got != wrap {
+		t.Errorf("chunk[0] length = %d, want %d", got, wrap)
 	}
 	// Total chunks must sum to original runes (modulo stripped whitespace).
 	total := 0

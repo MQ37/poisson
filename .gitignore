@@ -3,3 +3,6 @@
 *.db-*
 .poisson/
 .DS_Store
+.cache/
+.grok-podman-home/
+.grok-podman-*.log

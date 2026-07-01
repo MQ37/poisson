@@ -27,10 +27,7 @@ func (t *TUI) recomputeLayout() {
 	}
 	t.rows = h
 	t.cols = w
-	wrapWidth := w - 1
-	if wrapWidth < 1 {
-		wrapWidth = 1
-	}
+	wrapWidth := inputWrapWidth(w)
 	t.editor.wrapWidth = wrapWidth
 	t.headerRows = 1
 	t.statusRows = 0
@@ -114,6 +111,27 @@ func (t *TUI) renderInputHeader() string {
 	return ""
 }
 
+// paintApprovalInputRegion fills the entire input region with an opaque approval
+// panel (replacing the normal prompt editor).
+func (t *TUI) paintApprovalInputRegion(b *strings.Builder, lay layoutSnapshot, o *approvalOverlay) {
+	lines := o.renderInputPanel(t.inputRows, t.cols)
+	for i := 0; i < t.inputRows; i++ {
+		row := lay.inputTop + i
+		b.WriteString(cup(row, 1))
+		b.WriteString(clearLine())
+		if i < len(lines) {
+			b.WriteString(truncateToWidth(lines[i], t.cols))
+		} else {
+			b.WriteString(fillWidthBG(approvalPanelBG(), "", t.cols))
+		}
+	}
+	endRow := lay.inputTop + t.inputRows
+	for r := endRow; r <= t.rows; r++ {
+		b.WriteString(cup(r, 1))
+		b.WriteString(clearLine())
+	}
+}
+
 func (t *TUI) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc int) string {
 	if lineIdx >= len(screenLines) {
 		return ""
@@ -124,11 +142,15 @@ func (t *TUI) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc int
 	if lineIdx == 0 {
 		prompt = fgGreen + "› " + reset
 	}
+	maxWidth := t.cols
+	if maxWidth < 1 {
+		maxWidth = 1
+	}
 	if lineIdx != sr {
 		if lineIdx == 0 {
-			return prompt + string(runes)
+			return truncateToWidth(prompt+string(runes), maxWidth)
 		}
-		return " " + string(runes)
+		return truncateToWidth(" "+string(runes), maxWidth)
 	}
 	if sc < 0 {
 		sc = 0
@@ -139,6 +161,9 @@ func (t *TUI) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc int
 		suffix = string(runes[sc+1:])
 	}
 	var b strings.Builder
+	if lineIdx > 0 {
+		b.WriteString(" ")
+	}
 	b.WriteString(prompt)
 	b.WriteString(prefix)
 	b.WriteString("\x1b[7m")
@@ -149,7 +174,7 @@ func (t *TUI) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc int
 	}
 	b.WriteString("\x1b[27m")
 	b.WriteString(suffix)
-	return b.String()
+	return truncateToWidth(b.String(), maxWidth)
 }
 
 func (t *TUI) renderHintLine() string {

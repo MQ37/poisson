@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"time"
 )
 
 // StatusSnapshot is the data rendered in the 2-line status bar at the bottom
@@ -34,7 +33,7 @@ type StatusSnapshot struct {
 	ShowCost       bool
 }
 
-// RenderHeader returns a single Grok-style top strip: cwd left, tokens/model/time right.
+// RenderHeader returns a single Grok-style top strip: cwd left, tokens/model right.
 func (s StatusSnapshot) RenderHeader(width int) string {
 	if width < 20 {
 		width = 80
@@ -108,10 +107,6 @@ func (s StatusSnapshot) renderHeaderRight() string {
 		b.WriteString(reset)
 		b.WriteString("  ")
 	}
-	b.WriteString(dim)
-	b.WriteString(time.Now().Format("3:04 PM"))
-	b.WriteString(reset)
-	b.WriteString(" ")
 	return b.String()
 }
 

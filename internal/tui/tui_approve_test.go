@@ -3,8 +3,17 @@ package tui
 import (
 	"context"
 	"io"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"poisson/internal/agent"
+	"poisson/internal/config"
+	"poisson/internal/provider"
+	"poisson/internal/store"
+	"poisson/internal/testutil"
+	"poisson/internal/tools"
 )
 
 func newTestTUIHelper() *TUI {
@@ -20,7 +29,7 @@ func TestApproveLifecycle(t *testing.T) {
 	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger", "")
+		result <- tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
 	}()
 
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -45,8 +54,8 @@ func TestApproveLifecycle(t *testing.T) {
 	tui.mu.Lock()
 	blocks := tui.scroll.blockCount()
 	tui.mu.Unlock()
-	if blocks != 1 {
-		t.Fatalf("expected approval result in scrollback, blocks=%d", blocks)
+	if blocks != 0 {
+		t.Fatalf("approval should not append to scrollback, blocks=%d", blocks)
 	}
 }
 
@@ -84,7 +93,7 @@ func TestApproveWhileAgentRunning(t *testing.T) {
 	tui.status.Thinking = true
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger", "")
+		result <- tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
 	}()
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for !tui.approving.Load() && time.Now().Before(deadline) {
@@ -136,6 +145,100 @@ func TestFeedPlainArrowNotScrollback(t *testing.T) {
 	}
 }
 
+type streamCallCounter struct {
+	mu    sync.Mutex
+	calls int
+}
+
+type cancelOnCtxProvider struct {
+	counter *streamCallCounter
+}
+
+func (p *cancelOnCtxProvider) ID() string { return "fake" }
+func (p *cancelOnCtxProvider) Models() ([]provider.Model, error) {
+	return []provider.Model{{ID: "m", ContextWindow: 8192}}, nil
+}
+func (p *cancelOnCtxProvider) Stream(ctx context.Context, _ *provider.Request) (<-chan provider.StreamEvent, error) {
+	p.counter.mu.Lock()
+	p.counter.calls++
+	p.counter.mu.Unlock()
+	ch := make(chan provider.StreamEvent)
+	go func() {
+		defer close(ch)
+		<-ctx.Done()
+	}()
+	return ch, nil
+}
+
+func TestApproveCancelsRiskAssessment(t *testing.T) {
+	testutil.TempHome(t)
+	dir := testutil.TempDir(t)
+	st, err := store.Open(filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	sessionID := "s-risk-cancel"
+	cfg := config.DefaultConfig()
+	if err := st.CreateSession(&store.Session{
+		ID: sessionID, Cwd: ".", Provider: "fake", Model: "m",
+		CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	counter := &streamCallCounter{}
+	prov := &cancelOnCtxProvider{counter: counter}
+	a := agent.NewAgent(st, prov, tools.NewRegistry(), cfg, sessionID, nil, nil)
+	a.SetModel("m")
+
+	tui := newTUIWithAgent(a, sessionID)
+	tui.writer = io.Discard
+
+	result := make(chan bool, 1)
+	go func() {
+		result <- tui.Approve("rm -rf x", "danger", "/tmp", agent.BashRiskUnknown)
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for !tui.approving.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !tui.approving.Load() {
+		t.Fatal("Approve never entered approving state")
+	}
+
+	// Wait until risk assessment has started at least one LLM stream.
+	deadline = time.Now().Add(500 * time.Millisecond)
+	for {
+		counter.mu.Lock()
+		calls := counter.calls
+		counter.mu.Unlock()
+		if calls >= 1 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	tui.approvalAnswer <- true
+	select {
+	case <-result:
+	case <-time.After(time.Second):
+		t.Fatal("Approve timed out")
+	}
+
+	// Give the risk goroutine time to observe cancellation.
+	time.Sleep(50 * time.Millisecond)
+
+	counter.mu.Lock()
+	calls := counter.calls
+	counter.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("Stream calls = %d, want 1 (second run should not start after approve)", calls)
+	}
+}
+
 func TestApproveCancelledByRunCancel(t *testing.T) {
 	tui := newTestTUIHelper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -146,7 +249,7 @@ func TestApproveCancelledByRunCancel(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger", "")
+		result <- tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
 	}()
 
 	deadline := time.Now().Add(500 * time.Millisecond)

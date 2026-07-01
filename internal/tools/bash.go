@@ -31,7 +31,7 @@ func NewBashTool(cwd string, sandbox bool, approvalFn func(command, description,
 func (t *BashTool) Name() string { return "bash" }
 
 func (t *BashTool) Description() string {
-	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. Safe commands run automatically; others require approval."
+	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. Safe commands run automatically; gated commands classified as low risk run automatically; medium/high/unknown require human approval."
 }
 
 func (t *BashTool) Schema() json.RawMessage {

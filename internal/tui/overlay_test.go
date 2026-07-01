@@ -38,23 +38,36 @@ func TestApprovalKeyAllowedIgnoresArrowCSI(t *testing.T) {
 
 func TestApprovalOverlayRenderFits(t *testing.T) {
 	o := newApprovalOverlay("rm -rf ./build", "dangerous", "")
-	anchor, lines := o.render(20, 80)
-	if anchor < 1 || anchor > 20 {
-		t.Fatalf("anchor = %d", anchor)
-	}
-	if len(lines) < 4 {
-		t.Fatalf("expected box lines, got %d", len(lines))
+	lines := o.renderInputPanel(8, 80)
+	if len(lines) != 8 {
+		t.Fatalf("expected 8 panel lines, got %d", len(lines))
 	}
 	for _, ln := range lines {
-		if visibleWidth(ln) > 80 {
-			t.Fatalf("line too wide: %d %q", visibleWidth(ln), ln)
+		if visibleWidth(ln) != 80 {
+			t.Fatalf("line not full width: %d %q", visibleWidth(ln), stripANSI(ln))
 		}
+	}
+}
+
+func TestApprovalOverlayShowsRiskLine(t *testing.T) {
+	o := newApprovalOverlay("rm -rf x", "cleanup", "/tmp")
+	o.setRisk("high")
+	lines := o.renderInputPanel(8, 80)
+	found := false
+	for _, ln := range lines {
+		if strings.Contains(stripANSI(ln), "Risk: HIGH") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected risk line in %v", lines)
 	}
 }
 
 func TestApprovalOverlayShowsPurposeLine(t *testing.T) {
 	o := newApprovalOverlay("rm -rf ./build", "clean build artifacts", "")
-	_, lines := o.render(20, 80)
+	lines := o.renderInputPanel(8, 80)
 	foundCmd := false
 	foundPurpose := false
 	for _, ln := range lines {
@@ -76,7 +89,7 @@ func TestApprovalOverlayShowsPurposeLine(t *testing.T) {
 
 func TestApprovalOverlayPurposeFallbackGuardReason(t *testing.T) {
 	o := newApprovalOverlay("rm -rf x", "", "")
-	_, lines := o.render(20, 60)
+	lines := o.renderInputPanel(8, 60)
 	found := false
 	for _, ln := range lines {
 		if strings.Contains(ln, "Purpose:") && strings.Contains(ln, "destructive command") {

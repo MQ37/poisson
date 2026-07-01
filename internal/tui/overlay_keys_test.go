@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 	"time"
+
+	"poisson/internal/agent"
 )
 
 func arrowUpBytes() []byte   { return []byte{27, '[', 'A'} }
@@ -130,7 +132,7 @@ func TestApproveBufferedAnswerBeforeReceive(t *testing.T) {
 	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger", "")
+		result <- tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
 	}()
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for !tui.approving.Load() && time.Now().Before(deadline) {

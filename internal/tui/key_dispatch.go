@@ -32,11 +32,7 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	defer t.mu.Unlock()
 
 	if t.editor.wrapWidth < 1 && t.cols > 0 {
-		w := t.cols - 1
-		if w < 1 {
-			w = 1
-		}
-		t.editor.wrapWidth = w
+		t.editor.wrapWidth = inputWrapWidth(t.cols)
 	}
 
 	if k.isCtrlC() {

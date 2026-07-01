@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"os"
 	"sync"
-	"time"
 )
 
 // childApprovalBroker serializes stdin reads for bash approval in child mode.
-// A single reader goroutine dispatches lines to the active waiter only.
+// Approval requests are queued FIFO; each waits indefinitely for a response.
 type childApprovalBroker struct {
 	mu      sync.Mutex
-	waiter  chan bool
+	queue   []chan bool
 	started bool
 }
 
@@ -32,47 +31,24 @@ func (b *childApprovalBroker) start() {
 				continue
 			}
 			b.mu.Lock()
-			ch := b.waiter
-			b.mu.Unlock()
-			if ch != nil {
-				select {
-				case ch <- resp.Approved:
-				default:
-				}
+			if len(b.queue) == 0 {
+				b.mu.Unlock()
+				continue
 			}
+			ch := b.queue[0]
+			b.queue = b.queue[1:]
+			b.mu.Unlock()
+			ch <- resp.Approved
 		}
 	}()
 }
 
-func (b *childApprovalBroker) wait(timeout time.Duration) bool {
+// wait blocks until the next approval_response is received for this request.
+func (b *childApprovalBroker) wait() bool {
 	b.start()
 	respCh := make(chan bool, 1)
 	b.mu.Lock()
-	if b.waiter != nil {
-		b.mu.Unlock()
-		return false
-	}
-	b.waiter = respCh
+	b.queue = append(b.queue, respCh)
 	b.mu.Unlock()
-
-	defer func() {
-		b.mu.Lock()
-		if b.waiter == respCh {
-			b.waiter = nil
-		}
-		b.mu.Unlock()
-	}()
-
-	select {
-	case approved := <-respCh:
-		return approved
-	case <-time.After(timeout):
-		go func() {
-			select {
-			case <-respCh:
-			case <-time.After(5 * time.Second):
-			}
-		}()
-		return false
-	}
+	return <-respCh
 }
