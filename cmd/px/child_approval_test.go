@@ -102,6 +102,36 @@ func TestChildApprovalBrokerWaitsIndefinitely(t *testing.T) {
 	}
 }
 
+func TestChildApprovalBrokerEOFAutoDeny(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = oldStdin })
+
+	var broker childApprovalBroker
+	done := make(chan bool, 1)
+	go func() {
+		done <- broker.wait()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-done:
+		if got {
+			t.Fatal("expected auto-deny on stdin close")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for EOF auto-deny")
+	}
+}
+
 func TestChildApprovalBrokerDropsOrphanResponse(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {

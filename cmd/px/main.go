@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"poisson/internal/agent"
@@ -115,16 +116,24 @@ func runREPL(noSkills bool) {
 		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
 
-	subOutputFn := func(eventType, text, toolName string, toolInput json.RawMessage) {
+	subOutputFn := func(eventType, text, toolName string, toolInput json.RawMessage, toolErr string) {
 		switch eventType {
 		case "text":
 			outputChan <- agent.OutputEvent{Type: agent.OutputText, Text: text}
 		case "tool_start":
 			outputChan <- agent.OutputEvent{Type: agent.OutputToolStart, ToolName: toolName, ToolInput: toolInput}
+		case "tool_result":
+			outputChan <- agent.OutputEvent{
+				Type:              agent.OutputToolResult,
+				ToolName:          toolName,
+				ToolResultContent: text,
+				ToolError:         toolErr,
+			}
 		}
 	}
-	subApprovalFn := func(command, description, workdir, agentName string) bool {
-		return approvalFn(command, description, workdir)
+	subApprovalFn := func(command, description, workdir, agentName, risk string) bool {
+		_ = agentName // overlay uses command context; name available for future UI
+		return humanApproval(command, description, workdir, agent.ParseBashRisk(risk))
 	}
 
 	reg := tools.BuildRegistry(tools.BuildOptions{
@@ -310,7 +319,7 @@ func cmdLogout(args []string) {
 // stdout. Bash approval requests are written to stdout and the response is
 // read from stdin.
 func runChildMode() {
-	// Parse args: --json --no-skills --session <id> --tools <list> [task]
+	// Parse args: --json --no-skills --session <id> --tools <list> [-- task]
 	var sessionID, task, toolsList string
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
@@ -327,9 +336,14 @@ func runChildMode() {
 				toolsList = args[i+1]
 				i++
 			}
+		case "--":
+			task = strings.Join(args[i+1:], " ")
+			i = len(args)
 		default:
-			if !strings.HasPrefix(args[i], "-") && task == "" {
+			if task == "" {
 				task = args[i]
+			} else {
+				task += " " + args[i]
 			}
 		}
 	}
@@ -373,15 +387,18 @@ func runChildMode() {
 			childModel = cfg.Ollama.Model
 		}
 	}
-	st.CreateSession(&store.Session{
-		ID:         sessionID,
-		Cwd:        cwd,
-		Provider:   childProv,
-		Model:      childModel,
-		IsSubagent: true,
-		CreatedAt:  time.Now().Unix(),
-		UpdatedAt:  time.Now().Unix(),
-	})
+	if _, err := st.GetSession(sessionID); err != nil {
+		if err := st.CreateSession(&store.Session{
+			ID:         sessionID,
+			Cwd:        cwd,
+			Provider:   childProv,
+			Model:      childModel,
+			IsSubagent: true,
+		}); err != nil {
+			writeChildEvent(map[string]interface{}{"type": "error", "error": err.Error()})
+			os.Exit(1)
+		}
+	}
 
 	authStore, _ := auth.Load()
 	prov, _, _, _ := provider.BootstrapFromConfig(authStore, cfg)
@@ -439,16 +456,27 @@ func runChildMode() {
 	a.SetSkills(false, nil)
 
 	var toolCount int
-	var outputText strings.Builder
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for ev := range outputChan {
 			switch ev.Type {
 			case agent.OutputText:
-				outputText.WriteString(ev.Text)
 				writeChildEvent(map[string]interface{}{"type": "text", "text": ev.Text})
 			case agent.OutputToolStart:
 				toolCount++
 				writeChildEvent(map[string]interface{}{"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput})
+			case agent.OutputToolResult:
+				payload := map[string]interface{}{
+					"type":   "tool_result",
+					"tool":   ev.ToolName,
+					"result": ev.ToolResultContent,
+				}
+				if ev.ToolError != "" {
+					payload["error"] = ev.ToolError
+				}
+				writeChildEvent(payload)
 			}
 		}
 	}()
@@ -459,22 +487,23 @@ func runChildMode() {
 		success = false
 	}
 	close(outputChan)
+	wg.Wait()
 
 	ctxUsed, _ := a.ContextTokens()
-	done := map[string]interface{}{
+	writeChildEvent(map[string]interface{}{
 		"type":          "done",
 		"success":       success,
 		"toolCount":     toolCount,
 		"turns":         1,
 		"contextTokens": ctxUsed,
-	}
-	if outputText.Len() > 0 {
-		done["text"] = outputText.String()
-	}
-	writeChildEvent(done)
+	})
 }
 
+var childEventMu sync.Mutex
+
 func writeChildEvent(event map[string]interface{}) {
+	childEventMu.Lock()
+	defer childEventMu.Unlock()
 	data, _ := json.Marshal(event)
 	fmt.Println(string(data))
 }

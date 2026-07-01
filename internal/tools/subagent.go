@@ -5,18 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"poisson/internal/store"
 	"poisson/internal/subagent"
 )
 
-// SubagentOutput is a callback for streaming subagent events to the caller.
-// The caller (agent) wraps this to send events to its output channel.
-type SubagentOutput func(eventType, text, toolName string, toolInput json.RawMessage)
+// SubagentOutput streams subagent events to the parent UI.
+// eventType is text | tool_start | tool_result; toolErr is set for tool_result errors.
+type SubagentOutput func(eventType, text, toolName string, toolInput json.RawMessage, toolErr string)
 
-// SubagentApproval is a callback for bash approval requests from the child.
-type SubagentApproval func(command, description, workdir, agentName string) bool
+// SubagentApproval handles bash approval requests forwarded from the child.
+// risk is the child's assessed level (low/medium/high); empty means unknown.
+type SubagentApproval func(command, description, workdir, agentName, risk string) bool
 
 // SubagentTool spawns a one-shot child Poisson process for isolated work.
 type SubagentTool struct {
@@ -78,8 +78,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		agentName = "subagent"
 	}
 
-	// Create a child session in the store.
-	childSessionID := fmt.Sprintf("sub-%d", time.Now().UnixNano())
+	childSessionID := store.NewSubagentID()
 	prov, model := "ollama", "glm-5.2:cloud"
 	if t.providerFn != nil {
 		if p := t.providerFn(); p != "" {
@@ -91,15 +90,15 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 			model = m
 		}
 	}
-	t.store.CreateSession(&store.Session{
+	if err := t.store.CreateSession(&store.Session{
 		ID:         childSessionID,
 		Cwd:        t.cwd,
 		Provider:   prov,
 		Model:      model,
 		IsSubagent: true,
-		CreatedAt:  time.Now().Unix(),
-		UpdatedAt:  time.Now().Unix(),
-	})
+	}); err != nil {
+		return ToolResult{Error: "failed to create subagent session: " + err.Error()}, nil
+	}
 
 	child, err := subagent.Spawn(subagent.SpawnInput{
 		Task:      params.Task,
@@ -112,36 +111,37 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	if err != nil {
 		return ToolResult{Error: "failed to spawn subagent: " + err.Error()}, nil
 	}
-	defer child.Kill()
+	defer child.Reap()
 
-	// Read events from child.
 	var output strings.Builder
 	var toolCount, turns int
 	var success bool
 	var childErr string
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return ToolResult{Content: output.String(), Error: "subagent cancelled"}, nil
+		}
+
 		type readResult struct {
 			ev  *subagent.ChildEvent
 			err error
 		}
 		readCh := make(chan readResult, 1)
 		go func() {
-			ev, err := child.ReadEvent()
-			readCh <- readResult{ev: ev, err: err}
+			ev, readErr := child.ReadEvent()
+			readCh <- readResult{ev: ev, err: readErr}
 		}()
 
 		select {
 		case <-ctx.Done():
-			child.Kill()
 			return ToolResult{Content: output.String(), Error: "subagent cancelled"}, nil
 		case res := <-readCh:
 			if res.err != nil {
 				if ctx.Err() != nil {
-					child.Kill()
 					return ToolResult{Content: output.String(), Error: "subagent cancelled"}, nil
 				}
-				if res.err.Error() != "" {
+				if res.err.Error() != "" && childErr == "" {
 					childErr = res.err.Error()
 				}
 				goto done
@@ -155,27 +155,37 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 			case "text":
 				output.WriteString(ev.Text)
 				if t.outputFn != nil {
-					t.outputFn("text", ev.Text, "", nil)
+					t.outputFn("text", ev.Text, "", nil, "")
 				}
 
 			case "tool":
 				if t.outputFn != nil {
-					t.outputFn("tool_start", "", ev.Tool, ev.ToolInput)
+					t.outputFn("tool_start", "", ev.Tool, ev.ToolInput, "")
 				}
 				toolCount++
 
+			case "tool_result":
+				if t.outputFn != nil {
+					t.outputFn("tool_result", ev.Result, ev.Tool, nil, ev.Error)
+				}
+
 			case "approval_request":
+				if ctx.Err() != nil {
+					goto done
+				}
 				approved := false
 				if t.approvalFn != nil {
-					approved = t.approvalFn(ev.Command, ev.Description, ev.Cwd, ev.Agent)
+					approved = t.approvalFn(ev.Command, ev.Description, ev.Cwd, ev.Agent, ev.Risk)
 				}
-				child.SendApprovalSafe(approved)
+				if err := child.SendApprovalSafe(approved); err != nil {
+					childErr = "approval response failed: " + err.Error()
+					goto done
+				}
 
 			case "done":
 				success = ev.Success
-				turns = ev.Turns
-				if ev.Text != "" {
-					output.WriteString(ev.Text)
+				if ev.Turns > 0 {
+					turns = ev.Turns
 				}
 				if ev.Error != "" {
 					childErr = ev.Error
@@ -190,8 +200,6 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	}
 
 done:
-	child.Wait()
-
 	result := output.String()
 	result += fmt.Sprintf("\n\n---\nSubagent finished. %d tool calls, %d turns.", toolCount, turns)
 	if childErr != "" {

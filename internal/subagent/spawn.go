@@ -27,9 +27,10 @@ type SpawnInput struct {
 
 // ChildProcess wraps a spawned Poisson child process.
 type ChildProcess struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  *bufio.Reader
+	stdinMu sync.Mutex
 }
 
 // ChildEvent is a JSON event emitted by the child on stdout.
@@ -38,10 +39,12 @@ type ChildEvent struct {
 	Text          string          `json:"text,omitempty"`
 	Tool          string          `json:"tool,omitempty"`
 	ToolInput     json.RawMessage `json:"tool_input,omitempty"`
+	Result        string          `json:"result,omitempty"`
 	Command       string          `json:"command,omitempty"`
 	Description   string          `json:"description,omitempty"`
 	Cwd           string          `json:"cwd,omitempty"`
 	Agent         string          `json:"agent,omitempty"`
+	Risk          string          `json:"risk,omitempty"`
 	Approved      bool            `json:"approved,omitempty"`
 	Success       bool            `json:"success,omitempty"`
 	ToolCount     int             `json:"toolCount,omitempty"`
@@ -63,7 +66,7 @@ func Spawn(input SpawnInput) (*ChildProcess, error) {
 		"--tools", strings.Join(input.ChildTools, ","),
 	}
 	if input.Task != "" {
-		args = append(args, input.Task)
+		args = append(args, "--", input.Task)
 	}
 
 	bin, err := os.Executable()
@@ -98,7 +101,7 @@ func Spawn(input SpawnInput) (*ChildProcess, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	cmd.Stderr = nil // discard stderr
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start child: %w", err)
@@ -130,8 +133,6 @@ func (c *ChildProcess) ReadEvent() (*ChildEvent, error) {
 
 // SendApproval writes an approval response to the child's stdin.
 func (c *ChildProcess) SendApproval(approved bool) error {
-	resp := map[string]bool{"type": false, "approved": approved}
-	_ = resp // We need to use the correct structure
 	data, err := json.Marshal(map[string]interface{}{
 		"type":     "approval_response",
 		"approved": approved,
@@ -143,6 +144,13 @@ func (c *ChildProcess) SendApproval(approved bool) error {
 	return err
 }
 
+// SendApprovalSafe is a thread-safe version of SendApproval.
+func (c *ChildProcess) SendApprovalSafe(approved bool) error {
+	c.stdinMu.Lock()
+	defer c.stdinMu.Unlock()
+	return c.SendApproval(approved)
+}
+
 // Wait waits for the child process to exit and returns its error (if any).
 func (c *ChildProcess) Wait() error {
 	return c.cmd.Wait()
@@ -150,15 +158,14 @@ func (c *ChildProcess) Wait() error {
 
 // Kill terminates the child process.
 func (c *ChildProcess) Kill() error {
+	if c.cmd.Process == nil {
+		return nil
+	}
 	return c.cmd.Process.Kill()
 }
 
-// mu guards stdin writes (if multiple goroutines send approvals).
-var mu sync.Mutex
-
-// SendApprovalSafe is a thread-safe version of SendApproval.
-func (c *ChildProcess) SendApprovalSafe(approved bool) error {
-	mu.Lock()
-	defer mu.Unlock()
-	return c.SendApproval(approved)
+// Reap kills the child if still running and always waits to avoid zombies.
+func (c *ChildProcess) Reap() {
+	_ = c.Kill()
+	_ = c.Wait()
 }
