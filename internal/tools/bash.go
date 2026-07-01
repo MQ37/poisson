@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"poisson/internal/guard"
@@ -122,6 +123,16 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	if dir != "" {
 		cmd.Dir = dir
 	}
+	// Run in its own process group and kill the whole group on timeout/cancel,
+	// otherwise only the bash shell dies and its spawned children are orphaned.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = 2 * time.Second
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
