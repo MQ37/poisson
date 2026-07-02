@@ -81,7 +81,7 @@ func (s StatusSnapshot) renderHeaderRight() string {
 			label = s.Effort + " · " + label
 		}
 		b.WriteString(fgMagenta)
-		b.WriteString(shortenPath(label, 28))
+		b.WriteString(label)
 		b.WriteString(reset)
 		b.WriteString("  ")
 	}
