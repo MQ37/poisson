@@ -89,6 +89,37 @@ func TestXAIStreamText(t *testing.T) {
 	_ = p
 }
 
+// TestSSEParseReasoningContent verifies reasoning_content (ollama/DeepSeek-style)
+// and reasoning (xAI/alternate) fields are parsed and emitted as EventThinkingDelta.
+func TestSSEParseReasoningContent(t *testing.T) {
+	sse := "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking...\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"reasoning\":\"more thought\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":null}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":1}}\n\n" +
+		"data: [DONE]\n\n"
+
+	ch := make(chan StreamEvent, 64)
+	go pumpXAISSETest(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+
+	var thinking, text string
+	for ev := range ch {
+		switch ev.Type {
+		case EventThinkingDelta:
+			thinking += ev.Text
+		case EventTextDelta:
+			text += ev.Text
+		case EventError:
+			t.Fatalf("error: %v", ev.Error)
+		}
+	}
+	if thinking != "thinking...more thought" {
+		t.Errorf("thinking = %q, want %q", thinking, "thinking...more thought")
+	}
+	if text != "answer" {
+		t.Errorf("text = %q, want %q", text, "answer")
+	}
+}
+
 func TestXAISSEParseText(t *testing.T) {
 	sse := "data: {\"choices\":[{\"delta\":{\"content\":\"hello from grok\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n"
 

@@ -87,9 +87,11 @@ func pumpOpenAIChatCompletionsSSE(ctx context.Context, body io.ReadCloser, ch ch
 
 		var chunk struct {
 			Choices []struct {
-				Delta struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
+			Delta struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"` // ollama / DeepSeek-style
+				Reasoning        string `json:"reasoning"`        // xAI / alternate
+				ToolCalls []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Type     string `json:"type"`
@@ -123,6 +125,23 @@ func pumpOpenAIChatCompletionsSSE(ctx context.Context, body io.ReadCloser, ch ch
 		}
 
 		delta := chunk.Choices[0].Delta
+
+		// Reasoning / thinking content — emitted before the answer so the TUI
+		// groups it as a thinking block (ollama reasoning_content, xAI reasoning).
+		if delta.ReasoningContent != "" {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- StreamEvent{Type: EventThinkingDelta, Text: delta.ReasoningContent}:
+			}
+		}
+		if delta.Reasoning != "" {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- StreamEvent{Type: EventThinkingDelta, Text: delta.Reasoning}:
+			}
+		}
 
 		if delta.Content != "" {
 			select {
