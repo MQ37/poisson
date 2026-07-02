@@ -40,26 +40,6 @@ func (e *editor) runeCount(row int) int {
 	return utf8.RuneCountInString(e.lines[row])
 }
 
-// clampCursor keeps row/col within bounds (call after mutations).
-func (e *editor) clampCursor() {
-	if e.row < 0 {
-		e.row = 0
-	}
-	if e.row >= len(e.lines) {
-		e.row = len(e.lines) - 1
-	}
-	if e.row < 0 {
-		e.row = 0
-	}
-	if e.col < 0 {
-		e.col = 0
-	}
-	max := e.runeCount(e.row)
-	if e.col > max {
-		e.col = max
-	}
-}
-
 // insertRune inserts a printable rune at the cursor.
 func (e *editor) insertRune(r rune) {
 	runes := []rune(e.lines[e.row])
@@ -158,30 +138,6 @@ func (e *editor) moveRight() {
 		e.col = 0
 	}
 }
-
-func (e *editor) moveUp() {
-	if e.row == 0 {
-		return
-	}
-	e.row--
-	if e.col > e.runeCount(e.row) {
-		e.col = e.runeCount(e.row)
-	}
-}
-
-func (e *editor) moveDown() {
-	if e.row == len(e.lines)-1 {
-		return
-	}
-	e.row++
-	if e.col > e.runeCount(e.row) {
-		e.col = e.runeCount(e.row)
-	}
-}
-
-func (e *editor) moveHome() { e.col = 0 }
-
-func (e *editor) moveEnd() { e.col = e.runeCount(e.row) }
 
 // moveUpScreen moves the cursor one screen line up, wrapping across logical
 // rows. If the cursor is at the top, it stays put.
@@ -619,19 +575,6 @@ func parseModsEventPart(s string) (mods, event int) {
 		event = 1
 	}
 	return mods, event
-}
-
-func csiShiftFromBody(body []byte) bool {
-	if len(body) == 0 {
-		return false
-	}
-	parts := strings.Split(string(body), ";")
-	mods, _ := parseModsEventPart(parts[len(parts)-1])
-	m := mods - 1
-	if m < 0 {
-		m = 0
-	}
-	return m&1 != 0
 }
 
 func (e *editor) moveWordLeft() {

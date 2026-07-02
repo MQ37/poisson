@@ -208,12 +208,6 @@ func (t *TUI) feedConvFocus(k Key) (handled bool) {
 	return false
 }
 
-func (t *TUI) scrollViewportRows() int {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.convScrollRows()
-}
-
 // trimScrollbackFromLastUserLocked removes the last user turn from scrollback.
 // Caller must hold t.mu.
 func (t *TUI) trimScrollbackFromLastUserLocked() {
@@ -223,13 +217,6 @@ func (t *TUI) trimScrollbackFromLastUserLocked() {
 	}
 	t.scroll.trimFromBlockIndex(idxs[len(idxs)-1])
 	t.markScrollDirty()
-}
-
-// trimScrollbackFromLastUser removes the last user turn from on-screen scrollback.
-func (t *TUI) trimScrollbackFromLastUser() {
-	t.mu.Lock()
-	t.trimScrollbackFromLastUserLocked()
-	t.mu.Unlock()
 }
 
 // resetSessionViewLocked clears scrollback and focus after switching sessions.
@@ -367,13 +354,4 @@ func (t *TUI) syncConvUserIdxFromScrollLocked() {
 		t.convUserIdx = chosen
 		t.dirty.markScrollRows(0)
 	}
-}
-
-func containsTab(data []byte) bool {
-	for _, b := range data {
-		if b == 9 {
-			return true
-		}
-	}
-	return false
 }

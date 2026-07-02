@@ -185,13 +185,6 @@ func truncatePlain(s string, width int) string {
 	return string(runes[:width-1]) + "…"
 }
 
-func max0(n int) int {
-	if n < 0 {
-		return 0
-	}
-	return n
-}
-
 // approvalKeyAllowed maps approval input bytes to allow/deny. ok reports
 // whether the chunk contained a recognized approval answer.
 func approvalKeyAllowed(data []byte) (allowed, ok bool) {
@@ -203,13 +196,3 @@ func approvalKeyAllowed(data []byte) (allowed, ok bool) {
 	}
 	return false, false
 }
-
-// overlayHeight returns how many rows an overlay needs (for dirty marking).
-func overlayHeight(o overlay, scrollRows, cols int) int {
-	if ao, ok := o.(*approvalOverlay); ok {
-		return len(ao.renderInputPanel(8, cols))
-	}
-	_, lines := o.render(scrollRows, cols)
-	return len(lines)
-}
-

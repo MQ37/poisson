@@ -100,8 +100,8 @@ func (s *Store) AppendMessage(msg *Message) error {
 	// Insert message + FTS index + session touch atomically so a failure
 	// between steps can't leave the message invisible to /search.
 	tx, err := s.db.Begin()
-		if err != nil {
-			return fmt.Errorf("begin append tx: %w", err)
+	if err != nil {
+		return fmt.Errorf("begin append tx: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -130,15 +130,6 @@ func (s *Store) AppendMessage(msg *Message) error {
 	}
 
 	return tx.Commit()
-}
-
-func (s *Store) touchSession(sessionID string) error {
-	_, err := s.db.Exec(`UPDATE sessions SET updated_at = ? WHERE id = ?`,
-		time.Now().Unix(), sessionID)
-	if err != nil {
-		return fmt.Errorf("touch session: %w", err)
-	}
-	return nil
 }
 
 // GetMessages returns only the active messages for a session

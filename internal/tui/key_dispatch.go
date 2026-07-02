@@ -314,36 +314,6 @@ func (t *TUI) processEditor(data []byte) (bool, error) {
 	return false, nil
 }
 
-func hasCSI(data []byte) bool {
-	for i := 0; i+1 < len(data); i++ {
-		if data[i] == 27 && data[i+1] == '[' {
-			return true
-		}
-	}
-	return false
-}
-
-func containsCtrlC(data []byte) bool {
-	inPaste := false
-	for i := 0; i < len(data); i++ {
-		b := data[i]
-		if !inPaste && i+5 < len(data) && b == 27 && data[i+1] == '[' && data[i+2] == '2' && data[i+3] == '0' && data[i+4] == '0' && data[i+5] == '~' {
-			inPaste = true
-			i += 5
-			continue
-		}
-		if inPaste && i+5 < len(data) && b == 27 && data[i+1] == '[' && data[i+2] == '2' && data[i+3] == '0' && data[i+4] == '1' && data[i+5] == '~' {
-			inPaste = false
-			i += 5
-			continue
-		}
-		if !inPaste && b == 3 {
-			return true
-		}
-	}
-	return false
-}
-
 func containsSubmitKey(data []byte) bool {
 	for i, b := range data {
 		if b == '\r' {

@@ -202,16 +202,6 @@ func tableDataRow(widths []int, cells []string, header bool) string {
 	return b.String()
 }
 
-func maxInt(xs []int) int {
-	m := 0
-	for _, x := range xs {
-		if x > m {
-			m = x
-		}
-	}
-	return m
-}
-
 func maxIntIndex(xs []int) int {
 	best, idx := 0, 0
 	for i, x := range xs {

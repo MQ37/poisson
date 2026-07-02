@@ -301,34 +301,6 @@ func cmdCost(h commandHost) {
 	h.Out(styleSystem, b.String())
 }
 
-// cmdProviders lists available providers.
-func cmdProviders(h commandHost) {
-	var b strings.Builder
-	b.WriteString("Providers:\n")
-	b.WriteString("  anthropic  Anthropic Claude (API key or OAuth stealth)\n")
-	b.WriteString("  ollama     Local Ollama instance\n")
-	b.WriteString("  xai        xAI Grok (SuperGrok OAuth)\n")
-	b.WriteString(fmt.Sprintf("  current:   %s/%s\n", h.Agent().Provider().ID(), h.Agent().Model()))
-	h.Out(styleSystem, b.String())
-}
-
-// cmdModels lists models for the current provider.
-func cmdModels(h commandHost) error {
-	a := h.Agent()
-	models, err := a.Provider().Models()
-	if err != nil {
-		h.Out(styleError, "error listing models: "+err.Error())
-		return nil
-	}
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Models (%s):\n", a.Provider().ID()))
-	for _, m := range models {
-		b.WriteString(fmt.Sprintf("  %s  ctx=%d  %s\n", m.ID, m.ContextWindow, m.Name))
-	}
-	h.Out(styleSystem, b.String())
-	return nil
-}
-
 // cmdEffort sets the reasoning/effort level.
 func cmdEffort(h commandHost, args []string) error {
 	a := h.Agent()
@@ -346,5 +318,3 @@ func cmdEffort(h commandHost, args []string) error {
 	}
 	return nil
 }
-
-

@@ -143,38 +143,6 @@ func sanitizeSystemText(text string, cfg config.StealthConfig) string {
 	return strings.TrimSpace(result)
 }
 
-// stealthHealthCheck sends a minimal probe to verify the billing header
-// is accepted. Returns nil if healthy, an error otherwise.
-func (p *AnthropicProvider) stealthHealthCheck() error {
-	// A minimal request: 1 token max, trivial prompt.
-	req := &Request{
-		Model:     "claude-haiku-3-5-20241022",
-		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
-		MaxTokens: 1,
-	}
-	p.applyStealth(req)
-
-	ar := p.buildAnthropicRequest(req, true)
-	reqBody, _ := jsonMarshal(ar)
-
-	httpReq, err := httpNewRequest("POST", p.baseURL+"/v1/messages", reqBody)
-	if err != nil {
-		return err
-	}
-	p.setHeaders(httpReq, true)
-
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 400 || resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return &StealthError{StatusCode: resp.StatusCode}
-	}
-	return nil
-}
-
 // StealthError indicates the stealth billing header was rejected.
 type StealthError struct {
 	StatusCode int

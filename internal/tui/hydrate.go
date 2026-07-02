@@ -7,15 +7,15 @@ import (
 
 // msgBlock mirrors agent content block JSON in the messages table.
 type msgBlock struct {
-	Type       string          `json:"type"`
-	Text       string          `json:"text,omitempty"`
-	ToolCallID string          `json:"tool_call_id,omitempty"`
-	ToolName   string          `json:"tool_name,omitempty"`
-	ToolInput  json.RawMessage `json:"tool_input,omitempty"`
-	ToolResult  string `json:"tool_result,omitempty"`
-	ToolIsError bool   `json:"tool_is_error,omitempty"`
-	Thinking    string `json:"thinking,omitempty"`
-	Redacted    bool   `json:"redacted,omitempty"`
+	Type        string          `json:"type"`
+	Text        string          `json:"text,omitempty"`
+	ToolCallID  string          `json:"tool_call_id,omitempty"`
+	ToolName    string          `json:"tool_name,omitempty"`
+	ToolInput   json.RawMessage `json:"tool_input,omitempty"`
+	ToolResult  string          `json:"tool_result,omitempty"`
+	ToolIsError bool            `json:"tool_is_error,omitempty"`
+	Thinking    string          `json:"thinking,omitempty"`
+	Redacted    bool            `json:"redacted,omitempty"`
 }
 
 func parseMessageBlocks(content string) []msgBlock {
@@ -38,14 +38,6 @@ func parseHydratedToolResult(b msgBlock) (content, errMsg string) {
 		return b.ToolResult, strings.TrimPrefix(b.ToolResult, "Error: ")
 	}
 	return b.ToolResult, ""
-}
-
-// refreshScrollbackFromStoreLocked rebuilds on-screen scrollback from the store.
-// Caller must hold t.mu.
-func (t *TUI) refreshScrollbackFromStoreLocked() {
-	t.clearScrollbackKeepIntroLocked()
-	t.hydrateScrollbackLocked()
-	t.markFullDirty()
 }
 
 // hydrateScrollbackLocked replays store messages into scrollback. Caller holds t.mu.

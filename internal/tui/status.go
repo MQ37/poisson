@@ -9,28 +9,28 @@ import (
 // StatusSnapshot is the data rendered in the 2-line status bar at the bottom
 // of the split-screen TUI. It is updated from OutputStatus events.
 type StatusSnapshot struct {
-	SessionID      string
-	Title          string
-	Cwd            string
-	Branch         string
-	Model          string
-	Effort         string
-	ContextPct     float64
-	ContextTokens  int
-	ContextWindow  int
-	OutputTokens   int
-	CacheRead      int
-	CacheWrite     int
-	Cost           float64
-	CallCount      int
-	ToolCalls      int
-	ToolErrors     int
-	Thinking       bool
-	SpinnerFrame   int
-	WarnContext    bool
-	Hint           string
-	ShowTokens     bool
-	ShowCost       bool
+	SessionID     string
+	Title         string
+	Cwd           string
+	Branch        string
+	Model         string
+	Effort        string
+	ContextPct    float64
+	ContextTokens int
+	ContextWindow int
+	OutputTokens  int
+	CacheRead     int
+	CacheWrite    int
+	Cost          float64
+	CallCount     int
+	ToolCalls     int
+	ToolErrors    int
+	Thinking      bool
+	SpinnerFrame  int
+	WarnContext   bool
+	Hint          string
+	ShowTokens    bool
+	ShowCost      bool
 }
 
 // RenderHeader returns a single Grok-style top strip: cwd left, tokens/model right.
@@ -222,13 +222,6 @@ func (s StatusSnapshot) renderBottom(width int) string {
 	return truncateToWidth(b.String(), width)
 }
 
-func min6(n int) int {
-	if n < 6 {
-		return n
-	}
-	return 6
-}
-
 // shortenPath collapses $HOME to ~ and truncates the middle if longer than n.
 func shortenPath(p string, n int) string {
 	if home := homeDir(); home != "" && strings.HasPrefix(p, home) {
@@ -253,8 +246,6 @@ func homeDir() string {
 	}
 	return ""
 }
-
-func cwdLabel() string { return fgBlue }
 
 // gitBranch returns the current git branch name or "" if not in a repo.
 func gitBranch(cwd string) string {

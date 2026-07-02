@@ -88,15 +88,6 @@ func (d *dirtyTracker) markOverlay() {
 	d.cursor = true
 }
 
-func (d *dirtyTracker) markCursor() {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.full {
-		return
-	}
-	d.cursor = true
-}
-
 // dirtySnapshot is a point-in-time view consumed by the render goroutine.
 type dirtySnapshot struct {
 	full    bool

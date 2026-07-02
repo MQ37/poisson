@@ -32,13 +32,13 @@ type StyledLine struct {
 // scrollback is an append-only ring of document blocks. Blocks are laid out
 // to screen rows lazily with per-block caching.
 type scrollback struct {
-	blocks   []Block
-	maxLines int // max logical blocks (name kept for compat)
-	scrollOffset int // screen rows scrolled up from bottom; 0 = live tail
-	totalAdded int
+	blocks              []Block
+	maxLines            int // max logical blocks (name kept for compat)
+	scrollOffset        int // screen rows scrolled up from bottom; 0 = live tail
+	totalAdded          int
 	lastStreamWrapCount int
-	nextID     int64
-	focusedToolID int64 // expanded tool card receiving ↑↓ scroll
+	nextID              int64
+	focusedToolID       int64 // expanded tool card receiving ↑↓ scroll
 }
 
 func newScrollback(max int) *scrollback {
@@ -115,13 +115,6 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 
 func (s *scrollback) append(line StyledLine) {
 	s.appendBlock(styleToKind(line.Style), line.Text)
-}
-
-func (s *scrollback) appendIntroLine(line string) {
-	s.lastStreamWrapCount = 0
-	s.blocks = append(s.blocks, s.newBlock(blockIntro, line))
-	s.totalAdded++
-	s.trim()
 }
 
 func (s *scrollback) prependIntroLines(lines []string) {

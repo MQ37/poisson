@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -152,14 +151,6 @@ func resolvePath(cwd, p string) string {
 		return p
 	}
 	return filepath.Join(cwd, p)
-}
-
-// envOrDefault reads an env var or returns the default.
-func envOrDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }
 
 // itoa is a small helper to avoid importing strconv in callers.
