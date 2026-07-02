@@ -351,3 +351,60 @@ func TestAssessBashRiskDestructiveFastPath(t *testing.T) {
 		t.Fatalf("LLM was called %d times for a destructive command (should be 0)", fp.CallCount())
 	}
 }
+
+func TestIsUntrustedExecCommand(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want bool
+	}{
+		{"npx create-react-app my-app", true},
+		{"npx cowsay", true},
+		{"npx eslint .", true},
+		{"sudo npx something", true},
+		{"pnpm dlx cowsay", true},
+		{"pnpx cowsay", true},
+		{"yarn dlx prettier", true},
+		{"pipx run ruff", true},
+		{"bunx cowsay", true},
+		{"dlx cowsay", true},
+		{"cd /tmp \u0026\u0026 npx shadcn@latest add button", true},
+		{"echo hi; npx evil", true},
+		// Non-untrusted-exec.
+		{"npm run build", false},
+		{"pnpm install", false},
+		{"yarn add react", false},
+		{"pipx install ruff", false}, // install, not run
+		{"pnpm exec eslint .", false}, // exec runs local binary
+		{"git status", false},
+		{"ls -la", false},
+		{"cat file.txt", false},
+	}
+	for _, c := range cases {
+		got := isUntrustedExecCommand(c.cmd)
+		if got != c.want {
+			t.Errorf("isUntrustedExecCommand(%q) = %v, want %v", c.cmd, got, c.want)
+		}
+	}
+}
+
+// TestAssessBashRiskUntrustedExecFastPath verifies that npx commands are
+// escalated to high without calling the LLM (zero provider calls).
+func TestAssessBashRiskUntrustedExecFastPath(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("low", nil),
+		provider.FakeTextResponse("low", nil),
+	})
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	got := a.AssessBashRisk(context.Background(), "npx create-react-app", "scaffold app", "/tmp")
+	if got != BashRiskHigh {
+		t.Fatalf("AssessBashRisk(npx) = %q, want high", got)
+	}
+	if fp.CallCount() != 0 {
+		t.Fatalf("LLM was called %d times for an untrusted-exec command (should be 0)", fp.CallCount())
+	}
+}
