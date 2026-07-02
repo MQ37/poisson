@@ -84,10 +84,13 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 	// 3. Build summarization request.
 	summarizationMsgs := make([]provider.Message, 0, len(toSummarize)+2)
 	instruction := "Summarize the following conversation for context handoff. Produce ONLY the structured summary."
+	// If there is a previous summary, include it as context but instruct the
+	// model to incorporate relevant details and omit stale ones — NOT to
+	// blindly preserve everything (that caused unbounded summary growth across
+	// repeated compactions). The model summarizes fresh, naturally compressing.
 	if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil &&
 		sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
-		instruction = "You have a previous conversation summary. Merge it with the new messages below into ONE updated structured summary. Preserve all important details from the previous summary.\n\nPrevious summary:\n" +
-			*sess.CompactionSummary + "\n\nNow merge with these additional messages:"
+		instruction += "\n\nA previous context summary is included below. Incorporate relevant details and omit stale or superseded ones — do not blindly preserve everything.\n\n[Previous summary]\n" + *sess.CompactionSummary
 	}
 	summarizationMsgs = append(summarizationMsgs, provider.Message{
 		Role: "user",

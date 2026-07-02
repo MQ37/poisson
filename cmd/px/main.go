@@ -90,6 +90,10 @@ func runREPL(noSkills bool) {
 	if warn != "" {
 		fmt.Fprintln(os.Stderr, warn)
 	}
+	if prov == nil {
+		fmt.Fprintf(os.Stderr, "error: unknown provider %q in config; use anthropic, ollama, or xai\n", provName)
+		os.Exit(1)
+	}
 
 	// Ephemeral session id until the user sends the first message.
 	sessionID := store.NewSessionID()

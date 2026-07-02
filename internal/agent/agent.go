@@ -417,6 +417,14 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		assistantBlocks := buildAssistantBlocks(
 			thinkingBuilder.String(), thinkingSig.String(), redactedThinking,
 			textBuilder.String(), toolCalls)
+		if len(assistantBlocks) == 0 {
+			// Model returned nothing (no text, no thinking, no tool calls).
+			// Don't persist an empty assistant message — it would poison the
+			// next request with an empty content array (provider 400).
+			a.sendEvent(OutputEvent{Type: OutputError, Text: "model returned no content"})
+			a.sendEvent(OutputEvent{Type: OutputDone})
+			return fmt.Errorf("model returned empty response")
+		}
 		assistantContent, err := contentBlocksToJSON(assistantBlocks)
 		if err != nil {
 			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})

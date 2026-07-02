@@ -96,22 +96,40 @@ func (s *Store) AppendMessage(msg *Message) error {
 	if msg.Compacted {
 		compacted = 1
 	}
-	_, err := s.db.Exec(
+
+	// Insert message + FTS index + session touch atomically so a failure
+	// between steps can't leave the message invisible to /search.
+	tx, err := s.db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin append tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
 		`INSERT INTO messages
 		 (id, session_id, seq, role, content, deleted_at, compacted, api_call_id, created_at)
 		 VALUES (?,?,?,?,?,?,?,?,?)`,
 		msg.ID, msg.SessionID, msg.Seq, msg.Role, msg.Content,
-		msg.DeletedAt, compacted, msg.APICallID, msg.CreatedAt)
-	if err != nil {
+		msg.DeletedAt, compacted, msg.APICallID, msg.CreatedAt); err != nil {
 		return fmt.Errorf("append message: %w", err)
 	}
+
 	text := extractTextFromContent(msg.Content)
 	if ftsEligible(msg.Role, text) {
-		if err := s.indexFTS(msg.ID, msg.SessionID, msg.Role, text); err != nil {
-			return err
+		if _, err := tx.Exec(
+			`INSERT INTO messages_fts (session_id, message_id, role, content_text)
+			 VALUES (?,?,?,?)`,
+			msg.SessionID, msg.ID, msg.Role, text); err != nil {
+			return fmt.Errorf("index fts: %w", err)
 		}
 	}
-	return s.touchSession(msg.SessionID)
+
+	if _, err := tx.Exec(`UPDATE sessions SET updated_at = ? WHERE id = ?`,
+		time.Now().Unix(), msg.SessionID); err != nil {
+		return fmt.Errorf("touch session: %w", err)
+	}
+
+	return tx.Commit()
 }
 
 func (s *Store) touchSession(sessionID string) error {
@@ -119,18 +137,6 @@ func (s *Store) touchSession(sessionID string) error {
 		time.Now().Unix(), sessionID)
 	if err != nil {
 		return fmt.Errorf("touch session: %w", err)
-	}
-	return nil
-}
-
-// indexFTS inserts a row into messages_fts.
-func (s *Store) indexFTS(messageID, sessionID, role, text string) error {
-	_, err := s.db.Exec(
-		`INSERT INTO messages_fts (session_id, message_id, role, content_text)
-		 VALUES (?,?,?,?)`,
-		sessionID, messageID, role, text)
-	if err != nil {
-		return fmt.Errorf("index fts: %w", err)
 	}
 	return nil
 }
