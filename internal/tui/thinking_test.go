@@ -52,8 +52,8 @@ func TestThinkingToggleLast(t *testing.T) {
 	if !s.blocks[0].meta.Collapsed {
 		t.Fatal("expected collapsed")
 	}
-	if !s.toggleLastThinking() {
-		t.Fatal("toggle failed")
+	if toggled, collapsed := s.toggleLastThinking(); !toggled || collapsed {
+		t.Fatalf("toggle failed: toggled=%v collapsed=%v", toggled, collapsed)
 	}
 	if s.blocks[0].meta.Collapsed {
 		t.Fatal("expected expanded after toggle")
@@ -63,8 +63,8 @@ func TestThinkingToggleLast(t *testing.T) {
 func TestThinkingToggleLastWhileStreaming(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendBlock(blockThinking, "still going")
-	if !s.toggleLastThinking() {
-		t.Fatal("toggle failed while streaming")
+	if toggled, collapsed := s.toggleLastThinking(); !toggled || !collapsed {
+		t.Fatalf("toggle failed while streaming: toggled=%v collapsed=%v", toggled, collapsed)
 	}
 	if !s.blocks[0].meta.Collapsed || !s.blocks[0].meta.Streaming {
 		t.Fatalf("meta = %+v", s.blocks[0].meta)

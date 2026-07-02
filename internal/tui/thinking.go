@@ -106,20 +106,22 @@ func (s *scrollback) markThinkingStreaming() {
 }
 
 // toggleLastThinking toggles collapse on the most recent thinking block.
-func (s *scrollback) toggleLastThinking() bool {
+// Returns (toggled, nowCollapsed): toggled is false if there was no eligible
+// block (or it was redacted); nowCollapsed is the resulting collapsed state.
+func (s *scrollback) toggleLastThinking() (bool, bool) {
 	for i := len(s.blocks) - 1; i >= 0; i-- {
 		b := &s.blocks[i]
 		if b.kind != blockThinking {
 			continue
 		}
 		if b.meta.ThinkingRedacted {
-			return false
+			return false, true
 		}
 		b.meta.Collapsed = !b.meta.Collapsed
 		b.invalidateLayout()
-		return true
+		return true, b.meta.Collapsed
 	}
-	return false
+	return false, false
 }
 
 // appendThinkingRedacted adds a collapsed redacted-thinking placeholder block.

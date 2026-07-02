@@ -190,8 +190,15 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 
 	if k.Kind == KeyCtrl && k.Byte == 20 {
-		if t.scroll.toggleLastThinking() {
+		if toggled, collapsed := t.scroll.toggleLastThinking(); toggled {
 			t.markScrollDirty()
+			if collapsed {
+				t.setEphemeralHintLocked("thinking: hidden", 2*time.Second)
+			} else {
+				t.setEphemeralHintLocked("thinking: shown", 2*time.Second)
+			}
+		} else {
+			t.setEphemeralHintLocked("no thinking block this turn", 2*time.Second)
 		}
 		return false, nil
 	}
