@@ -16,6 +16,9 @@ const (
 	exaTokenURL  = "https://exa.ai/api/token/issue"
 	exaSearchURL = "https://exa.ai/api/search"
 	exaUserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0"
+
+	exaMaxBytes    = 1 << 20 // 1 MiB: cap search response (OOM guard)
+	exaErrMaxBytes = 4 << 10 // 4 KiB: cap error bodies
 )
 
 // ExaSearchTool searches the web via exa.ai's free landing-page API.
@@ -63,7 +66,7 @@ func (t *ExaSearchTool) Execute(ctx context.Context, input json.RawMessage) (Too
 	}
 
 	// Get JWT token.
-	token, err := getExaToken()
+	token, err := getExaToken(ctx)
 	if err != nil {
 		return ToolResult{Error: "token issue failed: " + err.Error()}, nil
 	}
@@ -73,7 +76,7 @@ func (t *ExaSearchTool) Execute(ctx context.Context, input json.RawMessage) (Too
 	if retryErr != nil {
 		// On 401, re-issue JWT and retry once.
 		if retryErr.StatusCode == 401 {
-			token, err = issueExaToken()
+			token, err = issueExaToken(ctx)
 			if err != nil {
 				return ToolResult{Error: "token re-issue failed: " + err.Error()}, nil
 			}
@@ -110,7 +113,9 @@ func doExaSearch(ctx context.Context, query, token string, num int, searchType s
 	}
 	jsonBody, _ := json.Marshal(body)
 
-	req, _ := http.NewRequestWithContext(ctx, "POST", exaSearchURL, bytes.NewReader(jsonBody))
+	searchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(searchCtx, "POST", exaSearchURL, bytes.NewReader(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("User-Agent", exaUserAgent)
@@ -124,15 +129,18 @@ func doExaSearch(ctx context.Context, query, token string, num int, searchType s
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, exaErrMaxBytes))
 		return "", &exaHTTPError{StatusCode: resp.StatusCode, Body: string(raw)}
 	}
 
-	data, _ := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, exaMaxBytes))
+	if err != nil {
+		return "", &exaHTTPError{StatusCode: 0, Body: "read response: " + err.Error()}
+	}
 	return string(data), nil
 }
 
-func getExaToken() (string, error) {
+func getExaToken(ctx context.Context) (string, error) {
 	// Check cache.
 	home, _ := os.UserHomeDir()
 	cachePath := filepath.Join(home, ".poisson", "exa-token.json")
@@ -147,11 +155,13 @@ func getExaToken() (string, error) {
 			}
 		}
 	}
-	return issueExaToken()
+	return issueExaToken(ctx)
 }
 
-func issueExaToken() (string, error) {
-	req, _ := http.NewRequest("POST", exaTokenURL, nil)
+func issueExaToken(ctx context.Context) (string, error) {
+	tokenCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(tokenCtx, "POST", exaTokenURL, nil)
 	req.Header.Set("User-Agent", exaUserAgent)
 	req.Header.Set("Origin", "https://exa.ai")
 	req.Header.Set("Referer", "https://exa.ai/")
@@ -163,7 +173,7 @@ func issueExaToken() (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, exaErrMaxBytes))
 		return "", fmt.Errorf("token issue HTTP %d: %s", resp.StatusCode, string(raw))
 	}
 

@@ -6,8 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"poisson/internal/config"
+)
+
+const (
+	fetchMaxBytes    = 2 << 20 // 2 MiB: cap extracted page text (OOM guard)
+	fetchErrMaxBytes = 4 << 10 // 4 KiB: cap error bodies
 )
 
 // FetchTool uses the local Ollama instance's web_fetch API to extract
@@ -52,7 +58,9 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 	}
 
 	body, _ := json.Marshal(map[string]string{"url": params.URL})
-	req, err := http.NewRequestWithContext(ctx, "POST", t.ollamaBaseURL+"/api/fetch", bytesReader(body))
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(fetchCtx, "POST", t.ollamaBaseURL+"/api/fetch", bytesReader(body))
 	if err != nil {
 		return ToolResult{Error: "create request: " + err.Error()}, nil
 	}
@@ -65,11 +73,11 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, fetchErrMaxBytes))
 		return ToolResult{Error: fmt.Sprintf("fetch failed (status %d): %s", resp.StatusCode, string(raw))}, nil
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, fetchMaxBytes))
 	if err != nil {
 		return ToolResult{Error: "read response: " + err.Error()}, nil
 	}
@@ -99,7 +107,8 @@ func IsOllamaReachable(cfg *config.Config) bool {
 	if cfg != nil && cfg.Ollama.BaseURL != "" {
 		baseURL = cfg.Ollama.BaseURL
 	}
-	resp, err := http.Get(baseURL + "/api/tags")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(baseURL + "/api/tags")
 	if err != nil {
 		return false
 	}
