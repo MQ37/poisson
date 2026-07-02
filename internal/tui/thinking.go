@@ -54,13 +54,10 @@ func layoutThinking(b *Block, width int, _ int) []ScreenRow {
 		chunks = append(chunks, prefix+formatThinkingStreaming()+reset)
 	}
 	if b.raw != "" {
+		// Apply dim+italic to every line of thinking text, not just the first.
 		md := layoutRichMarkdown(b.raw, width, "")
-		if b.meta.Streaming {
-			for _, ln := range md {
-				chunks = append(chunks, ln)
-			}
-		} else {
-			chunks = append(chunks, layoutRichMarkdown(b.raw, width, prefix)...)
+		for _, ln := range md {
+			chunks = append(chunks, prefix+ln+reset)
 		}
 	} else if !b.meta.Streaming {
 		chunks = []string{prefix + reset}
