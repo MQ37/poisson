@@ -210,3 +210,85 @@ func TestAssessBashRiskEvalModes(t *testing.T) {
 		t.Fatalf("guard mode = %+v, want high/guard", guard)
 	}
 }
+
+func TestIsPackageInstallCommand(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want bool
+	}{
+		{"npm install", true},
+		{"npm i", true},
+		{"npm ci", true},
+		{"npm add express", true},
+		{"pnpm install", true},
+		{"pnpm i", true},
+		{"pnpm add lodash", true},
+		{"yarn install", true},
+		{"yarn add react", true},
+		{"pip install requests", true},
+		{"pip3 install flask", true},
+		{"uv pip install httpx", true},
+		{"uv add fastapi", true},
+		{"go get github.com/foo/bar", true},
+		{"go install github.com/foo/bar@latest", true},
+		{"cargo add serde", true},
+		{"cargo install ripgrep", true},
+		{"apt install nginx", true},
+		{"apt-get install curl", true},
+		{"sudo apt install nginx", true},
+		{"brew install jq", true},
+		{"gem install rails", true},
+		{"composer require monolog/monolog", true},
+		{"composer install", true},
+		{"poetry install", true},
+		{"poetry add django", true},
+		{"nix profile install nixpkgs#hello", true},
+		// Chained commands.
+		{"cd /tmp \u0026\u0026 npm install", true},
+		{"echo hi; pip install evil", true},
+		{"git pull \u0026\u0026 yarn install \u0026\u0026 yarn build", true},
+		// Non-install commands.
+		{"npm run build", false},
+		{"npm test", false},
+		{"pnpm list", false},
+		{"yarn remove", false},
+		{"pip show flask", false},
+		{"go build", false},
+		{"go test", false},
+		{"cargo build", false},
+		{"cargo run", false},
+		{"make install", false}, // not a package manager
+		{"git status", false},
+		{"echo hello", false},
+		{"ls -la", false},
+		{"npm install -g", true}, // global install is still install
+	}
+	for _, c := range cases {
+		got := isPackageInstallCommand(c.cmd)
+		if got != c.want {
+			t.Errorf("isPackageInstallCommand(%q) = %v, want %v", c.cmd, got, c.want)
+		}
+	}
+}
+
+// TestAssessBashRiskInstallFastPath verifies that install commands are
+// escalated to medium without calling the LLM (zero provider calls).
+func TestAssessBashRiskInstallFastPath(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("low", nil),
+		provider.FakeTextResponse("low", nil),
+	})
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	got := a.AssessBashRisk(context.Background(), "npm install express", "install express", "/tmp")
+	if got != BashRiskMedium {
+		t.Fatalf("AssessBashRisk(npm install) = %q, want medium", got)
+	}
+	if fp.CallCount() != 0 {
+		t.Fatalf("LLM was called %d times for an install command (should be 0)", fp.CallCount())
+	}
+}
