@@ -91,13 +91,65 @@ No explanation. One word only.`
 // AssessBashRisk asks the active provider (LLM) to rate command risk. It never
 // consults the deterministic guard: on failure or ambiguous output it returns
 // BashRiskUnknown, which the approval gate treats as "must ask the human".
-// Package-install commands are fast-pathed to BashRiskMedium without an LLM
-// call — the human must always review what is being installed.
+// Destructive commands (rm, rmdir, shred, find -delete, …) are fast-pathed to
+// BashRiskHigh and package-install commands to BashRiskMedium, both without an
+// LLM call.
 func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdir string) BashRisk {
+	if isDestructiveCommand(command) {
+		return BashRiskHigh
+	}
 	if isPackageInstallCommand(command) {
 		return BashRiskMedium
 	}
 	return a.AssessBashRiskEval(ctx, command, description, workdir, BashRiskEvalLLM).Risk
+}
+
+// isDestructiveCommand reports whether the command deletes files or directories.
+// Such commands are fast-pathed to BashRiskHigh without an LLM call.
+func isDestructiveCommand(command string) bool {
+	for _, part := range strings.FieldsFunc(command, func(r rune) bool {
+		return r == '&' || r == '|' || r == ';' || r == '\n'
+	}) {
+		if detectDestructiveInPart(part) {
+			return true
+		}
+	}
+	return false
+}
+
+// detectDestructiveInPart checks whether a single sub-command deletes files.
+func detectDestructiveInPart(part string) bool {
+	tokens := strings.Fields(part)
+	// Skip leading wrappers (sudo, env, time, …).
+	i := 0
+	for i < len(tokens) {
+		if tokens[i] != "sudo" && tokens[i] != "env" && tokens[i] != "time" && tokens[i] != "nohup" && tokens[i] != "command" {
+			break
+		}
+		i++
+	}
+	if i >= len(tokens) {
+		return false
+	}
+	cmd := tokens[i]
+	switch cmd {
+	case "rm", "rmdir", "shred", "unlink", "truncate":
+		return true
+	case "find":
+		// find . -delete  or  find . -exec rm {}
+		for j := i + 1; j < len(tokens); j++ {
+			if tokens[j] == "-delete" {
+				return true
+			}
+			if (tokens[j] == "-exec" || tokens[j] == "-execdir") && j+1 < len(tokens) {
+				next := tokens[j+1]
+				if next == "rm" || next == "rmdir" || next == "shred" || next == "unlink" || next == "truncate" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // isPackageInstallCommand reports whether the command installs external

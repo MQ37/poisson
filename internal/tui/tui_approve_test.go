@@ -198,7 +198,7 @@ func TestApproveCancelsRiskAssessment(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger", "/tmp", agent.BashRiskUnknown)
+		result <- tui.Approve("git push origin main", "danger", "/tmp", agent.BashRiskUnknown)
 	}()
 
 	deadline := time.Now().Add(500 * time.Millisecond)

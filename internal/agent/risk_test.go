@@ -56,7 +56,7 @@ func TestAssessBashRisk(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	got := a.AssessBashRisk(ctx, "rm -rf /", "cleanup", "/tmp")
+	got := a.AssessBashRisk(ctx, "git push origin main", "push changes", "/tmp")
 	if got != BashRiskHigh {
 		t.Fatalf("AssessBashRisk = %q, want high", got)
 	}
@@ -146,7 +146,7 @@ func TestAssessBashRiskThinkingOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	got := a.AssessBashRisk(ctx, "rm -rf /", "cleanup", "/tmp")
+	got := a.AssessBashRisk(ctx, "git push origin main", "push changes", "/tmp")
 	if got != BashRiskHigh {
 		t.Fatalf("AssessBashRisk = %q, want high from thinking fallback", got)
 	}
@@ -169,9 +169,9 @@ func TestAssessBashRiskLLMFailureUnknown(t *testing.T) {
 
 	// LLM failure must not fall back to the deterministic guard — it returns
 	// unknown, which the approval gate routes to the human.
-	got := a.AssessBashRisk(ctx, "rmdir empty_dir", "remove empty directory", "/tmp/proj")
+	got := a.AssessBashRisk(ctx, "cat /etc/passwd", "read passwd", "/tmp/proj")
 	if got != BashRiskUnknown {
-		t.Fatalf("AssessBashRisk(rmdir) on LLM failure = %q, want unknown", got)
+		t.Fatalf("AssessBashRisk(cat) on LLM failure = %q, want unknown", got)
 	}
 }
 
@@ -290,5 +290,64 @@ func TestAssessBashRiskInstallFastPath(t *testing.T) {
 	}
 	if fp.CallCount() != 0 {
 		t.Fatalf("LLM was called %d times for an install command (should be 0)", fp.CallCount())
+	}
+}
+
+func TestIsDestructiveCommand(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want bool
+	}{
+		{"rm file.txt", true},
+		{"rm -rf node_modules", true},
+		{"rm -rf /", true},
+		{"sudo rm -rf /var/log", true},
+		{"rmdir empty_dir", true},
+		{"shred secret.txt", true},
+		{"unlink symlink", true},
+		{"truncate -s 0 log.txt", true},
+		{"find . -delete", true},
+		{"find . -name '*.tmp' -delete", true},
+		{"find . -exec rm {} \\\\;", true},
+		{"find . -execdir rmdir {} +", true},
+		{"cd /tmp \u0026\u0026 rm -rf build", true},
+		{"echo hi; rm foo", true},
+		// Non-destructive.
+		{"cat file.txt", false},
+		{"ls -la", false},
+		{"git status", false},
+		{"echo rm", false},
+		{"find . -name '*.go'", false},
+		{"find . -exec cat {} \\\\;", false},
+		{"npm install", false}, // install, not destructive
+		{"make install", false},
+	}
+	for _, c := range cases {
+		got := isDestructiveCommand(c.cmd)
+		if got != c.want {
+			t.Errorf("isDestructiveCommand(%q) = %v, want %v", c.cmd, got, c.want)
+		}
+	}
+}
+
+// TestAssessBashRiskDestructiveFastPath verifies that rm commands are
+// escalated to high without calling the LLM (zero provider calls).
+func TestAssessBashRiskDestructiveFastPath(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("low", nil),
+		provider.FakeTextResponse("low", nil),
+	})
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	got := a.AssessBashRisk(context.Background(), "rm -rf /tmp/build", "cleanup", "/tmp")
+	if got != BashRiskHigh {
+		t.Fatalf("AssessBashRisk(rm -rf) = %q, want high", got)
+	}
+	if fp.CallCount() != 0 {
+		t.Fatalf("LLM was called %d times for a destructive command (should be 0)", fp.CallCount())
 	}
 }
