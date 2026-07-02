@@ -43,12 +43,15 @@ Any small but critical details: file paths, error messages, environment quirks, 
 // Compact triggers manual compaction (/compact). Does not emit UI events; the TUI
 // owns scrollback refresh for manual compaction.
 func (a *Agent) Compact() error {
-	return a.compact(context.Background(), false)
+	return a.compact(context.Background(), false, false)
 }
 
-// compact performs mid-turn compaction of the conversation. When notifyUI is
-// true, emits compacting/compacted events for the TUI run loop.
-func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
+// compact performs compaction of the conversation. When notifyUI is true it
+// emits compacting/compacted events for the TUI run loop. When keepActiveTail
+// is true (auto-compaction during a turn, where the loop re-streams straight
+// after) it always leaves the current turn active so the next request stays
+// valid and non-empty.
+func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -65,31 +68,15 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 		return ErrNothingToCompact
 	}
 
-	// 2. Summarize the entire active conversation.
+	// 2. Choose how many leading messages to summarize.
 	estimatedTokens := 0
 	for _, m := range msgs {
 		estimatedTokens += a.EstimateTokens(m.Content)
 	}
 
-	summarizeCount := adjustCompactionCount(msgs, len(msgs))
-	window := a.ContextWindow()
-	budget := int(float64(window) * 0.65)
-	for summarizeCount > 1 {
-		est := 0
-		for _, m := range msgs[:summarizeCount] {
-			est += a.EstimateTokens(m.Content)
-		}
-		if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil &&
-			sess.CompactionSummary != nil {
-			est += a.EstimateTokens(*sess.CompactionSummary)
-		}
-		if est <= budget {
-			break
-		}
-		summarizeCount = adjustCompactionCount(msgs, summarizeCount/2)
-	}
-	if summarizeCount <= 0 {
-		return ErrNothingToCompact
+	summarizeCount, err := a.chooseSummarizeCount(msgs, keepActiveTail)
+	if err != nil {
+		return err
 	}
 
 	toSummarize := msgs[:summarizeCount]
@@ -209,6 +196,55 @@ func (a *Agent) compact(ctx context.Context, notifyUI bool) error {
 // shouldCompact checks if compaction should trigger.
 func (a *Agent) shouldCompact() bool {
 	return a.ShouldCompact()
+}
+
+// chooseSummarizeCount decides how many leading messages to summarize. With
+// keepActiveTail set (auto-compaction mid-turn) it summarizes everything before
+// the current turn and keeps that turn active: a fresh request's first message
+// must be a user turn and the in-flight tool results must stay visible. Without
+// it (manual /compact) it summarizes as much as fits the summarization budget,
+// which may empty the active set — the next user message then starts fresh.
+func (a *Agent) chooseSummarizeCount(msgs []store.Message, keepActiveTail bool) (int, error) {
+	if keepActiveTail {
+		count := lastUserIndex(msgs)
+		if count <= 0 {
+			return 0, ErrNothingToCompact
+		}
+		return count, nil
+	}
+
+	count := adjustCompactionCount(msgs, len(msgs))
+	budget := int(float64(a.ContextWindow()) * 0.65)
+	var summary string
+	if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil &&
+		sess.CompactionSummary != nil {
+		summary = *sess.CompactionSummary
+	}
+	for count > 1 {
+		est := a.EstimateTokens(summary)
+		for _, m := range msgs[:count] {
+			est += a.EstimateTokens(m.Content)
+		}
+		if est <= budget {
+			break
+		}
+		count = adjustCompactionCount(msgs, count/2)
+	}
+	if count <= 0 {
+		return 0, ErrNothingToCompact
+	}
+	return count, nil
+}
+
+// lastUserIndex returns the index of the most recent user message, or -1 if
+// there is none.
+func lastUserIndex(msgs []store.Message) int {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return i
+		}
+	}
+	return -1
 }
 
 // adjustCompactionCount ensures we don't split assistant/tool_use from tool results.

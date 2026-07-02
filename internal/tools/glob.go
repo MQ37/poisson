@@ -3,11 +3,19 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// walkMaxResults caps how many entries glob/ls collect from a recursive walk,
+// bounding memory and tool-result size. errWalkLimit stops the walk once hit.
+const walkMaxResults = 1000
+
+var errWalkLimit = errors.New("walk result limit reached")
 
 // GlobTool finds files matching a glob pattern.
 type GlobTool struct {
@@ -54,10 +62,11 @@ func (t *GlobTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	base = resolvePath(t.cwd, base)
 
 	var matches []string
+	truncated := false
 
 	// Handle doublestar (**/) patterns via recursive walk.
 	if strings.Contains(in.Pattern, "**") {
-		matches = globDoublestar(base, in.Pattern)
+		matches, truncated = globDoublestar(ctx, base, in.Pattern)
 	} else {
 		// Use filepath.Glob with the full pattern.
 		fullPattern := in.Pattern
@@ -92,14 +101,15 @@ func (t *GlobTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 			b.WriteString("\n")
 		}
 	}
+	if truncated {
+		b.WriteString(fmt.Sprintf("... (truncated at %d matches)\n", walkMaxResults))
+	}
 	return ToolResult{Content: b.String()}, nil
 }
 
 // globDoublestar expands a pattern containing ** by walking the base directory.
 // It supports patterns like "**/*.go", "src/**/*.go", "**/foo".
-func globDoublestar(base, pattern string) []string {
-	var results []string
-
+func globDoublestar(ctx context.Context, base, pattern string) (matches []string, truncated bool) {
 	// Split the pattern on the first "**" to get a prefix and suffix.
 	parts := strings.SplitN(pattern, "**", 2)
 	prefix := strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(parts[0]), "/"), "./")
@@ -115,36 +125,43 @@ func globDoublestar(base, pattern string) []string {
 	}
 
 	// Walk the search root, matching the suffix pattern against each path's
-	// relative portion.
-	filepath.Walk(searchRoot, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	// relative portion. Honor cancellation and cap results so a huge tree can't
+	// hang the tool or blow up the result.
+	err := filepath.Walk(searchRoot, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
 			return nil
+		}
+		if e := ctx.Err(); e != nil {
+			return e
+		}
+		// Skip VCS metadata: never the target of a glob and can be huge.
+		if info.IsDir() && info.Name() == ".git" && path != searchRoot {
+			return filepath.SkipDir
 		}
 		rel, err := filepath.Rel(searchRoot, path)
-		if err != nil {
+		if err != nil || rel == "." {
 			return nil
 		}
-		if rel == "." {
-			return nil
+		matched := suffix == ""
+		if !matched {
+			if ok, _ := filepath.Match(suffix, filepath.Base(rel)); ok {
+				matched = true
+			} else if ok, _ := filepath.Match(suffix, rel); ok {
+				matched = true
+			}
 		}
-		// Match suffix against the relative path or the basename.
-		if suffix == "" {
-			results = append(results, path)
-			return nil
-		}
-		// Try matching the suffix as a glob against the full relative path.
-		ok, _ := filepath.Match(suffix, filepath.Base(rel))
-		if ok {
-			results = append(results, path)
-			return nil
-		}
-		// Also try matching the suffix against the full relative path (for
-		// patterns like "src/**/*.go" — but we already stripped the prefix).
-		if matched, _ := filepath.Match(suffix, rel); matched {
-			results = append(results, path)
+		if matched {
+			matches = append(matches, path)
+			if len(matches) >= walkMaxResults {
+				truncated = true
+				return errWalkLimit
+			}
 		}
 		return nil
 	})
-
-	return results
+	if err != nil && !errors.Is(err, errWalkLimit) {
+		// ctx cancellation or a walk error: return what we collected.
+		truncated = truncated || ctx.Err() != nil
+	}
+	return matches, truncated
 }

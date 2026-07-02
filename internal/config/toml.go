@@ -77,16 +77,11 @@ func Parse(data string) (map[string]interface{}, error) {
 
 // descendTable walks/creates nested maps for a dotted header path.
 func descendTable(root map[string]interface{}, path string) (map[string]interface{}, error) {
-	parts := strings.Split(path, ".")
+	parts, err := splitTableKey(path)
+	if err != nil {
+		return nil, err
+	}
 	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			return nil, fmt.Errorf("empty section name in %q", path)
-		}
-		// Bare keys must be alphanumeric + underscore + hyphen per TOML.
-		if !validBareKey(p) {
-			return nil, fmt.Errorf("invalid table name segment %q", p)
-		}
 		existing, ok := root[p]
 		if !ok {
 			sub := map[string]interface{}{}
@@ -101,6 +96,70 @@ func descendTable(root map[string]interface{}, path string) (map[string]interfac
 		root = sub
 	}
 	return root, nil
+}
+
+// splitTableKey splits a table-header path on '.' outside quotes. A quoted
+// segment ("..." or '...') is taken verbatim, so a model name like
+// "glm-5.2:cloud" is a single key; bare segments must be valid bare keys.
+func splitTableKey(path string) ([]string, error) {
+	var parts []string
+	runes := []rune(path)
+	n := len(runes)
+	i := 0
+	for {
+		for i < n && (runes[i] == ' ' || runes[i] == '\t') {
+			i++
+		}
+		if i >= n {
+			return nil, fmt.Errorf("empty section name in %q", path)
+		}
+		var seg string
+		quoted := false
+		if runes[i] == '"' || runes[i] == '\'' {
+			q := runes[i]
+			i++
+			start := i
+			for i < n && runes[i] != q {
+				i++
+			}
+			if i >= n {
+				return nil, fmt.Errorf("unterminated quoted key in %q", path)
+			}
+			seg = string(runes[start:i])
+			quoted = true
+			i++ // consume closing quote
+			for i < n && (runes[i] == ' ' || runes[i] == '\t') {
+				i++
+			}
+		} else {
+			start := i
+			for i < n && runes[i] != '.' {
+				i++
+			}
+			seg = strings.TrimSpace(string(runes[start:i]))
+		}
+		if quoted {
+			if seg == "" {
+				return nil, fmt.Errorf("empty quoted key in %q", path)
+			}
+		} else {
+			if seg == "" {
+				return nil, fmt.Errorf("empty section name in %q", path)
+			}
+			if !validBareKey(seg) {
+				return nil, fmt.Errorf("invalid table name segment %q", seg)
+			}
+		}
+		parts = append(parts, seg)
+		if i >= n {
+			break
+		}
+		if runes[i] != '.' {
+			return nil, fmt.Errorf("unexpected %q in table header %q", string(runes[i]), path)
+		}
+		i++ // consume '.'
+	}
+	return parts, nil
 }
 
 func validBareKey(s string) bool {

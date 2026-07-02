@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -53,13 +54,21 @@ func (t *LsTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult
 	dir = resolvePath(t.cwd, dir)
 
 	var entries []string
+	truncated := false
 	if in.Recursive {
-		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return nil
 			}
+			if e := ctx.Err(); e != nil {
+				return e
+			}
 			if path == dir {
 				return nil
+			}
+			// Skip VCS metadata to avoid walking huge .git trees.
+			if info.IsDir() && info.Name() == ".git" {
+				return filepath.SkipDir
 			}
 			rel, _ := filepath.Rel(dir, path)
 			if !in.All && strings.HasPrefix(rel, ".") && !strings.Contains(rel, "/.") {
@@ -69,10 +78,14 @@ func (t *LsTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult
 				return nil
 			}
 			entries = append(entries, formatEntry(rel, info))
+			if len(entries) >= walkMaxResults {
+				truncated = true
+				return errWalkLimit
+			}
 			return nil
 		})
-		if err != nil {
-			return ToolResult{Error: "walk error: " + err.Error()}, nil
+		if walkErr != nil && !errors.Is(walkErr, errWalkLimit) {
+			return ToolResult{Error: "walk error: " + walkErr.Error()}, nil
 		}
 	} else {
 		infos, err := os.ReadDir(dir)
@@ -107,6 +120,9 @@ func (t *LsTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult
 			b.WriteString(e)
 			b.WriteString("\n")
 		}
+	}
+	if truncated {
+		b.WriteString(fmt.Sprintf("... (truncated at %d entries)\n", walkMaxResults))
 	}
 	return ToolResult{Content: b.String()}, nil
 }

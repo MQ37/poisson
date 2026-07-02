@@ -147,6 +147,39 @@ w = true
 	}
 }
 
+func TestParseQuotedTableKeyWithDot(t *testing.T) {
+	// A model name containing '.' must survive as a single key when quoted.
+	in := `[pricing.ollama."glm-5.2:cloud"]
+input = 0.1
+output = 0.2
+`
+	m, err := Parse(in)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	pr, ok := m["pricing"].(map[string]interface{})
+	if !ok {
+		t.Fatal("pricing not a table")
+	}
+	oll, ok := pr["ollama"].(map[string]interface{})
+	if !ok {
+		t.Fatal("pricing.ollama not a table")
+	}
+	model, ok := oll["glm-5.2:cloud"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("pricing.ollama[glm-5.2:cloud] not a table; keys = %v", oll)
+	}
+	if model["input"] != 0.1 || model["output"] != 0.2 {
+		t.Fatalf("rates = %v", model)
+	}
+}
+
+func TestParseUnterminatedQuotedKey(t *testing.T) {
+	if _, err := Parse(`[pricing."unclosed]` + "\n"); err == nil {
+		t.Fatal("expected error for unterminated quoted key")
+	}
+}
+
 func TestParseSectionWithSubsectionDot(t *testing.T) {
 	in := `[pricing.anthropic.claude-sonnet-4-20250514]
 input = 3.0

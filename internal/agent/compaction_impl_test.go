@@ -1,13 +1,29 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"poisson/internal/provider"
 	"poisson/internal/store"
 )
+
+// seedMessages appends messages with the given roles to a session.
+func seedMessages(t *testing.T, s *store.Store, sid string, roles []string) {
+	t.Helper()
+	now := time.Now().Unix()
+	for i, role := range roles {
+		content, _ := json.Marshal([]map[string]string{{"type": "text", "text": role + " msg"}})
+		if err := s.AppendMessage(&store.Message{
+			SessionID: sid, Role: role, Content: string(content), CreatedAt: now + int64(i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestAdjustCompactionCount_IncludesTrailingTools(t *testing.T) {
 	msgs := []store.Message{
@@ -38,15 +54,7 @@ func TestAdjustCompactionCount_NoOrphanTools(t *testing.T) {
 func TestCompactSummarizesAllMessages(t *testing.T) {
 	s := newTestStore(t)
 	sid := newTestSession(t, s, "test-model")
-	now := time.Now().Unix()
-	for i, role := range []string{"user", "assistant", "user", "assistant"} {
-		content, _ := json.Marshal([]map[string]string{{"type": "text", "text": role + " msg"}})
-		if err := s.AppendMessage(&store.Message{
-			SessionID: sid, Role: role, Content: string(content), CreatedAt: now + int64(i),
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	seedMessages(t, s, sid, []string{"user", "assistant", "user", "assistant"})
 
 	fp := newFakeProvider()
 	fp.SetResponses([][]provider.StreamEvent{
@@ -63,5 +71,58 @@ func TestCompactSummarizesAllMessages(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("active messages = %d, want 0 (whole conversation compacted)", len(msgs))
+	}
+}
+
+// TestCompactAutoKeepsActiveTail verifies auto-compaction never empties the
+// active set: it summarizes everything before the current turn and keeps that
+// turn (starting with a user message) active, so the run loop's next request is
+// valid and non-empty.
+func TestCompactAutoKeepsActiveTail(t *testing.T) {
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	seedMessages(t, s, sid, []string{"user", "assistant", "user", "assistant", "tool"})
+
+	fp := newFakeProvider()
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("## Big Picture\nolder turns", nil),
+	})
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(_, _, _ string) bool { return true })
+
+	if err := a.compact(context.Background(), false, true); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	msgs, err := s.GetMessages(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("active messages = %d, want 3 (current turn kept)", len(msgs))
+	}
+	if msgs[0].Role != "user" {
+		t.Fatalf("first active message role = %q, want user (valid request start)", msgs[0].Role)
+	}
+}
+
+// TestCompactAutoNothingWhenSingleTurn verifies auto-compaction bails without
+// touching messages when only the current turn exists (nothing older to
+// summarize), rather than emptying the active set.
+func TestCompactAutoNothingWhenSingleTurn(t *testing.T) {
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	seedMessages(t, s, sid, []string{"user", "assistant", "tool"})
+
+	fp := newFakeProvider()
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(_, _, _ string) bool { return true })
+
+	if err := a.compact(context.Background(), false, true); !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("compact = %v, want ErrNothingToCompact", err)
+	}
+	msgs, err := s.GetMessages(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("active messages = %d, want 3 (unchanged)", len(msgs))
 	}
 }

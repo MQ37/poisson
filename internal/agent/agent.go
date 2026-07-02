@@ -521,8 +521,10 @@ func (a *Agent) runTurn(ctx context.Context) error {
 
 		a.pendingResults = nil
 		if a.shouldCompact() {
-			if err := a.compact(ctx, true); err != nil {
-				log.Printf("warning: auto-compaction failed: %v", err)
+			if err := a.compact(ctx, true, true); err != nil {
+				if !errors.Is(err, ErrNothingToCompact) {
+					log.Printf("warning: auto-compaction failed: %v", err)
+				}
 				a.compactBackoffUntil = time.Now().Add(90 * time.Second)
 			}
 		}

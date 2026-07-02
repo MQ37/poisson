@@ -179,6 +179,7 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 
 # Pricing per 1M tokens (USD). OAuth/subscription providers default to 0.
 # Values here override the built-in defaults. Use nested tables, not inline tables.
+# Quote model names containing '.' (e.g. "glm-5.2:cloud") so they aren't split.
 # [pricing.anthropic.claude-opus-4-8]
 # input = 5.0
 # output = 25.0
@@ -187,10 +188,10 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # [pricing.xai.grok-build]
 # input = 1.0
 # output = 2.0
-# [pricing.ollama.glm-5.2:cloud]
+# [pricing.ollama."glm-5.2:cloud"]
 # input = 0
 # output = 0
-# [pricing.ollama.minimax-m3:cloud]
+# [pricing.ollama."minimax-m3:cloud"]
 # input = 0
 # output = 0
 `
