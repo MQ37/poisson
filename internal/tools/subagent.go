@@ -24,6 +24,7 @@ type SubagentTool struct {
 	store      *store.Store
 	providerFn func() string
 	modelFn    func() string
+	effortFn   func() string
 	outputFn   SubagentOutput
 	approvalFn SubagentApproval
 }
@@ -38,10 +39,11 @@ func NewSubagentTool(cwd string, st *store.Store, outputFn SubagentOutput, appro
 	}
 }
 
-// SetRuntime supplies live provider/model resolvers (called at spawn time).
-func (t *SubagentTool) SetRuntime(providerFn, modelFn func() string) {
+// SetRuntime supplies live provider/model/effort resolvers (called at spawn time).
+func (t *SubagentTool) SetRuntime(providerFn, modelFn, effortFn func() string) {
 	t.providerFn = providerFn
 	t.modelFn = modelFn
+	t.effortFn = effortFn
 }
 
 func (t *SubagentTool) Name() string { return "subagent" }
@@ -90,6 +92,10 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 			model = m
 		}
 	}
+	effort := ""
+	if t.effortFn != nil {
+		effort = t.effortFn()
+	}
 	if err := t.store.CreateSession(&store.Session{
 		ID:         childSessionID,
 		Cwd:        t.cwd,
@@ -107,6 +113,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		Name:      agentName,
 		Provider:  prov,
 		Model:     model,
+		Effort:    effort,
 	})
 	if err != nil {
 		return ToolResult{Error: "failed to spawn subagent: " + err.Error()}, nil

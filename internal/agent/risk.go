@@ -171,6 +171,13 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 
 	prompt := fmt.Sprintf("Command:\n%s\n\nPurpose: %s\n\nWorking directory: %s", command, description, workdir)
 	temp := 0.0
+	// A one-word answer needs only a tiny cap, but with reasoning effort the
+	// model must think first — leave headroom (0 = provider default) so thinking
+	// doesn't starve the answer.
+	maxTokens := 32
+	if a.effort != "" {
+		maxTokens = 0
+	}
 	req := &provider.Request{
 		Model: a.currentModel(),
 		System: []provider.SystemBlock{{
@@ -183,8 +190,9 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 				Text: prompt,
 			}},
 		}},
-		MaxTokens:   32,
+		MaxTokens:   maxTokens,
 		Temperature: &temp,
+		Effort:      a.effort,
 	}
 
 	ch, err := a.provider.Stream(ctx, req)

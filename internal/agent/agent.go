@@ -109,8 +109,18 @@ func NewAgent(
 		outputChan: outputChan,
 		approvalFn: approvalFn,
 		model:      defaultModel(p, cfg),
+		effort:     initialEffort(cfg),
 	}
 	return a
+}
+
+// initialEffort resolves the starting reasoning effort from config, falling back
+// to the built-in default so the status bar always shows a level.
+func initialEffort(cfg *config.Config) string {
+	if cfg != nil && cfg.Effort != "" {
+		return cfg.Effort
+	}
+	return config.DefaultEffort
 }
 
 // --- Session management accessors (for TUI slash commands) ---
@@ -126,7 +136,7 @@ func (a *Agent) SwitchSession(sessionID string) {
 	a.sessionID = sessionID
 	a.sessionToolCalls = 0
 	a.sessionToolErrors = 0
-	a.effort = ""
+	a.effort = initialEffort(a.config)
 	a.pendingResults = nil
 }
 

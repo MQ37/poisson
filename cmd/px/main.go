@@ -147,7 +147,7 @@ func runREPL(noSkills bool) {
 	// Set up agent.
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
 	agentRef = a
-	tools.BindSubagentRuntime(reg, func() string { return a.Provider().ID() }, func() string { return a.Model() })
+	tools.BindSubagentRuntime(reg, func() string { return a.Provider().ID() }, func() string { return a.Model() }, func() string { return a.Effort() })
 
 	var skillList []skills.Skill
 	if !noSkills {
@@ -452,6 +452,9 @@ func runChildMode() {
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
 	childAgentRef = a
 	a.SetModel(childModel)
+	if e := os.Getenv("POISSON_SUBAGENT_EFFORT"); e != "" {
+		a.SetEffort(e)
+	}
 	a.SetSkills(false, nil)
 
 	var toolCount int

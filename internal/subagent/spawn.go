@@ -20,6 +20,7 @@ type SpawnInput struct {
 	Name       string
 	Provider   string
 	Model      string
+	Effort     string
 	Sandbox    bool
 	ExtraEnv   []string
 	ChildTools []string // tool names available to the child
@@ -84,6 +85,9 @@ func Spawn(input SpawnInput) (*ChildProcess, error) {
 	}
 	if input.Model != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_MODEL=%s", input.Model))
+	}
+	if input.Effort != "" {
+		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_EFFORT=%s", input.Effort))
 	}
 	if input.Name != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_NAME=%s", input.Name))

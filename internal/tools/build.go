@@ -86,13 +86,13 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	return reg
 }
 
-// BindSubagentRuntime wires live provider/model resolvers on the subagent tool.
-func BindSubagentRuntime(reg *Registry, providerFn, modelFn func() string) {
+// BindSubagentRuntime wires live provider/model/effort resolvers on the subagent tool.
+func BindSubagentRuntime(reg *Registry, providerFn, modelFn, effortFn func() string) {
 	t, ok := reg.Get("subagent")
 	if !ok {
 		return
 	}
 	if st, ok := t.(*SubagentTool); ok {
-		st.SetRuntime(providerFn, modelFn)
+		st.SetRuntime(providerFn, modelFn, effortFn)
 	}
 }

@@ -59,6 +59,13 @@ type TUIConfig struct {
 	ShowCost   bool
 }
 
+// DefaultEffort is the reasoning effort applied when the user hasn't chosen one,
+// so a level is always shown in the status bar.
+const DefaultEffort = "medium"
+
+// effortLevels are the accepted reasoning-effort levels.
+var effortLevels = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+
 // Config is the fully parsed and defaulted Poisson configuration.
 type Config struct {
 	Provider   ProviderConfig
@@ -68,6 +75,7 @@ type Config struct {
 	Compaction CompactionConfig
 	Stealth    StealthConfig
 	TUI        TUIConfig
+	Effort     string // reasoning effort: low | medium | high | xhigh | max
 	// Pricing is keyed [provider][model] → Pricing.
 	Pricing map[string]map[string]Pricing
 }
@@ -118,6 +126,7 @@ func defaultConfig() *Config {
 			ShowTokens: true,
 			ShowCost:   true,
 		},
+		Effort: DefaultEffort,
 		Pricing: map[string]map[string]Pricing{
 			"anthropic": {
 				"claude-opus-4-8": {
@@ -143,6 +152,10 @@ func defaultConfig() *Config {
 const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # All options are commented out; Poisson uses built-in defaults.
 # Uncomment and edit to override.
+
+# Reasoning effort applied to every request (main agent, subagents, bash-risk
+# checks). Higher = more thinking, more cost/latency.
+# effort = "medium"              # low | medium | high | xhigh | max
 
 # Default provider + model
 [provider]
@@ -246,6 +259,14 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 
 	if v, ok := lookup(m, "provider", "default"); ok {
 		cfg.Provider.Default = asString(v)
+	}
+
+	if v, ok := lookup(m, "effort"); ok {
+		e := asString(v)
+		if !effortLevels[e] {
+			return nil, fmt.Errorf("effort: unknown level %q (want low|medium|high|xhigh|max)", e)
+		}
+		cfg.Effort = e
 	}
 
 	if v, ok := lookup(m, "anthropic", "model"); ok {

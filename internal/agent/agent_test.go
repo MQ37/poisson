@@ -703,8 +703,8 @@ func TestEffortIsPerAgent(t *testing.T) {
 	if a1.Effort() != "high" {
 		t.Fatalf("a1 effort = %q", a1.Effort())
 	}
-	if a2.Effort() != "" {
-		t.Fatalf("a2 effort leaked = %q", a2.Effort())
+	if a2.Effort() != config.DefaultEffort {
+		t.Fatalf("a2 effort leaked = %q, want default %q", a2.Effort(), config.DefaultEffort)
 	}
 }
 
