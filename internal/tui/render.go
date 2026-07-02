@@ -4,56 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
-	"poisson/internal/agent"
 )
-
-// renderEventString formats an OutputEvent into a string without writing to a
-// terminal. This is the testable core of the rendering logic.
-func renderEventString(ev agent.OutputEvent) string {
-	switch ev.Type {
-	case agent.OutputText:
-		return terminalText(ev.Text)
-
-	case agent.OutputThinking:
-		// Dimmed reasoning text.
-		return "\x1b[2m" + terminalText(ev.Text) + "\x1b[0m"
-
-	case agent.OutputToolStart:
-		var b strings.Builder
-		b.WriteString("\r\n  [")
-		b.WriteString(ev.ToolName)
-		b.WriteString("] ")
-		b.WriteString(toolInputPreview(ev.ToolName, ev.ToolInput))
-		b.WriteString("\r\n  ⠋ working...\r\n")
-		return b.String()
-
-	case agent.OutputToolResult:
-		var b strings.Builder
-		if ev.ToolError != "" {
-			b.WriteString("  ✗ ")
-			b.WriteString(previewText(ev.ToolError, 200))
-			b.WriteString("\r\n")
-		} else {
-			b.WriteString("  ✓ ")
-			b.WriteString(toolResultPreview(ev.ToolName, ev.ToolResultContent))
-			b.WriteString("\r\n")
-		}
-		return b.String()
-
-	case agent.OutputApproval:
-		return fmt.Sprintf("\r\n  ⚠ approval needed for: %s\r\n", ev.ToolName)
-
-	case agent.OutputError:
-		return fmt.Sprintf("error: %s\r\n", ev.Text)
-
-	case agent.OutputCompacting:
-		return "\r\n  compacting context...\r\n"
-
-	default:
-		return ""
-	}
-}
 
 // bashInputPreview summarizes a bash command for the tool card body.
 // Multi-line scripts show the first line plus a line count instead of
@@ -150,12 +101,6 @@ func toolResultPreview(toolName, content string) string {
 	return previewText(content, 200)
 }
 
-func terminalText(s string) string {
-	s = strings.ReplaceAll(s, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	return strings.ReplaceAll(s, "\n", "\r\n")
-}
-
 func previewText(s string, maxBytes int) string {
 	truncated := false
 	if len(s) > maxBytes {
@@ -183,41 +128,6 @@ func previewText(s string, maxBytes int) string {
 	return b.String()
 }
 
-// renderStatusBarString formats the status bar line:
-//
-//	[session] ctx: 42.3% (12,847/30,400) | $0.0124 | provider/model
-//
-// A ⚠ warning is appended when context usage exceeds 75%.
-func renderStatusBarString(ev agent.OutputEvent, sessionID string) string {
-	var b strings.Builder
-	b.WriteString("\r\n[")
-	b.WriteString(shortID(sessionID))
-	b.WriteString("] ctx: ")
-	b.WriteString(fmt.Sprintf("%.1f%%", ev.ContextPct))
-	b.WriteString(" (")
-	b.WriteString(formatNum(ev.ContextTokens))
-	b.WriteString("/")
-	b.WriteString(formatNum(ev.ContextWindow))
-	b.WriteString(") | $")
-	b.WriteString(fmt.Sprintf("%.4f", ev.Cost))
-	b.WriteString(" | ")
-	b.WriteString(ev.Model)
-	if ev.ContextPct > 75.0 {
-		b.WriteString(" ⚠")
-	}
-	b.WriteString("\r\n")
-	return b.String()
-}
-
-// shortID returns the first 6 characters of an ID, or the whole string if
-// shorter.
-func shortID(id string) string {
-	if len(id) > 6 {
-		return id[:6]
-	}
-	return id
-}
-
 // formatNum formats an integer with thousands separators (commas).
 func formatNum(n int) string {
 	s := fmt.Sprintf("%d", n)
@@ -240,5 +150,3 @@ func formatNum(n int) string {
 	}
 	return b.String()
 }
-
-

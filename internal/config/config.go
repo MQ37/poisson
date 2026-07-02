@@ -115,12 +115,7 @@ func defaultConfig() *Config {
 			Threshold: 0.85,
 			Model:     "",
 		},
-		Stealth: StealthConfig{
-			CCVersion:    "2.1.156",
-			CCEntrypoint: "sdk-cli",
-			CCHSalt:      "59cf53e54c78",
-			CCHPositions: []int{4, 7, 20},
-		},
+		Stealth: DefaultStealthConfig(),
 		TUI: TUIConfig{
 			Theme:      "dark",
 			ShowTokens: true,

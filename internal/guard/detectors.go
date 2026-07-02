@@ -53,26 +53,6 @@ func hasCommandSubstitution(raw string) bool {
 	return false
 }
 
-// IsSensitiveDir reports whether dir is a sensitive working directory (e.g.
-// ~/.ssh). dir should be absolute and cleaned.
-func IsSensitiveDir(dir string) (bool, string) {
-	d := filepath.Clean(dir)
-	check := d
-	if !strings.HasSuffix(check, string(filepath.Separator)) {
-		check += string(filepath.Separator)
-	}
-	for _, pat := range sensitiveDirPatterns {
-		if strings.Contains(check, pat) {
-			return true, "sensitive working directory: " + pat
-		}
-	}
-	base := filepath.Base(d)
-	if sensitiveExactBasenames[base] || sshPrivKeyRe.MatchString(base) {
-		return true, "sensitive working directory: " + base
-	}
-	return false, ""
-}
-
 // hasDangerousPatterns checks the raw command string for dangerous patterns:
 // output redirects that overwrite/truncate files (>, >>), and pipes into
 // dangerous shells.
@@ -397,9 +377,6 @@ func yqHasDangerousFlag(tokens []string) bool {
 func tailHasFollowFlag(tokens []string) bool {
 	for _, t := range tokens {
 		if t == "-f" || t == "--follow" || strings.HasPrefix(t, "-f") && strings.Contains(t, "f") {
-			return true
-		}
-		if t == "--follow" {
 			return true
 		}
 	}

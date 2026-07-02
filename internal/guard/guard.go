@@ -5,13 +5,6 @@ import (
 	"strings"
 )
 
-// IsAllSafe runs the full classification pipeline (SPEC §7.1) and returns
-// true if the command is auto-allowed.
-func IsAllSafe(command string) bool {
-	safe, _ := Classify(command)
-	return safe
-}
-
 // Classify runs the full classification pipeline and returns whether the
 // command is safe, and a reason if it is not.
 func Classify(command string) (safe bool, reason string) {
