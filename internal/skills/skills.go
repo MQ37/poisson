@@ -12,8 +12,6 @@ type Skill struct {
 	Name         string
 	Description  string
 	ArgumentHint string
-	FilePath     string
-	BaseDir      string
 	Body         string // frontmatter stripped
 }
 
@@ -42,7 +40,7 @@ func Discover() ([]Skill, error) {
 		if err != nil {
 			continue // skip dirs without SKILL.md
 		}
-		s := parseSkill(string(data), skillPath, filepath.Join(skillsDir, entry.Name()))
+		s := parseSkill(string(data))
 		s.Name = entry.Name()
 		skills = append(skills, s)
 	}
@@ -50,11 +48,8 @@ func Discover() ([]Skill, error) {
 }
 
 // parseSkill parses frontmatter and body from a SKILL.md file.
-func parseSkill(content, filePath, baseDir string) Skill {
-	s := Skill{
-		FilePath: filePath,
-		BaseDir:  baseDir,
-	}
+func parseSkill(content string) Skill {
+	s := Skill{}
 
 	// Parse YAML frontmatter (simple key: value pairs between --- markers).
 	if strings.HasPrefix(content, "---\n") {

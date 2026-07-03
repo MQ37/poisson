@@ -52,7 +52,6 @@ type TUI struct {
 	headerRows int // Grok-style top strip (cwd · tokens · model)
 	scrollRows int // rows allotted to scrollback
 	inputRows  int // rows for multi-line input
-	statusRows int // legacy; 0 (status moved to headerRows)
 
 	// Region content.
 	scroll *scrollback
@@ -158,7 +157,6 @@ func newTUI(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent)
 		dirty:          newDirtyTracker(),
 		inputRows:      3,
 		headerRows:     1,
-		statusRows:     0,
 		lastInputRows:  3,
 		done:           make(chan struct{}),
 		approvalAnswer: make(chan bool, 1),

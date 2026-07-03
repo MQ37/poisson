@@ -197,7 +197,6 @@ func (s *scrollback) appendToolCall(id int64, providerCallID, name string, input
 	b := s.newBlock(blockToolCall, "")
 	b.meta = BlockMeta{
 		ToolName:       name,
-		ToolID:         id,
 		ProviderCallID: providerCallID,
 		ToolInput:      append([]byte(nil), input...),
 		Streaming:      true,
@@ -205,7 +204,6 @@ func (s *scrollback) appendToolCall(id int64, providerCallID, name string, input
 	}
 	s.blocks = append(s.blocks, b)
 	s.totalAdded++
-	s.lastStreamWrapCount = 0
 	s.trim()
 }
 

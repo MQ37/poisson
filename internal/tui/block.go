@@ -22,7 +22,6 @@ const (
 // BlockMeta holds optional metadata for rich rendering (tool cards, collapse, etc.).
 type BlockMeta struct {
 	ToolName         string
-	ToolID           int64
 	ProviderCallID   string
 	ToolInput        []byte
 	ToolResult string

@@ -48,7 +48,6 @@ type ChildEvent struct {
 	Risk          string          `json:"risk,omitempty"`
 	Approved      bool            `json:"approved,omitempty"`
 	Success       bool            `json:"success,omitempty"`
-	ToolCount     int             `json:"toolCount,omitempty"`
 	Turns         int             `json:"turns,omitempty"`
 	ContextTokens int             `json:"contextTokens,omitempty"`
 	Error         string          `json:"error,omitempty"`

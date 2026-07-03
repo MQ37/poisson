@@ -30,7 +30,6 @@ func (t *TUI) recomputeLayout() {
 	wrapWidth := inputWrapWidth(w)
 	t.editor.wrapWidth = wrapWidth
 	t.headerRows = 1
-	t.statusRows = 0
 	t.inputRows = t.inputHeight(wrapWidth)
 	t.scrollRows = h - t.headerRows - t.inputRows
 	if t.scrollRows < 3 {

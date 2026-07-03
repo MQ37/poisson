@@ -129,7 +129,6 @@ func (s *scrollback) appendThinkingRedacted() {
 	b.meta.Streaming = false
 	s.blocks = append(s.blocks, b)
 	s.totalAdded++
-	s.lastStreamWrapCount = 0
 	s.trim()
 }
 

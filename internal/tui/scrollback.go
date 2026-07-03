@@ -36,7 +36,6 @@ type scrollback struct {
 	maxLines            int // max logical blocks (name kept for compat)
 	scrollOffset        int // screen rows scrolled up from bottom; 0 = live tail
 	totalAdded          int
-	lastStreamWrapCount int
 	nextID              int64
 	focusedToolID       int64 // expanded tool card receiving ↑↓ scroll
 }
@@ -91,7 +90,6 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 				return
 			}
 		}
-		s.lastStreamWrapCount = 0
 		b := s.newBlock(kind, sanitizeControls(text))
 		if kind == blockThinking {
 			b.meta.Streaming = true
@@ -105,7 +103,6 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 		s.trim()
 		return
 	}
-	s.lastStreamWrapCount = 0
 	for _, part := range strings.Split(text, "\n") {
 		s.blocks = append(s.blocks, s.newBlock(kind, sanitizeControls(part)))
 	}
@@ -122,7 +119,6 @@ func (s *scrollback) prependIntroLines(lines []string) {
 	if len(lines) == 0 {
 		return
 	}
-	s.lastStreamWrapCount = 0
 	newBlocks := make([]Block, 0, len(lines))
 	for _, ln := range lines {
 		newBlocks = append(newBlocks, s.newBlock(blockIntro, ln))
@@ -146,7 +142,6 @@ func (s *scrollback) stripIntroBlocks() {
 }
 
 func (s *scrollback) appendRaw(style LineStyle, text string) {
-	s.lastStreamWrapCount = 0
 	for _, ln := range splitLines(stripANSI(text)) {
 		s.blocks = append(s.blocks, s.newBlock(styleToKind(style), sanitizeControls(ln)))
 		s.totalAdded++
@@ -326,14 +321,12 @@ func (s *scrollback) appendToolCallReplay(id int64, providerCallID, name string,
 	b := s.newBlock(blockToolCall, "")
 	b.meta = BlockMeta{
 		ToolName:       name,
-		ToolID:         id,
 		ProviderCallID: providerCallID,
 		ToolInput:      append([]byte(nil), input...),
 		Streaming:      false,
 	}
 	s.blocks = append(s.blocks, b)
 	s.totalAdded++
-	s.lastStreamWrapCount = 0
 	s.trim()
 }
 

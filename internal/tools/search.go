@@ -57,11 +57,6 @@ type rgMatch struct {
 		Lines      struct {
 			Text string `json:"text"`
 		} `json:"lines"`
-		Submatches []struct {
-			Match struct {
-				Text string `json:"text"`
-			} `json:"match"`
-		} `json:"submatches"`
 	} `json:"data"`
 }
 

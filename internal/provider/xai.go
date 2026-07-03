@@ -126,13 +126,14 @@ func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry i
 
 // xaiRequest is the OpenAI-compatible request body.
 type xaiRequest struct {
-	Model         string            `json:"model"`
-	Messages      []xaiMessage      `json:"messages"`
-	Tools         []xaiTool         `json:"tools,omitempty"`
-	MaxTokens     int               `json:"max_tokens,omitempty"`
-	Stream        bool              `json:"stream"`
-	StreamOptions *xaiStreamOptions `json:"stream_options,omitempty"`
-	Temperature   *float64          `json:"temperature,omitempty"`
+	Model           string            `json:"model"`
+	Messages        []xaiMessage      `json:"messages"`
+	Tools           []xaiTool         `json:"tools,omitempty"`
+	MaxTokens       int               `json:"max_tokens,omitempty"`
+	Stream          bool              `json:"stream"`
+	StreamOptions   *xaiStreamOptions `json:"stream_options,omitempty"`
+	Temperature     *float64          `json:"temperature,omitempty"`
+	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
 }
 
 type xaiStreamOptions struct {
@@ -176,11 +177,12 @@ func emptyStrPtr() *string    { v := ""; return &v }
 // Every message MUST have a content field (even if empty) or xAI returns 422.
 func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 	ar := xaiRequest{
-		Model:         req.Model,
-		Stream:        true,
-		StreamOptions: &xaiStreamOptions{IncludeUsage: true},
-		MaxTokens:     req.MaxTokens,
-		Temperature:   req.Temperature,
+		Model:           req.Model,
+		Stream:          true,
+		StreamOptions:   &xaiStreamOptions{IncludeUsage: true},
+		MaxTokens:       req.MaxTokens,
+		Temperature:     req.Temperature,
+		ReasoningEffort: req.Effort,
 	}
 	if ar.MaxTokens == 0 {
 		ar.MaxTokens = 4096

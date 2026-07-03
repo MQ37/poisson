@@ -10,7 +10,7 @@ import (
 
 func TestParseSkillWithFrontmatter(t *testing.T) {
 	content := "---\ndescription: \"Review code quality\"\nargument-hint: \"[file or dir]\"\n---\n\n# Code Review\n\nRead the file and check for bugs."
-	s := parseSkill(content, "/path/to/SKILL.md", "/path/to")
+	s := parseSkill(content)
 	if s.Description != "Review code quality" {
 		t.Errorf("description = %q, want %q", s.Description, "Review code quality")
 	}
@@ -24,7 +24,7 @@ func TestParseSkillWithFrontmatter(t *testing.T) {
 
 func TestParseSkillNoFrontmatter(t *testing.T) {
 	content := "# Just a skill\n\nDo the thing."
-	s := parseSkill(content, "/path/SKILL.md", "/path")
+	s := parseSkill(content)
 	if s.Body != "# Just a skill\n\nDo the thing." {
 		t.Errorf("body = %q", s.Body)
 	}
@@ -35,7 +35,7 @@ func TestParseSkillNoFrontmatter(t *testing.T) {
 
 func TestParseSkillQuotedValues(t *testing.T) {
 	content := "---\ndescription: 'A quoted skill'\n---\nBody here."
-	s := parseSkill(content, "/p", "/p")
+	s := parseSkill(content)
 	if s.Description != "A quoted skill" {
 		t.Errorf("description = %q, want %q", s.Description, "A quoted skill")
 	}
