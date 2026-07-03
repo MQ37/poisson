@@ -134,11 +134,19 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 			break
 		}
 	}
-	if truncated && cmd.Process != nil {
+	earlyStop := truncated || scanner.Err() != nil
+	if earlyStop && cmd.Process != nil {
 		_ = cmd.Process.Kill()
 	}
 	waitErr := cmd.Wait()
 
+	scanErr := scanner.Err()
+	if scanErr != nil {
+		if count == 0 {
+			return ToolResult{Error: "search output unreadable: " + scanErr.Error()}, nil
+		}
+		b.WriteString(fmt.Sprintf("\n... (scanner error: %v)\n", scanErr))
+	}
 	if count == 0 {
 		if waitErr != nil && strings.TrimSpace(stderr.String()) != "" {
 			return ToolResult{Error: strings.TrimSpace(stderr.String())}, nil

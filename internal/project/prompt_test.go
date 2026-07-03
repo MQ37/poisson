@@ -67,6 +67,28 @@ func TestLoadProjectContextFilesClaudeMdFallback(t *testing.T) {
 	}
 }
 
+func TestLoadProjectContextFilesCapsFileSize(t *testing.T) {
+	tmpDir := testutil.TempDir(t)
+	// Build an AGENTS.md larger than MaxContextFileSize.
+	body := strings.Repeat("A", MaxContextFileSize+100)
+	os.WriteFile(filepath.Join(tmpDir, "AGENTS.md"), []byte(body), 0o600)
+
+	files := LoadProjectContextFiles(tmpDir, filepath.Join(tmpDir, ".poisson"))
+	if len(files) != 1 {
+		t.Fatalf("expected 1 file, got %d", len(files))
+	}
+
+	if len(files[0].Content) > MaxContextFileSize+100 {
+		t.Errorf("content size %d exceeds cap plus truncation notice", len(files[0].Content))
+	}
+	if !strings.Contains(files[0].Content, strings.Repeat("A", MaxContextFileSize-10)) {
+		t.Error("content should contain the leading bytes up to the cap")
+	}
+	if !strings.Contains(files[0].Content, "(file truncated at") {
+		t.Errorf("expected truncation notice, got: %q", files[0].Content)
+	}
+}
+
 func TestBuildSystemPrompt(t *testing.T) {
 	opts := BuildSystemPromptOptions{
 		Cwd:       "/home/user/project",

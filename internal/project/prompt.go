@@ -2,10 +2,16 @@
 package project
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// MaxContextFileSize caps a single context file (AGENTS.md/CLAUDE.md) read
+// from disk. Oversized files are truncated to prevent one giant file from
+// blowing up the system prompt every turn.
+const MaxContextFileSize = 64 * 1024
 
 // ContextFile represents a discovered AGENTS.md or CLAUDE.md file.
 type ContextFile struct {
@@ -49,11 +55,22 @@ func LoadProjectContextFiles(cwd, agentDir string) []ContextFile {
 func loadFromDir(dir string) *ContextFile {
 	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
 		path := filepath.Join(dir, name)
-		data, err := os.ReadFile(path)
+		f, err := os.Open(path)
 		if err != nil {
 			continue
 		}
-		return &ContextFile{Path: path, Content: string(data)}
+		data := make([]byte, MaxContextFileSize+1)
+		n, err := f.Read(data)
+		_ = f.Close()
+		if n == 0 {
+			continue
+		}
+		truncated := n > MaxContextFileSize
+		content := string(data[:min(n, MaxContextFileSize)])
+		if truncated {
+			content += fmt.Sprintf("\n\n... (file truncated at %d bytes)\n", MaxContextFileSize)
+		}
+		return &ContextFile{Path: path, Content: content}
 	}
 	return nil
 }

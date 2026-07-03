@@ -355,7 +355,7 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 	defer body.Close()
 
 	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 16*1024*1024), 16*1024*1024)
 
 	toolCalls := make(map[int]*ToolCall)
 	toolInputBuffers := make(map[int]*bytes.Buffer)

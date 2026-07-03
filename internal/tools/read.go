@@ -92,8 +92,8 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 			remaining := maxBytes - byteCount
 			if remaining > 0 {
 				b.WriteString(utf8SafePrefix(line, remaining))
+				linesWritten++
 			}
-			linesWritten++
 			b.WriteString(fmt.Sprintf("\n... (output truncated at 50KB, %d lines shown)\n", linesWritten))
 			break
 		}

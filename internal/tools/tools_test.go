@@ -179,6 +179,34 @@ func itoaTest(n int, b *strings.Builder) {
 	b.Write(digits)
 }
 
+// TestRead_TruncationCountsLinesCorrectly verifies that when the byte cap is
+// hit with zero bytes remaining for the next line, the reported line count is
+// not inflated by one (off-by-one fix).
+func TestRead_TruncationCountsLinesCorrectly(t *testing.T) {
+	dir := testutil.TempDir(t)
+	path := filepath.Join(dir, "exact.txt")
+
+	// One full line that exactly fills maxBytes (including its trailing \n),
+	// followed by a second line. When reading, the second line has 0 remaining
+	// bytes, so no partial line is written and the count should stay at 1.
+	firstLine := strings.Repeat("a", maxBytes-1) + "\n"
+	if err := os.WriteFile(path, []byte(firstLine+"more\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	r := NewReadTool(dir)
+	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "exact.txt"}))
+	if res.Error != "" {
+		t.Fatalf("read error: %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "1 lines shown") {
+		t.Errorf("expected '1 lines shown' in truncated output, got: %q", res.Content)
+	}
+	if strings.Contains(res.Content, "2 lines shown") {
+		t.Errorf("off-by-one: reported 2 lines shown, got: %q", res.Content)
+	}
+}
+
 func TestEdit(t *testing.T) {
 	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
@@ -378,6 +406,35 @@ func TestSearch_NoMatches(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, "no matches") {
 		t.Errorf("expected 'no matches' message: %q", res.Content)
+	}
+}
+
+// TestSearch_ScannerErrorReported verifies that a match line exceeding the
+// scanner buffer is reported, instead of silently returning partial/no results.
+func TestSearch_ScannerErrorReported(t *testing.T) {
+	dir := testutil.TempDir(t)
+	longLine := strings.Repeat("x", 2*1024*1024) + "NEEDLE"
+	path := filepath.Join(dir, "huge.txt")
+	if err := os.WriteFile(path, []byte(longLine+"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	s := NewSearchTool(dir)
+	res, _ := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern": "NEEDLE",
+		"path":    ".",
+	}))
+
+	// The scanner buffer is 1MB; the rg JSON line for a 2MB match exceeds it.
+	// The fix surfaces this as either a ToolResult.Error or a content warning.
+	if res.Error != "" {
+		if !strings.Contains(res.Error, "scanner error") && !strings.Contains(res.Error, "unreadable") {
+			t.Errorf("expected scanner-related error, got: %q", res.Error)
+		}
+		return
+	}
+	if !strings.Contains(res.Content, "scanner error") {
+		t.Errorf("expected scanner error warning in output, got: %q", res.Content)
 	}
 }
 

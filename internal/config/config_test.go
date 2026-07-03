@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"poisson/internal/testutil"
@@ -281,6 +282,59 @@ func TestConfigPath(t *testing.T) {
 	want := filepath.Join(tmpHome, ".poisson", "config.toml")
 	if p != want {
 		t.Errorf("ConfigPath = %q, want %q", p, want)
+	}
+}
+
+func TestLoadRejectsWrongTypes(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		wantErr string
+	}{
+		{
+			name: "show_tokens as string",
+			content: `
+[tui]
+show_tokens = "yes"
+`,
+			wantErr: "tui.show_tokens: expected boolean",
+		},
+		{
+			name: "model as integer",
+			content: `
+[anthropic]
+model = 42
+`,
+			wantErr: "anthropic.model: expected string",
+		},
+		{
+			name: "api_key as integer",
+			content: `
+[anthropic]
+api_key = 123
+`,
+			wantErr: "anthropic.api_key: expected string",
+		},
+		{
+			name: "effort as bool",
+			content: `
+effort = true
+`,
+			wantErr: "effort: expected string",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			writeTempConfig(t, tc.content)
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
+			}
+		})
 	}
 }
 

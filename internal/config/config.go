@@ -253,11 +253,18 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 	cfg := defaultConfig()
 
 	if v, ok := lookup(m, "provider", "default"); ok {
-		cfg.Provider.Default = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("provider.default: %w", err)
+		}
+		cfg.Provider.Default = s
 	}
 
 	if v, ok := lookup(m, "effort"); ok {
-		e := asString(v)
+		e, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("effort: %w", err)
+		}
 		if !effortLevels[e] {
 			return nil, fmt.Errorf("effort: unknown level %q (want low|medium|high|xhigh|max)", e)
 		}
@@ -265,21 +272,41 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 	}
 
 	if v, ok := lookup(m, "anthropic", "model"); ok {
-		cfg.Anthropic.Model = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("anthropic.model: %w", err)
+		}
+		cfg.Anthropic.Model = s
 	}
 	if v, ok := lookup(m, "anthropic", "api_key"); ok {
-		cfg.Anthropic.APIKey = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("anthropic.api_key: %w", err)
+		}
+		cfg.Anthropic.APIKey = s
 	}
 
 	if v, ok := lookup(m, "xai", "model"); ok {
-		cfg.XAI.Model = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("xai.model: %w", err)
+		}
+		cfg.XAI.Model = s
 	}
 
 	if v, ok := lookup(m, "ollama", "base_url"); ok {
-		cfg.Ollama.BaseURL = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("ollama.base_url: %w", err)
+		}
+		cfg.Ollama.BaseURL = s
 	}
 	if v, ok := lookup(m, "ollama", "model"); ok {
-		cfg.Ollama.Model = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("ollama.model: %w", err)
+		}
+		cfg.Ollama.Model = s
 	}
 
 	if v, ok := lookup(m, "compaction", "threshold"); ok {
@@ -290,17 +317,33 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 		cfg.Compaction.Threshold = f
 	}
 	if v, ok := lookup(m, "compaction", "model"); ok {
-		cfg.Compaction.Model = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("compaction.model: %w", err)
+		}
+		cfg.Compaction.Model = s
 	}
 
 	if v, ok := lookup(m, "stealth", "cc_version"); ok {
-		cfg.Stealth.CCVersion = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("stealth.cc_version: %w", err)
+		}
+		cfg.Stealth.CCVersion = s
 	}
 	if v, ok := lookup(m, "stealth", "cc_entrypoint"); ok {
-		cfg.Stealth.CCEntrypoint = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("stealth.cc_entrypoint: %w", err)
+		}
+		cfg.Stealth.CCEntrypoint = s
 	}
 	if v, ok := lookup(m, "stealth", "cch_salt"); ok {
-		cfg.Stealth.CCHSalt = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("stealth.cch_salt: %w", err)
+		}
+		cfg.Stealth.CCHSalt = s
 	}
 	if v, ok := lookup(m, "stealth", "cch_positions"); ok {
 		pos, err := asIntArray(v)
@@ -311,13 +354,25 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 	}
 
 	if v, ok := lookup(m, "tui", "theme"); ok {
-		cfg.TUI.Theme = asString(v)
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("tui.theme: %w", err)
+		}
+		cfg.TUI.Theme = s
 	}
 	if v, ok := lookup(m, "tui", "show_tokens"); ok {
-		cfg.TUI.ShowTokens = asBool(v)
+		b, err := asBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("tui.show_tokens: %w", err)
+		}
+		cfg.TUI.ShowTokens = b
 	}
 	if v, ok := lookup(m, "tui", "show_cost"); ok {
-		cfg.TUI.ShowCost = asBool(v)
+		b, err := asBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("tui.show_cost: %w", err)
+		}
+		cfg.TUI.ShowCost = b
 	}
 
 	// Pricing: [pricing.<provider>.<model>] → input, output, cache_read, cache_write
@@ -396,18 +451,20 @@ func lookup(m map[string]interface{}, path ...string) (interface{}, bool) {
 	return nil, false
 }
 
-func asString(v interface{}) string {
+// asString coerces a TOML value to string, rejecting non-string types.
+func asString(v interface{}) (string, error) {
 	if s, ok := v.(string); ok {
-		return s
+		return s, nil
 	}
-	return ""
+	return "", fmt.Errorf("expected string, got %T", v)
 }
 
-func asBool(v interface{}) bool {
+// asBool coerces a TOML value to bool, rejecting non-bool types.
+func asBool(v interface{}) (bool, error) {
 	if b, ok := v.(bool); ok {
-		return b
+		return b, nil
 	}
-	return false
+	return false, fmt.Errorf("expected boolean, got %T", v)
 }
 
 // asFloat converts an int or a float (from TOML) to float64.

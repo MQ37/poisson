@@ -124,8 +124,6 @@ func (o *approvalOverlay) renderInputPanel(panelRows, cols int) []string {
 		}
 		o.clampScroll()
 		cmdAll = cmdAll[o.scroll : o.scroll+cmdRows]
-	} else if len(cmdAll) > cmdRows {
-		cmdAll = cmdAll[:cmdRows]
 	}
 
 	out := make([]string, panelRows)
