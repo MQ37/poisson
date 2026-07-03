@@ -645,8 +645,11 @@ func TestPromptWithContextCancelsStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get messages: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Fatalf("cancelled prompt left %d active messages", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("cancelled prompt left %d active messages, want 1 (user only)", len(msgs))
+	}
+	if msgs[0].Role != "user" {
+		t.Fatalf("remaining message role = %q, want user", msgs[0].Role)
 	}
 }
 
@@ -685,8 +688,11 @@ func TestPromptWithContextCancelsToolTurnCleanly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get messages: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Fatalf("cancelled tool turn left active messages: %+v", msgs)
+	if len(msgs) != 3 {
+		t.Fatalf("cancelled tool turn left %d messages, want 3 (user+assistant+tool_result)", len(msgs))
+	}
+	if msgs[2].Role != "tool" {
+		t.Fatalf("last message role = %q, want tool", msgs[2].Role)
 	}
 }
 

@@ -348,7 +348,10 @@ func (a *Agent) PromptWithContext(ctx context.Context, userInput string) error {
 
 	err = a.runTurn(ctx)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		_ = a.store.SoftDeleteMessages(a.sessionID, userMsg.Seq)
+		// Keep the conversation visible — just stop generation. runTurn already
+		// returns before storing the final (incomplete) assistant message, so
+		// there are no orphaned tool_use blocks. Previous tool iterations (if
+		// any) have complete tool_use+result pairs.
 	}
 	return err
 }
@@ -516,12 +519,10 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			}(i, tc)
 		}
 		wg.Wait()
-		if err := ctx.Err(); err != nil {
-			a.sendEvent(OutputEvent{Type: OutputDone})
-			return err
-		}
 
-		// Persist tool_result messages in start order.
+		// Persist tool_result messages even if the context was cancelled — the
+		// results are already computed and leaving orphaned tool_use blocks
+		// without results would cause a provider 400 on the next request.
 		for i, result := range results {
 			toolBlock := provider.ContentBlock{
 				Type:       "tool_result",
@@ -564,6 +565,11 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		}
 
 		a.UpdateStatus()
+
+		if err := ctx.Err(); err != nil {
+			a.sendEvent(OutputEvent{Type: OutputDone})
+			return err
+		}
 
 		a.pendingResults = nil
 		if a.shouldCompact() {

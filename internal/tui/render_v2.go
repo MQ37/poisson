@@ -483,7 +483,6 @@ func (t *TUI) markAfterEvent(ev agent.OutputEvent) {
 		t.activeTools = 0
 		if t.turnCancelled {
 			t.turnCancelled = false
-			t.trimScrollbackFromLastUserLocked()
 			t.scroll.appendRaw(styleSystem, "  cancelled")
 		}
 		t.dirty.markStatus()
