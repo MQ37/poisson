@@ -109,3 +109,71 @@ func FakeErrorResponse(err error) []StreamEvent {
 		{Type: EventError, Error: err},
 	}
 }
+
+// FakeThinkingTextResponse emits reasoning deltas followed by text. This
+// simulates a model that thinks before answering (ollama reasoning_content,
+// Anthropic extended thinking, xAI reasoning).
+func FakeThinkingTextResponse(thinking, text string, usage *Usage) []StreamEvent {
+	if usage == nil {
+		usage = &Usage{InputTokens: 10, OutputTokens: 20}
+	}
+	var events []StreamEvent
+	for _, chunk := range splitChunks(thinking, 12) {
+		events = append(events, StreamEvent{Type: EventThinkingDelta, Text: chunk})
+	}
+	events = append(events, StreamEvent{Type: EventTextDelta, Text: text})
+	events = append(events, StreamEvent{Type: EventDone, Usage: usage})
+	return events
+}
+
+// FakeThinkingToolCallResponse emits reasoning, text, and a tool call. Returns
+// two sequences: the first for the tool-call turn, the second for the final
+// text turn after receiving the tool result.
+func FakeThinkingToolCallResponse(thinking, text string, toolName string, toolInput interface{}, finalText string) ([]StreamEvent, []StreamEvent) {
+	inputJSON, _ := json.Marshal(toolInput)
+	var first []StreamEvent
+	for _, chunk := range splitChunks(thinking, 12) {
+		first = append(first, StreamEvent{Type: EventThinkingDelta, Text: chunk})
+	}
+	first = append(first, StreamEvent{Type: EventTextDelta, Text: text})
+	first = append(first, StreamEvent{Type: EventToolUseStart, ToolCall: &ToolCall{ID: "call_1", Name: toolName, Input: inputJSON}})
+	first = append(first, StreamEvent{Type: EventToolUseStop, ToolCall: &ToolCall{ID: "call_1", Name: toolName, Input: inputJSON}})
+	first = append(first, StreamEvent{Type: EventDone, Usage: &Usage{InputTokens: 20, OutputTokens: 15}})
+	second := []StreamEvent{
+		{Type: EventTextDelta, Text: finalText},
+		{Type: EventDone, Usage: &Usage{InputTokens: 30, OutputTokens: 15}},
+	}
+	return first, second
+}
+
+// FakeRedactedThinkingResponse emits a redacted thinking block followed by text.
+func FakeRedactedThinkingResponse(text string, usage *Usage) []StreamEvent {
+	if usage == nil {
+		usage = &Usage{InputTokens: 10, OutputTokens: 10}
+	}
+	return []StreamEvent{
+		{Type: EventThinkingRedacted, Text: "encrypted-sig"},
+		{Type: EventTextDelta, Text: text},
+		{Type: EventDone, Usage: usage},
+	}
+}
+
+// splitChunks divides a string into pieces of at most n bytes, simulating
+// how a streaming model sends tokens incrementally.
+func splitChunks(s string, n int) []string {
+	if n < 1 {
+		n = 1
+	}
+	var out []string
+	for len(s) > n {
+		out = append(out, s[:n])
+		s = s[n:]
+	}
+	if s != "" {
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		out = []string{""}
+	}
+	return out
+}
