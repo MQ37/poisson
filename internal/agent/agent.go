@@ -100,6 +100,7 @@ func NewAgent(
 	outputChan chan OutputEvent,
 	approvalFn func(command, description, workdir string) bool,
 ) *Agent {
+	model := defaultModel(p, cfg)
 	a := &Agent{
 		store:      s,
 		provider:   p,
@@ -108,8 +109,8 @@ func NewAgent(
 		sessionID:  sessionID,
 		outputChan: outputChan,
 		approvalFn: approvalFn,
-		model:      defaultModel(p, cfg),
-		effort:     initialEffort(cfg),
+		model:      model,
+		effort:     effectiveEffort(initialEffort(cfg), p.ID(), model),
 	}
 	return a
 }
@@ -121,6 +122,31 @@ func initialEffort(cfg *config.Config) string {
 		return cfg.Effort
 	}
 	return config.DefaultEffort
+}
+
+// effectiveEffort validates effort against the model's supported levels. If the
+// model is known and doesn't support the requested level, the first supported
+// level is used instead. Unknown models keep the effort (the provider decides).
+func effectiveEffort(effort, providerID, model string) string {
+	if effort == "" {
+		return ""
+	}
+	s, ok := provider.GetModelSettings(providerID, model)
+	if !ok {
+		return effort // unknown model — keep it, provider will handle
+	}
+	if !s.SupportsEffort {
+		return "" // known model that doesn't support effort
+	}
+	if len(s.EffortLevels) == 0 {
+		return effort // supports effort but no specific levels listed
+	}
+	for _, lvl := range s.EffortLevels {
+		if lvl == effort {
+			return effort
+		}
+	}
+	return s.EffortLevels[0] // not in supported list — use first supported
 }
 
 // --- Session management accessors (for TUI slash commands) ---
@@ -136,13 +162,14 @@ func (a *Agent) SwitchSession(sessionID string) {
 	a.sessionID = sessionID
 	a.sessionToolCalls = 0
 	a.sessionToolErrors = 0
-	a.effort = initialEffort(a.config)
+	a.effort = effectiveEffort(initialEffort(a.config), a.provider.ID(), a.model)
 	a.pendingResults = nil
 }
 
 // SetProvider swaps the provider and persists it on the active session.
 func (a *Agent) SetProvider(p provider.Provider) {
 	a.provider = p
+	a.effort = effectiveEffort(a.effort, p.ID(), a.model)
 	sess, err := a.store.GetSession(a.sessionID)
 	if err != nil {
 		return
@@ -155,6 +182,7 @@ func (a *Agent) SetProvider(p provider.Provider) {
 // SetModel updates the session's model name and persists it.
 func (a *Agent) SetModel(model string) {
 	a.model = model
+	a.effort = effectiveEffort(a.effort, a.provider.ID(), model)
 	sess, err := a.store.GetSession(a.sessionID)
 	if err != nil {
 		return

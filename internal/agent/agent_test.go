@@ -744,3 +744,28 @@ func TestThinkingBlocksRoundTripThroughStore(t *testing.T) {
 		t.Fatalf("redacted thinking not preserved: %+v", msg.Content[0])
 	}
 }
+
+func TestEffectiveEffort(t *testing.T) {
+	cases := []struct {
+		effort, prov, model, want string
+	}{
+		// glm-5.2:cloud supports only high/max — medium is clamped to high.
+		{"medium", "ollama", "glm-5.2:cloud", "high"},
+		{"high", "ollama", "glm-5.2:cloud", "high"},
+		{"max", "ollama", "glm-5.2:cloud", "max"},
+		// claude-opus supports medium.
+		{"medium", "anthropic", "claude-opus-4-8", "medium"},
+		// xAI grok-build supports only high/max.
+		{"medium", "xai", "grok-build", ""},  // SupportsEffort=false
+		// Unknown model keeps the effort.
+		{"medium", "fake", "test-model", "medium"},
+		// Empty effort stays empty.
+		{"", "ollama", "glm-5.2:cloud", ""},
+	}
+	for _, c := range cases {
+		got := effectiveEffort(c.effort, c.prov, c.model)
+		if got != c.want {
+			t.Errorf("effectiveEffort(%q, %q, %q) = %q, want %q", c.effort, c.prov, c.model, got, c.want)
+		}
+	}
+}
