@@ -450,17 +450,6 @@ func scrollDeltaForKey(k Key, viewHeight int) (delta int, ok bool) {
 	return 0, false
 }
 
-// decodeKittyKeys translates kitty CSI-u sequences into legacy bytes. New code
-// should use Decoder.Push instead; this remains for tests and mouse-scroll paths.
-func decodeKittyKeys(data []byte) []byte {
-	var d Decoder
-	keys := d.Push(data)
-	if len(keys) == 0 && len(d.pending) > 0 {
-		return append([]byte{}, d.pending...)
-	}
-	return keysToLegacyBytes(keys)
-}
-
 func keysToLegacyBytes(keys []Key) []byte {
 	var out []byte
 	for _, k := range keys {

@@ -73,22 +73,6 @@ func TestIsOAuth(t *testing.T) {
 	}
 }
 
-func TestGetAccessToken(t *testing.T) {
-	store := AuthStore{
-		"anthropic": {Type: "oauth", Access: "oauth-tok"},
-		"openai":    {Type: "api_key", Key: "sk-key"},
-	}
-	if got := GetAccessToken(store, "anthropic"); got != "oauth-tok" {
-		t.Errorf("anthropic access = %q, want oauth-tok", got)
-	}
-	if got := GetAccessToken(store, "openai"); got != "sk-key" {
-		t.Errorf("openai access (via key) = %q, want sk-key", got)
-	}
-	if got := GetAccessToken(store, "missing"); got != "" {
-		t.Errorf("missing access = %q, want empty", got)
-	}
-}
-
 func TestGetAPIKey(t *testing.T) {
 	store := AuthStore{
 		"anthropic": {Type: "api_key", Key: "sk-ant-123"},

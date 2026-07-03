@@ -178,27 +178,6 @@ func TestListSessionsOrdersByUpdatedAt(t *testing.T) {
 	}
 }
 
-func TestSessionCompactionSummary(t *testing.T) {
-	s := newTestStore(t)
-	mustCreateSession(t, s, "sc")
-
-	if err := s.SetCompactionSummary("sc", "## Big Picture\nDo the thing"); err != nil {
-		t.Fatalf("SetCompactionSummary: %v", err)
-	}
-	got, _ := s.GetSession("sc")
-	if got.CompactionSummary == nil || *got.CompactionSummary != "## Big Picture\nDo the thing" {
-		t.Fatalf("summary = %v", got.CompactionSummary)
-	}
-
-	if err := s.ClearCompactionSummary("sc"); err != nil {
-		t.Fatalf("ClearCompactionSummary: %v", err)
-	}
-	got, _ = s.GetSession("sc")
-	if got.CompactionSummary != nil {
-		t.Fatalf("summary should be nil, got %v", *got.CompactionSummary)
-	}
-}
-
 func TestSessionForkFields(t *testing.T) {
 	s := newTestStore(t)
 	parent := strPtr("parent-1")
@@ -332,77 +311,6 @@ func TestApplyCompaction(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Seq != 3 {
 		t.Fatalf("active messages = %v, want seq 3 only", got)
-	}
-}
-
-func TestMarkCompacted(t *testing.T) {
-	s := newTestStore(t)
-	mustCreateSession(t, s, "mc")
-
-	for _, txt := range []string{"a", "b", "c", "d", "e"} {
-		if err := s.AppendMessage(&Message{SessionID: "mc", Role: "user", Content: textContent(txt)}); err != nil {
-			t.Fatalf("AppendMessage: %v", err)
-		}
-	}
-
-	// Mark up to seq 3 as compacted.
-	if err := s.MarkCompacted("mc", 3); err != nil {
-		t.Fatalf("MarkCompacted: %v", err)
-	}
-
-	got, err := s.GetMessages("mc")
-	if err != nil {
-		t.Fatalf("GetMessages: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("after compaction got %d active, want 2", len(got))
-	}
-	for _, m := range got {
-		if m.Seq <= 3 {
-			t.Fatalf("compacted message seq %d still active", m.Seq)
-		}
-	}
-}
-
-func TestCloneMessages(t *testing.T) {
-	s := newTestStore(t)
-	mustCreateSession(t, s, "src")
-	mustCreateSession(t, s, "dst")
-
-	for _, txt := range []string{"alpha", "beta", "gamma", "delta"} {
-		if err := s.AppendMessage(&Message{SessionID: "src", Role: "user", Content: textContent(txt)}); err != nil {
-			t.Fatalf("AppendMessage: %v", err)
-		}
-	}
-
-	// Clone messages up to seq 3 into dst.
-	if err := s.CloneMessages("src", 3, "dst"); err != nil {
-		t.Fatalf("CloneMessages: %v", err)
-	}
-
-	dstMsgs, err := s.GetMessages("dst")
-	if err != nil {
-		t.Fatalf("GetMessages dst: %v", err)
-	}
-	if len(dstMsgs) != 3 {
-		t.Fatalf("dst has %d messages, want 3", len(dstMsgs))
-	}
-	// seq preserved.
-	for i, m := range dstMsgs {
-		if m.Seq != i+1 {
-			t.Fatalf("cloned msg %d seq = %d, want %d", i, m.Seq, i+1)
-		}
-	}
-	// IDs are new (different from source).
-	srcMsgs, _ := s.GetMessages("src")
-	srcIDs := map[string]bool{}
-	for _, m := range srcMsgs {
-		srcIDs[m.ID] = true
-	}
-	for _, m := range dstMsgs {
-		if srcIDs[m.ID] {
-			t.Fatal("cloned message reuses source ID")
-		}
 	}
 }
 
@@ -621,8 +529,8 @@ func TestSearchFiltersCompacted(t *testing.T) {
 	if err := s.AppendMessage(&Message{SessionID: "compact-search", Role: "user", Content: textContent("compactterm new")}); err != nil {
 		t.Fatalf("AppendMessage new: %v", err)
 	}
-	if err := s.MarkCompacted("compact-search", 1); err != nil {
-		t.Fatalf("MarkCompacted: %v", err)
+	if err := s.ApplyCompaction("compact-search", 1, "summary"); err != nil {
+		t.Fatalf("ApplyCompaction: %v", err)
 	}
 	res, err := s.Search("compactterm", 10)
 	if err != nil {

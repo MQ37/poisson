@@ -79,21 +79,3 @@ func TestFeedPickerArrowKeysE2E(t *testing.T) {
 		t.Fatalf("up: idx=%d want 0", p.idx)
 	}
 }
-
-func TestDecodeKittyKeysCompat(t *testing.T) {
-	cases := []struct {
-		name string
-		in   []byte
-		want []byte
-	}{
-		{"kitty arrow up", []byte{27, '[', '5', '7', '3', '5', '2', 'u'}, []byte{27, '[', 'A'}},
-		{"kitty enter", []byte{27, '[', '5', '7', '3', '4', '5', 'u'}, []byte{'\r'}},
-		{"legacy arrow", []byte{27, '[', 'A'}, []byte{27, '[', 'A'}},
-	}
-	for _, c := range cases {
-		got := decodeKittyKeys(c.in)
-		if string(got) != string(c.want) {
-			t.Errorf("%s: got %q want %q", c.name, got, c.want)
-		}
-	}
-}

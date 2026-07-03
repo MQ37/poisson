@@ -178,29 +178,6 @@ func (s *Store) SetSessionTitle(id, title string) error {
 	return nil
 }
 
-// SetCompactionSummary stores the compaction summary on a session and
-// bumps updated_at.
-func (s *Store) SetCompactionSummary(id, summary string) error {
-	_, err := s.db.Exec(
-		`UPDATE sessions SET compaction_summary = ?, updated_at = ? WHERE id = ?`,
-		summary, time.Now().Unix(), id)
-	if err != nil {
-		return fmt.Errorf("set compaction summary: %w", err)
-	}
-	return nil
-}
-
-// ClearCompactionSummary nulls out the compaction summary on a session.
-func (s *Store) ClearCompactionSummary(id string) error {
-	_, err := s.db.Exec(
-		`UPDATE sessions SET compaction_summary = NULL, updated_at = ? WHERE id = ?`,
-		time.Now().Unix(), id)
-	if err != nil {
-		return fmt.Errorf("clear compaction summary: %w", err)
-	}
-	return nil
-}
-
 // scanner abstracts *sql.Row and *sql.Rows for shared scan logic.
 type scanner interface {
 	Scan(dest ...any) error

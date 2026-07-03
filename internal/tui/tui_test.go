@@ -97,7 +97,6 @@ func TestExpandAtFilesFenceEscalation(t *testing.T) {
 	}
 }
 
-
 func TestMatchSlash(t *testing.T) {
 	cases := []struct {
 		partial string
@@ -157,28 +156,6 @@ func TestSplitPrefix(t *testing.T) {
 			t.Errorf("splitPrefix(%q, %d) = (%q, %q), want (%q, %q)",
 				tc.line, tc.col, gotHead, gotTok, tc.wantHead, tc.wantToken)
 		}
-	}
-}
-
-func TestMatchAtFile(t *testing.T) {
-	dir := testutil.TempDir(t)
-	for _, n := range []string{"alpha.txt", "beta.go", "gamma.md"} {
-		if err := os.WriteFile(filepath.Join(dir, n), nil, 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got := matchAtFile("@", dir)
-	if len(got) != 3 {
-		t.Errorf("expected 3 matches for \"@\", got %d: %v", len(got), got)
-	}
-	got = matchAtFile("@a", dir)
-	if len(got) != 1 || got[0] != "@alpha.txt" {
-		t.Errorf("expected [@alpha.txt], got %v", got)
-	}
-	got = matchAtFile("@"+filepath.Join(dir, "a"), "/")
-	want := "@" + filepath.Join(dir, "alpha.txt")
-	if len(got) != 1 || got[0] != want {
-		t.Errorf("absolute match = %v, want [%s]", got, want)
 	}
 }
 
@@ -575,82 +552,5 @@ func TestEditorInsertTextMultiline(t *testing.T) {
 	}
 	if e.row != 2 || e.col != 1 {
 		t.Errorf("cursor should be row=2 col=1, got row=%d col=%d", e.row, e.col)
-	}
-}
-
-func TestFeedPasteBypass(t *testing.T) {
-	// Pasted bytes inside bracketed paste markers should go directly to the
-	// editor, not trigger Tab/Enter/Esc interception.
-	tui := newTUI(nil, "s-test", nil)
-	tui.cols = 80
-	tui.rows = 24
-	tui.editor.wrapWidth = 79
-
-	// Simulate a paste containing a tab and CR.
-	paste := append([]byte("\x1b[200~"), []byte("hello\tworld\r\n")...)
-	paste = append(paste, []byte("\x1b[201~")...)
-	quit, err := tui.processEditor(paste)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if quit {
-		t.Fatal("paste should not quit")
-	}
-	// The editor should contain the pasted text with tab and CR converted.
-	expected := "hello\tworld\n"
-	if tui.editor.text() != expected {
-		t.Errorf("expected %q, got %q", expected, tui.editor.text())
-	}
-	// No completion should have been triggered.
-	if tui.completion != nil {
-		t.Error("paste triggered completion — should have been bypassed")
-	}
-}
-
-func TestContainsSubmitKeyKittyVariants(t *testing.T) {
-	cases := []struct {
-		name string
-		data []byte
-		want bool
-	}{
-		{"raw CR", []byte{'\r'}, true},
-		{"kitty Enter no mods", []byte{27, '[', '1', '3', 'u'}, true},
-		{"kitty Enter mods=1", []byte{27, '[', '1', '3', ';', '1', 'u'}, true},
-		{"kitty Shift+Enter", []byte{27, '[', '1', '3', ';', '2', 'u'}, false},
-		{"kitty Ctrl+Enter", []byte{27, '[', '1', '3', ';', '5', 'u'}, false},
-		{"plain text", []byte("hello"), false},
-	}
-	for _, c := range cases {
-		got := containsSubmitKey(c.data)
-		if got != c.want {
-			t.Errorf("%s: containsSubmitKey=%v want %v", c.name, got, c.want)
-		}
-	}
-}
-
-func TestDecodeKittyKeys(t *testing.T) {
-	cases := []struct {
-		name string
-		in   []byte
-		want []byte
-	}{
-		{"plain text passes through", []byte("hello"), []byte("hello")},
-		{"kitty backspace", []byte{27, '[', '1', '2', '7', 'u'}, []byte{127}},
-		{"kitty enter", []byte{27, '[', '1', '3', 'u'}, []byte{'\r'}},
-		{"kitty shift+enter to newline", []byte{27, '[', '1', '3', ';', '2', 'u'}, []byte{'\n'}},
-		{"kitty ctrl+c", []byte{27, '[', '9', '9', ';', '5', 'u'}, []byte{3}},
-		{"kitty ctrl+d", []byte{27, '[', '1', '0', '0', ';', '5', 'u'}, []byte{4}},
-		{"arrow up passes through", []byte{27, '[', 'A'}, []byte{27, '[', 'A'}},
-		{"kitty arrow up", []byte{27, '[', '5', '7', '3', '5', '2', 'u'}, []byte{27, '[', 'A'}},
-		{"kitty page up", []byte{27, '[', '5', '7', '3', '5', '4', 'u'}, []byte{27, '[', '5', '~'}},
-		{"kitty page down", []byte{27, '[', '5', '7', '3', '5', '5', 'u'}, []byte{27, '[', '6', '~'}},
-		{"shift+arrow dropped-as-csi passes through", []byte{27, '[', '1', ';', '2', 'A'}, []byte{27, '[', '1', ';', '2', 'A'}},
-		{"text then kitty backspace", append([]byte("ab"), 27, '[', '1', '2', '7', 'u'), []byte{'a', 'b', 127}},
-	}
-	for _, c := range cases {
-		got := decodeKittyKeys(c.in)
-		if string(got) != string(c.want) {
-			t.Errorf("%s: decodeKittyKeys(%q)=%q want %q", c.name, c.in, got, c.want)
-		}
 	}
 }

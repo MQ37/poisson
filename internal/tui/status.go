@@ -110,25 +110,6 @@ func (s StatusSnapshot) renderHeaderRight() string {
 	return b.String()
 }
 
-// Render returns the two status lines joined with a "\n" separator. The
-// returned string already includes the per-side ANSI; it does NOT include
-// the trailing newline that the scrollback uses for layout.
-func (s StatusSnapshot) Render(width int) string {
-	if width < 20 {
-		width = 80
-	}
-	left := s.renderLeft(width)
-	right := s.renderRight(width)
-	gap := width - visibleWidth(left) - visibleWidth(right)
-	if gap < 1 {
-		gap = 1
-	}
-	top := truncateToWidth(dim+left+strings.Repeat(" ", gap)+right+reset, width)
-
-	bottom := s.renderBottom(width)
-	return top + "\r\n" + bottom
-}
-
 func (s StatusSnapshot) renderLeft(width int) string {
 	cwd := shortenPath(s.Cwd, 30)
 	id := s.SessionID

@@ -68,24 +68,3 @@ func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessa
 	res, err := t.Execute(ctx, input)
 	return TrimToolResult(res), err
 }
-
-// ExecuteParallel dispatches all calls concurrently with a sync.WaitGroup.
-// Results are returned in the same order as the input calls.
-func (r *Registry) ExecuteParallel(ctx context.Context, calls []ToolCall) ([]ToolResult, error) {
-	results := make([]ToolResult, len(calls))
-	var wg sync.WaitGroup
-	for i, call := range calls {
-		wg.Add(1)
-		go func(idx int, c ToolCall) {
-			defer wg.Done()
-			res, err := r.Execute(ctx, c.Name, c.Input)
-			if err != nil {
-				results[idx] = TrimToolResult(ToolResult{Error: err.Error()})
-			} else {
-				results[idx] = res
-			}
-		}(i, call)
-	}
-	wg.Wait()
-	return results, nil
-}

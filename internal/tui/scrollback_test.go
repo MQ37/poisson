@@ -56,43 +56,6 @@ func TestScrollbackVisibleNoPanicOnOverflow(t *testing.T) {
 	}
 }
 
-func TestStatusRenderUsesCRLF(t *testing.T) {
-	s := StatusSnapshot{
-		SessionID:     "s-12345678",
-		Cwd:           "/tmp",
-		Model:         "ollama/glm-5.2:cloud",
-		ContextPct:    12.5,
-		ContextTokens: 1234,
-		OutputTokens:  56,
-		Cost:          0.0012,
-		ShowTokens:    true,
-		ShowCost:      true,
-	}
-	out := s.Render(80)
-	if !strings.Contains(out, "\r\n") {
-		t.Errorf("status render should use CRLF between rows, got %q", out)
-	}
-	if strings.Count(out, "12.5%") != 1 {
-		t.Errorf("expected exactly one context %% occurrence, got %q", out)
-	}
-}
-
-func TestStatusRenderTruncatesTopRow(t *testing.T) {
-	s := StatusSnapshot{
-		SessionID: "s-12345678",
-		Cwd:       "/a/very/long/path/that/would/overflow/the/status/bar",
-		Model:     "ollama/" + strings.Repeat("x", 120),
-	}
-	out := s.Render(40)
-	rows := strings.Split(out, "\r\n")
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d", len(rows))
-	}
-	if visibleWidth(rows[0]) > 40 {
-		t.Fatalf("top row width = %d, want <= 40: %q", visibleWidth(rows[0]), rows[0])
-	}
-}
-
 func TestScrollbackSplitsNewlines(t *testing.T) {
 	s := newScrollback(1024)
 	// Non-streaming multiline (user echo) must become separate rows.

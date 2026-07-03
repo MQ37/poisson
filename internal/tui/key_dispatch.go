@@ -304,27 +304,3 @@ func (t *TUI) processEditorKey(k Key) (bool, error) {
 	t.markInputDirty()
 	return false, nil
 }
-
-func (t *TUI) processEditor(data []byte) (bool, error) {
-	for _, k := range (&Decoder{}).Push(data) {
-		if quit, err := t.processEditorKey(k); quit || err != nil {
-			return quit, err
-		}
-	}
-	return false, nil
-}
-
-func containsSubmitKey(data []byte) bool {
-	for i, b := range data {
-		if b == '\r' {
-			return true
-		}
-		if b == 27 && i+4 < len(data) && data[i+1] == '[' && data[i+2] == '1' && data[i+3] == '3' && data[i+4] == 'u' {
-			return true
-		}
-		if b == 27 && i+6 < len(data) && data[i+1] == '[' && data[i+2] == '1' && data[i+3] == '3' && data[i+4] == ';' && data[i+5] == '1' && data[i+6] == 'u' {
-			return true
-		}
-	}
-	return false
-}

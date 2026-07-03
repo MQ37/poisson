@@ -184,15 +184,3 @@ func truncatePlain(s string, width int) string {
 	}
 	return string(runes[:width-1]) + "…"
 }
-
-// approvalKeyAllowed maps approval input bytes to allow/deny. ok reports
-// whether the chunk contained a recognized approval answer.
-func approvalKeyAllowed(data []byte) (allowed, ok bool) {
-	var d Decoder
-	for _, k := range d.Push(data) {
-		if a, hit := keyApprovalAnswer(k); hit {
-			return a, true
-		}
-	}
-	return false, false
-}

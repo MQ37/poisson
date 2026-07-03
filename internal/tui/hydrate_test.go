@@ -32,7 +32,9 @@ func TestHydrateScrollbackFromSession(t *testing.T) {
 	a := agent.NewAgent(st, provider.NewFakeProvider("fake", nil), tools.NewRegistry(),
 		config.DefaultConfig(), sid, nil, nil)
 	tui := newTUI(a, sid, nil)
-	tui.resetSessionView()
+	tui.mu.Lock()
+	tui.resetSessionViewLocked()
+	tui.mu.Unlock()
 
 	out := testScrollOutput(tui)
 	if !containsPlain(out, "hello") || !containsPlain(out, "world") {

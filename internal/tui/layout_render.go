@@ -224,7 +224,7 @@ func (t *TUI) editorAtScrollBottom() bool {
 }
 
 // appendErrorLocked writes an error to the scrollback. The caller MUST hold
-// t.mu (e.g. feed/submit/processEditor, which run under the lock).
+// t.mu (e.g. feed/submit, which run under the lock).
 func (t *TUI) appendErrorLocked(err error) {
 	t.scroll.appendRaw(styleError, "error: "+err.Error())
 	t.markScrollDirty()

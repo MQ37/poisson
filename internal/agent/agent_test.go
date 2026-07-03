@@ -242,7 +242,7 @@ func TestBuildRequestWithCompactionSummary(t *testing.T) {
 	agent := NewAgent(s, newFakeProvider(), reg, cfg, sessionID, nil, nil)
 
 	summary := "Previous conversation was about X."
-	if err := s.SetCompactionSummary(sessionID, summary); err != nil {
+	if err := s.ApplyCompaction(sessionID, 0, summary); err != nil {
 		t.Fatalf("set compaction summary: %v", err)
 	}
 

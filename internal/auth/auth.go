@@ -72,21 +72,6 @@ func IsOAuth(store AuthStore, provider string) bool {
 	return ok && entry.Type == "oauth"
 }
 
-// GetAccessToken returns the access token for the given provider, or "".
-func GetAccessToken(store AuthStore, provider string) string {
-	entry, ok := store[provider]
-	if !ok {
-		return ""
-	}
-	if entry.Type == "oauth" {
-		return entry.Access
-	}
-	if entry.Type == "api_key" {
-		return entry.Key
-	}
-	return ""
-}
-
 // GetAPIKey returns the API key for the given provider, or "".
 func GetAPIKey(store AuthStore, provider string) string {
 	entry, ok := store[provider]

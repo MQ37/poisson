@@ -102,10 +102,7 @@ func TestApproveWhileAgentRunning(t *testing.T) {
 	if !tui.approving.Load() {
 		t.Fatal("approving not set while agent running")
 	}
-	allowed, ok := approvalKeyAllowed([]byte{'a'})
-	if !ok || !allowed {
-		t.Fatal("expected allow key")
-	}
+	allowed := true
 	select {
 	case tui.approvalAnswer <- allowed:
 	default:

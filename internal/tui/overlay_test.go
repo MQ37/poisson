@@ -5,37 +5,6 @@ import (
 	"testing"
 )
 
-func TestApprovalKeyAllowed(t *testing.T) {
-	cases := []struct {
-		key  string
-		want bool
-		ok   bool
-	}{
-		{"a", true, true},
-		{"A", true, true},
-		{"y", true, true},
-		{"d", false, true},
-		{"n", false, true},
-		{"\x1b", false, true},
-		{"\x03", false, false},
-		{"x", false, false},
-		{"\r", true, true},
-	}
-	for _, tc := range cases {
-		got, ok := approvalKeyAllowed([]byte(tc.key))
-		if ok != tc.ok || (tc.ok && got != tc.want) {
-			t.Errorf("key %q: allowed=%v ok=%v, want allowed=%v ok=%v", tc.key, got, ok, tc.want, tc.ok)
-		}
-	}
-}
-
-func TestApprovalKeyAllowedIgnoresArrowCSI(t *testing.T) {
-	allowed, ok := approvalKeyAllowed(arrowDownBytes())
-	if ok {
-		t.Fatalf("arrow during approval should be ignored, got allowed=%v ok=%v", allowed, ok)
-	}
-}
-
 func TestApprovalOverlayRenderFits(t *testing.T) {
 	o := newApprovalOverlay("rm -rf ./build", "dangerous", "")
 	lines := o.renderInputPanel(8, 80)

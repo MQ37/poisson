@@ -11,11 +11,11 @@ func TestThemeDefaultsToDark(t *testing.T) {
 	t.Setenv("TERM", "xterm")
 	applyTheme("dark")
 
-	if CurrentTheme() != "dark" {
-		t.Errorf("CurrentTheme() = %q, want dark", CurrentTheme())
+	if themeName != "dark" {
+		t.Errorf("themeName = %q, want dark", themeName)
 	}
-	if SupportsTruecolor() {
-		t.Error("SupportsTruecolor() true with no COLORTERM/24bit TERM")
+	if truecolor {
+		t.Error("truecolor true with no COLORTERM/24bit TERM")
 	}
 	// 16-color codes are short
 	if !strings.HasPrefix(fgBlue, "\x1b[34m") {
@@ -28,8 +28,8 @@ func TestThemeLightSelection(t *testing.T) {
 	t.Setenv("TERM", "xterm")
 	applyTheme("light")
 
-	if CurrentTheme() != "light" {
-		t.Errorf("CurrentTheme() = %q, want light", CurrentTheme())
+	if themeName != "light" {
+		t.Errorf("themeName = %q, want light", themeName)
 	}
 	// same 16 codes for light16 (profile dependent)
 	if !strings.HasPrefix(fgBlue, "\x1b[34m") {
@@ -41,8 +41,8 @@ func TestThemeUnknownFallsBackToDark(t *testing.T) {
 	t.Setenv("COLORTERM", "")
 	t.Setenv("TERM", "xterm")
 	applyTheme("neon")
-	if CurrentTheme() != "dark" {
-		t.Errorf("unknown theme fell to %q, want dark", CurrentTheme())
+	if themeName != "dark" {
+		t.Errorf("unknown theme fell to %q, want dark", themeName)
 	}
 }
 
@@ -51,7 +51,7 @@ func TestThemeTruecolorDetection(t *testing.T) {
 	t.Setenv("COLORTERM", "truecolor")
 	t.Setenv("TERM", "xterm")
 	applyTheme("dark")
-	if !SupportsTruecolor() {
+	if !truecolor {
 		t.Error("expected truecolor with COLORTERM=truecolor")
 	}
 	if !strings.Contains(fgBlue, "38;2;") {
@@ -64,7 +64,7 @@ func TestThemeTruecolorDetection(t *testing.T) {
 	// 24bit alias
 	t.Setenv("COLORTERM", "24bit")
 	applyTheme("light")
-	if !SupportsTruecolor() {
+	if !truecolor {
 		t.Error("expected truecolor with COLORTERM=24bit")
 	}
 	if !strings.Contains(fgBlue, "30;90;190") {
@@ -75,7 +75,7 @@ func TestThemeTruecolorDetection(t *testing.T) {
 	t.Setenv("COLORTERM", "")
 	t.Setenv("TERM", "xterm-24bit")
 	applyTheme("dark")
-	if !SupportsTruecolor() {
+	if !truecolor {
 		t.Error("expected truecolor with TERM=xterm-24bit")
 	}
 }
@@ -84,7 +84,7 @@ func TestTheme16ColorNoEnv(t *testing.T) {
 	t.Setenv("COLORTERM", "")
 	t.Setenv("TERM", "xterm-256color") // 256 but not 24bit -> 16 fallback per our detect
 	applyTheme("dark")
-	if SupportsTruecolor() {
+	if truecolor {
 		t.Error("256color without explicit 24bit should not be truecolor")
 	}
 	if strings.Contains(fgYellow, ";2;") {

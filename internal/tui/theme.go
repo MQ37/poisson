@@ -51,12 +51,6 @@ func applyTheme(theme string) {
 	}
 }
 
-// CurrentTheme returns the active theme name ("dark" or "light").
-func CurrentTheme() string { return themeName }
-
-// SupportsTruecolor reports whether 24-bit color is active for the current palette.
-func SupportsTruecolor() bool { return truecolor }
-
 // applyDark16 wires the classic 16-color dark palette.
 func applyDark16() {
 	reset = "\x1b[0m"

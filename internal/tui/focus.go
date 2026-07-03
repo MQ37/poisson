@@ -232,14 +232,6 @@ func (t *TUI) resetSessionViewLocked() {
 	t.dirty.markFull()
 }
 
-// resetSessionView clears scrollback and focus state after switching sessions,
-// then replays stored messages so the UI matches the active session.
-func (t *TUI) resetSessionView() {
-	t.mu.Lock()
-	t.resetSessionViewLocked()
-	t.mu.Unlock()
-}
-
 func (t *TUI) setEphemeralHintLocked(msg string, d time.Duration) {
 	t.status.Hint = msg
 	t.hintExpiry = time.Now().Add(d)

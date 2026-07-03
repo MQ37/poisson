@@ -58,11 +58,6 @@ func matchSlash(partial string) []string {
 	return matchSlashFuzzy(partial)
 }
 
-// matchAtFile returns filesystem paths matching partial (fuzzy-ranked).
-func matchAtFile(partial string, cwd string) []string {
-	cands, _ := matchAtFileFuzzy(partial, cwd)
-	return cands
-}
 
 // commonPrefix returns the longest common prefix of all strings, or "" if
 // the slice is empty.
