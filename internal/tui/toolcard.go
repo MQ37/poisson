@@ -271,13 +271,13 @@ func toolCardSpinnerRows(visible []ScreenRow) []int {
 
 // animateSpinnerInLine swaps the spinner placeholder in a line.
 func animateSpinnerInLine(text string, frame int) string {
-	plain := stripANSI(text)
-	idx := strings.Index(plain, toolCardSpinnerSlot)
-	if idx < 0 {
-		return text
-	}
-	styleEnd := len(text) - len(plain)
-	return text[:styleEnd] + plain[:idx] + spinnerChar(frame) + plain[idx+len(toolCardSpinnerSlot):]
+	// Replace the spinner-slot glyph in place. The glyph (U+25CC) only ever
+	// appears in visible content, never inside ANSI escapes, so a direct rune
+	// swap is correct even when the line has ANSI codes interspersed (e.g. the
+	// subagent widget styles the name, timer, and task separately). The earlier
+	// approach assumed a single leading style prefix and duplicated content on
+	// lines that violated that assumption.
+	return strings.Replace(text, toolCardSpinnerSlot, spinnerChar(frame), 1)
 }
 
 // toolInputJSON is a helper for tests.
