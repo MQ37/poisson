@@ -100,6 +100,41 @@ func TestLoadProjectContextFilesCapsFileSize(t *testing.T) {
 	}
 }
 
+func TestContextDirsForFile(t *testing.T) {
+	sep := string(filepath.Separator)
+	root := sep + "proj"
+	sub := filepath.Join(root, "a", "b")
+
+	// cwd == fileDir: just that dir.
+	if got := ContextDirsForFile(root, root); len(got) != 1 || got[0] != root {
+		t.Errorf("cwd==fileDir: got %v", got)
+	}
+
+	// cwd is an ancestor: whole chain shallow→deep.
+	got := ContextDirsForFile(root, sub)
+	want := []string{root, filepath.Join(root, "a"), sub}
+	if len(got) != len(want) {
+		t.Fatalf("chain: got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("chain[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// Different branch (no direct path): only the file dir.
+	other := sep + "other" + sep + "place"
+	if got := ContextDirsForFile(root, other); len(got) != 1 || got[0] != other {
+		t.Errorf("different branch: got %v, want [%s]", got, other)
+	}
+
+	// Ancestor of cwd is NOT walked (parent is a different branch relative to cwd).
+	parent := sep + "proj"
+	if got := ContextDirsForFile(filepath.Join(root, "a"), parent); len(got) != 1 || got[0] != parent {
+		t.Errorf("parent-of-cwd: got %v", got)
+	}
+}
+
 func TestBuildSystemPrompt(t *testing.T) {
 	opts := BuildSystemPromptOptions{
 		Cwd:       "/home/user/project",

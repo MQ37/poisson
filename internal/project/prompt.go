@@ -66,6 +66,42 @@ func LoadProjectContextFiles(cwd, agentDir string, readDirs []string) []ContextF
 	return result
 }
 
+// ContextFileInDir returns the AGENTS.md/CLAUDE.md ContextFile in dir, or nil
+// if the directory has neither.
+func ContextFileInDir(dir string) *ContextFile { return loadFromDir(dir) }
+
+// ContextDirsForFile returns the directories whose AGENTS.md should be loaded
+// when a file living in fileDir is worked on, given the process cwd:
+//
+//   - If cwd is an ancestor of (or equal to) fileDir, every directory from cwd
+//     down to fileDir is returned, shallowest first, so the whole chain of
+//     project instructions from the working root to the file applies.
+//   - Otherwise fileDir is on a different branch of the tree (there is no direct
+//     path from cwd) and only fileDir itself is returned — we never walk an
+//     unrelated ancestor chain.
+func ContextDirsForFile(cwd, fileDir string) []string {
+	cwd = filepath.Clean(cwd)
+	fileDir = filepath.Clean(fileDir)
+	if cwd == fileDir {
+		return []string{fileDir}
+	}
+	rel, err := filepath.Rel(cwd, fileDir)
+	sep := string(filepath.Separator)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+sep) || filepath.IsAbs(rel) {
+		return []string{fileDir} // different branch — no direct path from cwd
+	}
+	dirs := []string{cwd}
+	cur := cwd
+	for _, part := range strings.Split(rel, sep) {
+		if part == "" || part == "." {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		dirs = append(dirs, cur)
+	}
+	return dirs
+}
+
 // loadFromDir checks a directory for AGENTS.md or CLAUDE.md.
 func loadFromDir(dir string) *ContextFile {
 	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {

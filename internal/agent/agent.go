@@ -90,6 +90,14 @@ type Agent struct {
 
 	skillsEnabled bool
 	skills        []skills.Skill
+
+	// contextMu guards loadedContextDirs.
+	contextMu sync.Mutex
+	// loadedContextDirs records directories whose AGENTS.md has been injected
+	// into the conversation this epoch (a file was worked on there). Each is
+	// injected once; the set is reset on compaction and session switch so the
+	// files are re-loaded afterwards.
+	loadedContextDirs map[string]bool
 }
 
 // NewAgent creates an Agent ready to process prompts for the given session.
@@ -113,6 +121,8 @@ func NewAgent(
 		approvalFn: approvalFn,
 		model:      model,
 		effort:     effectiveEffort(initialEffort(cfg), p.ID(), model),
+
+		loadedContextDirs: map[string]bool{},
 	}
 	return a
 }
@@ -166,6 +176,26 @@ func (a *Agent) SwitchSession(sessionID string) {
 	a.sessionToolErrors = 0
 	a.effort = effectiveEffort(initialEffort(a.config), a.provider.ID(), a.model)
 	a.pendingResults = nil
+	a.resetContextTracker()
+}
+
+// resetContextTracker forgets which directories' AGENTS.md have been injected,
+// so they load again. Called on session switch and after compaction.
+func (a *Agent) resetContextTracker() {
+	a.contextMu.Lock()
+	a.loadedContextDirs = map[string]bool{}
+	a.contextMu.Unlock()
+}
+
+// cwd resolves the working directory for the active session.
+func (a *Agent) cwd() string {
+	if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil && sess.Cwd != "" {
+		return sess.Cwd
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "."
 }
 
 // SetProvider swaps the provider and persists it on the active session.
@@ -262,62 +292,73 @@ func (a *Agent) Provider() provider.Provider { return a.provider }
 // Config returns the current config.
 func (a *Agent) Config() *config.Config { return a.config }
 
-// readDirsFromMessages returns the set of directories a file was read, edited,
-// or written from in the given conversation. Relative tool paths are resolved
-// against cwd (matching the file tools' own resolution). Used to decide which
-// non-cwd AGENTS.md files are relevant to the session.
-func readDirsFromMessages(cwd string, msgs []provider.Message) []string {
-	seen := make(map[string]bool)
-	var dirs []string
-	for _, m := range msgs {
-		for _, b := range m.Content {
-			if b.Type != "tool_use" {
-				continue
-			}
-			switch b.ToolName {
-			case "read", "edit", "write":
-			default:
-				continue
-			}
-			var in struct {
-				Path string `json:"path"`
-			}
-			if json.Unmarshal(b.ToolInput, &in) != nil || in.Path == "" {
-				continue
-			}
-			p := in.Path
-			if !filepath.IsAbs(p) {
-				p = filepath.Join(cwd, p)
-			}
-			dir := filepath.Dir(p)
-			if !seen[dir] {
-				seen[dir] = true
-				dirs = append(dirs, dir)
-			}
-		}
+// contextInjectionForFile returns the AGENTS.md/CLAUDE.md content to append to a
+// tool result when a file was worked on (read/edit/write), loading each
+// applicable file at most once per epoch. When cwd is an ancestor of the file's
+// directory, the whole chain from cwd down to that directory is considered;
+// otherwise only the file's own directory is. Files already carried by the
+// system prompt (sysPaths: global + cwd) are never re-injected.
+func (a *Agent) contextInjectionForFile(cwd, toolName string, input json.RawMessage, sysPaths map[string]bool) string {
+	switch toolName {
+	case "read", "edit", "write":
+	default:
+		return ""
 	}
-	return dirs
+	var in struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(input, &in) != nil || in.Path == "" {
+		return ""
+	}
+	p := in.Path
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(cwd, p)
+	}
+	dirs := project.ContextDirsForFile(cwd, filepath.Dir(p))
+
+	var out strings.Builder
+	a.contextMu.Lock()
+	defer a.contextMu.Unlock()
+	for _, d := range dirs {
+		if a.loadedContextDirs[d] {
+			continue
+		}
+		cf := project.ContextFileInDir(d)
+		if cf == nil || sysPaths[cf.Path] {
+			continue
+		}
+		a.loadedContextDirs[d] = true
+		out.WriteString("\n\n<project_instructions path=\"")
+		out.WriteString(cf.Path)
+		out.WriteString("\">\n")
+		out.WriteString(cf.Content)
+		out.WriteString("\n</project_instructions>")
+	}
+	return out.String()
 }
 
-// LoadedContextFiles returns the AGENTS.md/CLAUDE.md files currently injected
-// into the system prompt for the active session (global + cwd + any dir a file
-// was read from). Used by /status.
-func (a *Agent) LoadedContextFiles() []project.ContextFile {
-	cwd, _ := os.Getwd()
-	var msgs []provider.Message
-	if sess, err := a.store.GetSession(a.sessionID); err == nil {
-		if sess.Cwd != "" {
-			cwd = sess.Cwd
-		}
-		if stored, err := a.store.GetMessages(a.sessionID); err == nil {
-			for _, sm := range stored {
-				if pm, err := messageToProvider(sm); err == nil {
-					msgs = append(msgs, pm)
-				}
-			}
-		}
+// systemPromptContextPaths returns the set of AGENTS.md/CLAUDE.md paths carried
+// by the system prompt (global + cwd), which must never be re-injected.
+func (a *Agent) systemPromptContextPaths(cwd string) map[string]bool {
+	paths := map[string]bool{}
+	for _, cf := range project.LoadProjectContextFiles(cwd, config.ConfigDir(), nil) {
+		paths[cf.Path] = true
 	}
-	return project.LoadProjectContextFiles(cwd, config.ConfigDir(), readDirsFromMessages(cwd, msgs))
+	return paths
+}
+
+// LoadedContextFiles returns every AGENTS.md/CLAUDE.md currently in the
+// session's context: the system-prompt ones (global + cwd) plus each directory
+// whose file has been injected this epoch. Used by /status.
+func (a *Agent) LoadedContextFiles() []project.ContextFile {
+	cwd := a.cwd()
+	a.contextMu.Lock()
+	dirs := make([]string, 0, len(a.loadedContextDirs))
+	for d := range a.loadedContextDirs {
+		dirs = append(dirs, d)
+	}
+	a.contextMu.Unlock()
+	return project.LoadProjectContextFiles(cwd, config.ConfigDir(), dirs)
 }
 
 // ToolNames returns the sorted names of the currently registered tools.
@@ -597,6 +638,8 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		// Persist tool_result messages even if the context was cancelled — the
 		// results are already computed and leaving orphaned tool_use blocks
 		// without results would cause a provider 400 on the next request.
+		turnCwd := a.cwd()
+		sysCtxPaths := a.systemPromptContextPaths(turnCwd)
 		for i, result := range results {
 			toolBlock := provider.ContentBlock{
 				Type:       "tool_result",
@@ -607,6 +650,10 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				toolBlock.ToolResult = result.Error
 			} else {
 				toolBlock.ToolResult = result.Content
+				// Attach any not-yet-loaded AGENTS.md for the file's directory
+				// (and the cwd→dir chain) so the model gets its project rules.
+				toolBlock.ToolResult += a.contextInjectionForFile(
+					turnCwd, toolCalls[i].Name, toolCalls[i].Input, sysCtxPaths)
 			}
 
 			toolContent, err := contentBlocksToJSON([]provider.ContentBlock{toolBlock})
@@ -686,10 +733,11 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 		providerMsgs = append(providerMsgs, pm)
 	}
 
-	// Build system prompt with AGENTS.md + skills. Ancestor AGENTS.md is only
-	// included when a file was read from that dir (see LoadProjectContextFiles).
-	contextFiles := project.LoadProjectContextFiles(
-		sess.Cwd, config.ConfigDir(), readDirsFromMessages(sess.Cwd, providerMsgs))
+	// System prompt carries only the always-relevant context: the global
+	// ~/.poisson AGENTS.md and the cwd's own. Directory-specific AGENTS.md for
+	// files the agent works on are injected into the conversation on demand (see
+	// contextInjectionForFile), not the system prompt.
+	contextFiles := project.LoadProjectContextFiles(sess.Cwd, config.ConfigDir(), nil)
 	toolNames := make([]string, 0)
 	if a.tools != nil {
 		for _, td := range a.tools.Definitions() {
