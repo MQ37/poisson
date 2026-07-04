@@ -57,7 +57,11 @@ type ChildEvent struct {
 
 // Spawn starts a child Poisson process in JSON output mode.
 func Spawn(input SpawnInput) (*ChildProcess, error) {
-	if input.ChildTools == nil {
+	// Never spawn a child with an empty allowlist: an empty --tools value makes
+	// the child build the full parent tool set (which includes subagent), so
+	// subagents could spawn subagents without bound. len==0 (not ==nil) so an
+	// empty slice is treated like a missing one.
+	if len(input.ChildTools) == 0 {
 		input.ChildTools = []string{"read", "write", "edit", "bash", "search", "ls", "glob"}
 	}
 

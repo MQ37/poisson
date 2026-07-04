@@ -66,6 +66,29 @@ func TestBuildRegistry_Child(t *testing.T) {
 	}
 }
 
+// TestBuildRegistry_ChildCannotGetSubagent proves the child catalog is a hard
+// ceiling: even if "subagent" (or recall/exa_search) is explicitly requested
+// in the allowlist, it is never registered, so subagents can't spawn
+// subagents (recursion is impossible beyond one level).
+func TestBuildRegistry_ChildCannotGetSubagent(t *testing.T) {
+	dir := testutil.TempDir(t)
+	reg := BuildRegistry(BuildOptions{
+		Cwd:         dir,
+		Tools:       "read,subagent,recall,exa_search,bash",
+		SubApproval: func(_, _, _, _, _ string) bool { return true },
+	})
+	for _, absent := range []string{"subagent", "recall", "exa_search"} {
+		if _, ok := reg.Get(absent); ok {
+			t.Errorf("child registry must never expose %q", absent)
+		}
+	}
+	for _, want := range []string{"read", "bash"} {
+		if _, ok := reg.Get(want); !ok {
+			t.Errorf("child registry missing allowed tool %q", want)
+		}
+	}
+}
+
 func TestRegistry_Unregister(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(NewReadTool("."))

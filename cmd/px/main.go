@@ -437,6 +437,13 @@ func runChildMode() {
 		return humanChildApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
 
+	// A subagent must never receive the subagent tool (nor recall/exa): that
+	// would let it spawn further subagents unbounded. An empty allowlist would
+	// make BuildRegistry hand out the full parent set, so force the safe child
+	// default here — child mode is structurally incapable of recursing.
+	if toolsList == "" {
+		toolsList = "read,write,edit,bash,search,ls,glob"
+	}
 	reg := tools.BuildRegistry(tools.BuildOptions{
 		Cwd:        cwd,
 		Sandbox:    sandbox,
