@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -19,35 +20,49 @@ type ContextFile struct {
 	Content string
 }
 
-// LoadProjectContextFiles walks the directory tree from cwd to /, collecting
-// AGENTS.md files. It also checks ~/.poisson/ for a global AGENTS.md.
-// Returns files ordered: [global, ...ancestors_root_to_cwd].
-func LoadProjectContextFiles(cwd, agentDir string) []ContextFile {
+// LoadProjectContextFiles collects the AGENTS.md/CLAUDE.md files that apply to
+// the session: the global ~/.poisson one, the cwd's own, and one for each dir
+// in readDirs (directories a file was actually read/edited from this session).
+//
+// It deliberately does NOT walk cwd → root: being in a subdirectory must not
+// pull in an ancestor's AGENTS.md unless a file was read from that ancestor.
+// Returned ordered global-first, then remaining dirs shallowest → deepest so
+// more specific (deeper) instructions come last.
+func LoadProjectContextFiles(cwd, agentDir string, readDirs []string) []ContextFile {
 	var result []ContextFile
 	seen := make(map[string]bool)
-
-	// 1. Global (~/.poisson/AGENTS.md).
-	if global := loadFromDir(agentDir); global != nil && !seen[global.Path] {
-		result = append(result, *global)
-		seen[global.Path] = true
-	}
-
-	// 2. Walk cwd → root (root-first ordering).
-	var ancestors []ContextFile
-	current := cwd
-	for {
-		if f := loadFromDir(current); f != nil && !seen[f.Path] {
-			ancestors = append([]ContextFile{*f}, ancestors...)
+	add := func(f *ContextFile) {
+		if f != nil && !seen[f.Path] {
+			result = append(result, *f)
 			seen[f.Path] = true
 		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			break
-		}
-		current = parent
 	}
 
-	result = append(result, ancestors...)
+	// 1. Global (~/.poisson/AGENTS.md).
+	add(loadFromDir(agentDir))
+
+	// 2. cwd + dirs a file was read from, deepest-last.
+	dirSet := map[string]bool{filepath.Clean(cwd): true}
+	for _, d := range readDirs {
+		if d != "" {
+			dirSet[filepath.Clean(d)] = true
+		}
+	}
+	dirs := make([]string, 0, len(dirSet))
+	for d := range dirSet {
+		dirs = append(dirs, d)
+	}
+	sort.Slice(dirs, func(i, j int) bool {
+		di := strings.Count(dirs[i], string(os.PathSeparator))
+		dj := strings.Count(dirs[j], string(os.PathSeparator))
+		if di != dj {
+			return di < dj
+		}
+		return dirs[i] < dirs[j]
+	})
+	for _, d := range dirs {
+		add(loadFromDir(d))
+	}
 	return result
 }
 

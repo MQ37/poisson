@@ -25,30 +25,41 @@ func TestLoadProjectContextFiles(t *testing.T) {
 	os.MkdirAll(agentDir, 0o700)
 	os.WriteFile(filepath.Join(agentDir, "AGENTS.md"), []byte("# Global Rules\nNever give up."), 0o600)
 
-	files := LoadProjectContextFiles(subDir, agentDir)
-	if len(files) != 3 {
-		t.Fatalf("expected 3 context files, got %d", len(files))
+	// From the subdir with no files read elsewhere: only global + the cwd's own
+	// AGENTS.md. The parent (root) one must NOT be auto-included.
+	files := LoadProjectContextFiles(subDir, agentDir, nil)
+	if len(files) != 2 {
+		t.Fatalf("expected 2 context files (global + cwd), got %d", len(files))
 	}
-
-	// Global should be first.
 	if !strings.Contains(files[0].Content, "Global Rules") {
 		t.Errorf("files[0] should be global, got: %s", files[0].Content)
 	}
+	if !strings.Contains(files[1].Content, "Project Rules") {
+		t.Errorf("files[1] should be cwd project, got: %s", files[1].Content)
+	}
+	for _, f := range files {
+		if strings.Contains(f.Content, "Root Rules") {
+			t.Fatalf("parent AGENTS.md must not auto-load from a subdir")
+		}
+	}
 
-	// Root should be second.
+	// Once a file was read from the parent dir, its AGENTS.md is included
+	// (global, then root, then cwd — shallow to deep).
+	files = LoadProjectContextFiles(subDir, agentDir, []string{tmpDir})
+	if len(files) != 3 {
+		t.Fatalf("expected 3 context files with parent read, got %d", len(files))
+	}
 	if !strings.Contains(files[1].Content, "Root Rules") {
 		t.Errorf("files[1] should be root, got: %s", files[1].Content)
 	}
-
-	// Closest should be last.
 	if !strings.Contains(files[2].Content, "Project Rules") {
-		t.Errorf("files[2] should be project, got: %s", files[2].Content)
+		t.Errorf("files[2] should be cwd project, got: %s", files[2].Content)
 	}
 }
 
 func TestLoadProjectContextFilesNoFiles(t *testing.T) {
 	tmpDir := testutil.TempDir(t)
-	files := LoadProjectContextFiles(tmpDir, filepath.Join(tmpDir, ".poisson"))
+	files := LoadProjectContextFiles(tmpDir, filepath.Join(tmpDir, ".poisson"), nil)
 	if len(files) != 0 {
 		t.Errorf("expected 0 files, got %d", len(files))
 	}
@@ -58,7 +69,7 @@ func TestLoadProjectContextFilesClaudeMdFallback(t *testing.T) {
 	tmpDir := testutil.TempDir(t)
 	os.WriteFile(filepath.Join(tmpDir, "CLAUDE.md"), []byte("# Claude rules\nDo good."), 0o600)
 
-	files := LoadProjectContextFiles(tmpDir, filepath.Join(tmpDir, ".poisson"))
+	files := LoadProjectContextFiles(tmpDir, filepath.Join(tmpDir, ".poisson"), nil)
 	if len(files) != 1 {
 		t.Fatalf("expected 1 file, got %d", len(files))
 	}
@@ -73,7 +84,7 @@ func TestLoadProjectContextFilesCapsFileSize(t *testing.T) {
 	body := strings.Repeat("A", MaxContextFileSize+100)
 	os.WriteFile(filepath.Join(tmpDir, "AGENTS.md"), []byte(body), 0o600)
 
-	files := LoadProjectContextFiles(tmpDir, filepath.Join(tmpDir, ".poisson"))
+	files := LoadProjectContextFiles(tmpDir, filepath.Join(tmpDir, ".poisson"), nil)
 	if len(files) != 1 {
 		t.Fatalf("expected 1 file, got %d", len(files))
 	}

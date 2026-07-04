@@ -8,7 +8,6 @@ import (
 
 	"poisson/internal/agent"
 	"poisson/internal/config"
-	"poisson/internal/project"
 	"poisson/internal/provider"
 	"poisson/internal/store"
 )
@@ -351,7 +350,7 @@ func cmdStatus(h commandHost) {
 	}
 
 	// Context files (AGENTS.md / CLAUDE.md) that get injected each turn.
-	files := project.LoadProjectContextFiles(cwd, config.ConfigDir())
+	files := a.LoadedContextFiles()
 	b.WriteString(fmt.Sprintf("\nContext files (%d):\n", len(files)))
 	if len(files) == 0 {
 		b.WriteString("  (none)\n")

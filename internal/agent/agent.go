@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -260,6 +261,64 @@ func (a *Agent) Provider() provider.Provider { return a.provider }
 
 // Config returns the current config.
 func (a *Agent) Config() *config.Config { return a.config }
+
+// readDirsFromMessages returns the set of directories a file was read, edited,
+// or written from in the given conversation. Relative tool paths are resolved
+// against cwd (matching the file tools' own resolution). Used to decide which
+// non-cwd AGENTS.md files are relevant to the session.
+func readDirsFromMessages(cwd string, msgs []provider.Message) []string {
+	seen := make(map[string]bool)
+	var dirs []string
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			if b.Type != "tool_use" {
+				continue
+			}
+			switch b.ToolName {
+			case "read", "edit", "write":
+			default:
+				continue
+			}
+			var in struct {
+				Path string `json:"path"`
+			}
+			if json.Unmarshal(b.ToolInput, &in) != nil || in.Path == "" {
+				continue
+			}
+			p := in.Path
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(cwd, p)
+			}
+			dir := filepath.Dir(p)
+			if !seen[dir] {
+				seen[dir] = true
+				dirs = append(dirs, dir)
+			}
+		}
+	}
+	return dirs
+}
+
+// LoadedContextFiles returns the AGENTS.md/CLAUDE.md files currently injected
+// into the system prompt for the active session (global + cwd + any dir a file
+// was read from). Used by /status.
+func (a *Agent) LoadedContextFiles() []project.ContextFile {
+	cwd, _ := os.Getwd()
+	var msgs []provider.Message
+	if sess, err := a.store.GetSession(a.sessionID); err == nil {
+		if sess.Cwd != "" {
+			cwd = sess.Cwd
+		}
+		if stored, err := a.store.GetMessages(a.sessionID); err == nil {
+			for _, sm := range stored {
+				if pm, err := messageToProvider(sm); err == nil {
+					msgs = append(msgs, pm)
+				}
+			}
+		}
+	}
+	return project.LoadProjectContextFiles(cwd, config.ConfigDir(), readDirsFromMessages(cwd, msgs))
+}
 
 // ToolNames returns the sorted names of the currently registered tools.
 func (a *Agent) ToolNames() []string {
@@ -627,9 +686,10 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 		providerMsgs = append(providerMsgs, pm)
 	}
 
-	// Build system prompt with AGENTS.md + skills.
-	agentDir := config.ConfigDir()
-	contextFiles := project.LoadProjectContextFiles(sess.Cwd, agentDir)
+	// Build system prompt with AGENTS.md + skills. Ancestor AGENTS.md is only
+	// included when a file was read from that dir (see LoadProjectContextFiles).
+	contextFiles := project.LoadProjectContextFiles(
+		sess.Cwd, config.ConfigDir(), readDirsFromMessages(sess.Cwd, providerMsgs))
 	toolNames := make([]string, 0)
 	if a.tools != nil {
 		for _, td := range a.tools.Definitions() {
