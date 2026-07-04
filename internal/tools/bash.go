@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"syscall"
 	"time"
 )
@@ -153,5 +152,3 @@ func resolvePath(cwd, p string) string {
 	return filepath.Join(cwd, p)
 }
 
-// itoa is a small helper to avoid importing strconv in callers.
-func itoa(n int) string { return strconv.Itoa(n) }

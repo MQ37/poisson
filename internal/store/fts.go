@@ -44,16 +44,3 @@ func (s *Store) deleteFTSForSoftDeleted(sessionID string, fromSeq int) error {
 	}
 	return nil
 }
-
-func (s *Store) deleteFTSCompactedThrough(sessionID string, upToSeq int) error {
-	_, err := s.db.Exec(`
-		DELETE FROM messages_fts
-		WHERE message_id IN (
-			SELECT id FROM messages
-			WHERE session_id = ? AND seq <= ? AND compacted = 1
-		)`, sessionID, upToSeq)
-	if err != nil {
-		return fmt.Errorf("delete fts compacted: %w", err)
-	}
-	return nil
-}

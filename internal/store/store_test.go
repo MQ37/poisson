@@ -2,7 +2,6 @@ package store
 
 import (
 	"encoding/json"
-	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -721,17 +720,6 @@ func lower(s string) string {
 	}
 	return string(out)
 }
-
-func approxEqual(a, b, tol float64) bool {
-	d := a - b
-	if d < 0 {
-		d = -d
-	}
-	return d < tol
-}
-
-// Ensure fmt is used (sanity prints if needed).
-var _ = fmt.Sprintf
 
 func TestNewSessionIDUnique(t *testing.T) {
 	seen := map[string]bool{}

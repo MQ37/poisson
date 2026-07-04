@@ -1,12 +1,8 @@
 package provider
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"net/http"
 	"strings"
 
 	"poisson/internal/config"
@@ -143,21 +139,3 @@ func sanitizeSystemText(text string, cfg config.StealthConfig) string {
 	return strings.TrimSpace(result)
 }
 
-// StealthError indicates the stealth billing header was rejected.
-type StealthError struct {
-	StatusCode int
-}
-
-func (e *StealthError) Error() string {
-	return fmt.Sprintf("stealth billing header rejected (status %d) — update [stealth] constants in config.toml", e.StatusCode)
-}
-
-// jsonMarshal wraps json.Marshal.
-func jsonMarshal(v interface{}) ([]byte, error) {
-	return json.Marshal(v)
-}
-
-// httpNewRequest creates a POST request with a JSON body.
-func httpNewRequest(method, url string, body []byte) (*http.Request, error) {
-	return http.NewRequest(method, url, bytes.NewReader(body))
-}

@@ -61,16 +61,6 @@ func (s *scrollback) scrollBlockToTop(blockIdx, viewHeight, width, skipTopRows i
 }
 
 // userPromptText returns plain text for a user block index.
-// trimFromBlockIndex removes blocks from idx onward (used by /undo).
-func (s *scrollback) trimFromBlockIndex(idx int) {
-	if idx < 0 || idx >= len(s.blocks) {
-		return
-	}
-	s.blocks = append([]Block(nil), s.blocks[:idx]...)
-	s.scrollOffset = 0
-	s.focusedToolID = 0
-}
-
 func (s *scrollback) userPromptText(blockIdx int) string {
 	if blockIdx < 0 || blockIdx >= len(s.blocks) {
 		return ""

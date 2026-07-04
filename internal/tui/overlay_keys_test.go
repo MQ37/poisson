@@ -7,9 +7,6 @@ import (
 	"poisson/internal/agent"
 )
 
-func arrowUpBytes() []byte   { return []byte{27, '[', 'A'} }
-func arrowDownBytes() []byte { return []byte{27, '[', 'B'} }
-
 func TestPickerOverlayArrowKeys(t *testing.T) {
 	p := newPickerOverlay("Providers", []pickerItem{
 		{id: "anthropic", label: "anthropic"},

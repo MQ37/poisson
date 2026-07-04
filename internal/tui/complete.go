@@ -42,9 +42,6 @@ func (c *completion) cycle(dir int) {
 	}
 }
 
-// reset clears the selection without losing the candidate list.
-func (c *completion) reset() { c.idx = -1 }
-
 // slashCommands is the canonical list exposed to the user. Keep in sync with
 // commands.go.
 var slashCommands = []string{

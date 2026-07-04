@@ -209,17 +209,6 @@ func (t *TUI) feedConvFocus(k Key) (handled bool) {
 	return false
 }
 
-// trimScrollbackFromLastUserLocked removes the last user turn from scrollback.
-// Caller must hold t.mu.
-func (t *TUI) trimScrollbackFromLastUserLocked() {
-	idxs := t.scroll.userBlockIndices()
-	if len(idxs) == 0 {
-		return
-	}
-	t.scroll.trimFromBlockIndex(idxs[len(idxs)-1])
-	t.markScrollDirty()
-}
-
 // resetSessionViewLocked clears scrollback and focus after switching sessions.
 // Caller must hold t.mu.
 func (t *TUI) resetSessionViewLocked() {
