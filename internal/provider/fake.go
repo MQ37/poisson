@@ -103,6 +103,27 @@ func FakeToolCallResponse(toolName string, toolInput interface{}, finalText stri
 	return first, second
 }
 
+// FakeMultiToolCallResponse builds an event sequence where the assistant
+// requests two tool calls in one turn, then (on the next Stream call) responds
+// with text. Returns the first and second event sequences.
+func FakeMultiToolCallResponse(toolName1 string, toolInput1 interface{}, toolName2 string, toolInput2 interface{}, finalText string) ([]StreamEvent, []StreamEvent) {
+	inputJSON1, _ := json.Marshal(toolInput1)
+	inputJSON2, _ := json.Marshal(toolInput2)
+	first := []StreamEvent{
+		{Type: EventTextDelta, Text: "I will run both tools."},
+		{Type: EventToolUseStart, ToolCall: &ToolCall{ID: "call_1", Name: toolName1, Input: inputJSON1}},
+		{Type: EventToolUseStop, ToolCall: &ToolCall{ID: "call_1", Name: toolName1, Input: inputJSON1}},
+		{Type: EventToolUseStart, ToolCall: &ToolCall{ID: "call_2", Name: toolName2, Input: inputJSON2}},
+		{Type: EventToolUseStop, ToolCall: &ToolCall{ID: "call_2", Name: toolName2, Input: inputJSON2}},
+		{Type: EventDone, Usage: &Usage{InputTokens: 25, OutputTokens: 15}},
+	}
+	second := []StreamEvent{
+		{Type: EventTextDelta, Text: finalText},
+		{Type: EventDone, Usage: &Usage{InputTokens: 35, OutputTokens: 20}},
+	}
+	return first, second
+}
+
 // FakeErrorResponse builds an event sequence that emits an error.
 func FakeErrorResponse(err error) []StreamEvent {
 	return []StreamEvent{

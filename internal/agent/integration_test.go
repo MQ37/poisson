@@ -622,6 +622,225 @@ func TestInteg_AllFilesUnderTmp(t *testing.T) {
 		t.Errorf("dir %q is not under /tmp", dir)
 	}
 }
+
+// TestInteg_MultiToolCallFlow verifies that a model requesting two tools in
+// one turn executes both and then produces a final answer.
+func TestInteg_MultiToolCallFlow(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(dir + "/test.db")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	sid := "itest-multi-tool"
+	st.CreateSession(&store.Session{ID: sid, Cwd: dir, Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()})
+
+	prov := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	first, second := provider.FakeMultiToolCallResponse(
+		"write", map[string]string{"path": "a.txt", "content": "alpha"},
+		"write", map[string]string{"path": "b.txt", "content": "beta"},
+		"Both files written.",
+	)
+	prov.SetResponses([][]provider.StreamEvent{first, second})
+
+	reg := tools.NewRegistry()
+	reg.Register(tools.NewWriteTool(dir))
+	reg.Register(tools.NewReadTool(dir))
+
+	cfg := config.DefaultConfig()
+	cfg.Provider.Default = "fake"
+	output := make(chan OutputEvent, 256)
+	a := NewAgent(st, prov, reg, cfg, sid, output, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	a.PromptWithContext(ctx, "write two files")
+
+	msgs, _ := st.GetMessages(sid)
+	// user, assistant(tool_use x2), tool_result x2, assistant(text) = 5
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(msgs))
+	}
+	if !hasBlock(msgs[1], "tool_use") {
+		t.Errorf("msg[1] missing tool_use: %q", msgs[1].Role)
+	}
+	if msgs[2].Role != "tool" || msgs[3].Role != "tool" {
+		t.Errorf("expected two tool results, got %q and %q", msgs[2].Role, msgs[3].Role)
+	}
+	if msgText(msgs[4]) != "Both files written." {
+		t.Errorf("final answer = %q", msgText(msgs[4]))
+	}
+
+	// Verify both files were written.
+	r := tools.NewReadTool(dir)
+	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "a.txt"}))
+	if !strings.Contains(res.Content, "alpha") {
+		t.Errorf("a.txt content = %q", res.Content)
+	}
+	res, _ = r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "b.txt"}))
+	if !strings.Contains(res.Content, "beta") {
+		t.Errorf("b.txt content = %q", res.Content)
+	}
+}
+
+// TestInteg_ToolErrorHandling verifies that a tool error is stored in the
+// tool_result block and the model receives it for the next turn.
+func TestInteg_ToolErrorHandling(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(dir + "/test.db")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	sid := "itest-tool-err"
+	st.CreateSession(&store.Session{ID: sid, Cwd: dir, Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()})
+
+	prov := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	input, _ := json.Marshal(map[string]string{"path": "missing.txt"})
+	first := []provider.StreamEvent{
+		{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_1", Name: "read", Input: input}},
+		{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_1", Name: "read", Input: input}},
+		{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+	}
+	second := provider.FakeTextResponse("The file was missing.", nil)
+	prov.SetResponses([][]provider.StreamEvent{first, second})
+
+	reg := tools.NewRegistry()
+	reg.Register(tools.NewReadTool(dir))
+
+	cfg := config.DefaultConfig()
+	cfg.Provider.Default = "fake"
+	output := make(chan OutputEvent, 256)
+	a := NewAgent(st, prov, reg, cfg, sid, output, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	a.PromptWithContext(ctx, "read a file")
+
+	msgs, _ := st.GetMessages(sid)
+	if len(msgs) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(msgs))
+	}
+	if msgs[2].Role != "tool" {
+		t.Errorf("msg[2] role = %q, want tool", msgs[2].Role)
+	}
+	if !hasBlock(msgs[2], "tool_result") {
+		t.Error("tool_result block missing")
+	}
+	var blocks []struct {
+		Type      string `json:"type"`
+		ToolIsError bool `json:"tool_is_error"`
+	}
+	_ = json.Unmarshal([]byte(msgs[2].Content), &blocks)
+	var foundError bool
+	for _, b := range blocks {
+		if b.Type == "tool_result" && b.ToolIsError {
+			foundError = true
+		}
+	}
+	if !foundError {
+		t.Errorf("tool_result should be marked as error: %q", msgs[2].Content)
+	}
+}
+
+// TestInteg_ProviderError verifies that an EventError from the provider is
+// returned as an error and no empty assistant message is stored.
+func TestInteg_ProviderError(t *testing.T) {
+	e := newIntegEnv(t, [][]provider.StreamEvent{
+		provider.FakeErrorResponse(errors.New("model overloaded")),
+	})
+
+	err := e.agent.PromptWithContext(context.Background(), "test")
+	if err == nil {
+		t.Fatal("expected error for provider failure")
+	}
+	if !strings.Contains(err.Error(), "model overloaded") {
+		t.Errorf("error = %q, want containing 'model overloaded'", err.Error())
+	}
+
+	msgs := e.msgs()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message (user only), got %d", len(msgs))
+	}
+}
+
+// TestInteg_CostTracking verifies session cost and total cost are updated
+// after API calls.
+func TestInteg_CostTracking(t *testing.T) {
+	e := newIntegEnv(t, [][]provider.StreamEvent{
+		provider.FakeTextResponse("answer 1", &provider.Usage{InputTokens: 100, OutputTokens: 50}),
+		provider.FakeTextResponse("answer 2", &provider.Usage{InputTokens: 200, OutputTokens: 100}),
+	})
+	// Configure pricing for the fake model so cost is non-zero.
+	e.agent.Config().Pricing["fake"] = map[string]config.Pricing{
+		"test-model": {InputPerMTok: 1.0, OutputPerMTok: 2.0},
+	}
+
+	e.send("q1")
+	e.send("q2")
+
+	sessionCost, err := e.store.GetSessionCost(e.sid)
+	if err != nil {
+		t.Fatalf("GetSessionCost: %v", err)
+	}
+	totalCost, err := e.store.GetTotalCost()
+	if err != nil {
+		t.Fatalf("GetTotalCost: %v", err)
+	}
+	if sessionCost != totalCost {
+		t.Errorf("sessionCost=%v != totalCost=%v", sessionCost, totalCost)
+	}
+	if sessionCost <= 0 {
+		t.Errorf("expected positive cost, got %v", sessionCost)
+	}
+}
+
+// TestInteg_SwitchSessionEffort verifies that switching the model validates
+// the current effort against the new model's supported levels.
+func TestInteg_SwitchSessionEffort(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(dir + "/test.db")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	sid := "itest-effort-switch"
+	st.CreateSession(&store.Session{ID: sid, Cwd: dir, Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()})
+
+	// Configure fake model settings: supports only "high" and "max".
+	provider.KnownModels["fake/m"] = provider.ModelSettings{
+		ContextWindow:  8192,
+		SupportsEffort: true,
+		EffortLevels:   []string{"high", "max"},
+	}
+	defer delete(provider.KnownModels, "fake/m")
+
+	prov := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	cfg := config.DefaultConfig()
+	cfg.Provider.Default = "fake"
+	output := make(chan OutputEvent, 256)
+	a := NewAgent(st, prov, nil, cfg, sid, output, nil)
+
+	// Select model "m"; default effort "medium" is not supported by fake/m
+	// (only high/max), so it should be clamped to "high".
+	a.SetModel("m")
+	if got := a.Effort(); got != "high" {
+		t.Errorf("effort after SetModel(m) = %q, want high", got)
+	}
+
+	// Set effort to "low" (unsupported), re-select model -> clamped to "high".
+	a.SetEffort("low")
+	a.SetModel("m")
+	if got := a.Effort(); got != "high" {
+		t.Errorf("effort after SetModel = %q, want high", got)
+	}
+}
+
 func mustJSON(t *testing.T, v interface{}) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(v)
