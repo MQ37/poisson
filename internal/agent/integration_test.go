@@ -33,7 +33,6 @@ type integEnv struct {
 	agent   *Agent
 	sid     string
 	output  chan OutputEvent
-	events  []OutputEvent
 	reg     *tools.Registry
 }
 

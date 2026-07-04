@@ -111,7 +111,7 @@ func loadFromDir(dir string) *ContextFile {
 			continue
 		}
 		data := make([]byte, MaxContextFileSize+1)
-		n, err := f.Read(data)
+		n, _ := f.Read(data) // one read caps memory; regular files fill in one call
 		_ = f.Close()
 		if n == 0 {
 			continue

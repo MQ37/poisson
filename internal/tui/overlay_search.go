@@ -68,10 +68,6 @@ func (s *searchOverlay) render(scrollRows, cols int) (int, []string) {
 	} else {
 		q = fgCyan + q + reset
 	}
-	inner := cols - 6
-	if inner < 20 {
-		inner = cols - 4
-	}
 	label := fgYellow + bold + " search: " + reset + q
 	count := ""
 	if s.query != "" {
