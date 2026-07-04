@@ -8,6 +8,7 @@ import (
 
 	"poisson/internal/agent"
 	"poisson/internal/config"
+	"poisson/internal/project"
 	"poisson/internal/provider"
 	"poisson/internal/store"
 )
@@ -299,6 +300,101 @@ func cmdCost(h commandHost) {
 	b.WriteString(fmt.Sprintf("  Calls:  %d\n", breakdown.CallCount))
 	b.WriteString(fmt.Sprintf("  Cost:   $%.4f\n", cost))
 	h.Out(styleSystem, b.String())
+}
+
+// cmdStatus prints basic session info plus the context files (AGENTS.md) and
+// skills currently loaded into the system prompt for this session.
+func cmdStatus(h commandHost) {
+	a := h.Agent()
+	sid := h.SessionID()
+
+	// Resolve cwd + title from the session row (falls back to the process cwd
+	// for an unsaved session, mirroring what the prompt builder would use).
+	cwd := cwdOf()
+	title := ""
+	saved := false
+	if sess, err := a.Store().GetSession(sid); err == nil {
+		saved = true
+		if sess.Cwd != "" {
+			cwd = sess.Cwd
+		}
+		if sess.Title != nil {
+			title = strings.TrimSpace(*sess.Title)
+		}
+	}
+
+	var b strings.Builder
+	head := "Session " + sid
+	if title != "" {
+		head += "  · " + title
+	}
+	b.WriteString(head + "\n")
+	b.WriteString(fmt.Sprintf("  Model:    %s/%s\n", a.Provider().ID(), a.Model()))
+	if eff := a.Effort(); eff != "" {
+		b.WriteString(fmt.Sprintf("  Effort:   %s\n", eff))
+	}
+	b.WriteString(fmt.Sprintf("  Cwd:      %s\n", cwd))
+	used, total := a.ContextTokens()
+	if total > 0 {
+		b.WriteString(fmt.Sprintf("  Context:  %s / %s tokens (%.1f%%)\n",
+			formatNum(used), formatNum(total), float64(used)/float64(total)*100))
+	} else {
+		b.WriteString(fmt.Sprintf("  Context:  %s tokens\n", formatNum(used)))
+	}
+	if saved {
+		if cost, err := a.Store().GetSessionCost(sid); err == nil {
+			b.WriteString(fmt.Sprintf("  Cost:     $%.4f\n", cost))
+		}
+	}
+	if names := a.ToolNames(); len(names) > 0 {
+		b.WriteString(fmt.Sprintf("  Tools (%d): %s\n", len(names), strings.Join(names, ", ")))
+	}
+
+	// Context files (AGENTS.md / CLAUDE.md) that get injected each turn.
+	files := project.LoadProjectContextFiles(cwd, config.ConfigDir())
+	b.WriteString(fmt.Sprintf("\nContext files (%d):\n", len(files)))
+	if len(files) == 0 {
+		b.WriteString("  (none)\n")
+	}
+	for _, cf := range files {
+		b.WriteString(fmt.Sprintf("  %s  (%s)\n", cf.Path, humanBytes(len(cf.Content))))
+	}
+
+	// Skills loaded into the prompt.
+	if !a.SkillsEnabled() {
+		b.WriteString("\nSkills: (disabled)\n")
+	} else {
+		sk := a.Skills()
+		b.WriteString(fmt.Sprintf("\nSkills (%d):\n", len(sk)))
+		if len(sk) == 0 {
+			b.WriteString("  (none)\n")
+		}
+		for _, s := range sk {
+			desc := collapseWhitespace(s.Description)
+			if len(desc) > 70 {
+				desc = desc[:69] + "…"
+			}
+			if desc != "" {
+				b.WriteString(fmt.Sprintf("  %s — %s\n", s.Name, desc))
+			} else {
+				b.WriteString(fmt.Sprintf("  %s\n", s.Name))
+			}
+		}
+	}
+
+	h.Out(styleSystem, strings.TrimRight(b.String(), "\n"))
+}
+
+// humanBytes formats a byte count as B/KB/MB.
+func humanBytes(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
+	}
 }
 
 // cmdEffort sets the reasoning/effort level.

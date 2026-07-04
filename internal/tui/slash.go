@@ -144,6 +144,9 @@ func (t *TUI) handleSlash(cmd string) error {
 	case "/cost":
 		cmdCost(h)
 		return nil
+	case "/status":
+		cmdStatus(h)
+		return nil
 	case "/btw":
 		question := strings.TrimSpace(strings.TrimPrefix(cmd, parts[0]))
 		if question == "" {

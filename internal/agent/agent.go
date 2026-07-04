@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -259,6 +260,20 @@ func (a *Agent) Provider() provider.Provider { return a.provider }
 
 // Config returns the current config.
 func (a *Agent) Config() *config.Config { return a.config }
+
+// ToolNames returns the sorted names of the currently registered tools.
+func (a *Agent) ToolNames() []string {
+	if a.tools == nil {
+		return nil
+	}
+	defs := a.tools.Definitions()
+	names := make([]string, 0, len(defs))
+	for _, td := range defs {
+		names = append(names, td.Name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 // SetEffort sets the thinking effort for subsequent requests.
 func (a *Agent) SetEffort(level string) { a.effort = level }

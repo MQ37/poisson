@@ -40,6 +40,7 @@ func renderHelp() string {
   /effort [l]  Effort picker (or set level incl. max)
   /reload      Reload config and skills
   /cost        Show session cost
+  /status      Session info + loaded context files & skills
   /btw <q>     Side question in floating box`, "\n"))
 	b.WriteString("\n\n")
 	for _, ln := range keybindingLines() {

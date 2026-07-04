@@ -47,7 +47,7 @@ func (c *completion) cycle(dir int) {
 var slashCommands = []string{
 	"/quit", "/clear", "/help", "/name", "/new", "/resume", "/sessions",
 	"/search", "/compact", "/model", "/effort",
-	"/providers", "/reload", "/cost", "/btw",
+	"/providers", "/reload", "/cost", "/status", "/btw",
 }
 
 // matchSlash returns slash commands matching partial (prefix or fuzzy).
