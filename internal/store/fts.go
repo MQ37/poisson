@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -30,17 +29,4 @@ func (s *Store) reconcileFTS() error {
 	}
 	_, err = s.db.Exec(`DELETE FROM messages_fts WHERE trim(content_text) = ''`)
 	return err
-}
-
-func (s *Store) deleteFTSForSoftDeleted(sessionID string, fromSeq int) error {
-	_, err := s.db.Exec(`
-		DELETE FROM messages_fts
-		WHERE message_id IN (
-			SELECT id FROM messages
-			WHERE session_id = ? AND seq >= ? AND deleted_at IS NOT NULL
-		)`, sessionID, fromSeq)
-	if err != nil {
-		return fmt.Errorf("delete fts soft-deleted: %w", err)
-	}
-	return nil
 }

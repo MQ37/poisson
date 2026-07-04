@@ -156,22 +156,6 @@ func (s *Store) GetMessages(sessionID string) ([]Message, error) {
 	return out, rows.Err()
 }
 
-// SoftDeleteMessages sets deleted_at = now on all messages in the session
-// with seq >= fromSeq (and deleted_at IS NULL). Used by /undo.
-func (s *Store) SoftDeleteMessages(sessionID string, fromSeq int) error {
-	_, err := s.db.Exec(
-		`UPDATE messages SET deleted_at = ?
-		 WHERE session_id = ? AND seq >= ? AND deleted_at IS NULL`,
-		time.Now().Unix(), sessionID, fromSeq)
-	if err != nil {
-		return fmt.Errorf("soft delete messages: %w", err)
-	}
-	if err := s.deleteFTSForSoftDeleted(sessionID, fromSeq); err != nil {
-		return err
-	}
-	return nil
-}
-
 // scanMessage scans a message row from either *sql.Row or *sql.Rows.
 func scanMessage(sc scanner) (*Message, error) {
 	var m Message

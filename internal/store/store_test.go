@@ -254,35 +254,6 @@ func TestAppendAndGetMessages(t *testing.T) {
 	}
 }
 
-func TestSoftDeleteMessages(t *testing.T) {
-	s := newTestStore(t)
-	mustCreateSession(t, s, "sd")
-
-	for _, txt := range []string{"one", "two", "three", "four"} {
-		if err := s.AppendMessage(&Message{SessionID: "sd", Role: "user", Content: textContent(txt)}); err != nil {
-			t.Fatalf("AppendMessage: %v", err)
-		}
-	}
-
-	// Soft delete from seq 3 onward.
-	if err := s.SoftDeleteMessages("sd", 3); err != nil {
-		t.Fatalf("SoftDeleteMessages: %v", err)
-	}
-
-	got, err := s.GetMessages("sd")
-	if err != nil {
-		t.Fatalf("GetMessages: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("after soft delete got %d, want 2", len(got))
-	}
-	for _, m := range got {
-		if m.Seq >= 3 {
-			t.Fatalf("soft-deleted message seq %d still active", m.Seq)
-		}
-	}
-}
-
 func TestApplyCompaction(t *testing.T) {
 	s := newTestStore(t)
 	mustCreateSession(t, s, "ac")
@@ -372,34 +343,6 @@ func TestSearch(t *testing.T) {
 	}
 }
 
-func TestSearchFiltersSoftDeleted(t *testing.T) {
-	s := newTestStore(t)
-	mustCreateSession(t, s, "filter-sess")
-
-	if err := s.AppendMessage(&Message{SessionID: "filter-sess", Role: "user", Content: textContent("uniqueterm zap alpha")}); err != nil {
-		t.Fatalf("AppendMessage: %v", err)
-	}
-	if err := s.AppendMessage(&Message{SessionID: "filter-sess", Role: "assistant", Content: textContent("uniqueterm zap beta")}); err != nil {
-		t.Fatalf("AppendMessage: %v", err)
-	}
-
-	// Before delete: both findable.
-	res, _ := s.Search("uniqueterm", 10)
-	if len(res) != 2 {
-		t.Fatalf("before delete: expected 2 results, got %d", len(res))
-	}
-
-	// Soft delete from seq 2 onward (removes the assistant message).
-	if err := s.SoftDeleteMessages("filter-sess", 2); err != nil {
-		t.Fatalf("SoftDeleteMessages: %v", err)
-	}
-
-	res, _ = s.Search("uniqueterm", 10)
-	if len(res) != 1 {
-		t.Fatalf("after soft delete: expected 1 result, got %d", len(res))
-	}
-}
-
 func ftsRowCount(t *testing.T, s *Store) int {
 	t.Helper()
 	var n int
@@ -438,27 +381,6 @@ func TestFTSSkipsToolMessages(t *testing.T) {
 	}
 	if len(res) != 0 {
 		t.Fatalf("tool text must not be searchable, got %d results", len(res))
-	}
-}
-
-func TestFTSRemovesSoftDeletedRows(t *testing.T) {
-	s := newTestStore(t)
-	mustCreateSession(t, s, "fts-del")
-
-	if err := s.AppendMessage(&Message{SessionID: "fts-del", Role: "user", Content: textContent("keepme alpha")}); err != nil {
-		t.Fatalf("append 1: %v", err)
-	}
-	if err := s.AppendMessage(&Message{SessionID: "fts-del", Role: "user", Content: textContent("deleteme beta")}); err != nil {
-		t.Fatalf("append 2: %v", err)
-	}
-	if ftsRowCount(t, s) != 2 {
-		t.Fatalf("expected 2 fts rows before delete")
-	}
-	if err := s.SoftDeleteMessages("fts-del", 2); err != nil {
-		t.Fatalf("SoftDeleteMessages: %v", err)
-	}
-	if ftsRowCount(t, s) != 1 {
-		t.Fatalf("fts rows after soft delete = %d, want 1", ftsRowCount(t, s))
 	}
 }
 
