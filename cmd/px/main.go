@@ -311,8 +311,8 @@ func cmdLogout(args []string) {
 // stdout. Bash approval requests are written to stdout and the response is
 // read from stdin.
 func runChildMode() {
-	// Parse args: --json --no-skills --session <id> --tools <list> [-- task]
-	var sessionID, task, toolsList string
+	// Parse args: --json --no-skills --session <id> [-- task]
+	var sessionID, task string
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -321,11 +321,6 @@ func runChildMode() {
 		case "--session":
 			if i+1 < len(args) {
 				sessionID = args[i+1]
-				i++
-			}
-		case "--tools":
-			if i+1 < len(args) {
-				toolsList = args[i+1]
 				i++
 			}
 		case "--":
@@ -437,18 +432,15 @@ func runChildMode() {
 		return humanChildApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
 
-	// A subagent must never receive the subagent tool (nor recall/exa): that
-	// would let it spawn further subagents unbounded. An empty allowlist would
-	// make BuildRegistry hand out the full parent set, so force the safe child
-	// default here — child mode is structurally incapable of recursing.
-	if toolsList == "" {
-		toolsList = "read,write,edit,bash,search,ls,glob"
-	}
+	// Child:true grants every tool except subagent, so a subagent gets the full
+	// tool set (read/write/edit/bash/search/ls/glob/exa_search/recall) but cannot
+	// spawn further subagents — recursion is bounded to one level.
 	reg := tools.BuildRegistry(tools.BuildOptions{
 		Cwd:        cwd,
+		Store:      st,
 		Sandbox:    sandbox,
 		ApprovalFn: approvalFn,
-		Tools:      toolsList,
+		Child:      true,
 	})
 
 	// Run agent with a nil outputChan (we write events ourselves).

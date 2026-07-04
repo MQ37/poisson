@@ -1,8 +1,6 @@
 package tools
 
 import (
-	"strings"
-
 	"poisson/internal/store"
 )
 
@@ -16,72 +14,39 @@ type BuildOptions struct {
 	Sandbox     bool
 	ApprovalFn  ApprovalFn
 	SubApproval SubagentApproval
-	// Tools is a comma-separated allowlist for child mode. Empty registers the
-	// full parent tool set.
-	Tools string
+	// Child omits the subagent tool so a subagent cannot spawn further
+	// subagents (recursion is bounded to one level). Every other tool remains
+	// available to children.
+	Child bool
 }
 
-type toolEntry struct {
-	name    string
-	factory func(BuildOptions) Tool
-}
-
-// childCatalog maps tool names allowed in subagent child mode.
-var childCatalog = map[string]func(BuildOptions) Tool{
-	"read": func(o BuildOptions) Tool { return NewReadTool(o.Cwd) },
-	"write": func(o BuildOptions) Tool {
-		return NewWriteTool(o.Cwd)
-	},
-	"edit": func(o BuildOptions) Tool { return NewEditTool(o.Cwd) },
-	"bash": func(o BuildOptions) Tool {
-		approval := o.ApprovalFn
-		if approval == nil {
-			approval = func(string, string, string) bool { return false }
-		}
-		return NewBashTool(o.Cwd, o.Sandbox, approval)
-	},
-	"search": func(o BuildOptions) Tool { return NewSearchTool(o.Cwd) },
-	"ls":     func(o BuildOptions) Tool { return NewLsTool(o.Cwd) },
-	"glob":   func(o BuildOptions) Tool { return NewGlobTool(o.Cwd) },
-}
-
-// BuildRegistry constructs a tool registry for parent or child mode.
+// BuildRegistry constructs the tool registry. A child (subagent) receives every
+// tool except subagent; the parent additionally gets subagent when a
+// SubApproval handler is supplied.
 func BuildRegistry(opts BuildOptions) *Registry {
 	reg := NewRegistry()
-	if opts.Tools != "" {
-		for _, name := range strings.Split(opts.Tools, ",") {
-			name = strings.TrimSpace(name)
-			if factory, ok := childCatalog[name]; ok {
-				reg.Register(factory(opts))
-			}
-		}
-		return reg
-	}
 
 	approval := opts.ApprovalFn
 	if approval == nil {
 		approval = func(string, string, string) bool { return false }
 	}
 
-	parentTools := []toolEntry{
-		{"bash", func(o BuildOptions) Tool { return NewBashTool(o.Cwd, false, approval) }},
-		{"read", func(o BuildOptions) Tool { return NewReadTool(o.Cwd) }},
-		{"write", func(o BuildOptions) Tool { return NewWriteTool(o.Cwd) }},
-		{"edit", func(o BuildOptions) Tool { return NewEditTool(o.Cwd) }},
-		{"search", func(o BuildOptions) Tool { return NewSearchTool(o.Cwd) }},
-		{"ls", func(o BuildOptions) Tool { return NewLsTool(o.Cwd) }},
-		{"glob", func(o BuildOptions) Tool { return NewGlobTool(o.Cwd) }},
-	}
-	for _, e := range parentTools {
-		reg.Register(e.factory(opts))
-	}
+	reg.Register(NewBashTool(opts.Cwd, opts.Sandbox, approval))
+	reg.Register(NewReadTool(opts.Cwd))
+	reg.Register(NewWriteTool(opts.Cwd))
+	reg.Register(NewEditTool(opts.Cwd))
+	reg.Register(NewSearchTool(opts.Cwd))
+	reg.Register(NewLsTool(opts.Cwd))
+	reg.Register(NewGlobTool(opts.Cwd))
+	reg.Register(NewExaSearchTool())
 	if opts.Store != nil {
 		reg.Register(NewRecallTool(opts.Store))
 	}
-	if opts.SubApproval != nil {
+	// Parent-only: a subagent must never receive the subagent tool, or it could
+	// spawn subagents without bound.
+	if !opts.Child && opts.SubApproval != nil {
 		reg.Register(NewSubagentTool(opts.Cwd, opts.SubApproval))
 	}
-	reg.Register(NewExaSearchTool())
 	return reg
 }
 

@@ -51,41 +51,28 @@ func TestBuildRegistry_ParentWithStore(t *testing.T) {
 	}
 }
 
+// TestBuildRegistry_Child asserts a child gets every tool except subagent,
+// including exa_search and recall (when a store is supplied).
 func TestBuildRegistry_Child(t *testing.T) {
 	dir := testutil.TempDir(t)
-	reg := BuildRegistry(BuildOptions{Cwd: dir, Tools: "read,bash,search"})
-	for _, w := range []string{"read", "bash", "search"} {
-		if _, ok := reg.Get(w); !ok {
-			t.Errorf("child registry missing %q", w)
-		}
+	st, err := store.Open(filepath.Join(dir, "child.db"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, absent := range []string{"write", "subagent", "exa_search"} {
-		if _, ok := reg.Get(absent); ok {
-			t.Errorf("child registry should not have %q", absent)
-		}
-	}
-}
-
-// TestBuildRegistry_ChildCannotGetSubagent proves the child catalog is a hard
-// ceiling: even if "subagent" (or recall/exa_search) is explicitly requested
-// in the allowlist, it is never registered, so subagents can't spawn
-// subagents (recursion is impossible beyond one level).
-func TestBuildRegistry_ChildCannotGetSubagent(t *testing.T) {
-	dir := testutil.TempDir(t)
+	t.Cleanup(func() { st.Close() })
 	reg := BuildRegistry(BuildOptions{
 		Cwd:         dir,
-		Tools:       "read,subagent,recall,exa_search,bash",
-		SubApproval: func(_, _, _, _, _ string) bool { return true },
+		Store:       st,
+		Child:       true,
+		SubApproval: func(string, string, string, string, string) bool { return true },
 	})
-	for _, absent := range []string{"subagent", "recall", "exa_search"} {
-		if _, ok := reg.Get(absent); ok {
-			t.Errorf("child registry must never expose %q", absent)
+	for _, w := range []string{"read", "write", "edit", "bash", "search", "ls", "glob", "exa_search", "recall"} {
+		if _, ok := reg.Get(w); !ok {
+			t.Errorf("child registry missing %q; have %v", w, toolNames(reg))
 		}
 	}
-	for _, want := range []string{"read", "bash"} {
-		if _, ok := reg.Get(want); !ok {
-			t.Errorf("child registry missing allowed tool %q", want)
-		}
+	if _, ok := reg.Get("subagent"); ok {
+		t.Error("child registry must never expose subagent (would allow recursion)")
 	}
 }
 

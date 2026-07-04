@@ -54,7 +54,7 @@ func (t *SubagentTool) SetRuntime(providerFn, modelFn, effortFn func() string) {
 func (t *SubagentTool) Name() string { return "subagent" }
 
 func (t *SubagentTool) Description() string {
-	return "Spawn a one-shot child Poisson agent to complete a specific task. The child has read, write, edit, bash, search, ls, and glob tools. Use when you need focused work isolated from the main session. The child returns its final output when done. It cannot ask questions — give it a complete, self-contained task."
+	return "Spawn a one-shot child Poisson agent to complete a specific task. The child has every tool you do (read, write, edit, bash, search, ls, glob, exa_search, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. The child returns its final output when done. It cannot ask questions — give it a complete, self-contained task."
 }
 
 func (t *SubagentTool) Schema() json.RawMessage {

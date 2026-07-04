@@ -19,13 +19,12 @@ type SpawnInput struct {
 	Cwd        string
 	SessionID  string
 	Name       string
-	Provider   string
-	Model      string
-	Effort     string
-	Sandbox    bool
-	ExtraEnv   []string
-	ChildTools []string // tool names available to the child
-	DBPath     string   // ephemeral DB path for the child (empty = parent's DB)
+	Provider  string
+	Model     string
+	Effort    string
+	Sandbox   bool
+	ExtraEnv  []string
+	DBPath    string // ephemeral DB path for the child (empty = parent's DB)
 }
 
 // ChildProcess wraps a spawned Poisson child process.
@@ -57,19 +56,13 @@ type ChildEvent struct {
 
 // Spawn starts a child Poisson process in JSON output mode.
 func Spawn(input SpawnInput) (*ChildProcess, error) {
-	// Never spawn a child with an empty allowlist: an empty --tools value makes
-	// the child build the full parent tool set (which includes subagent), so
-	// subagents could spawn subagents without bound. len==0 (not ==nil) so an
-	// empty slice is treated like a missing one.
-	if len(input.ChildTools) == 0 {
-		input.ChildTools = []string{"read", "write", "edit", "bash", "search", "ls", "glob"}
-	}
-
+	// The child is flagged via POISSON_SUBAGENT_CHILD below; runChildMode then
+	// builds the registry with Child:true, which grants every tool except
+	// subagent (so subagents cannot spawn subagents).
 	args := []string{
 		"--json",
 		"--no-skills",
 		"--session", input.SessionID,
-		"--tools", strings.Join(input.ChildTools, ","),
 	}
 	if input.Task != "" {
 		args = append(args, "--", input.Task)
