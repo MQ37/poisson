@@ -89,11 +89,28 @@ func formatDuration(ms int64) string {
 	return fmt.Sprintf("%dm%02ds", m, s)
 }
 
+// dedupAdjacentWords collapses an immediately repeated word, e.g. a model that
+// stutters a name field ("calc calc" -> "calc"). Distinct words are untouched
+// so legitimate multi-word names ("code reviewer") survive.
+func dedupAdjacentWords(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) < 2 {
+		return s
+	}
+	out := fields[:1]
+	for _, w := range fields[1:] {
+		if w != out[len(out)-1] {
+			out = append(out, w)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
 // appendSubagentCard adds a running subagent widget to the scrollback.
 func (s *scrollback) appendSubagentCard(id int64, providerCallID, name, task, model string) {
 	b := s.newBlock(blockSubagent, "")
 	b.meta = BlockMeta{
-		ToolName:       name,
+		ToolName:       dedupAdjacentWords(name),
 		ProviderCallID: providerCallID,
 		SubagentTask:   collapseWhitespace(task),
 		SubagentModel:  model,
