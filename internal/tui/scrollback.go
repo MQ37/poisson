@@ -215,6 +215,12 @@ func (s *scrollback) layoutAll(width int) ([]ScreenRow, []int) {
 	cumulative := make([]int, len(s.blocks)+1)
 	var out []ScreenRow
 	for i := range s.blocks {
+		// Running subagent widgets are shown pinned above the conversation, not
+		// inline, until they finish (then they appear here as a record).
+		if s.blocks[i].kind == blockSubagent && s.blocks[i].meta.Streaming {
+			cumulative[i+1] = len(out)
+			continue
+		}
 		rows := s.blocks[i].layoutPlain(width)
 		out = append(out, rows...)
 		cumulative[i+1] = len(out)

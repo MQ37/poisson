@@ -106,10 +106,6 @@ func prefixName(k completionKind) string {
 	return "?"
 }
 
-func (t *TUI) renderInputHeader() string {
-	return ""
-}
-
 // paintApprovalInputRegion fills the entire input region with an opaque approval
 // panel (replacing the normal prompt editor).
 func (t *TUI) paintApprovalInputRegion(b *strings.Builder, lay layoutSnapshot, o *approvalOverlay) {

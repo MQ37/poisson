@@ -87,19 +87,34 @@ func (t *TUI) hydrateScrollbackLocked() {
 					if len(input) == 0 {
 						input = json.RawMessage("{}")
 					}
-					t.scroll.appendToolCallReplay(id, b.ToolCallID, b.ToolName, input)
+					// Subagents replay as the same compact widget shown live, not a
+					// full tool card, so resume matches the live view.
+					if b.ToolName == "subagent" {
+						name, task := subagentTaskFromInput(input)
+						if name == "" {
+							name = "subagent"
+						}
+						t.scroll.appendSubagentCard(id, b.ToolCallID, name, task, modelLabel(t.agent))
+					} else {
+						t.scroll.appendToolCallReplay(id, b.ToolCallID, b.ToolName, input)
+					}
 				}
 			}
 		case "tool":
 			for _, b := range blocks {
 				if b.Type == "tool_result" {
 					content, errMsg := parseHydratedToolResult(b)
-					t.scroll.completeToolCall(b.ToolCallID, content, errMsg, 0)
+					// Try the subagent widget first; only fall back to a tool card
+					// (which appends an orphan line if unmatched) when it isn't one.
+					if !t.scroll.completeSubagentCard(b.ToolCallID, errMsg, -1) {
+						t.scroll.completeToolCall(b.ToolCallID, content, errMsg, 0)
+					}
 				}
 			}
 		}
 	}
 	t.scroll.finalizeOrphanToolCalls()
+	t.scroll.finalizeOrphanSubagents()
 	t.scroll.finalizeThinking()
 	t.scroll.scrollToBottom()
 }

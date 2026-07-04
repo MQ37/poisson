@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 // SpawnInput holds the parameters for spawning a child Poisson process.
@@ -100,6 +101,11 @@ func Spawn(input SpawnInput) (*ChildProcess, error) {
 	}
 	cmd.Env = env
 
+	// Run the child in its own process group so Reap() can kill the whole tree
+	// (the child plus any bash grandchildren it spawned) on Ctrl+C — otherwise
+	// killing only the child orphans its subprocesses, leaving them running.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("stdin pipe: %w", err)
@@ -163,11 +169,18 @@ func (c *ChildProcess) Wait() error {
 	return c.cmd.Wait()
 }
 
-// Kill terminates the child process.
+// Kill terminates the child process and its entire process group, so any
+// grandchildren (e.g. bash commands the subagent launched) are killed too
+// rather than being orphaned and left running in the background.
 func (c *ChildProcess) Kill() error {
 	if c.cmd.Process == nil {
 		return nil
 	}
+	// Negative PID targets the whole process group (set via Setpgid at spawn).
+	if err := syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL); err == nil {
+		return nil
+	}
+	// Fall back to killing just the process if the group signal failed.
 	return c.cmd.Process.Kill()
 }
 

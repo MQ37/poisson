@@ -91,10 +91,12 @@ func newTUIIntegEnv(t *testing.T, responses [][]provider.StreamEvent) *tuiIntegE
 	return &tuiIntegEnv{
 		t:     t,
 		dir:   dir,
+		sid:   sid,
 		store: st,
 		prov:  prov,
 		agent: a,
 		tui:   tui,
+		reg:   reg,
 	}
 }
 
@@ -787,5 +789,126 @@ func TestTUIInteg_SubagentDoesNotPolluteConversation(t *testing.T) {
 	// Two blocks total: one tool card + one subagent widget. No extra child steps.
 	if e.tui.scroll.blockCount() != 2 {
 		t.Fatalf("expected exactly 2 blocks (tool card + widget), got %d", e.tui.scroll.blockCount())
+	}
+}
+
+// TestTUIInteg_SubagentPinnedWhileRunning verifies a running subagent is shown
+// in the pinned region above the conversation (not inline), and moves inline
+// once it completes.
+func TestTUIInteg_SubagentPinnedWhileRunning(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolStart,
+		ToolName:   "subagent",
+		ToolCallID: "call_1",
+		ToolInput:  mustJSONTUI(t, map[string]string{"task": "explore the code", "name": "explore"}),
+	})
+
+	// While running: pinned line exists; inline flow does NOT contain it.
+	e.tui.mu.Lock()
+	if e.tui.scroll.runningSubagentCount() != 1 {
+		t.Errorf("runningSubagentCount = %d, want 1", e.tui.scroll.runningSubagentCount())
+	}
+	pinned := e.tui.scroll.runningSubagentLines(100)
+	inline := e.tui.scroll.visible(20, 100)
+	e.tui.mu.Unlock()
+
+	if len(pinned) != 1 || !strings.Contains(stripANSI(pinned[0]), "explore") {
+		t.Errorf("pinned running line missing: %v", pinned)
+	}
+	for _, r := range inline {
+		if strings.Contains(stripANSI(r.Text), "explore the code") {
+			t.Errorf("running subagent must not appear inline: %q", stripANSI(r.Text))
+		}
+	}
+
+	// Complete it: now it appears inline (a record), and the pinned region empties.
+	e.feedEvent(agent.OutputEvent{
+		Type: agent.OutputToolResult, ToolName: "subagent", ToolCallID: "call_1",
+	})
+	e.tui.mu.Lock()
+	if e.tui.scroll.runningSubagentCount() != 0 {
+		t.Errorf("runningSubagentCount after done = %d, want 0", e.tui.scroll.runningSubagentCount())
+	}
+	inline = e.tui.scroll.visible(20, 100)
+	e.tui.mu.Unlock()
+	var foundInline bool
+	for _, r := range inline {
+		if strings.Contains(stripANSI(r.Text), "explore the code") {
+			foundInline = true
+		}
+	}
+	if !foundInline {
+		t.Error("completed subagent should appear inline in the conversation")
+	}
+}
+
+// TestTUIInteg_SubagentResumeRendersWidget verifies that resuming a session
+// with a subagent tool call replays it as the compact widget (matching live),
+// not as a full tool card.
+func TestTUIInteg_SubagentResumeRendersWidget(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	sid := e.sid
+	// Seed the DB: user, assistant(subagent tool_use), tool_result.
+	e.store.AppendMessage(&store.Message{
+		SessionID: sid, Role: "user", Content: `[{"type":"text","text":"go explore"}]`,
+	})
+	e.store.AppendMessage(&store.Message{
+		SessionID: sid, Role: "assistant",
+		Content: `[{"type":"tool_use","tool_call_id":"c1","tool_name":"subagent","tool_input":{"task":"Explore the module","name":"explore"}}]`,
+	})
+	e.store.AppendMessage(&store.Message{
+		SessionID: sid, Role: "tool",
+		Content: `[{"type":"tool_result","tool_call_id":"c1","tool_result":"Subagent finished. 3 tool calls, 1 turns."}]`,
+	})
+
+	e.tui.mu.Lock()
+	e.tui.resetSessionViewLocked()
+	e.tui.mu.Unlock()
+
+	if e.firstBlockOfKind(blockSubagent) == -1 {
+		t.Error("resumed subagent should be a widget (blockSubagent)")
+	}
+	if e.firstBlockOfKind(blockToolCall) != -1 {
+		t.Error("resumed subagent must not be a full tool card")
+	}
+	// The child's internal result summary must not leak into the conversation.
+	if strings.Contains(e.scrollText(), "3 tool calls") {
+		t.Errorf("subagent result leaked into resumed conversation: %q", e.scrollText())
+	}
+	// The widget shows ✓ (done) without a bogus duration.
+	idx := e.firstBlockOfKind(blockSubagent)
+	line := e.renderBlock(idx, 100)
+	if !strings.Contains(line, "✓") {
+		t.Errorf("resumed subagent widget should show ✓: %q", line)
+	}
+	if strings.Contains(line, ".0s") || strings.Contains(line, "0.0s") {
+		t.Errorf("resumed subagent should not show a fabricated duration: %q", line)
+	}
+}
+
+// TestTUIInteg_HeaderSpinnerAdvancesDuringSubagent verifies the header status
+// bar is marked dirty each spinner tick while a subagent runs, so the spinner
+// next to the model keeps spinning (regression: it used to freeze).
+func TestTUIInteg_HeaderSpinnerAdvancesDuringSubagent(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.tui.mu.Lock()
+	e.tui.status.Thinking = true
+	e.tui.mu.Unlock()
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolStart,
+		ToolName:   "subagent",
+		ToolCallID: "call_1",
+		ToolInput:  mustJSONTUI(t, map[string]string{"task": "work", "name": "worker"}),
+	})
+
+	e.tui.dirty.consume() // clear any pending dirty
+	e.tui.markSpinnerTick()
+	snap := e.tui.dirty.consume()
+	if !snap.status {
+		t.Error("header status should be marked dirty on spinner tick while a subagent runs")
+	}
+	if len(snap.scroll) == 0 && !snap.full {
+		t.Error("scroll region (pinned running lines) should be marked dirty on spinner tick")
 	}
 }

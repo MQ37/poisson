@@ -38,7 +38,7 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 	}
 	scrollStart := t.headerRows + 1
 	inputTop := t.headerRows + t.scrollRows + 1
-	bodyRows := t.inputRows - 3
+	bodyRows := t.inputRows - 2
 	if bodyRows < 1 {
 		bodyRows = 1
 	}
@@ -53,8 +53,8 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 		scrollStart:   scrollStart,
 		inputTop:      inputTop,
 		bodyRows:      bodyRows,
-		bodyStart:     inputTop + 2,
-		hintRow:       inputTop + 2 + bodyRows,
+		bodyStart:     inputTop + 1,
+		hintRow:       inputTop + 1 + bodyRows,
 		firstRow:      firstRow,
 		sr:            sr,
 		sc:            sc,
@@ -130,11 +130,21 @@ func (t *TUI) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []i
 		}
 	}
 	pinRows := t.convPinRows()
+	// Pinned region above the conversation: running subagent widgets first
+	// (live spinner + timer), then the focus-mode prompt line (if any).
+	subLines := t.scroll.runningSubagentLines(lay.wrapWidth)
 	for pr := 0; pr < pinRows; pr++ {
 		_, pinDirty := onlySet[pr]
-		if paintAll || pinDirty {
-			t.paintConvPinRow(b, startRow+pr, t.cols)
+		if !(paintAll || pinDirty) {
+			continue
 		}
+		if pr < len(subLines) {
+			b.WriteString(cup(startRow+pr, 1))
+			b.WriteString(clearLine())
+			b.WriteString(truncateToWidth(t.formatScrollLine(subLines[pr]), lay.wrapWidth))
+			continue
+		}
+		t.paintConvPinRow(b, startRow+pr, t.cols)
 	}
 	contentRows := t.scrollRows - pinRows
 	for i := 0; i < contentRows; i++ {
@@ -179,13 +189,9 @@ func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 		}
 	}
 
+	// Separator on the first input row (the previously-empty header row was
+	// reclaimed to keep the input area compact).
 	b.WriteString(cup(lay.inputTop, 1))
-	b.WriteString(clearLine())
-	if header := t.renderInputHeader(); header != "" {
-		b.WriteString(header)
-	}
-
-	b.WriteString(cup(lay.inputTop+1, 1))
 	b.WriteString(clearLine())
 	sep := dim + strings.Repeat("─", lay.wrapWidth) + reset
 	if t.focusRegion == focusConv {
@@ -195,7 +201,7 @@ func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 
 	for i := 0; i < lay.bodyRows; i++ {
 		lineIdx := lay.firstRow + i
-		b.WriteString(cup(lay.inputTop+2+i, 1))
+		b.WriteString(cup(lay.inputTop+1+i, 1))
 		b.WriteString(clearLine())
 		if lineIdx < len(lay.screenLines) {
 			b.WriteString(t.renderInputScreenRow(lineIdx, lay.screenLines, lay.sr, lay.sc))
@@ -536,15 +542,22 @@ func (t *TUI) markSpinnerTick() {
 	t.mu.Lock()
 	lay := t.prepareLayout()
 	rows := t.offsetConvDirtyRows(t.toolSpinnerRows(lay))
+	runningSub := t.scroll.hasRunningSubagent()
+	thinking := t.status.Thinking
 	t.mu.Unlock()
-	if len(rows) > 0 {
+	// While a subagent runs, repaint the whole scroll region so the pinned
+	// running-agent lines (spinner + live timer) update each tick.
+	if runningSub {
+		t.dirty.markScrollAll(t.scrollRows)
+	} else if len(rows) > 0 {
 		t.dirty.markScrollRows(rows...)
-		if t.activeOverlay != nil {
-			t.dirty.markOverlay()
-		}
-	} else if _, ok := t.activeOverlay.(*btwOverlay); ok {
+	}
+	if t.activeOverlay != nil {
 		t.dirty.markOverlay()
-	} else {
+	}
+	// Always refresh the status bar so the header spinner next to the model
+	// keeps spinning even while tool/subagent cards are animating.
+	if thinking {
 		t.dirty.markStatus()
 	}
 }

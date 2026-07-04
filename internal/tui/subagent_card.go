@@ -8,11 +8,12 @@ import (
 )
 
 // layoutSubagentCard renders a compact one-line subagent widget in the spirit
-// of the Grok CLI: an icon, the agent name, a truncated task, the model label,
-// and a live status (spinner + elapsed while running; ✓/✗ + duration when done).
+// of the Grok CLI. The spinner/glyph, name, and elapsed timer are anchored on
+// the LEFT so the runtime is always visible no matter how long the task is;
+// the task (+ model) fills the remaining width and is truncated with an ellipsis.
 //
-//	⁘ explore   Explore checkout flow · glm-5.2:cloud            ◌ 5.6s
-//	⁘ explore   Explore checkout flow · glm-5.2:cloud            ✓ 5.6s
+//	⁘ explore  3.2s  Explore checkout flow · glm-5.2:cloud
+//	✓ explore  5.6s  Explore checkout flow · glm-5.2:cloud
 func layoutSubagentCard(b *Block, width int) []ScreenRow {
 	if width < 12 {
 		width = 12
@@ -22,24 +23,29 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 		name = "subagent"
 	}
 
-	// Status glyph + elapsed/duration.
-	var status string
+	// Left segment: glyph + name + duration — always kept visible.
+	var glyph, dur string
+	statusStyle := dim
 	if b.meta.ToolDone {
-		glyph := "✓"
+		glyph = "✓"
+		statusStyle = fgGreen
 		if b.meta.ToolError != "" {
 			glyph = "✗"
+			statusStyle = fgRed
 		}
-		status = fmt.Sprintf("%s %s", glyph, formatDuration(b.meta.DurationMs))
+		// Duration is unknown after a resume (start time not persisted).
+		if b.meta.DurationMs > 0 {
+			dur = formatDuration(b.meta.DurationMs)
+		}
 	} else {
+		glyph = toolCardSpinnerSlot
 		elapsed := int64(0)
 		if !b.meta.StartedAt.IsZero() {
 			elapsed = time.Since(b.meta.StartedAt).Milliseconds()
 		}
-		status = fmt.Sprintf("%s %s", toolCardSpinnerSlot, formatDuration(elapsed))
+		dur = formatDuration(elapsed)
 	}
 
-	icon := "⁘ "
-	label := icon + name
 	detail := b.meta.SubagentTask
 	if m := b.meta.SubagentModel; m != "" {
 		if detail != "" {
@@ -49,37 +55,23 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 		}
 	}
 
-	// Colorize: name in cyan, detail dim, status green/red/dim.
-	nameStyle := fgCyan + bold
-	statusStyle := dim
-	if b.meta.ToolDone {
-		if b.meta.ToolError != "" {
-			statusStyle = fgRed
-		} else {
-			statusStyle = fgGreen
-		}
+	// left (plain) = "⁘ name  3.2s"; styled separately below.
+	leftPlain := glyph + " " + name
+	if dur != "" {
+		leftPlain += "  " + dur
+	}
+	styledLeft := statusStyle + glyph + reset + " " + fgCyan + bold + name + reset
+	if dur != "" {
+		styledLeft += "  " + statusStyle + dur + reset
 	}
 
-	// Budget the detail so name + detail + status fit on one line.
-	// Layout: "<label>  <detail><pad><status>"
-	labelW := visibleWidth(label)
-	statusW := visibleWidth(status)
 	gap := 2
-	avail := width - labelW - gap - statusW - 1
-	if avail < 4 {
-		avail = 4
+	avail := width - visibleWidth(leftPlain) - gap
+	line := styledLeft
+	if avail >= 4 && detail != "" {
+		detail = truncatePlain(detail, avail)
+		line += strings.Repeat(" ", gap) + dim + detail + reset
 	}
-	detail = truncatePlain(detail, avail)
-	detailW := visibleWidth(detail)
-	pad := width - labelW - gap - detailW - statusW
-	if pad < 1 {
-		pad = 1
-	}
-
-	line := nameStyle + label + reset +
-		strings.Repeat(" ", gap) + dim + detail + reset +
-		strings.Repeat(" ", pad) + statusStyle + status + reset
-
 	return []ScreenRow{{Text: line, Tag: RowTag{BlockID: b.id, RowIdx: 0}}}
 }
 
@@ -113,9 +105,10 @@ func (s *scrollback) appendSubagentCard(id int64, providerCallID, name, task, mo
 	s.trim()
 }
 
-// completeSubagentCard marks the matching subagent widget done. Match is by
-// providerCallID when set, otherwise the most recent still-running widget.
-func (s *scrollback) completeSubagentCard(providerCallID, errMsg string, durationMs int64) {
+// completeSubagentCard marks the matching subagent widget done and reports
+// whether a widget matched. Match is by providerCallID when set, otherwise the
+// most recent still-running widget.
+func (s *scrollback) completeSubagentCard(providerCallID, errMsg string, durationMs int64) bool {
 	for i := len(s.blocks) - 1; i >= 0; i-- {
 		b := &s.blocks[i]
 		if b.kind != blockSubagent || b.meta.ToolDone {
@@ -127,14 +120,79 @@ func (s *scrollback) completeSubagentCard(providerCallID, errMsg string, duratio
 		b.meta.Streaming = false
 		b.meta.ToolDone = true
 		b.meta.ToolError = errMsg
-		if durationMs > 0 {
+		switch {
+		case durationMs < 0:
+			b.meta.DurationMs = 0 // unknown (e.g. resume) — omit from display
+		case durationMs > 0:
 			b.meta.DurationMs = durationMs
-		} else if !b.meta.StartedAt.IsZero() {
+		case !b.meta.StartedAt.IsZero():
 			b.meta.DurationMs = time.Since(b.meta.StartedAt).Milliseconds()
 		}
 		b.invalidateLayout()
-		return
+		return true
 	}
+	return false
+}
+
+// finalizeOrphanSubagents marks any still-running subagent widgets done after
+// a resume (their tool_result may be missing from the replayed history).
+func (s *scrollback) finalizeOrphanSubagents() {
+	for i := range s.blocks {
+		b := &s.blocks[i]
+		if b.kind != blockSubagent || b.meta.ToolDone {
+			continue
+		}
+		b.meta.Streaming = false
+		b.meta.ToolDone = true
+		b.meta.DurationMs = 0 // unknown after resume
+		b.invalidateLayout()
+	}
+}
+
+// hasRunningSubagent reports whether any subagent widget is still running.
+func (s *scrollback) hasRunningSubagent() bool {
+	for i := range s.blocks {
+		if s.blocks[i].kind == blockSubagent && s.blocks[i].meta.Streaming {
+			return true
+		}
+	}
+	return false
+}
+
+// maxPinnedSubagents caps how many running subagents are pinned above the convo.
+const maxPinnedSubagents = 5
+
+// runningSubagentCount returns the number of currently-running subagents (capped).
+func (s *scrollback) runningSubagentCount() int {
+	n := 0
+	for i := range s.blocks {
+		if s.blocks[i].kind == blockSubagent && s.blocks[i].meta.Streaming {
+			n++
+			if n >= maxPinnedSubagents {
+				break
+			}
+		}
+	}
+	return n
+}
+
+// runningSubagentLines renders the currently-running subagent widgets (capped)
+// for the pinned region shown above the conversation.
+func (s *scrollback) runningSubagentLines(width int) []string {
+	var lines []string
+	for i := range s.blocks {
+		b := &s.blocks[i]
+		if b.kind != blockSubagent || !b.meta.Streaming {
+			continue
+		}
+		if rows := layoutSubagentCard(b, width); len(rows) > 0 {
+			lines = append(lines, rows[0].Text)
+		}
+		if len(lines) >= maxPinnedSubagents {
+			break
+		}
+	}
+	return lines
 }
 
 // collapseWhitespace flattens newlines/tabs/runs of spaces into single spaces

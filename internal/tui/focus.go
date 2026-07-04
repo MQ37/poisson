@@ -16,10 +16,11 @@ const (
 // convPinRows is the number of scroll-region rows reserved for the conv-focus
 // turn header band (full-width background, not part of scrollback content).
 func (t *TUI) convPinRows() int {
+	n := t.scroll.runningSubagentCount()
 	if t.focusRegion == focusConv {
-		return 1
+		n++
 	}
-	return 0
+	return n
 }
 
 func (t *TUI) convScrollRows() int {

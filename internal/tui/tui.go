@@ -189,12 +189,12 @@ func (t *TUI) inputHeight(width int) int {
 		return n
 	}
 	visual := totalVisualLines(t.editor, width)
-	n := visual + 2 // +1 separator, +1 hint
-	if visual > 1 && n < 6 {
-		n = 6 // show multiple wrapped rows (3 body lines + chrome)
+	n := visual + 2 // +1 separator, +1 hint (header row reclaimed)
+	if visual > 1 && n < 5 {
+		n = 5 // show multiple wrapped rows (3 body lines + chrome)
 	}
-	if n < 4 {
-		n = 4
+	if n < 3 {
+		n = 3
 	}
 	max := t.rows / 3
 	if max < 5 {
