@@ -270,13 +270,6 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		}
 	}
 
-	if t.running() && !t.approving.Load() {
-		if k.isEnter() {
-			return false, nil
-		}
-		return t.processEditorKey(k)
-	}
-
 	return t.processEditorKey(k)
 }
 
@@ -284,6 +277,14 @@ func (t *TUI) processEditorKey(k Key) (bool, error) {
 	submitted, quit := t.editor.applyKey(k)
 	if submitted != "" {
 		t.completion = nil
+		// A turn is in flight: queue the message instead of starting a second
+		// turn. It (and any other queued messages) are sent once this one ends.
+		if t.running() && !t.approving.Load() {
+			t.enqueueLocked(submitted)
+			t.refreshCompletion()
+			t.markInputDirty()
+			return false, nil
+		}
 		if err := t.submit(submitted); err != nil {
 			if errors.Is(err, errQuitSentinel) {
 				t.prepareShutdownLocked()

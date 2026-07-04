@@ -93,6 +93,11 @@ type TUI struct {
 	approvalAnswer chan bool
 	overlayQuit    atomic.Bool
 
+	// queued holds messages the user submitted while a turn was in flight. They
+	// are sent together as a single new turn once the current turn finishes.
+	// Cleared on cancel. Guarded by t.mu.
+	queued []string
+
 	// Submission signaling.
 	lastCtrlC        time.Time
 	turnCancelled    bool // set when user cancels an in-flight turn; cleared on OutputDone
@@ -188,20 +193,36 @@ func (t *TUI) inputHeight(width int) int {
 		}
 		return n
 	}
+	q := t.queuedPreviewRows()
 	visual := totalVisualLines(t.editor, width)
-	n := visual + 2 // +1 separator, +1 hint (header row reclaimed)
-	if visual > 1 && n < 5 {
-		n = 5 // show multiple wrapped rows (3 body lines + chrome)
+	n := visual + 2 + q // +1 separator, +1 hint (header row reclaimed), +queued preview
+	if visual > 1 && n < 5+q {
+		n = 5 + q // show multiple wrapped rows (3 body lines + chrome)
 	}
-	if n < 3 {
-		n = 3
+	if n < 3+q {
+		n = 3 + q
 	}
 	max := t.rows / 3
-	if max < 5 {
-		max = 5
+	if max < 5+q {
+		max = 5 + q
 	}
 	if n > max {
 		n = max
+	}
+	return n
+}
+
+// maxQueuedPreview caps how many pending-message rows appear above the input.
+const maxQueuedPreview = 3
+
+// queuedPreviewRows is the number of rows the pending-message preview occupies.
+func (t *TUI) queuedPreviewRows() int {
+	n := len(t.queued)
+	if n == 0 {
+		return 0
+	}
+	if n > maxQueuedPreview {
+		return maxQueuedPreview
 	}
 	return n
 }

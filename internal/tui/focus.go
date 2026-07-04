@@ -267,6 +267,12 @@ func (t *TUI) cancelActiveRunLocked() {
 		t.exitArmed = true
 		cancel()
 	}
+	// Cancelling abandons any messages queued behind this turn — the user hit
+	// stop, so nothing pending should be sent.
+	if len(t.queued) > 0 {
+		t.queued = nil
+		t.dirty.markFull()
+	}
 	t.setEphemeralHintLocked("cancelled — Ctrl+C again to exit", 2*time.Second)
 }
 

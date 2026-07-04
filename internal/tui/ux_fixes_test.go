@@ -81,8 +81,13 @@ func TestTypingWhileAgentRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tui.editor.text() != "d" {
-		t.Fatalf("enter should not submit while thinking, editor=%q", tui.editor.text())
+	// Enter while thinking queues the message (sent after the current turn)
+	// rather than starting a second turn or being ignored.
+	if tui.editor.text() != "" {
+		t.Fatalf("enter should clear editor and queue while thinking, editor=%q", tui.editor.text())
+	}
+	if len(tui.queued) != 1 || tui.queued[0] != "d" {
+		t.Fatalf("message not queued: %v", tui.queued)
 	}
 }
 

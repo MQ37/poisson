@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"poisson/internal/agent"
@@ -13,6 +14,7 @@ type layoutSnapshot struct {
 	wrapWidth   int
 	scrollStart int // 1-based terminal row of first scroll line
 	inputTop    int
+	queuedRows  int // pending-message preview rows, between separator and body
 	bodyRows    int
 	bodyStart   int
 	hintRow     int
@@ -38,10 +40,15 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 	}
 	scrollStart := t.headerRows + 1
 	inputTop := t.headerRows + t.scrollRows + 1
-	bodyRows := t.inputRows - 2
+	queuedRows := 0
+	if !t.approving.Load() {
+		queuedRows = t.queuedPreviewRows()
+	}
+	bodyRows := t.inputRows - 2 - queuedRows
 	if bodyRows < 1 {
 		bodyRows = 1
 	}
+	bodyStart := inputTop + 1 + queuedRows
 	screenLines := wrapLines(t.editor.lines, wrapWidth)
 	sr, sc := screenCursor(t.editor, wrapWidth)
 	firstRow := 0
@@ -52,9 +59,10 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 		wrapWidth:     wrapWidth,
 		scrollStart:   scrollStart,
 		inputTop:      inputTop,
+		queuedRows:    queuedRows,
 		bodyRows:      bodyRows,
-		bodyStart:     inputTop + 1,
-		hintRow:       inputTop + 1 + bodyRows,
+		bodyStart:     bodyStart,
+		hintRow:       bodyStart + bodyRows,
 		firstRow:      firstRow,
 		sr:            sr,
 		sc:            sc,
@@ -199,9 +207,15 @@ func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 	}
 	b.WriteString(sep)
 
+	for i := 0; i < lay.queuedRows; i++ {
+		b.WriteString(cup(lay.inputTop+1+i, 1))
+		b.WriteString(clearLine())
+		b.WriteString(truncateToWidth(t.renderQueuedRow(i, lay.wrapWidth), lay.wrapWidth))
+	}
+
 	for i := 0; i < lay.bodyRows; i++ {
 		lineIdx := lay.firstRow + i
-		b.WriteString(cup(lay.inputTop+1+i, 1))
+		b.WriteString(cup(lay.bodyStart+i, 1))
 		b.WriteString(clearLine())
 		if lineIdx < len(lay.screenLines) {
 			b.WriteString(t.renderInputScreenRow(lineIdx, lay.screenLines, lay.sr, lay.sc))
@@ -216,6 +230,24 @@ func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 		b.WriteString(cup(r, 1))
 		b.WriteString(clearLine())
 	}
+}
+
+// renderQueuedRow renders one pending-message preview line. When there are more
+// queued messages than preview rows, the last row summarises the remainder.
+func (t *TUI) renderQueuedRow(i, width int) string {
+	n := len(t.queued)
+	if n > maxQueuedPreview && i == maxQueuedPreview-1 {
+		return dim + fmt.Sprintf("  … +%d more queued", n-(maxQueuedPreview-1)) + reset
+	}
+	if i >= n {
+		return ""
+	}
+	label := "  ⏳ "
+	avail := width - visibleWidth(label)
+	if avail < 1 {
+		avail = 1
+	}
+	return dim + label + truncatePlain(collapseWhitespace(t.queued[i]), avail) + reset
 }
 
 func (t *TUI) paintCompletionOverlay(b *strings.Builder, lay layoutSnapshot) {

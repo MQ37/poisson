@@ -42,7 +42,14 @@ func (t *TUI) submit(text string) error {
 	t.scroll.scrollToBottom()
 	t.scroll.append(StyledLine{Style: styleUser, Text: text})
 	t.editor.setText("")
+	t.startTurn(expanded)
+	return nil
+}
 
+// startTurn kicks off an agent turn for an already-displayed prompt. The user
+// message must already be in the scrollback; startTurn only manages the
+// in-flight state and the worker goroutine. Caller must hold t.mu.
+func (t *TUI) startTurn(prompt string) {
 	t.status.Thinking = true
 	t.status.Hint = ""
 	t.markScrollDirty()
@@ -61,19 +68,68 @@ func (t *TUI) submit(text string) error {
 			t.cancelRun = nil
 			t.cancelMu.Unlock()
 			cancel()
-			t.mu.Lock()
-			t.status.Thinking = false
-			t.dirty.markStatus()
-			t.mu.Unlock()
 			if r := recover(); r != nil {
 				t.mu.Lock()
 				t.scroll.appendRaw(styleError, fmt.Sprintf("agent panic: %v", r))
 				t.mu.Unlock()
 			}
+			t.mu.Lock()
+			t.status.Thinking = false
+			t.dirty.markStatus()
+			// Send anything queued during this turn as one combined follow-up.
+			t.drainQueueLocked()
+			t.mu.Unlock()
 		}()
-		_ = t.agent.PromptWithContext(ctx, expanded)
+		_ = t.agent.PromptWithContext(ctx, prompt)
 	}()
-	return nil
+}
+
+// enqueueLocked queues a message typed while a turn is in flight. It shows in
+// the pending-preview area and is sent (with any other queued messages) once
+// the turn finishes. Caller must hold t.mu.
+func (t *TUI) enqueueLocked(text string) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		t.editor.setText("")
+		return
+	}
+	if strings.HasPrefix(trimmed, "/") {
+		t.setEphemeralHintLocked("can't queue a / command while busy", 2*time.Second)
+		return
+	}
+	t.history = append(t.history, text)
+	t.histIdx = -1
+	t.draftSaved = ""
+	t.queued = append(t.queued, text)
+	t.editor.setText("")
+	// Input height grows to show the pending preview, so repaint everything.
+	t.dirty.markFull()
+}
+
+// drainQueueLocked appends every queued message to the conversation and starts
+// one combined follow-up turn. No-op if the queue is empty or a compaction is
+// running. Caller must hold t.mu.
+func (t *TUI) drainQueueLocked() {
+	if len(t.queued) == 0 {
+		return
+	}
+	if t.compacting.Load() {
+		// Can't submit during compaction; keep them queued for the next drain.
+		return
+	}
+	msgs := t.queued
+	t.queued = nil
+	parts := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		expanded, err := expandAtFiles(m)
+		if err != nil {
+			expanded = m
+		}
+		parts = append(parts, expanded)
+		t.scroll.append(StyledLine{Style: styleUser, Text: m})
+	}
+	t.scroll.scrollToBottom()
+	t.startTurn(strings.Join(parts, "\n\n"))
 }
 
 func (t *TUI) handleEvent(ev agent.OutputEvent) {
