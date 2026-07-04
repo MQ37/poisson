@@ -236,6 +236,13 @@ func (a *Agent) chooseSummarizeCount(msgs []store.Message, keepActiveTail bool) 
 		}
 		count = adjustCompactionCount(msgs, count/2)
 	}
+	// The kept tail (msgs[count:]) becomes the request's Messages array — the
+	// summary is a separate system block — so it must begin with a user turn.
+	// Anthropic (and others) reject a leading assistant/tool message. Advance
+	// the boundary to the next user message (or the end, leaving an empty tail).
+	for count < len(msgs) && msgs[count].Role != "user" {
+		count++
+	}
 	if count <= 0 {
 		return 0, ErrNothingToCompact
 	}
