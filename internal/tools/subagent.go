@@ -4,37 +4,42 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"poisson/internal/store"
 	"poisson/internal/subagent"
 )
 
-// SubagentOutput streams subagent events to the parent UI.
-// eventType is text | tool_start | tool_result; toolErr is set for tool_result errors.
-type SubagentOutput func(eventType, text, toolName string, toolInput json.RawMessage, toolErr string)
+// removeDBFiles deletes a SQLite database and its WAL/SHM sidecars.
+func removeDBFiles(path string) {
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(path + suffix)
+	}
+}
 
 // SubagentApproval handles bash approval requests forwarded from the child.
 // risk is the child's assessed level (low/medium/high); empty means unknown.
 type SubagentApproval func(command, description, workdir, agentName, risk string) bool
 
-// SubagentTool spawns a one-shot child Poisson process for isolated work.
+// SubagentTool spawns a one-shot child Poisson process for isolated work. The
+// child's conversation is ephemeral (a throwaway temp DB) and its internal
+// steps never enter the parent's conversation — only the final result is
+// returned to the calling model. The parent UI shows a compact widget derived
+// from the tool_start / tool_result events, not the child's steps.
 type SubagentTool struct {
 	cwd        string
-	store      *store.Store
 	providerFn func() string
 	modelFn    func() string
 	effortFn   func() string
-	outputFn   SubagentOutput
 	approvalFn SubagentApproval
 }
 
 // NewSubagentTool creates a subagent tool.
-func NewSubagentTool(cwd string, st *store.Store, outputFn SubagentOutput, approvalFn SubagentApproval) *SubagentTool {
+func NewSubagentTool(cwd string, approvalFn SubagentApproval) *SubagentTool {
 	return &SubagentTool{
 		cwd:        cwd,
-		store:      st,
-		outputFn:   outputFn,
 		approvalFn: approvalFn,
 	}
 }
@@ -96,15 +101,12 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	if t.effortFn != nil {
 		effort = t.effortFn()
 	}
-	if err := t.store.CreateSession(&store.Session{
-		ID:         childSessionID,
-		Cwd:        t.cwd,
-		Provider:   prov,
-		Model:      model,
-		IsSubagent: true,
-	}); err != nil {
-		return ToolResult{Error: "failed to create subagent session: " + err.Error()}, nil
-	}
+
+	// The child conversation is ephemeral: it lives in a throwaway DB under the
+	// OS temp dir and is deleted when the subagent finishes, so nothing is
+	// persisted to the parent's DB (same policy as /btw).
+	dbPath := filepath.Join(os.TempDir(), "poisson-"+childSessionID+".db")
+	defer removeDBFiles(dbPath)
 
 	child, err := subagent.Spawn(subagent.SpawnInput{
 		Task:      params.Task,
@@ -114,6 +116,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		Provider:  prov,
 		Model:     model,
 		Effort:    effort,
+		DBPath:    dbPath,
 	})
 	if err != nil {
 		return ToolResult{Error: "failed to spawn subagent: " + err.Error()}, nil
@@ -158,23 +161,18 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 				continue
 			}
 
+			// The child's internal steps (text, tool calls, tool results) are
+			// intentionally NOT forwarded to the parent UI: only the final result
+			// is returned to the calling model, and the parent shows a compact
+			// widget. We still accumulate text + count tools for the summary.
 			switch ev.Type {
 			case "text":
 				output.WriteString(ev.Text)
-				if t.outputFn != nil {
-					t.outputFn("text", ev.Text, "", nil, "")
-				}
 
 			case "tool":
-				if t.outputFn != nil {
-					t.outputFn("tool_start", "", ev.Tool, ev.ToolInput, "")
-				}
 				toolCount++
 
 			case "tool_result":
-				if t.outputFn != nil {
-					t.outputFn("tool_result", ev.Result, ev.Tool, nil, ev.Error)
-				}
 
 			case "approval_request":
 				if ctx.Err() != nil {

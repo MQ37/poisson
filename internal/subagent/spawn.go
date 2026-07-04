@@ -24,6 +24,7 @@ type SpawnInput struct {
 	Sandbox    bool
 	ExtraEnv   []string
 	ChildTools []string // tool names available to the child
+	DBPath     string   // ephemeral DB path for the child (empty = parent's DB)
 }
 
 // ChildProcess wraps a spawned Poisson child process.
@@ -90,6 +91,9 @@ func Spawn(input SpawnInput) (*ChildProcess, error) {
 	}
 	if input.Name != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_NAME=%s", input.Name))
+	}
+	if input.DBPath != "" {
+		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_DB=%s", input.DBPath))
 	}
 	if input.Sandbox {
 		env = append(env, "POISSON_SANDBOX=1")

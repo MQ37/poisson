@@ -92,10 +92,26 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		}
 	case agent.OutputToolStart:
 		t.scroll.finalizeThinking()
+		if ev.ToolName == "subagent" {
+			// Subagents render as a compact widget, never a full tool card, and
+			// their internal steps never touch the main conversation.
+			id := t.nextToolID
+			t.nextToolID++
+			name, task := subagentTaskFromInput(ev.ToolInput)
+			if name == "" {
+				name = "subagent"
+			}
+			t.scroll.appendSubagentCard(id, ev.ToolCallID, name, task, modelLabel(t.agent))
+			break
+		}
 		id := t.nextToolID
 		t.nextToolID++
 		t.scroll.appendToolCall(id, ev.ToolCallID, ev.ToolName, ev.ToolInput)
 	case agent.OutputToolResult:
+		if ev.ToolName == "subagent" {
+			t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolError, 0)
+			break
+		}
 		t.scroll.completeToolCall(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
 	case agent.OutputApproval:
 	case agent.OutputError:

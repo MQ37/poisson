@@ -176,6 +176,42 @@ func (e *tuiIntegEnv) blockMeta(i int) *BlockMeta {
 	return &e.tui.scroll.blocks[i].meta
 }
 
+// feedEvent applies a single OutputEvent to the TUI (handle + markAfter),
+// mirroring the TUI's run loop for one event.
+func (e *tuiIntegEnv) feedEvent(ev agent.OutputEvent) {
+	e.tui.mu.Lock()
+	e.tui.handleEvent(ev)
+	e.tui.markAfterEvent(ev)
+	e.tui.mu.Unlock()
+}
+
+// firstBlockOfKind returns the index of the first scrollback block of the
+// given kind, or -1.
+func (e *tuiIntegEnv) firstBlockOfKind(k BlockKind) int {
+	e.tui.mu.Lock()
+	defer e.tui.mu.Unlock()
+	for i := range e.tui.scroll.blocks {
+		if e.tui.scroll.blocks[i].kind == k {
+			return i
+		}
+	}
+	return -1
+}
+
+// renderBlock lays out scrollback block i at a fixed width and returns its
+// plain text (ANSI stripped). Deterministic regardless of terminal size.
+func (e *tuiIntegEnv) renderBlock(i, width int) string {
+	e.tui.mu.Lock()
+	defer e.tui.mu.Unlock()
+	e.tui.scroll.blocks[i].invalidateLayout()
+	rows := e.tui.scroll.blocks[i].layoutPlain(width)
+	var parts []string
+	for _, r := range rows {
+		parts = append(parts, stripANSI(r.Text))
+	}
+	return strings.Join(parts, "\n")
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -564,4 +600,192 @@ func mustJSONTUI(t *testing.T, v interface{}) json.RawMessage {
 		t.Fatalf("mustJSON: %v", err)
 	}
 	return b
+}
+
+// =============================================================================
+// Subagent widget tests
+//
+// The real subagent tool spawns a child process, so these tests drive the
+// TUI at the event level (the agent emits tool_start/tool_result for the
+// "subagent" tool) and verify the compact widget renders, runs with a live
+// timer, and completes — without polluting the main conversation.
+// =============================================================================
+
+// TestTUIInteg_SubagentWidgetShown verifies a subagent tool call renders as a
+// compact widget block (blockSubagent), not a full tool card, and shows the
+// name, task, model, and a running timer.
+func TestTUIInteg_SubagentWidgetShown(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	input := mustJSONTUI(t, map[string]string{
+		"task": "Explore the checkout flow and report findings",
+		"name": "explore",
+	})
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolStart,
+		ToolName:   "subagent",
+		ToolCallID: "call_1",
+		ToolInput:  input,
+	})
+
+	// Exactly one block, and it must be a subagent widget (never a tool card).
+	if e.tui.scroll.blockCount() != 1 {
+		t.Fatalf("expected 1 block, got %d", e.tui.scroll.blockCount())
+	}
+	idx := e.firstBlockOfKind(blockSubagent)
+	if idx != 0 {
+		t.Fatalf("expected a subagent widget at block 0, got kind index %d", idx)
+	}
+	if e.firstBlockOfKind(blockToolCall) != -1 {
+		t.Error("subagent must not create a tool card block")
+	}
+
+	meta := e.blockMeta(0)
+	if meta.ToolName != "explore" {
+		t.Errorf("widget name = %q, want explore", meta.ToolName)
+	}
+	if !strings.Contains(meta.SubagentTask, "Explore the checkout flow") {
+		t.Errorf("widget task = %q", meta.SubagentTask)
+	}
+	if meta.ToolDone {
+		t.Error("widget should be running, not done")
+	}
+	if !strings.Contains(meta.SubagentModel, "test-model") {
+		t.Errorf("widget model = %q, want provider/model label", meta.SubagentModel)
+	}
+
+	// Rendered widget line shows name, task, and a running timer.
+	line := e.renderBlock(0, 100)
+	if !strings.Contains(line, "explore") {
+		t.Errorf("widget missing subagent name: %q", line)
+	}
+	if !strings.Contains(line, "Explore the checkout flow") {
+		t.Errorf("widget missing subagent task: %q", line)
+	}
+	if !strings.Contains(line, "0.0s") {
+		t.Errorf("widget missing running timer: %q", line)
+	}
+	// The full screen still renders it (present in the scrollback region).
+	if !strings.Contains(e.render(), "explore") {
+		t.Error("widget not present in full screen render")
+	}
+}
+
+// TestTUIInteg_SubagentWidgetTimerRuns verifies the widget shows an increasing
+// elapsed time while running (the layout is not frozen by the cache).
+func TestTUIInteg_SubagentWidgetTimerRuns(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolStart,
+		ToolName:   "subagent",
+		ToolCallID: "call_1",
+		ToolInput:  mustJSONTUI(t, map[string]string{"task": "long task", "name": "worker"}),
+	})
+
+	// Backdate the start so the elapsed timer reads a known non-zero value.
+	e.tui.mu.Lock()
+	e.tui.scroll.blocks[0].meta.StartedAt = time.Now().Add(-3200 * time.Millisecond)
+	e.tui.mu.Unlock()
+
+	// Render the widget block at a fixed width (deterministic vs terminal size).
+	line := e.renderBlock(0, 100)
+	if !strings.Contains(line, "3.2s") {
+		t.Errorf("expected live elapsed '3.2s' in widget line: %q", line)
+	}
+	if !strings.Contains(line, "worker") || !strings.Contains(line, "long task") {
+		t.Errorf("widget line missing name/task: %q", line)
+	}
+}
+
+// TestTUIInteg_SubagentWidgetCompletes verifies the widget flips to a done
+// state (✓ + frozen duration) on the subagent tool result.
+func TestTUIInteg_SubagentWidgetCompletes(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolStart,
+		ToolName:   "subagent",
+		ToolCallID: "call_1",
+		ToolInput:  mustJSONTUI(t, map[string]string{"task": "do work", "name": "worker"}),
+	})
+	e.feedEvent(agent.OutputEvent{
+		Type:              agent.OutputToolResult,
+		ToolName:          "subagent",
+		ToolCallID:        "call_1",
+		ToolResultContent: "Subagent finished. 3 tool calls, 1 turns.",
+	})
+
+	meta := e.blockMeta(0)
+	if !meta.ToolDone {
+		t.Fatal("widget should be done after tool result")
+	}
+	if meta.ToolError != "" {
+		t.Errorf("widget should be successful, got error %q", meta.ToolError)
+	}
+
+	line := e.renderBlock(0, 100)
+	if !strings.Contains(line, "✓") {
+		t.Errorf("widget should show ✓ done marker: %q", line)
+	}
+	// The child's internal result text must NOT leak into the main conversation.
+	if strings.Contains(e.scrollText(), "3 tool calls") {
+		t.Errorf("subagent result must not appear in main conversation: %q", e.scrollText())
+	}
+}
+
+// TestTUIInteg_SubagentWidgetFailure verifies a failed subagent renders ✗.
+func TestTUIInteg_SubagentWidgetFailure(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolStart,
+		ToolName:   "subagent",
+		ToolCallID: "call_1",
+		ToolInput:  mustJSONTUI(t, map[string]string{"task": "do work", "name": "worker"}),
+	})
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolResult,
+		ToolName:   "subagent",
+		ToolCallID: "call_1",
+		ToolError:  "subagent crashed",
+	})
+
+	meta := e.blockMeta(0)
+	if !meta.ToolDone || meta.ToolError == "" {
+		t.Fatalf("widget should be done with error, meta=%+v", meta)
+	}
+	line := e.renderBlock(0, 100)
+	if !strings.Contains(line, "✗") {
+		t.Errorf("widget should show ✗ failure marker: %q", line)
+	}
+}
+
+// TestTUIInteg_SubagentDoesNotPolluteConversation verifies that a subagent
+// widget and a normal assistant turn coexist: the widget is a single compact
+// block and regular tools still render as tool cards.
+func TestTUIInteg_SubagentDoesNotPolluteConversation(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+
+	// A regular tool call renders as a tool card.
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolStart,
+		ToolName:   "read",
+		ToolCallID: "call_read",
+		ToolInput:  mustJSONTUI(t, map[string]string{"path": "x.txt"}),
+	})
+	// A subagent call renders as a widget.
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolStart,
+		ToolName:   "subagent",
+		ToolCallID: "call_sub",
+		ToolInput:  mustJSONTUI(t, map[string]string{"task": "deep work", "name": "explore"}),
+	})
+
+	if e.firstBlockOfKind(blockToolCall) == -1 {
+		t.Error("regular tool should render as a tool card")
+	}
+	if e.firstBlockOfKind(blockSubagent) == -1 {
+		t.Error("subagent should render as a widget")
+	}
+	// Two blocks total: one tool card + one subagent widget. No extra child steps.
+	if e.tui.scroll.blockCount() != 2 {
+		t.Fatalf("expected exactly 2 blocks (tool card + widget), got %d", e.tui.scroll.blockCount())
+	}
 }

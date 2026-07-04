@@ -16,7 +16,8 @@ const (
 	blockError
 	blockCompacting
 	blockApproval
-	blockIntro // startup splash; raw may contain inline ANSI
+	blockSubagent // compact subagent lifecycle widget (never a full tool card)
+	blockIntro    // startup splash; raw may contain inline ANSI
 )
 
 // BlockMeta holds optional metadata for rich rendering (tool cards, collapse, etc.).
@@ -24,6 +25,8 @@ type BlockMeta struct {
 	ToolName         string
 	ProviderCallID   string
 	ToolInput        []byte
+	SubagentTask     string // subagent widget: the task prompt (truncated for display)
+	SubagentModel    string // subagent widget: provider/model label
 	ToolResult string
 	ToolError  string
 	ToolDone   bool
@@ -133,7 +136,9 @@ func (b *Block) layoutPlain(width int) []ScreenRow {
 	if width < 1 {
 		width = 1
 	}
-	if b.cacheWidth == width && b.cachedRows != nil {
+	// Running subagent widgets show a live elapsed timer, so their layout must
+	// not be cached — recompute every paint while streaming.
+	if b.cacheWidth == width && b.cachedRows != nil && !(b.kind == blockSubagent && b.meta.Streaming) {
 		return b.cachedRows
 	}
 	var rows []ScreenRow
@@ -145,6 +150,8 @@ func (b *Block) layoutPlain(width int) []ScreenRow {
 		rows = layoutThinking(b, width, 0)
 	case blockToolCall:
 		rows = layoutToolCard(b, width, 0)
+	case blockSubagent:
+		rows = layoutSubagentCard(b, width)
 	case blockIntro:
 		for _, chunk := range wrapANSI(b.raw, width) {
 			rows = append(rows, ScreenRow{Text: chunk + reset, Tag: RowTag{BlockID: b.id, RowIdx: len(rows)}})

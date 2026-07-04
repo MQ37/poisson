@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -41,7 +40,6 @@ func TestBuildRegistry_ParentWithStore(t *testing.T) {
 	reg := BuildRegistry(BuildOptions{
 		Cwd:   dir,
 		Store: st,
-		SubOutput: func(string, string, string, json.RawMessage, string) {},
 		SubApproval: func(string, string, string, string, string) bool {
 			return false
 		},

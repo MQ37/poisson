@@ -120,21 +120,6 @@ func runREPL(noSkills bool) {
 		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
 
-	subOutputFn := func(eventType, text, toolName string, toolInput json.RawMessage, toolErr string) {
-		switch eventType {
-		case "text":
-			outputChan <- agent.OutputEvent{Type: agent.OutputText, Text: text}
-		case "tool_start":
-			outputChan <- agent.OutputEvent{Type: agent.OutputToolStart, ToolName: toolName, ToolInput: toolInput}
-		case "tool_result":
-			outputChan <- agent.OutputEvent{
-				Type:              agent.OutputToolResult,
-				ToolName:          toolName,
-				ToolResultContent: text,
-				ToolError:         toolErr,
-			}
-		}
-	}
 	subApprovalFn := func(command, description, workdir, agentName, risk string) bool {
 		_ = agentName // overlay uses command context; name available for future UI
 		return humanApproval(command, description, workdir, agent.ParseBashRisk(risk))
@@ -144,7 +129,6 @@ func runREPL(noSkills bool) {
 		Cwd:         cwd,
 		Store:       st,
 		ApprovalFn:  approvalFn,
-		SubOutput:   subOutputFn,
 		SubApproval: subApprovalFn,
 	})
 
@@ -366,7 +350,12 @@ func runChildMode() {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
-	dbPath := filepath.Join(config.ConfigDir(), "poisson.db")
+	// Subagents run against an ephemeral DB (POISSON_SUBAGENT_DB) so their
+	// conversation is never persisted to the user's real DB.
+	dbPath := os.Getenv("POISSON_SUBAGENT_DB")
+	if dbPath == "" {
+		dbPath = filepath.Join(config.ConfigDir(), "poisson.db")
+	}
 	st, err := store.Open(dbPath)
 	if err != nil {
 		writeChildEvent(map[string]interface{}{"type": "error", "error": err.Error()})

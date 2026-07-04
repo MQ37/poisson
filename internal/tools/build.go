@@ -15,7 +15,6 @@ type BuildOptions struct {
 	Store       *store.Store
 	Sandbox     bool
 	ApprovalFn  ApprovalFn
-	SubOutput   SubagentOutput
 	SubApproval SubagentApproval
 	// Tools is a comma-separated allowlist for child mode. Empty registers the
 	// full parent tool set.
@@ -79,8 +78,8 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	if opts.Store != nil {
 		reg.Register(NewRecallTool(opts.Store))
 	}
-	if opts.Store != nil && opts.SubOutput != nil && opts.SubApproval != nil {
-		reg.Register(NewSubagentTool(opts.Cwd, opts.Store, opts.SubOutput, opts.SubApproval))
+	if opts.SubApproval != nil {
+		reg.Register(NewSubagentTool(opts.Cwd, opts.SubApproval))
 	}
 	reg.Register(NewExaSearchTool())
 	return reg
