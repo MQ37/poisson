@@ -293,6 +293,10 @@ func cmdLogin(args []string) {
 		}
 		fmt.Println("Logged in to xAI (SuperGrok).")
 
+	case "ollama":
+		fmt.Println("Ollama runs locally and needs no login.")
+		fmt.Println("Just start the Ollama server (default: http://localhost:11434).")
+
 	default:
 		fmt.Printf("unknown provider: %s\n", prov)
 		os.Exit(1)

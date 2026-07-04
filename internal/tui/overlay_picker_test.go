@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"poisson/internal/provider"
+	"poisson/internal/testutil"
 )
 
 func TestPickerOverlayRender(t *testing.T) {
@@ -49,6 +50,36 @@ func TestPickerEffortIncludesMax(t *testing.T) {
 	}
 	if !hasMax {
 		t.Fatalf("expected max in effort picker: %v", items)
+	}
+}
+
+func TestPickerProviderItemsOllamaNoAuth(t *testing.T) {
+	testutil.TempHome(t) // isolate auth store to an empty temp HOME
+	_, a, sessionID := newTestStoreAndAgent(t)
+	items := pickerProviderItems(cmdHost(newTUIWithAgent(a, sessionID)))
+
+	var ollama, anthropic *pickerItem
+	for i := range items {
+		switch items[i].id {
+		case "ollama":
+			ollama = &items[i]
+		case "anthropic":
+			anthropic = &items[i]
+		}
+	}
+	if ollama == nil {
+		t.Fatal("ollama not in provider picker")
+	}
+	// Ollama needs no credentials — it must never show as "not configured".
+	if strings.Contains(ollama.hint, "not configured") {
+		t.Errorf("ollama should not be 'not configured': %q", ollama.hint)
+	}
+	if !strings.Contains(ollama.hint, "no auth needed") {
+		t.Errorf("ollama hint = %q, want 'no auth needed'", ollama.hint)
+	}
+	// A credential-based provider with no auth should still show not configured.
+	if anthropic == nil || !strings.Contains(anthropic.hint, "not configured") {
+		t.Errorf("anthropic (no creds) should be 'not configured', got %v", anthropic)
 	}
 }
 

@@ -53,9 +53,14 @@ func pickerProviderItems(h commandHost) []pickerItem {
 	}
 	var items []pickerItem
 	for _, p := range providers {
-		status := "✗ not configured"
-		if e, ok := store[p.id]; ok && (e.Type == "none" || e.Key != "" || e.Access != "") {
+		var status string
+		if p.id == "ollama" {
+			// Ollama runs locally and needs no credentials.
+			status = "✓ no auth needed"
+		} else if e, ok := store[p.id]; ok && (e.Type == "none" || e.Key != "" || e.Access != "") {
 			status = "✓ configured"
+		} else {
+			status = "✗ not configured"
 		}
 		items = append(items, pickerItem{
 			id:    p.id,
