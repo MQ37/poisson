@@ -319,6 +319,9 @@ func (a *Agent) contextInjectionForFile(cwd, toolName string, input json.RawMess
 	var out strings.Builder
 	a.contextMu.Lock()
 	defer a.contextMu.Unlock()
+	if a.loadedContextDirs == nil {
+		a.loadedContextDirs = map[string]bool{}
+	}
 	for _, d := range dirs {
 		if a.loadedContextDirs[d] {
 			continue
