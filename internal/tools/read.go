@@ -47,7 +47,8 @@ const (
 	maxLines      = 2000
 	maxBytes      = 50 * 1024
 	maxImageBytes = 5 * 1024 * 1024
-	readLineSize  = 64 * 1024
+	readLineSize  = 64 * 1024        // initial per-line scan buffer
+	maxLineSize   = 8 * 1024 * 1024  // max single line before scanning gives up
 )
 
 func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
@@ -72,7 +73,7 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, readLineSize), readLineSize)
+	scanner.Buffer(make([]byte, 0, readLineSize), maxLineSize)
 
 	var b strings.Builder
 	linesWritten := 0
@@ -110,7 +111,13 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		}
 	}
 	if err := scanner.Err(); err != nil && err != io.EOF {
-		return ToolResult{Error: "read error: " + err.Error()}, nil
+		// A single line longer than maxLineSize (e.g. a minified bundle) would
+		// otherwise fail the whole read; return what we have with a note instead.
+		if err == bufio.ErrTooLong {
+			b.WriteString("\n... (a line exceeded the read buffer; output truncated)\n")
+		} else {
+			return ToolResult{Error: "read error: " + err.Error()}, nil
+		}
 	}
 
 	content := b.String()

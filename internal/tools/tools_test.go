@@ -59,6 +59,30 @@ func TestWriteThenRead(t *testing.T) {
 	}
 }
 
+func TestRead_LongSingleLine(t *testing.T) {
+	dir := testutil.TempDir(t)
+	r := NewReadTool(dir)
+	// A single line larger than the initial scan buffer (64KB) but under the
+	// giving-up cap — e.g. a minified bundle. Must not hard-fail.
+	line := strings.Repeat("x", 200*1024)
+	if err := os.WriteFile(filepath.Join(dir, "min.js"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "min.js"}))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("long line should not error, got: %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "x") {
+		t.Errorf("expected file content, got %q", res.Content)
+	}
+	if len(res.Content) > maxBytes+1024 {
+		t.Errorf("content %d bytes exceeds cap", len(res.Content))
+	}
+}
+
 func TestRead_ImageBase64(t *testing.T) {
 	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "pixel.png")
