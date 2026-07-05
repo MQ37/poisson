@@ -33,6 +33,29 @@ func TestParseSkillNoFrontmatter(t *testing.T) {
 	}
 }
 
+func TestParseSkillFoldedBlockScalar(t *testing.T) {
+	content := "---\nname: notion-cli\ndescription: >-\n  Use the Notion CLI to interact with the API,\n  manage workers, and upload files.\n---\n\n# Body"
+	s := parseSkill(content)
+	want := "Use the Notion CLI to interact with the API, manage workers, and upload files."
+	if s.Description != want {
+		t.Errorf("description = %q, want %q", s.Description, want)
+	}
+	if s.Body != "# Body" {
+		t.Errorf("body = %q, want %q", s.Body, "# Body")
+	}
+}
+
+func TestParseSkillLiteralBlockScalar(t *testing.T) {
+	content := "---\ndescription: |\n  line one\n  line two\nname: x\n---\nBody"
+	s := parseSkill(content)
+	if s.Description != "line one\nline two" {
+		t.Errorf("description = %q, want %q", s.Description, "line one\nline two")
+	}
+	if s.Name != "x" {
+		t.Errorf("name = %q, want x (sibling key after block)", s.Name)
+	}
+}
+
 func TestParseSkillQuotedValues(t *testing.T) {
 	content := "---\ndescription: 'A quoted skill'\n---\nBody here."
 	s := parseSkill(content)
