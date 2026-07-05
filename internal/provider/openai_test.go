@@ -91,6 +91,25 @@ func TestBuildRequestResponsesFormat(t *testing.T) {
 	}
 }
 
+func TestBuildRequestPromptCacheKey(t *testing.T) {
+	p := &OpenAIProvider{}
+	// A normal session id is emitted verbatim as prompt_cache_key.
+	body := p.buildRequest(&Request{Model: "gpt-5.5", CacheKey: "sess-abc123"})
+	if body.PromptCacheKey != "sess-abc123" {
+		t.Errorf("prompt_cache_key = %q, want sess-abc123", body.PromptCacheKey)
+	}
+	// Over-long keys are clamped to 64 runes (Responses API limit).
+	long := strings.Repeat("x", 100)
+	if got := p.buildRequest(&Request{Model: "gpt-5.5", CacheKey: long}).PromptCacheKey; len([]rune(got)) != 64 {
+		t.Errorf("clamped key len = %d, want 64", len([]rune(got)))
+	}
+	// Empty key is omitted from the JSON body.
+	blob, _ := json.Marshal(p.buildRequest(&Request{Model: "gpt-5.5"}))
+	if strings.Contains(string(blob), "prompt_cache_key") {
+		t.Errorf("empty cache key must be omitted, got: %s", blob)
+	}
+}
+
 const cannedResponsesSSE = `event: response.output_item.added
 data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"bash","arguments":""}}
 

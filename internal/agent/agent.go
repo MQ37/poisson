@@ -807,6 +807,7 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 		Messages: providerMsgs,
 		Tools:    toolDefs,
 		Effort:   a.effort,
+		CacheKey: a.sessionID, // stable per conversation → OpenAI prompt caching
 	}, nil
 }
 

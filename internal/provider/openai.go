@@ -142,6 +142,19 @@ type openaiRespRequest struct {
 	ToolChoice        string           `json:"tool_choice,omitempty"`
 	ParallelToolCalls bool             `json:"parallel_tool_calls"`
 	Reasoning         *openaiReasoning `json:"reasoning,omitempty"`
+	PromptCacheKey    string           `json:"prompt_cache_key,omitempty"`
+}
+
+// openaiPromptCacheKeyMax is the Responses API limit for prompt_cache_key.
+const openaiPromptCacheKeyMax = 64
+
+// clampPromptCacheKey caps the key at 64 runes (Responses API limit).
+func clampPromptCacheKey(key string) string {
+	r := []rune(key)
+	if len(r) <= openaiPromptCacheKeyMax {
+		return key
+	}
+	return string(r[:openaiPromptCacheKeyMax])
 }
 
 type openaiReasoning struct {
@@ -194,6 +207,12 @@ func (p *OpenAIProvider) buildRequest(req *Request) openaiRespRequest {
 		Instructions:      strings.Join(sys, "\n\n"),
 		ToolChoice:        "auto",
 		ParallelToolCalls: true,
+		// prompt_cache_key routes repeated turns to the same prompt cache so the
+		// large stable prefix (instructions + tools + conversation) is served
+		// from cache instead of re-billed in full every turn. Codex forces
+		// store:false, so full context is resent each turn — caching is the only
+		// lever to cut the tokens counted against the usage limit.
+		PromptCacheKey: clampPromptCacheKey(req.CacheKey),
 	}
 	if effort := mapOpenAIEffort(req.Effort); effort != "" {
 		body.Reasoning = &openaiReasoning{Effort: effort, Summary: "auto"}

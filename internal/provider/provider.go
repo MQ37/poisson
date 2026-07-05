@@ -52,6 +52,7 @@ type Request struct {
 	MaxTokens   int      // 0 = provider default
 	Temperature *float64 // nil = provider default
 	Effort      string   // thinking effort: "" | "low" | "medium" | "high" | "xhigh" | "max"
+	CacheKey    string   // OpenAI prompt_cache_key (session-scoped); other providers ignore it
 }
 
 // SystemBlock is one block of system-prompt text. CacheCtl is an
