@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,121 @@ import (
 	"poisson/internal/testutil"
 	"poisson/internal/tools"
 )
+
+// barrierTool is a test tool whose Execute is fully controllable, used to prove
+// the agent runs a turn's tool calls concurrently.
+type barrierTool struct {
+	name string
+	run  func(ctx context.Context) (tools.ToolResult, error)
+}
+
+func (b barrierTool) Name() string                { return b.name }
+func (b barrierTool) Description() string          { return b.name }
+func (b barrierTool) Schema() json.RawMessage      { return json.RawMessage(`{"type":"object"}`) }
+func (b barrierTool) Execute(ctx context.Context, _ json.RawMessage) (tools.ToolResult, error) {
+	return b.run(ctx)
+}
+
+// twoToolTurn builds a turn with two tool_use blocks (call_1→first, call_2→
+// second) followed by a final-text turn.
+func twoToolTurn(first, second, finalText string) [][]provider.StreamEvent {
+	arg := json.RawMessage(`{}`)
+	return [][]provider.StreamEvent{
+		{
+			{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_1", Name: first, Input: arg}},
+			{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_1", Name: first, Input: arg}},
+			{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_2", Name: second, Input: arg}},
+			{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_2", Name: second, Input: arg}},
+			{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+		},
+		provider.FakeTextResponse(finalText, nil),
+	}
+}
+
+// TestInteg_ParallelToolsRunConcurrently proves a turn's tool calls execute
+// concurrently (not serially) and that tool_result messages are persisted in
+// tool_use order even when the later tool finishes first.
+//
+// Each tool signals it has started and then waits for the other's start
+// signal, so both must be in flight at once to proceed — serial execution
+// would deadlock (caught by the ctx timeout + the maxInFlight assertion).
+// "first" sleeps briefly after the rendezvous so it finishes last; the
+// ordering assertion then proves results are re-ordered by tool_use index,
+// not completion time.
+func TestInteg_ParallelToolsRunConcurrently(t *testing.T) {
+	st := newTestStore(t)
+	sid := "itest-parallel"
+	if err := st.CreateSession(&store.Session{ID: sid, Cwd: testutil.TempDir(t), Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	prov := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	prov.SetResponses(twoToolTurn("first", "second", "done"))
+
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	var inFlight, maxInFlight int32
+	track := func() func() {
+		n := atomic.AddInt32(&inFlight, 1)
+		for {
+			m := atomic.LoadInt32(&maxInFlight)
+			if n <= m || atomic.CompareAndSwapInt32(&maxInFlight, m, n) {
+				break
+			}
+		}
+		return func() { atomic.AddInt32(&inFlight, -1) }
+	}
+
+	reg := tools.NewRegistry()
+	reg.Register(barrierTool{name: "first", run: func(ctx context.Context) (tools.ToolResult, error) {
+		defer track()()
+		close(firstStarted)
+		select {
+		case <-secondStarted: // serial execution would deadlock here
+		case <-ctx.Done():
+			return tools.ToolResult{}, ctx.Err()
+		}
+		time.Sleep(20 * time.Millisecond) // finish after second → exercises index re-ordering
+		return tools.ToolResult{Content: "FIRST_DONE"}, nil
+	}})
+	reg.Register(barrierTool{name: "second", run: func(ctx context.Context) (tools.ToolResult, error) {
+		defer track()()
+		close(secondStarted)
+		select {
+		case <-firstStarted:
+		case <-ctx.Done():
+			return tools.ToolResult{}, ctx.Err()
+		}
+		return tools.ToolResult{Content: "SECOND_DONE"}, nil
+	}})
+
+	cfg := config.DefaultConfig()
+	cfg.Provider.Default = "fake"
+	a := NewAgent(st, prov, reg, cfg, sid, make(chan OutputEvent, 256), nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.PromptWithContext(ctx, "run both"); err != nil {
+		t.Fatalf("PromptWithContext: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&maxInFlight); got < 2 {
+		t.Errorf("max concurrent tool executions = %d, want 2 (ran serially?)", got)
+	}
+
+	msgs, _ := st.GetMessages(sid)
+	// user, assistant(tool_use x2), tool_result(first), tool_result(second), assistant(text)
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(msgs))
+	}
+	if msgs[2].Role != "tool" || !strings.Contains(msgs[2].Content, "FIRST_DONE") {
+		t.Errorf("msg[2] should be first's result in tool_use order, got %q", msgs[2].Content)
+	}
+	if msgs[3].Role != "tool" || !strings.Contains(msgs[3].Content, "SECOND_DONE") {
+		t.Errorf("msg[3] should be second's result, got %q", msgs[3].Content)
+	}
+}
 
 // =============================================================================
 // Integration test framework
