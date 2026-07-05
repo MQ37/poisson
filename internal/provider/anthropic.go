@@ -175,9 +175,16 @@ type anthropicContentBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`   // for tool_result
 	IsError   bool            `json:"is_error,omitempty"`  // for tool_result
-	Thinking  string          `json:"thinking,omitempty"`  // for thinking
-	Signature string          `json:"signature,omitempty"` // for thinking
-	Data      string          `json:"data,omitempty"`      // for redacted_thinking
+	Thinking  string                `json:"thinking,omitempty"`  // for thinking
+	Signature string                `json:"signature,omitempty"` // for thinking
+	Data      string                `json:"data,omitempty"`      // for redacted_thinking
+	Source    *anthropicImageSource `json:"source,omitempty"`    // for image
+}
+
+type anthropicImageSource struct {
+	Type      string `json:"type"`       // "base64"
+	MediaType string `json:"media_type"` // "image/png"
+	Data      string `json:"data"`       // base64-encoded bytes
 }
 
 type anthropicSystem struct {
@@ -296,6 +303,13 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 				am.Content = append(am.Content, anthropicContentBlock{
 					Type: "text", Text: cb.Text,
 				})
+			case "image":
+				if data, mt, ok := imageBlockBase64(cb); ok {
+					am.Content = append(am.Content, anthropicContentBlock{
+						Type:   "image",
+						Source: &anthropicImageSource{Type: "base64", MediaType: mt, Data: data},
+					})
+				}
 			case "tool_use":
 				am.Content = append(am.Content, anthropicContentBlock{
 					Type: "tool_use", ID: cb.ToolCallID, Name: cb.ToolName, Input: cb.ToolInput,

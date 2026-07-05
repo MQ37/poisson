@@ -11,6 +11,7 @@ type ModelSettings struct {
 	ContextWindow  int
 	SupportsEffort bool
 	EffortLevels   []string // e.g. ["low", "medium", "high", "xhigh", "max"]
+	Vision         bool     // accepts image input
 }
 
 // KnownModels is a registry of model metadata indexed by provider/model ID.
@@ -20,11 +21,13 @@ var KnownModels = map[string]ModelSettings{
 		ContextWindow:  1000000,
 		SupportsEffort: true,
 		EffortLevels:   []string{"low", "medium", "high", "xhigh", "max"},
+		Vision:         true,
 	},
 	// xAI — only grok-build
 	"xai/grok-build": {
 		ContextWindow:  256000,
 		SupportsEffort: false,
+		Vision:         true,
 	},
 	// Ollama — glm-5.2:cloud, minimax-m3:cloud, kimi-k2.7-code:cloud.
 	"ollama/glm-5.2:cloud": {
@@ -38,6 +41,7 @@ var KnownModels = map[string]ModelSettings{
 	"ollama/minimax-m3:cloud": {
 		ContextWindow:  512000,
 		SupportsEffort: false,
+		Vision:         true,
 	},
 	// kimi-k2.7-code:cloud — 256K context, Moonshot coding/agentic model.
 	// Always operates in thinking mode (can't be disabled) and exposes no
@@ -45,6 +49,7 @@ var KnownModels = map[string]ModelSettings{
 	"ollama/kimi-k2.7-code:cloud": {
 		ContextWindow:  256000,
 		SupportsEffort: false,
+		Vision:         true,
 	},
 }
 

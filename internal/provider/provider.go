@@ -86,6 +86,12 @@ type ContentBlock struct {
 	ToolResult  string // tool_result
 	ToolIsError bool   `json:"tool_is_error,omitempty"` // tool_result: Poisson error flag
 
+	// Image blocks (Type == "image"). MediaType is e.g. "image/png"; ImagePath
+	// points at the (downscaled) file on disk. Providers read + encode it when
+	// building a request — the bytes are never stored in the block itself.
+	MediaType string
+	ImagePath string
+
 	// Anthropic extended-thinking fields (Type == "thinking"). Thinking holds
 	// the reasoning text; ThinkingSignature is the opaque signature that must
 	// be replayed verbatim; Redacted marks a redacted_thinking block whose

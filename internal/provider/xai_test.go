@@ -309,7 +309,7 @@ func TestXAIBuildRequestContentField(t *testing.T) {
 	if asst == nil {
 		t.Fatal("no assistant message")
 	}
-	if asst.Content == nil || *asst.Content != "" {
+	if s, ok := asst.Content.(string); !ok || s != "" {
 		t.Errorf("assistant content should be empty string, got %v", asst.Content)
 	}
 	if len(asst.ToolCalls) != 1 {

@@ -59,7 +59,7 @@ type ollamaStreamOptions struct {
 
 type ollamaOpenAIMessage struct {
 	Role       string                 `json:"role"`
-	Content    *string                `json:"content"`
+	Content    any                    `json:"content"` // string or []oaiContentPart (multimodal)
 	ToolCalls  []ollamaOpenAIToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string                 `json:"tool_call_id,omitempty"`
 }
@@ -101,8 +101,6 @@ type ollamaTagDetails struct {
 	ContextLength int `json:"context_length"`
 }
 
-func ollamaStrPtr(s string) *string { return &s }
-func ollamaEmptyStrPtr() *string    { v := ""; return &v }
 
 func mapOllamaReasoningEffort(effort string) string {
 	switch effort {
@@ -194,7 +192,7 @@ func (p *OllamaProvider) buildOllamaRequest(req *Request) ollamaChatRequest {
 	for _, b := range req.System {
 		out.Messages = append(out.Messages, ollamaOpenAIMessage{
 			Role:    "system",
-			Content: ollamaStrPtr(b.Text),
+			Content: b.Text,
 		})
 	}
 
@@ -206,7 +204,7 @@ func (p *OllamaProvider) buildOllamaRequest(req *Request) ollamaChatRequest {
 				}
 				out.Messages = append(out.Messages, ollamaOpenAIMessage{
 					Role:       "tool",
-					Content:    ollamaStrPtr(cb.ToolResult),
+					Content:    cb.ToolResult,
 					ToolCallID: cb.ToolCallID,
 				})
 			}
@@ -215,10 +213,13 @@ func (p *OllamaProvider) buildOllamaRequest(req *Request) ollamaChatRequest {
 
 		var textParts []string
 		var toolCalls []ollamaOpenAIToolCall
+		var images []ContentBlock
 		for _, cb := range m.Content {
 			switch cb.Type {
 			case "text":
 				textParts = append(textParts, cb.Text)
+			case "image":
+				images = append(images, cb)
 			case "tool_use":
 				toolCalls = append(toolCalls, ollamaOpenAIToolCall{
 					ID:   cb.ToolCallID,
@@ -232,10 +233,13 @@ func (p *OllamaProvider) buildOllamaRequest(req *Request) ollamaChatRequest {
 		}
 
 		om := ollamaOpenAIMessage{Role: m.Role}
-		if len(textParts) > 0 {
-			om.Content = ollamaStrPtr(strings.Join(textParts, "\n"))
+		text := strings.Join(textParts, "\n")
+		if len(images) > 0 {
+			om.Content = openAIUserContent(text, images)
+		} else if len(textParts) > 0 {
+			om.Content = text
 		} else if m.Role == "assistant" || m.Role == "user" {
-			om.Content = ollamaEmptyStrPtr()
+			om.Content = ""
 		}
 		if len(toolCalls) > 0 {
 			om.ToolCalls = toolCalls

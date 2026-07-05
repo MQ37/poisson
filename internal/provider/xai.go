@@ -142,7 +142,7 @@ type xaiStreamOptions struct {
 
 type xaiMessage struct {
 	Role       string        `json:"role"`
-	Content    *string       `json:"content"`
+	Content    any           `json:"content"` // string or []oaiContentPart (multimodal)
 	ToolCalls  []xaiToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
 }
@@ -169,9 +169,6 @@ type xaiToolDef struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
-// strPtr returns a pointer to the given string (nil-safe helper).
-func strPtr(s string) *string { return &s }
-func emptyStrPtr() *string    { v := ""; return &v }
 
 // buildRequest converts a Poisson Request to the xAI OpenAI-compatible format.
 // Every message MUST have a content field (even if empty) or xAI returns 422.
@@ -192,7 +189,7 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 	for _, sb := range req.System {
 		ar.Messages = append(ar.Messages, xaiMessage{
 			Role:    "system",
-			Content: strPtr(sb.Text),
+			Content: sb.Text,
 		})
 	}
 
@@ -205,7 +202,7 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 				}
 				ar.Messages = append(ar.Messages, xaiMessage{
 					Role:       "tool",
-					Content:    strPtr(cb.ToolResult),
+					Content:    cb.ToolResult,
 					ToolCallID: cb.ToolCallID,
 				})
 			}
@@ -214,11 +211,14 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 
 		var textParts []string
 		var toolCalls []xaiToolCall
+		var images []ContentBlock
 
 		for _, cb := range msg.Content {
 			switch cb.Type {
 			case "text":
 				textParts = append(textParts, cb.Text)
+			case "image":
+				images = append(images, cb)
 			case "tool_use":
 				toolCalls = append(toolCalls, xaiToolCall{
 					ID:   cb.ToolCallID,
@@ -233,12 +233,13 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 
 		// Build the message — content must always be set (not nil).
 		xm := xaiMessage{Role: msg.Role}
-		if len(textParts) > 0 {
-			xm.Content = strPtr(strings.Join(textParts, "\n"))
-		} else if msg.Role == "assistant" {
-			xm.Content = emptyStrPtr() // assistant with only tool calls still needs content: ""
+		text := strings.Join(textParts, "\n")
+		if len(images) > 0 {
+			xm.Content = openAIUserContent(text, images)
+		} else if len(textParts) > 0 {
+			xm.Content = text
 		} else {
-			xm.Content = emptyStrPtr()
+			xm.Content = "" // content must always be set (not nil), even for tool-only turns
 		}
 		if len(toolCalls) > 0 {
 			xm.ToolCalls = toolCalls

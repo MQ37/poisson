@@ -803,6 +803,8 @@ type contentBlockJSON struct {
 	Thinking          string          `json:"thinking,omitempty"`
 	ThinkingSignature string          `json:"thinking_signature,omitempty"`
 	Redacted          bool            `json:"redacted,omitempty"`
+	MediaType         string          `json:"media_type,omitempty"`
+	ImagePath         string          `json:"image_path,omitempty"`
 }
 
 // contentBlocksToJSON serializes a slice of ContentBlocks into a JSON string
@@ -824,6 +826,8 @@ func contentBlocksToJSON(blocks []provider.ContentBlock) (string, error) {
 			Thinking:          b.Thinking,
 			ThinkingSignature: b.ThinkingSignature,
 			Redacted:          b.Redacted,
+			MediaType:         b.MediaType,
+			ImagePath:         b.ImagePath,
 		}
 	}
 	data, err := json.Marshal(out)
@@ -857,6 +861,8 @@ func messageToProvider(msg store.Message) (provider.Message, error) {
 			Thinking:          b.Thinking,
 			ThinkingSignature: b.ThinkingSignature,
 			Redacted:          b.Redacted,
+			MediaType:         b.MediaType,
+			ImagePath:         b.ImagePath,
 		}
 	}
 	return provider.Message{

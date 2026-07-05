@@ -177,7 +177,7 @@ func TestOllamaBuildRequestUsesOpenAIEndpointFields(t *testing.T) {
 	if body.ReasoningEffort != "high" {
 		t.Fatalf("reasoning_effort = %q, want high", body.ReasoningEffort)
 	}
-	if len(body.Messages) != 1 || body.Messages[0].Content == nil || *body.Messages[0].Content != "hi" {
+	if len(body.Messages) != 1 || body.Messages[0].Content != "hi" {
 		t.Fatalf("messages = %+v", body.Messages)
 	}
 }
