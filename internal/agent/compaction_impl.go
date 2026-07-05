@@ -104,6 +104,13 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		if err != nil {
 			return fmt.Errorf("convert message %s: %w", m.ID, err)
 		}
+		// Never feed image bytes to the summarizer (huge, and it can't use them);
+		// replace image blocks with a text placeholder.
+		for i := range pm.Content {
+			if pm.Content[i].Type == "image" {
+				pm.Content[i] = provider.ContentBlock{Type: "text", Text: "[image]"}
+			}
+		}
 		summarizationMsgs = append(summarizationMsgs, pm)
 	}
 

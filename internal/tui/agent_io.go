@@ -14,7 +14,7 @@ import (
 
 func (t *TUI) submit(text string) error {
 	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
+	if trimmed == "" && len(t.pendingAttachments) == 0 {
 		t.editor.setText("")
 		return nil
 	}
@@ -30,26 +30,43 @@ func (t *TUI) submit(text string) error {
 		t.draftSaved = ""
 		return t.handleSlash(trimmed)
 	}
-	expanded, err := expandAtFiles(text)
+	// Stage @image.png refs as attachments (stripped from the text); text files
+	// stay inline via expandAtFiles.
+	cleaned, err := t.attachImageRefs(text)
 	if err != nil {
 		t.appendErrorLocked(err)
 		t.editor.setText("")
+		t.clearAttachments()
 		return nil
 	}
-	t.history = append(t.history, text)
+	expanded, err := expandAtFiles(cleaned)
+	if err != nil {
+		t.appendErrorLocked(err)
+		t.editor.setText("")
+		t.clearAttachments()
+		return nil
+	}
+	if text != "" {
+		t.history = append(t.history, text)
+	}
 	t.histIdx = -1
 	t.draftSaved = ""
 	t.scroll.scrollToBottom()
-	t.scroll.append(StyledLine{Style: styleUser, Text: text})
+	display := text
+	if strings.TrimSpace(display) == "" {
+		display = "🖼 (image)"
+	}
+	t.scroll.append(StyledLine{Style: styleUser, Text: display})
 	t.editor.setText("")
-	t.startTurn(expanded)
+	images := t.takeAttachmentsForSend()
+	t.startTurn(expanded, images...)
 	return nil
 }
 
 // startTurn kicks off an agent turn for an already-displayed prompt. The user
 // message must already be in the scrollback; startTurn only manages the
 // in-flight state and the worker goroutine. Caller must hold t.mu.
-func (t *TUI) startTurn(prompt string) {
+func (t *TUI) startTurn(prompt string, images ...agent.ImageAttachment) {
 	t.status.Thinking = true
 	t.status.Hint = ""
 	t.markScrollDirty()
@@ -80,7 +97,7 @@ func (t *TUI) startTurn(prompt string) {
 			t.drainQueueLocked()
 			t.mu.Unlock()
 		}()
-		_ = t.agent.PromptWithContext(ctx, prompt)
+		_ = t.agent.PromptWithContext(ctx, prompt, images...)
 	}()
 }
 

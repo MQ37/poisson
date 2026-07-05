@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"strings"
 	"time"
 
 	"poisson/internal/provider"
@@ -51,9 +52,16 @@ func (a *Agent) estimateMessagesTokens() int {
 	}
 	for _, m := range msgs {
 		total += a.EstimateTokens(m.Content)
+		// The stored content only holds each image's path (a few bytes), but the
+		// downscaled image itself costs vision tokens; account for it flatly.
+		total += strings.Count(m.Content, `"type":"image"`) * imageTokenEstimate
 	}
 	return total
 }
+
+// imageTokenEstimate is the rough vision-token cost of one downscaled
+// (<=1024px) image; used only for the status-bar context estimate.
+const imageTokenEstimate = 800
 
 // ShouldCompact returns true if estimated context exceeds the threshold.
 func (a *Agent) ShouldCompact() bool {

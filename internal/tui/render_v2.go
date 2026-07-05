@@ -14,6 +14,7 @@ type layoutSnapshot struct {
 	wrapWidth   int
 	scrollStart int // 1-based terminal row of first scroll line
 	inputTop    int
+	attachRows  int // image-chip rows, between separator and queued preview
 	queuedRows  int // pending-message preview rows, between separator and body
 	bodyRows    int
 	bodyStart   int
@@ -41,14 +42,16 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 	scrollStart := t.headerRows + 1
 	inputTop := t.headerRows + t.scrollRows + 1
 	queuedRows := 0
+	attachRows := 0
 	if !t.approving.Load() {
 		queuedRows = t.queuedPreviewRows()
+		attachRows = t.attachmentRows()
 	}
-	bodyRows := t.inputRows - 2 - queuedRows
+	bodyRows := t.inputRows - 2 - queuedRows - attachRows
 	if bodyRows < 1 {
 		bodyRows = 1
 	}
-	bodyStart := inputTop + 1 + queuedRows
+	bodyStart := inputTop + 1 + attachRows + queuedRows
 	screenLines := wrapLines(t.editor.lines, wrapWidth)
 	sr, sc := screenCursor(t.editor, wrapWidth)
 	firstRow := 0
@@ -59,6 +62,7 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 		wrapWidth:     wrapWidth,
 		scrollStart:   scrollStart,
 		inputTop:      inputTop,
+		attachRows:    attachRows,
 		queuedRows:    queuedRows,
 		bodyRows:      bodyRows,
 		bodyStart:     bodyStart,
@@ -207,8 +211,14 @@ func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 	}
 	b.WriteString(sep)
 
+	if lay.attachRows > 0 {
+		b.WriteString(cup(lay.inputTop+1, 1))
+		b.WriteString(clearLine())
+		b.WriteString(truncateToWidth(t.renderAttachmentRow(lay.wrapWidth), lay.wrapWidth))
+	}
+
 	for i := 0; i < lay.queuedRows; i++ {
-		b.WriteString(cup(lay.inputTop+1+i, 1))
+		b.WriteString(cup(lay.inputTop+1+lay.attachRows+i, 1))
 		b.WriteString(clearLine())
 		b.WriteString(truncateToWidth(t.renderQueuedRow(i, lay.wrapWidth), lay.wrapWidth))
 	}

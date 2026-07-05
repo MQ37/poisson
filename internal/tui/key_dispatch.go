@@ -173,10 +173,11 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 
 	if k.isCtrlC() {
-		if t.editor.text() != "" {
+		if t.editor.text() != "" || len(t.pendingAttachments) > 0 {
 			t.editor.setText("")
+			t.clearAttachments()
 			t.completion = nil
-			t.markInputDirty()
+			t.dirty.markFull()
 		} else {
 			now := time.Now()
 			if !t.lastCtrlC.IsZero() && now.Sub(t.lastCtrlC) <= 2*time.Second {
@@ -249,6 +250,9 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		case 14:
 			t.navigateHistory(1)
 			t.markInputDirty()
+			return false, nil
+		case 22: // Ctrl+V — attach an image from the clipboard
+			t.grabClipboardImageLocked()
 			return false, nil
 		}
 	}

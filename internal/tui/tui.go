@@ -98,6 +98,13 @@ type TUI struct {
 	// Cleared on cancel. Guarded by t.mu.
 	queued []string
 
+	// pendingAttachments are images staged via Ctrl+V or @file, sent with the
+	// next user message and shown as chips above the input. Guarded by t.mu.
+	pendingAttachments []attachment
+	// grabImage reads an image from the system clipboard; overridable in tests
+	// so they never spawn wl-paste/xclip. nil means use the real reader.
+	grabImage func() ([]byte, error)
+
 	// Submission signaling.
 	lastCtrlC        time.Time
 	turnCancelled    bool // set when user cancels an in-flight turn; cleared on OutputDone
@@ -165,6 +172,7 @@ func newTUI(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent)
 		lastInputRows:  3,
 		done:           make(chan struct{}),
 		approvalAnswer: make(chan bool, 1),
+		grabImage:      grabClipboardImage,
 	}
 }
 
@@ -193,9 +201,9 @@ func (t *TUI) inputHeight(width int) int {
 		}
 		return n
 	}
-	q := t.queuedPreviewRows()
+	q := t.queuedPreviewRows() + t.attachmentRows()
 	visual := totalVisualLines(t.editor, width)
-	n := visual + 2 + q // +1 separator, +1 hint (header row reclaimed), +queued preview
+	n := visual + 2 + q // +1 separator, +1 hint (header row reclaimed), +previews
 	if visual > 1 && n < 5+q {
 		n = 5 + q // show multiple wrapped rows (3 body lines + chrome)
 	}

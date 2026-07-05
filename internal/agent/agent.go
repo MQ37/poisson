@@ -431,23 +431,43 @@ func (a *Agent) EnsureSession() error {
 	})
 }
 
+// ImageAttachment is an already-processed image (downscaled, on disk) to send
+// with a user message.
+type ImageAttachment struct {
+	Path      string
+	MediaType string
+}
+
 // Prompt appends the user message to the store and runs the turn loop.
 func (a *Agent) Prompt(userInput string) error {
 	return a.PromptWithContext(context.Background(), userInput)
 }
 
-// PromptWithContext is Prompt with cancellation support.
-func (a *Agent) PromptWithContext(ctx context.Context, userInput string) error {
+// PromptWithContext is Prompt with cancellation support. Any images are sent as
+// image content blocks alongside the text in the user message.
+func (a *Agent) PromptWithContext(ctx context.Context, userInput string, images ...ImageAttachment) error {
 	if err := a.EnsureSession(); err != nil {
 		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Session error: %v", err)})
 		a.sendEvent(OutputEvent{Type: OutputDone})
 		return fmt.Errorf("ensure session: %w", err)
 	}
 
-	// INGEST: append user message.
-	content, err := contentBlocksToJSON([]provider.ContentBlock{
-		{Type: "text", Text: userInput},
-	})
+	// INGEST: append user message (images first, then the text).
+	var blocks []provider.ContentBlock
+	for _, im := range images {
+		if im.Path == "" {
+			continue
+		}
+		mt := im.MediaType
+		if mt == "" {
+			mt = "image/png"
+		}
+		blocks = append(blocks, provider.ContentBlock{Type: "image", MediaType: mt, ImagePath: im.Path})
+	}
+	if userInput != "" || len(blocks) == 0 {
+		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: userInput})
+	}
+	content, err := contentBlocksToJSON(blocks)
 	if err != nil {
 		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})
 		a.sendEvent(OutputEvent{Type: OutputDone})
