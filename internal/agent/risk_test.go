@@ -2,12 +2,64 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"poisson/internal/config"
 	"poisson/internal/provider"
+	"poisson/internal/store"
 )
+
+// TestAssessBashRiskUsesIsolatedContext guards that the bash-risk classifier
+// call never carries the conversation: even with a populated session history,
+// the request must be a single synthetic user message + the fixed classifier
+// system prompt, with none of the prior conversation leaking in.
+func TestAssessBashRiskUsesIsolatedContext(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("medium", nil),
+		provider.FakeTextResponse("medium", nil),
+	})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	const marker = "SECRET_CONVERSATION_MARKER_9137"
+	for _, m := range []*store.Message{
+		{SessionID: sid, Role: "user", Content: `[{"type":"text","text":"` + marker + ` please help"}]`},
+		{SessionID: sid, Role: "assistant", Content: `[{"type":"text","text":"sure, ` + marker + `"}]`},
+	} {
+		if err := s.AppendMessage(m); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	a.AssessBashRisk(ctx, "git commit -am wip", "commit work", "/tmp")
+
+	req := fp.LastRequest()
+	if req == nil {
+		t.Fatal("no risk request captured")
+	}
+	if len(req.Messages) != 1 || req.Messages[0].Role != "user" {
+		t.Fatalf("risk request must be exactly one user message, got %d: %+v", len(req.Messages), req.Messages)
+	}
+	if len(req.System) != 1 || !strings.Contains(req.System[0].Text, "classify bash command risk") {
+		t.Fatalf("risk request system must be the classifier prompt only, got %+v", req.System)
+	}
+	userText := req.Messages[0].Content[0].Text
+	if !strings.Contains(userText, "git commit -am wip") {
+		t.Errorf("risk prompt should contain the command, got %q", userText)
+	}
+	// The conversation must not appear anywhere in the request.
+	if strings.Contains(userText, marker) || strings.Contains(req.System[0].Text, marker) {
+		t.Error("conversation history leaked into the bash-risk request")
+	}
+}
 
 func TestParseBashRisk(t *testing.T) {
 	cases := []struct {
