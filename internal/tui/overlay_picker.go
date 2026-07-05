@@ -50,6 +50,7 @@ func pickerProviderItems(h commandHost) []pickerItem {
 		{"anthropic", "Claude API/OAuth"},
 		{"ollama", "local models"},
 		{"xai", "Grok OAuth"},
+		{"openai", "GPT ChatGPT subscription"},
 	}
 	var items []pickerItem
 	for _, p := range providers {

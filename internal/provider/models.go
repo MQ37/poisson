@@ -23,6 +23,14 @@ var KnownModels = map[string]ModelSettings{
 		EffortLevels:   []string{"low", "medium", "high", "xhigh", "max"},
 		Vision:         true,
 	},
+	// OpenAI — gpt-5.5 via the ChatGPT Codex subscription (Responses API).
+	// Codex caps the subscription context at 400K; effort tops out at xhigh.
+	"openai/gpt-5.5": {
+		ContextWindow:  400000,
+		SupportsEffort: true,
+		EffortLevels:   []string{"low", "medium", "high", "xhigh"},
+		Vision:         true,
+	},
 	// xAI — only grok-build
 	"xai/grok-build": {
 		ContextWindow:  256000,

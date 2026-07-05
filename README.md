@@ -18,15 +18,16 @@ tracks every token and dollar, and keeps your whole history in a local SQLite
 database you own. No cloud account for the app itself, no telemetry, no
 Electron — just one static binary and your terminal.
 
-It talks to **Anthropic** (Claude, via your Pro/Max subscription), **xAI**
-(Grok, via SuperGrok) and **Ollama** (local + cloud models). You can paste
+It talks to **Anthropic** (Claude, via your Pro/Max subscription), **OpenAI**
+(GPT-5.5, via your ChatGPT Plus/Pro subscription), **xAI** (Grok, via SuperGrok)
+and **Ollama** (local + cloud models). You can paste
 images, search past sessions full-text, fork and compact context, and approve
 risky shell commands from a popup.
 
 ```bash
 git clone <this-repo> poisson && cd poisson
 ./build.sh          # -> ./px  (needs Go 1.25+)
-./px login ollama   # or: ./px login anthropic | ./px login xai
+./px login ollama   # or: ./px login anthropic | openai | xai
 ./px                # launch the TUI
 ```
 
@@ -69,6 +70,7 @@ Authenticate a provider (stored in `~/.poisson/auth.json`, mode `0600`):
 
 ```bash
 ./px login anthropic  # Claude Pro/Max — browser OAuth (subscription billing)
+./px login openai     # ChatGPT Plus/Pro — browser OAuth (Codex subscription)
 ./px login xai        # SuperGrok — browser OAuth
 ./px login ollama     # local Ollama at http://localhost:11434 (no auth needed)
 ```
@@ -89,6 +91,7 @@ Then just:
 | Provider | Model | Auth | Vision |
 |---|---|---|---|
 | `anthropic` | `claude-opus-4-8` | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
+| `openai` | `gpt-5.5` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `xai` | `grok-build` | OAuth (SuperGrok) | ✅ |
 | `ollama` | `glm-5.2:cloud` *(default)* | local daemon / Ollama cloud | ❌ |
 | `ollama` | `minimax-m3:cloud` | local daemon / Ollama cloud | ✅ |
@@ -123,6 +126,9 @@ override. The knobs:
 [anthropic]
 # model = "claude-opus-4-8"
 # api_key = "sk-ant-..."             # optional; OAuth (auth.json) preferred
+
+[openai]
+# model = "gpt-5.5"                 # via ChatGPT Codex subscription (px login openai)
 
 [xai]
 # model = "grok-build"

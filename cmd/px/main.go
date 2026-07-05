@@ -237,7 +237,7 @@ func cmdCost(args []string) {
 func cmdLogin(args []string) {
 	if len(args) == 0 {
 		fmt.Println("usage: Poisson login <provider>")
-		fmt.Println("providers: anthropic, xai")
+		fmt.Println("providers: anthropic, xai, openai")
 		return
 	}
 	prov := strings.ToLower(args[0])
@@ -276,6 +276,20 @@ func cmdLogin(args []string) {
 			os.Exit(1)
 		}
 		fmt.Println("Logged in to xAI (SuperGrok).")
+
+	case "openai":
+		fmt.Println("Starting OpenAI Codex OAuth login (ChatGPT Plus/Pro)...")
+		entry, err := auth.LoginOpenAI()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
+			os.Exit(1)
+		}
+		authStore["openai"] = *entry
+		if err := auth.Save(authStore); err != nil {
+			fmt.Fprintf(os.Stderr, "error saving auth: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Logged in to OpenAI (ChatGPT subscription). Model: gpt-5.5")
 
 	case "ollama":
 		fmt.Println("Ollama runs locally and needs no login.")

@@ -32,6 +32,11 @@ type XAIConfig struct {
 	Model string
 }
 
+// OpenAIConfig holds OpenAI provider settings.
+type OpenAIConfig struct {
+	Model string
+}
+
 // OllamaConfig holds Ollama provider settings.
 type OllamaConfig struct {
 	BaseURL string
@@ -71,6 +76,7 @@ type Config struct {
 	Provider   ProviderConfig
 	Anthropic  AnthropicConfig
 	XAI        XAIConfig
+	OpenAI     OpenAIConfig
 	Ollama     OllamaConfig
 	Compaction CompactionConfig
 	Stealth    StealthConfig
@@ -106,6 +112,9 @@ func defaultConfig() *Config {
 		},
 		XAI: XAIConfig{
 			Model: "grok-build",
+		},
+		OpenAI: OpenAIConfig{
+			Model: "gpt-5.5",
 		},
 		Ollama: OllamaConfig{
 			BaseURL: "http://localhost:11434",
@@ -154,7 +163,7 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 
 # Default provider + model
 [provider]
-# default = "ollama"             # anthropic | ollama | xai
+# default = "ollama"             # anthropic | ollama | xai | openai
 
 [anthropic]
 # model = "claude-opus-4-8"
@@ -164,6 +173,10 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 
 [xai]
 # model = "grok-build"
+
+[openai]
+# GPT via the ChatGPT Codex subscription (run: px login openai).
+# model = "gpt-5.5"
 
 [ollama]
 # base_url = "http://localhost:11434"
@@ -295,6 +308,14 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 			return nil, fmt.Errorf("xai.model: %w", err)
 		}
 		cfg.XAI.Model = s
+	}
+
+	if v, ok := lookup(m, "openai", "model"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("openai.model: %w", err)
+		}
+		cfg.OpenAI.Model = s
 	}
 
 	if v, ok := lookup(m, "ollama", "base_url"); ok {

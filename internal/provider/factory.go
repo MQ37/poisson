@@ -19,6 +19,10 @@ func ResolveDefaultProvider(a auth.AuthStore, cfg *config.Config) (name string, 
 		name = "ollama"
 		warn = "no anthropic credentials found, using ollama"
 	}
+	if name == "openai" && !auth.IsOAuth(a, "openai") {
+		name = "ollama"
+		warn = "no openai credentials found, using ollama"
+	}
 	return name, warn
 }
 
@@ -35,6 +39,8 @@ func NewProvider(name string, a auth.AuthStore, cfg *config.Config) Provider {
 		return NewOllamaProvider(baseURL, cfg.Ollama.Model)
 	case "xai":
 		return NewXAIProvider(a, cfg)
+	case "openai":
+		return NewOpenAIProvider(a, cfg)
 	default:
 		return nil
 	}
@@ -63,6 +69,11 @@ func DefaultModel(provName string, cfg *config.Config) string {
 			return m
 		}
 		return "grok-build"
+	case "openai":
+		if m := cfg.OpenAI.Model; m != "" {
+			return m
+		}
+		return "gpt-5.5"
 	case "ollama":
 		if m := cfg.Ollama.Model; m != "" {
 			return m
