@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 300" width="1040" height="300" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">
+  <defs>
+    <linearGradient id="bar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#56d364"/>
+      <stop offset="1" stop-color="#238636"/>
+    </linearGradient>
+  </defs>
+
+  <!-- panel -->
+  <rect x="1" y="1" width="1038" height="298" rx="16" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+
+  <!-- Poisson(λ=3) probability mass function -->
+  <g>
+    <rect x="40"  y="194" width="40" height="36"  rx="3" fill="url(#bar)"/>
+    <rect x="88"  y="123" width="40" height="107" rx="3" fill="url(#bar)"/>
+    <rect x="136" y="70"  width="40" height="160" rx="3" fill="url(#bar)"/>
+    <rect x="184" y="70"  width="40" height="160" rx="3" fill="url(#bar)"/>
+    <rect x="232" y="110" width="40" height="120" rx="3" fill="url(#bar)"/>
+    <rect x="280" y="158" width="40" height="72"  rx="3" fill="url(#bar)"/>
+    <rect x="328" y="194" width="40" height="36"  rx="3" fill="url(#bar)"/>
+    <rect x="376" y="215" width="40" height="15"  rx="3" fill="url(#bar)"/>
+    <rect x="424" y="224" width="40" height="6"   rx="3" fill="url(#bar)"/>
+    <rect x="472" y="228" width="40" height="2"   rx="2" fill="url(#bar)"/>
+    <rect x="520" y="229" width="40" height="1"   rx="1" fill="url(#bar)"/>
+  </g>
+
+  <!-- distribution curve through the bar tops -->
+  <polyline points="60,194 108,123 156,70 204,70 252,110 300,158 348,194 396,215 444,224 492,228 540,229"
+            fill="none" stroke="#56d364" stroke-width="2.5" opacity="0.85" stroke-linejoin="round"/>
+  <g fill="#56d364">
+    <circle cx="60" cy="194" r="3"/><circle cx="108" cy="123" r="3"/><circle cx="156" cy="70" r="3"/>
+    <circle cx="204" cy="70" r="3"/><circle cx="252" cy="110" r="3"/><circle cx="300" cy="158" r="3"/>
+    <circle cx="348" cy="194" r="3"/><circle cx="396" cy="215" r="3"/><circle cx="444" cy="224" r="3"/>
+  </g>
+
+  <!-- baseline + k labels -->
+  <line x1="32" y1="230" x2="576" y2="230" stroke="#30363d" stroke-width="1.5"/>
+  <g fill="#6e7681" font-size="12" text-anchor="middle">
+    <text x="60" y="248">0</text><text x="108" y="248">1</text><text x="156" y="248">2</text>
+    <text x="204" y="248">3</text><text x="252" y="248">4</text><text x="300" y="248">5</text>
+    <text x="348" y="248">6</text><text x="396" y="248">7</text><text x="444" y="248">8</text>
+    <text x="492" y="248">9</text><text x="540" y="248">10</text>
+  </g>
+
+  <!-- wordmark + taglines (kept well inside the 1040 viewBox) -->
+  <text x="610" y="150" font-size="62" font-weight="700" fill="#3fb950">poisson</text>
+  <text x="612" y="184" font-size="18" fill="#8b949e">your terminal's coding agent</text>
+  <text x="612" y="212" font-size="13" fill="#6e7681">single static binary · SQLite · 3 deps</text>
+  <text x="612" y="250" font-size="12" fill="#484f58">P(k) = e^(−λ) · λ^k / k!      λ = 3</text>
+</svg>
