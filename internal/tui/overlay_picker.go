@@ -74,9 +74,17 @@ func pickerProviderItems(h commandHost) []pickerItem {
 
 func pickerModelItems(h commandHost) ([]pickerItem, error) {
 	a := h.Agent()
-	models, err := a.Provider().Models()
-	if err != nil {
-		return nil, err
+	// Prefer the curated registry (KnownModels) so the menu is stable and
+	// intentional — e.g. Ollama cloud models we support show up with correct
+	// context windows even when not yet pulled, and unlisted /api/tags entries
+	// don't. Fall back to the provider's live listing when uncurated.
+	models := provider.CuratedModels(a.Provider().ID())
+	if len(models) == 0 {
+		var err error
+		models, err = a.Provider().Models()
+		if err != nil {
+			return nil, err
+		}
 	}
 	items := make([]pickerItem, len(models))
 	for i, m := range models {

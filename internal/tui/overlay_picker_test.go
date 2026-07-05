@@ -53,6 +53,29 @@ func TestPickerEffortIncludesMax(t *testing.T) {
 	}
 }
 
+func TestPickerModelItemsUsesCuratedList(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	a.SetProvider(provider.NewOllamaProvider("http://localhost:11434", "glm-5.2:cloud"))
+	a.SetModel("glm-5.2:cloud")
+	items, err := pickerModelItems(cmdHost(newTUIWithAgent(a, sessionID)))
+	if err != nil {
+		t.Fatalf("pickerModelItems: %v", err)
+	}
+	got := map[string]bool{}
+	for _, it := range items {
+		got[it.id] = true
+	}
+	for _, want := range []string{"glm-5.2:cloud", "minimax-m3:cloud", "kimi-k2.7-code:cloud"} {
+		if !got[want] {
+			t.Errorf("model picker missing curated %q; got %v", want, got)
+		}
+	}
+	// Curated menu must not leak arbitrary live /api/tags entries.
+	if got["deepseek-v4-pro:cloud"] {
+		t.Error("uncurated live model leaked into the picker")
+	}
+}
+
 func TestPickerProviderItemsOllamaNoAuth(t *testing.T) {
 	testutil.TempHome(t) // isolate auth store to an empty temp HOME
 	_, a, sessionID := newTestStoreAndAgent(t)

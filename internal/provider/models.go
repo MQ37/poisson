@@ -1,5 +1,10 @@
 package provider
 
+import (
+	"sort"
+	"strings"
+)
+
 // ModelSettings holds per-model configuration that providers use to build
 // requests correctly. Not all fields apply to all providers.
 type ModelSettings struct {
@@ -47,4 +52,23 @@ var KnownModels = map[string]ModelSettings{
 func GetModelSettings(providerID, modelID string) (ModelSettings, bool) {
 	s, ok := KnownModels[providerID+"/"+modelID]
 	return s, ok
+}
+
+// CuratedModels returns the KnownModels entries for a provider as Model values,
+// sorted by ID. This is the curated menu the model picker shows — the source of
+// truth for which models are offered, independent of whatever a provider's live
+// listing (e.g. Ollama's /api/tags) happens to report. Empty when the provider
+// has no curated entries.
+func CuratedModels(providerID string) []Model {
+	prefix := providerID + "/"
+	var out []Model
+	for key, s := range KnownModels {
+		id, ok := strings.CutPrefix(key, prefix)
+		if !ok {
+			continue
+		}
+		out = append(out, Model{ID: id, Name: id, ContextWindow: s.ContextWindow})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
 }
