@@ -401,6 +401,8 @@ func defaultModel(p provider.Provider, cfg *config.Config) string {
 		return cfg.Anthropic.Model
 	case "xai":
 		return cfg.XAI.Model
+	case "openai":
+		return cfg.OpenAI.Model
 	default:
 		return ""
 	}
@@ -1009,6 +1011,8 @@ func (a *Agent) currentModel() string {
 			return a.config.Anthropic.Model
 		case "xai":
 			return a.config.XAI.Model
+		case "openai":
+			return a.config.OpenAI.Model
 		}
 		return ""
 	}

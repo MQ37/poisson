@@ -559,6 +559,22 @@ func TestContextWindow(t *testing.T) {
 	}
 }
 
+// TestContextWindowBeforeSessionUsesConfigModel guards the lazy-session case:
+// before the first message the session row doesn't exist, so currentModel()
+// falls back to the provider's configured model. A missing provider case there
+// made openai report the 8192 default instead of gpt-5.5's 400K window.
+func TestContextWindowBeforeSessionUsesConfigModel(t *testing.T) {
+	s := newTestStore(t)
+	cfg := config.DefaultConfig() // OpenAI.Model defaults to gpt-5.5
+	p := provider.NewFakeProvider("openai", nil)
+	id := store.NewSessionID()    // deliberately not created yet
+	a := NewAgent(s, p, newTestRegistry(testutil.TempDir(t)), cfg, id, nil, nil)
+
+	if got := a.ContextWindow(); got != 400000 {
+		t.Errorf("ContextWindow() before session = %d, want 400000 (gpt-5.5)", got)
+	}
+}
+
 func TestPromptStoresUserMessage(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
