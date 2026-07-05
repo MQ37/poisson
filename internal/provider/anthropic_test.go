@@ -10,6 +10,50 @@ import (
 	"poisson/internal/config"
 )
 
+// --- Prompt-cache tests (no real API calls) ---
+
+func TestAnthropicPromptCacheBreakpoints(t *testing.T) {
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "oauth", Access: "t"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+	req := &Request{
+		Model: "claude-x",
+		System: []SystemBlock{{Text: "sys A"}, {Text: "sys B"}},
+		Tools: []ToolDef{
+			{Name: "read", Description: "r", Schema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "write", Description: "w", Schema: json.RawMessage(`{"type":"object"}`)},
+		},
+		Messages: []Message{
+			{Role: "user", Content: []ContentBlock{{Type: "text", Text: "first"}}},
+			{Role: "assistant", Content: []ContentBlock{{Type: "text", Text: "reply"}}},
+			{Role: "user", Content: []ContentBlock{{Type: "text", Text: "second"}}},
+		},
+	}
+	ar := p.buildAnthropicRequest(req, false)
+
+	// Exactly one breakpoint each on: last tool, last system block, last message.
+	if ar.Tools[0].CacheControl != nil || ar.Tools[1].CacheControl == nil {
+		t.Errorf("cache breakpoint must be on the LAST tool only")
+	}
+	if ar.System[0].CacheControl != nil || ar.System[1].CacheControl == nil {
+		t.Errorf("cache breakpoint must be on the LAST system block only")
+	}
+	last := ar.Messages[len(ar.Messages)-1]
+	if last.Content[len(last.Content)-1].CacheControl == nil {
+		t.Errorf("cache breakpoint must be on the last message's last block")
+	}
+	if ar.Messages[0].Content[0].CacheControl != nil {
+		t.Errorf("earlier messages must not carry a cache breakpoint")
+	}
+
+	// Wire format must be an object {"type":"ephemeral"}, never a bare string.
+	blob, _ := json.Marshal(ar)
+	if !strings.Contains(string(blob), `"cache_control":{"type":"ephemeral"}`) {
+		t.Fatalf("cache_control must serialize as an object, got: %s", blob)
+	}
+	if strings.Contains(string(blob), `"cache_control":"`) {
+		t.Fatalf("cache_control serialized as a bare string (invalid): %s", blob)
+	}
+}
+
 // --- Stealth tests (no real API calls) ---
 
 func TestComputeCCH(t *testing.T) {

@@ -179,6 +179,15 @@ type anthropicContentBlock struct {
 	Signature string                `json:"signature,omitempty"` // for thinking
 	Data      string                `json:"data,omitempty"`      // for redacted_thinking
 	Source    *anthropicImageSource `json:"source,omitempty"`    // for image
+
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+// anthropicCacheControl marks a prompt-cache breakpoint. Anthropic requires an
+// object (`{"type":"ephemeral"}`), not a bare string.
+type anthropicCacheControl struct {
+	Type string `json:"type"`          // "ephemeral"
+	TTL  string `json:"ttl,omitempty"` // "" = 5m default, or "1h" (needs beta header)
 }
 
 type anthropicImageSource struct {
@@ -188,15 +197,16 @@ type anthropicImageSource struct {
 }
 
 type anthropicSystem struct {
-	Type     string `json:"type"`
-	Text     string `json:"text"`
-	CacheCtl string `json:"cache_control,omitempty"`
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  json.RawMessage        `json:"input_schema"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 func anthropicThinkingBudget(effort string) int {
@@ -237,11 +247,7 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 
 	// System blocks.
 	for _, sb := range req.System {
-		as := anthropicSystem{Type: "text", Text: sb.Text}
-		if sb.CacheCtl != "" {
-			as.CacheCtl = sb.CacheCtl
-		}
-		ar.System = append(ar.System, as)
+		ar.System = append(ar.System, anthropicSystem{Type: "text", Text: sb.Text})
 	}
 
 	// Messages. The Anthropic API only accepts "user" and "assistant" roles;
@@ -331,7 +337,34 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 		})
 	}
 
+	applyPromptCache(&ar)
 	return ar
+}
+
+// applyPromptCache places ephemeral cache_control breakpoints so Anthropic
+// caches the stable prefix (tools + system) and the conversation across turns.
+// Caching is prefix-based: each breakpoint caches everything up to and
+// including it (max 4 allowed; we use at most 3). Cache reads bill at ~0.1x
+// input price, so in an agentic loop — which resends the full system, tools,
+// and growing history every turn — this slashes input token cost. The stealth
+// billing block (system[0]) is derived from the first user message, so it is
+// stable per session and safe inside the cached prefix.
+func applyPromptCache(ar *anthropicRequest) {
+	cc := &anthropicCacheControl{Type: "ephemeral"}
+	if n := len(ar.Tools); n > 0 {
+		ar.Tools[n-1].CacheControl = cc // caches all tool definitions
+	}
+	if n := len(ar.System); n > 0 {
+		ar.System[n-1].CacheControl = cc // caches tools + system
+	}
+	// Rolling breakpoint: cache the conversation prefix. The final request
+	// message is always a user turn (a prompt or coalesced tool results).
+	if n := len(ar.Messages); n > 0 {
+		last := &ar.Messages[n-1]
+		if last.Role == "user" && len(last.Content) > 0 {
+			last.Content[len(last.Content)-1].CacheControl = cc
+		}
+	}
 }
 
 // setHeaders configures the HTTP request headers based on auth type.
