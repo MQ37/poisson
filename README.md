@@ -97,6 +97,9 @@ Then just:
 | `ollama` | `minimax-m3:cloud` | local daemon / Ollama cloud | ✅ |
 | `ollama` | `kimi-k2.7-code:cloud` | local daemon / Ollama cloud | ✅ |
 
+Provider notes: OpenAI/Codex ([details](docs/openai.md)) and Ollama caching /
+`keep_alive` ([details](docs/ollama.md)).
+
 Switch anytime: `/model`, `/effort`, `/providers` (or the Ctrl+P palette).
 Reasoning effort levels: `low · medium · high · xhigh · max` (default `medium`;
 each model advertises which it supports).
