@@ -21,16 +21,25 @@ var KnownModels = map[string]ModelSettings{
 		ContextWindow:  256000,
 		SupportsEffort: false,
 	},
-	// Ollama — only glm-5.2:cloud and minimax-m3:cloud
+	// Ollama — glm-5.2:cloud, minimax-m3:cloud, kimi-k2.7-code:cloud.
 	"ollama/glm-5.2:cloud": {
 		ContextWindow:  976000,
 		SupportsEffort: true,
 		EffortLevels:   []string{"high", "max"},
 	},
+	// minimax-m3:cloud — 512K context, native interleaved thinking + tools.
+	// Thinking is always-on (streamed as reasoning_content); Ollama exposes no
+	// configurable reasoning-effort level, so SupportsEffort is false.
 	"ollama/minimax-m3:cloud": {
 		ContextWindow:  512000,
-		SupportsEffort: true,
-		EffortLevels:   []string{"low", "medium", "high"},
+		SupportsEffort: false,
+	},
+	// kimi-k2.7-code:cloud — 256K context, Moonshot coding/agentic model.
+	// Always operates in thinking mode (can't be disabled) and exposes no
+	// configurable reasoning-effort level, so SupportsEffort is false.
+	"ollama/kimi-k2.7-code:cloud": {
+		ContextWindow:  256000,
+		SupportsEffort: false,
 	},
 }
 

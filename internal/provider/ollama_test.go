@@ -159,7 +159,7 @@ func TestOllamaBuildRequestUsesOpenAIEndpointFields(t *testing.T) {
 	p := NewOllamaProvider("http://localhost:11434", "glm-5.2:cloud")
 	temp := 0.4
 	req := &Request{
-		Model:       "minimax-m3:cloud",
+		Model:       "glm-5.2:cloud", // effort-capable model (minimax/kimi expose no effort)
 		MaxTokens:   512,
 		Temperature: &temp,
 		Effort:      "xhigh",

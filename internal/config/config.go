@@ -202,6 +202,9 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # [pricing.ollama."minimax-m3:cloud"]
 # input = 0
 # output = 0
+# [pricing.ollama."kimi-k2.7-code:cloud"]
+# input = 0
+# output = 0
 `
 
 // ConfigDir returns the path to ~/.poisson/, creating it (mode 0700) if missing.
