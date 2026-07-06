@@ -13,6 +13,10 @@ func (t *TUI) syncHeaderFromAgentLocked() {
 	t.status.ContextPct = a.ContextPercent()
 	t.status.Effort = a.Effort()
 	t.status.Model = modelLabel(a)
+	// Pull the per-session tool/error counts straight from the agent so they
+	// reset with the session (e.g. on /new) rather than lingering from status
+	// events of the previous session.
+	t.status.ToolCalls, t.status.ToolErrors = a.SessionToolStats()
 	t.status.WarnContext = t.status.ContextPct > 75.0
 
 	if tb, err := a.Store().GetSessionTokenBreakdown(a.SessionID()); err == nil {

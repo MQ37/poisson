@@ -189,6 +189,17 @@ func resetHostSessionView(h commandHost) {
 	}
 }
 
+// refreshHostHeader re-syncs the header from the agent and forces a repaint.
+// Used after model/provider switches so the context window and model label
+// reflect the new selection immediately. Commands run with t.mu held, so this
+// calls the locked variant directly (matching resetHostSessionView).
+func refreshHostHeader(h commandHost) {
+	if th, ok := h.(tuiCmdHost); ok {
+		th.t.syncHeaderFromAgentLocked()
+		th.t.dirty.markFull()
+	}
+}
+
 // cmdModel switches provider/model.
 func cmdModel(h commandHost, args []string) error {
 	a := h.Agent()
@@ -215,6 +226,7 @@ func cmdModel(h commandHost, args []string) error {
 		}
 		a.SetModel(model)
 		a.ReloadConfigDependentTools()
+		refreshHostHeader(h)
 		h.Out(styleSystem, fmt.Sprintf("model: %s/%s", provName, model))
 		return nil
 	}
@@ -234,6 +246,7 @@ func cmdModel(h commandHost, args []string) error {
 	}
 	a.SetModel(modelName)
 	a.ReloadConfigDependentTools()
+	refreshHostHeader(h)
 	h.Out(styleSystem, fmt.Sprintf("model: %s/%s", provName, modelName))
 	return nil
 }

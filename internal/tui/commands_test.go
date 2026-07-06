@@ -87,6 +87,21 @@ func TestCmdNew(t *testing.T) {
 	}
 }
 
+func TestCmdNewResetsToolCounts(t *testing.T) {
+	_, a, originalID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, originalID)
+	// Leftover counts from the previous session's status events.
+	tui.status.ToolCalls = 7
+	tui.status.ToolErrors = 3
+
+	if err := cmdNew(cmdHost(tui)); err != nil {
+		t.Fatalf("cmdNew: %v", err)
+	}
+	if tui.status.ToolCalls != 0 || tui.status.ToolErrors != 0 {
+		t.Fatalf("tool counts not reset on /new: %dT/%de", tui.status.ToolCalls, tui.status.ToolErrors)
+	}
+}
+
 // --- /name ---
 
 func TestCmdName(t *testing.T) {
@@ -307,6 +322,22 @@ func TestCmdModelWithProvider(t *testing.T) {
 	}
 	if sess.Provider != "xai" || sess.Model != "grok-build" {
 		t.Fatalf("session metadata = %s/%s, want xai/grok-build", sess.Provider, sess.Model)
+	}
+}
+
+func TestCmdModelUpdatesContextWindow(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+	tui.status.ContextWindow = 12345 // stale value from a previous model
+
+	cmdModel(cmdHost(tui), []string{"xai/grok-build"})
+
+	ms, ok := provider.GetModelSettings("xai", "grok-build")
+	if !ok {
+		t.Fatal("missing model settings for xai/grok-build")
+	}
+	if tui.status.ContextWindow != ms.ContextWindow {
+		t.Fatalf("ContextWindow = %d after switch, want %d", tui.status.ContextWindow, ms.ContextWindow)
 	}
 }
 

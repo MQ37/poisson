@@ -169,6 +169,12 @@ func (a *Agent) Store() *store.Store { return a.store }
 // SessionID returns the current session ID.
 func (a *Agent) SessionID() string { return a.sessionID }
 
+// SessionToolStats returns the tool-call and tool-error counts for the current
+// session run. Reset on session switch (see SwitchSession).
+func (a *Agent) SessionToolStats() (calls, errors int) {
+	return a.sessionToolCalls, a.sessionToolErrors
+}
+
 // SwitchSession changes the active session.
 func (a *Agent) SwitchSession(sessionID string) {
 	a.sessionID = sessionID
