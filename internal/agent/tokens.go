@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"log"
 	"strings"
 	"time"
 
@@ -134,7 +135,10 @@ func (a *Agent) ContextWindow() int {
 func (a *Agent) UpdateStatus() {
 	used, total := a.ContextTokens()
 	pct := a.ContextPercent()
-	breakdown, _ := a.store.GetSessionTokenBreakdown(a.sessionID)
+	breakdown, err := a.store.GetSessionTokenBreakdown(a.sessionID)
+	if err != nil {
+		log.Printf("warning: status token breakdown: %v", err)
+	}
 	model := a.currentModel()
 
 	a.sendEvent(OutputEvent{

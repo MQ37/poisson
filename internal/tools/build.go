@@ -1,11 +1,14 @@
 package tools
 
 import (
+	"context"
+
 	"poisson/internal/store"
 )
 
-// ApprovalFn is called before executing dangerous bash commands.
-type ApprovalFn func(command, description, workdir string) bool
+// ApprovalFn is called before executing dangerous bash commands. ctx is the
+// tool's turn context so a cancelled turn also cancels the risk classification.
+type ApprovalFn func(ctx context.Context, command, description, workdir string) bool
 
 // BuildOptions configures which tools to register.
 type BuildOptions struct {
@@ -28,7 +31,7 @@ func BuildRegistry(opts BuildOptions) *Registry {
 
 	approval := opts.ApprovalFn
 	if approval == nil {
-		approval = func(string, string, string) bool { return false }
+		approval = func(context.Context, string, string, string) bool { return false }
 	}
 
 	reg.Register(NewBashTool(opts.Cwd, opts.Sandbox, approval))

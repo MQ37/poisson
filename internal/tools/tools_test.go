@@ -590,7 +590,7 @@ func TestBashTool_NoAllowlist(t *testing.T) {
 		t.Fatal("expected safe command to be gated (no allowlist), got auto-run")
 	}
 
-	b := NewBashTool(dir, false, func(_, _, _ string) bool { return true })
+	b := NewBashTool(dir, false, func(context.Context, string, string, string) bool { return true })
 	res, _ = b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "echo hello",
 		"description": "print hello",
@@ -664,7 +664,7 @@ func TestBashTool_UnsafeDenied(t *testing.T) {
 
 func TestBashTool_UnsafeApproved(t *testing.T) {
 	dir := testutil.TempDir(t)
-	approved := func(command, desc, wd string) bool { return true }
+	approved := func(_ context.Context, command, desc, wd string) bool { return true }
 	b := NewBashTool(dir, false, approved)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -687,7 +687,7 @@ func TestBashTool_PromptsForApproval(t *testing.T) {
 	dir := testutil.TempDir(t)
 	var gotCmd, gotDesc string
 	called := false
-	approvalFn := func(command, desc, wd string) bool {
+	approvalFn := func(_ context.Context, command, desc, wd string) bool {
 		called = true
 		gotCmd = command
 		gotDesc = desc
@@ -720,7 +720,7 @@ func TestBashTool_MissingDescFallback(t *testing.T) {
 	dir := testutil.TempDir(t)
 	var gotDesc string
 	called := false
-	approvalFn := func(command, desc, wd string) bool {
+	approvalFn := func(_ context.Context, command, desc, wd string) bool {
 		called = true
 		gotDesc = desc
 		return false

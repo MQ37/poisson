@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -43,7 +44,7 @@ func newTestStoreAndAgent(t *testing.T) (*store.Store, *agent.Agent, string) {
 	}
 	prov := provider.NewFakeProvider("ollama", []provider.Model{{ID: cfg.Ollama.Model, ContextWindow: 8192}})
 	reg := tools.NewRegistry()
-	a := agent.NewAgent(s, prov, reg, cfg, sessionID, make(chan agent.OutputEvent, 64), func(_, _, _ string) bool { return false })
+	a := agent.NewAgent(s, prov, reg, cfg, sessionID, make(chan agent.OutputEvent, 64), func(context.Context, string, string, string) bool { return false })
 	return s, a, sessionID
 }
 
@@ -244,7 +245,7 @@ func TestCmdSessionsEmpty(t *testing.T) {
 		t.Fatalf("open empty store: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	tui.agent = agent.NewAgent(s, provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 4096}}), tools.NewRegistry(), config.DefaultConfig(), sessionID, make(chan agent.OutputEvent, 64), func(_, _, _ string) bool { return false })
+	tui.agent = agent.NewAgent(s, provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 4096}}), tools.NewRegistry(), config.DefaultConfig(), sessionID, make(chan agent.OutputEvent, 64), func(context.Context, string, string, string) bool { return false })
 	cmdSessions(cmdHost(tui))
 	if out := testScrollOutput(tui); !strings.Contains(out, "no sessions") {
 		t.Errorf("expected no sessions, got %q", out)
@@ -411,7 +412,7 @@ func TestCmdCostEphemeralSession(t *testing.T) {
 	sessionID := store.NewSessionID()
 	cfg := config.DefaultConfig()
 	prov := provider.NewFakeProvider("ollama", []provider.Model{{ID: cfg.Ollama.Model, ContextWindow: 8192}})
-	a := agent.NewAgent(s, prov, tools.NewRegistry(), cfg, sessionID, make(chan agent.OutputEvent, 64), func(_, _, _ string) bool { return false })
+	a := agent.NewAgent(s, prov, tools.NewRegistry(), cfg, sessionID, make(chan agent.OutputEvent, 64), func(context.Context, string, string, string) bool { return false })
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdCost(cmdHost(tui))

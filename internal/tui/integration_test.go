@@ -101,7 +101,7 @@ func newTUIIntegEnv(t *testing.T, responses [][]provider.StreamEvent) *tuiIntegE
 }
 
 // alwaysApprove passes every bash command without UI interaction.
-func alwaysApprove(_, _, _ string) bool { return true }
+func alwaysApprove(_ context.Context, _, _, _ string) bool { return true }
 
 // runTurn sends a prompt through the agent and applies all resulting events
 // into the TUI synchronously. This mirrors TUI.submit() without the terminal

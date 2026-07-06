@@ -14,13 +14,13 @@ import (
 type BashTool struct {
 	cwd        string
 	sandbox    bool
-	approvalFn func(command, description, workdir string) bool
+	approvalFn func(ctx context.Context, command, description, workdir string) bool
 }
 
 // NewBashTool creates a bash tool. The approval function is called when a
 // command is not auto-safe and not in sandbox mode; if it returns false the
 // command is denied. Pass nil to auto-deny all unsafe commands.
-func NewBashTool(cwd string, sandbox bool, approvalFn func(command, description, workdir string) bool) *BashTool {
+func NewBashTool(cwd string, sandbox bool, approvalFn func(ctx context.Context, command, description, workdir string) bool) *BashTool {
 	return &BashTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
 }
 
@@ -85,7 +85,7 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		}
 		approved := false
 		if t.approvalFn != nil {
-			approved = t.approvalFn(in.Command, purpose, dir)
+			approved = t.approvalFn(ctx, in.Command, purpose, dir)
 		}
 		if !approved {
 			return ToolResult{Error: "command denied"}, nil

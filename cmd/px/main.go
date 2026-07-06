@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -195,9 +196,9 @@ func runPrint(opts printOpts) {
 	humanApproval := func(command, description, workdir string, risk agent.BashRisk) bool {
 		return yolo // headless: only --yolo approves escalated commands
 	}
-	approvalFn := func(command, description, workdir string) bool {
+	approvalFn := func(ctx context.Context, command, description, workdir string) bool {
 		if agentRef != nil {
-			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(command, description, workdir)
+			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(ctx, command, description, workdir)
 		}
 		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
@@ -288,9 +289,9 @@ func runREPL(noSkills bool) {
 		}
 		return false
 	}
-	approvalFn := func(command, description, workdir string) bool {
+	approvalFn := func(ctx context.Context, command, description, workdir string) bool {
 		if agentRef != nil {
-			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(command, description, workdir)
+			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(ctx, command, description, workdir)
 		}
 		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
@@ -611,12 +612,12 @@ func runChildMode() {
 			"agent":       os.Getenv("POISSON_SUBAGENT_NAME"),
 		})
 	}
-	approvalFn := func(command, description, workdir string) bool {
+	approvalFn := func(ctx context.Context, command, description, workdir string) bool {
 		if sandbox {
 			return true
 		}
 		if childAgentRef != nil {
-			return agent.WrapRiskGatedApproval(childAgentRef, humanChildApproval)(command, description, workdir)
+			return agent.WrapRiskGatedApproval(childAgentRef, humanChildApproval)(ctx, command, description, workdir)
 		}
 		return humanChildApproval(command, description, workdir, agent.BashRiskUnknown)
 	}

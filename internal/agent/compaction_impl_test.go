@@ -72,7 +72,7 @@ func TestCompactManualKeepsUserFirst(t *testing.T) {
 	}
 	fp := newFakeProvider()
 	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("summary", nil)})
-	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(_, _, _ string) bool { return true })
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) bool { return true })
 	if err := a.Compact(); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestCompactSummarizesAllMessages(t *testing.T) {
 	fp.SetResponses([][]provider.StreamEvent{
 		provider.FakeTextResponse("## Big Picture\nAll compacted", nil),
 	})
-	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(_, _, _ string) bool { return true })
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) bool { return true })
 
 	if err := a.Compact(); err != nil {
 		t.Fatalf("Compact: %v", err)
@@ -121,7 +121,7 @@ func TestCompactAutoKeepsActiveTail(t *testing.T) {
 	fp.SetResponses([][]provider.StreamEvent{
 		provider.FakeTextResponse("## Big Picture\nolder turns", nil),
 	})
-	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(_, _, _ string) bool { return true })
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) bool { return true })
 
 	if err := a.compact(context.Background(), false, true); err != nil {
 		t.Fatalf("compact: %v", err)
@@ -147,7 +147,7 @@ func TestCompactAutoNothingWhenSingleTurn(t *testing.T) {
 	seedMessages(t, s, sid, []string{"user", "assistant", "tool"})
 
 	fp := newFakeProvider()
-	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(_, _, _ string) bool { return true })
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) bool { return true })
 
 	if err := a.compact(context.Background(), false, true); !errors.Is(err, ErrNothingToCompact) {
 		t.Fatalf("compact = %v, want ErrNothingToCompact", err)

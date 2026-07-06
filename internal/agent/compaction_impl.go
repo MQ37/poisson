@@ -187,10 +187,9 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		log.Printf("warning: record compaction: %v", err)
 	}
 
-	// 9. Clear pending results and compaction backoff. Reset the context-file
-	// tracker: the injected AGENTS.md now live in summarized-away messages, so
-	// they must be re-injected the next time those directories are touched.
-	a.pendingResults = nil
+	// 9. Clear the compaction backoff. Reset the context-file tracker: the
+	// injected AGENTS.md now live in summarized-away messages, so they must be
+	// re-injected the next time those directories are touched.
 	a.compactBackoffUntil = time.Time{}
 	a.resetContextTracker()
 	a.UpdateStatus()

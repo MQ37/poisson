@@ -103,8 +103,9 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 
-	// SQLite performs best with a single connection for writes under WAL.
-	// We allow multiple open connections for concurrent readers.
+	// Serialize DB access on a single connection: SQLite serializes writes
+	// anyway, and for this local single-user CLI one connection under WAL avoids
+	// "database is locked" contention with no meaningful throughput cost.
 	db.SetMaxOpenConns(1)
 
 	if _, err := db.Exec(schemaSQL); err != nil {

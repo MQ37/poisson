@@ -74,16 +74,13 @@ type Agent struct {
 	config     *config.Config
 	sessionID  string
 	outputChan chan OutputEvent
-	approvalFn func(command, description, workdir string) bool
+	approvalFn func(ctx context.Context, command, description, workdir string) bool
 	model      string
 	effort     string
 
 	// session tool counters for the status bar (reset on SwitchSession).
 	sessionToolCalls  int
 	sessionToolErrors int
-
-	// pendingResults holds in-flight tool result text before persistence (legacy).
-	pendingResults []string
 
 	// compactBackoffUntil suppresses auto-compaction retries after a failure.
 	compactBackoffUntil time.Time
@@ -108,7 +105,7 @@ func NewAgent(
 	cfg *config.Config,
 	sessionID string,
 	outputChan chan OutputEvent,
-	approvalFn func(command, description, workdir string) bool,
+	approvalFn func(ctx context.Context, command, description, workdir string) bool,
 ) *Agent {
 	model := defaultModel(p, cfg)
 	a := &Agent{
@@ -181,7 +178,6 @@ func (a *Agent) SwitchSession(sessionID string) {
 	a.sessionToolCalls = 0
 	a.sessionToolErrors = 0
 	a.effort = effectiveEffort(initialEffort(a.config), a.provider.ID(), a.model)
-	a.pendingResults = nil
 	a.resetContextTracker()
 }
 
@@ -204,30 +200,33 @@ func (a *Agent) cwd() string {
 	return "."
 }
 
-// SetProvider swaps the provider and persists it on the active session.
-func (a *Agent) SetProvider(p provider.Provider) {
+// SetProvider swaps the provider and persists it on the active session. A
+// session that isn't persisted yet is not an error (nothing to update); a
+// failed write is returned so the caller can surface it.
+func (a *Agent) SetProvider(p provider.Provider) error {
 	a.provider = p
 	a.effort = effectiveEffort(a.effort, p.ID(), a.model)
 	sess, err := a.store.GetSession(a.sessionID)
 	if err != nil {
-		return
+		return nil
 	}
 	sess.Provider = p.ID()
 	sess.UpdatedAt = time.Now().Unix()
-	_ = a.store.UpdateSession(sess)
+	return a.store.UpdateSession(sess)
 }
 
-// SetModel updates the session's model name and persists it.
-func (a *Agent) SetModel(model string) {
+// SetModel updates the session's model name and persists it. See SetProvider
+// for the error semantics.
+func (a *Agent) SetModel(model string) error {
 	a.model = model
 	a.effort = effectiveEffort(a.effort, a.provider.ID(), model)
 	sess, err := a.store.GetSession(a.sessionID)
 	if err != nil {
-		return
+		return nil
 	}
 	sess.Model = model
 	sess.UpdatedAt = time.Now().Unix()
-	_ = a.store.UpdateSession(sess)
+	return a.store.UpdateSession(sess)
 }
 
 // SetConfig swaps the config (for /reload).
@@ -643,7 +642,6 @@ func (a *Agent) runTurn(ctx context.Context) error {
 
 		// Dispatch concurrently; emit each tool_result to the TUI as it finishes
 		// so cards stop spinning without waiting for slower siblings (e.g. bash approval).
-		a.pendingResults = nil
 		results := make([]tools.ToolResult, len(toolCalls))
 		var wg sync.WaitGroup
 		for i, tc := range toolCalls {
@@ -703,12 +701,6 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				return fmt.Errorf("append tool result message: %w", err)
 			}
 
-			pending := toolBlock.ToolResult
-			if toolBlock.ToolIsError {
-				pending = "Error: " + pending
-			}
-			a.pendingResults = append(a.pendingResults, pending)
-
 			a.sessionToolCalls++
 			if result.Error != "" {
 				a.sessionToolErrors++
@@ -723,7 +715,6 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			return err
 		}
 
-		a.pendingResults = nil
 		if a.shouldCompact() {
 			if err := a.compact(ctx, true, true); err != nil {
 				if !errors.Is(err, ErrNothingToCompact) {

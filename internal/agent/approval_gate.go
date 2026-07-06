@@ -16,12 +16,12 @@ type HumanApprovalFunc func(command, description, workdir string, risk BashRisk)
 // error, timeout, unparseable output) fall through to the human. The
 // deterministic guard is never consulted for the auto-approve decision, so a
 // failed classification can never silently allow a command.
-func WrapRiskGatedApproval(a *Agent, ask HumanApprovalFunc) func(command, description, workdir string) bool {
-	return func(command, description, workdir string) bool {
+func WrapRiskGatedApproval(a *Agent, ask HumanApprovalFunc) func(ctx context.Context, command, description, workdir string) bool {
+	return func(ctx context.Context, command, description, workdir string) bool {
 		var risk BashRisk = BashRiskUnknown
 		if a != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), approvalRiskTimeout)
-			risk = a.AssessBashRisk(ctx, command, description, workdir)
+			rctx, cancel := context.WithTimeout(ctx, approvalRiskTimeout)
+			risk = a.AssessBashRisk(rctx, command, description, workdir)
 			cancel()
 			if risk == BashRiskLow {
 				return true

@@ -176,8 +176,8 @@ func switchAgentToSession(h commandHost, sess *store.Session) bool {
 		return false
 	}
 	a.SwitchSession(sess.ID)
-	a.SetProvider(p)
-	a.SetModel(sess.Model)
+	warnPersist(h, a.SetProvider(p))
+	warnPersist(h, a.SetModel(sess.Model))
 	h.SetSessionID(sess.ID)
 	resetHostSessionView(h)
 	return true
@@ -200,6 +200,14 @@ func refreshHostHeader(h commandHost) {
 	}
 }
 
+// warnPersist surfaces a best-effort session-persist failure to the user rather
+// than dropping it silently.
+func warnPersist(h commandHost, err error) {
+	if err != nil {
+		h.Out(styleError, "warning: session not persisted: "+err.Error())
+	}
+}
+
 // cmdModel switches provider/model.
 func cmdModel(h commandHost, args []string) error {
 	a := h.Agent()
@@ -217,14 +225,14 @@ func cmdModel(h commandHost, args []string) error {
 				h.Out(styleError, "unknown provider: "+provName)
 				return nil
 			}
-			a.SetProvider(newProv)
+			warnPersist(h, a.SetProvider(newProv))
 		}
 		model := provider.DefaultModel(provName, a.Config())
 		if model == "" {
 			h.Out(styleError, "no default model configured for provider: "+provName)
 			return nil
 		}
-		a.SetModel(model)
+		warnPersist(h, a.SetModel(model))
 		a.ReloadConfigDependentTools()
 		refreshHostHeader(h)
 		h.Out(styleSystem, fmt.Sprintf("model: %s/%s", provName, model))
@@ -242,9 +250,9 @@ func cmdModel(h commandHost, args []string) error {
 			h.Out(styleError, "unknown provider: "+provName)
 			return nil
 		}
-		a.SetProvider(newProv)
+		warnPersist(h, a.SetProvider(newProv))
 	}
-	a.SetModel(modelName)
+	warnPersist(h, a.SetModel(modelName))
 	a.ReloadConfigDependentTools()
 	refreshHostHeader(h)
 	h.Out(styleSystem, fmt.Sprintf("model: %s/%s", provName, modelName))
@@ -261,7 +269,7 @@ func cmdReload(h commandHost) error {
 	}
 	a.SetConfig(cfg)
 	if p := provider.NewProviderFromDisk(a.Provider().ID(), cfg); p != nil {
-		a.SetProvider(p)
+		warnPersist(h, a.SetProvider(p))
 	}
 	n, err := a.ReloadSkills()
 	if err != nil {

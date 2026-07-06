@@ -25,7 +25,7 @@ func TestWrapRiskGatedApprovalAutoLow(t *testing.T) {
 		return false
 	})
 
-	if !approve("gh run list --limit 5", "list runs", "/tmp") {
+	if !approve(context.Background(), "gh run list --limit 5", "list runs", "/tmp") {
 		t.Fatal("expected auto-allow for low risk")
 	}
 	if asked {
@@ -51,7 +51,7 @@ func TestWrapRiskGatedApprovalRequiresHumanForHigh(t *testing.T) {
 		return true
 	})
 
-	if !approve("rm -rf x", "delete", "/tmp") {
+	if !approve(context.Background(), "rm -rf x", "delete", "/tmp") {
 		t.Fatal("expected human allow")
 	}
 	if gotRisk != BashRiskHigh {
@@ -80,7 +80,7 @@ func TestWrapRiskGatedApprovalRequiresHumanWhenLLMFails(t *testing.T) {
 		return false
 	})
 
-	_ = approve("make install", "build", "/tmp")
+	_ = approve(context.Background(), "make install", "build", "/tmp")
 	if !asked {
 		t.Fatal("expected human prompt for non-low risk")
 	}
@@ -95,7 +95,7 @@ func TestWrapRiskGatedApprovalNilAgent(t *testing.T) {
 		}
 		return true
 	})
-	if !approve("rm -rf /", "x", "/") {
+	if !approve(context.Background(), "rm -rf /", "x", "/") {
 		t.Fatal("expected ask to allow")
 	}
 	if !asked {
@@ -123,7 +123,7 @@ func TestWrapRiskGatedApprovalMediumNotAuto(t *testing.T) {
 		}
 		return false
 	})
-	_ = approve("npm install x", "add pkg", "/tmp")
+	_ = approve(context.Background(), "npm install x", "add pkg", "/tmp")
 	if !asked {
 		t.Fatal("medium must not auto-allow")
 	}

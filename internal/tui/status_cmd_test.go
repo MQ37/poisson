@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,8 +40,8 @@ func TestCmdStatus(t *testing.T) {
 	prov := provider.NewFakeProvider("ollama", []provider.Model{{ID: cfg.Ollama.Model, ContextWindow: 8192}})
 	reg := tools.NewRegistry()
 	reg.Register(tools.NewReadTool(dir))
-	reg.Register(tools.NewBashTool(dir, true, func(_, _, _ string) bool { return true }))
-	a := agent.NewAgent(s, prov, reg, cfg, sid, make(chan agent.OutputEvent, 64), func(_, _, _ string) bool { return false })
+	reg.Register(tools.NewBashTool(dir, true, func(context.Context, string, string, string) bool { return true }))
+	a := agent.NewAgent(s, prov, reg, cfg, sid, make(chan agent.OutputEvent, 64), func(context.Context, string, string, string) bool { return false })
 	a.SetModel(cfg.Ollama.Model)
 	a.SetSkills(true, []skills.Skill{{Name: "code-quality", Description: "Universal code-quality principles."}})
 
