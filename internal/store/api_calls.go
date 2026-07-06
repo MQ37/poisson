@@ -24,6 +24,14 @@ type APICall struct {
 	CreatedAt          int64
 }
 
+// TotalInputTokens is the full prompt size the model processed: uncached input
+// plus cache reads and cache writes. Providers that cache (e.g. Anthropic)
+// report input_tokens EXCLUDING cached tokens, so InputTokens alone undercounts
+// the active context.
+func (c *APICall) TotalInputTokens() int {
+	return c.InputTokens + c.CacheReadTokens + c.CacheWriteTokens
+}
+
 // TokenBreakdown is the aggregate token usage for a session.
 type TokenBreakdown struct {
 	InputTokens       int

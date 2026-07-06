@@ -563,6 +563,32 @@ func TestContextWindow(t *testing.T) {
 // before the first message the session row doesn't exist, so currentModel()
 // falls back to the provider's configured model. A missing provider case there
 // made openai report the 8192 default instead of gpt-5.5's 400K window.
+// TestContextTokensIncludesCachedInput guards against the caching regression:
+// once prompt caching is on, the provider reports input_tokens EXCLUDING cached
+// tokens (the rest land in cache read/write). The status counter must sum all
+// three, or it collapses to the tiny uncached input (the "2 / 1,000,000" bug).
+func TestContextTokensIncludesCachedInput(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	a := NewAgent(s, newFakeProvider(), nil, newTestConfig(), sessionID, nil, nil)
+
+	// ~5000 estimated tokens of conversation in the store.
+	if err := s.AppendMessage(&store.Message{SessionID: sessionID, Role: "user", Content: strings.Repeat("x", 20000)}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	// A cached turn: tiny uncached input, the rest served from cache.
+	if err := s.RecordAPICall(&store.APICall{
+		SessionID: sessionID, Model: "test-model",
+		InputTokens: 2, CacheReadTokens: 5000, OutputTokens: 10,
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+
+	if used, _ := a.ContextTokens(); used < 4000 {
+		t.Fatalf("ContextTokens used = %d, want ~5000; regression counts only uncached input (2)", used)
+	}
+}
+
 func TestContextWindowBeforeSessionUsesConfigModel(t *testing.T) {
 	s := newTestStore(t)
 	cfg := config.DefaultConfig() // OpenAI.Model defaults to gpt-5.5

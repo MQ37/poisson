@@ -30,14 +30,17 @@ func (a *Agent) estimateActiveContextTokens() int {
 	if err != nil {
 		return estimated
 	}
-	if last.InputTokensUnknown || last.InputTokens == 0 {
+	// Use the full prompt size (input + cache read + cache write); with prompt
+	// caching, InputTokens alone excludes cached tokens and undercounts context.
+	actual := last.TotalInputTokens()
+	if last.InputTokensUnknown || actual == 0 {
 		return estimated
 	}
 	// After compaction active messages shrink; trust the lower estimate.
-	if estimated < last.InputTokens {
+	if estimated < actual {
 		return estimated
 	}
-	return last.InputTokens
+	return actual
 }
 
 func (a *Agent) estimateMessagesTokens() int {
@@ -82,8 +85,8 @@ func (a *Agent) ShouldCompact() bool {
 
 	estimated := a.estimateMessagesTokens()
 	if last, err := a.store.GetLastAPICall(a.sessionID); err == nil &&
-		!last.InputTokensUnknown && last.InputTokens > estimated {
-		estimated = last.InputTokens
+		!last.InputTokensUnknown && last.TotalInputTokens() > estimated {
+		estimated = last.TotalInputTokens()
 	}
 
 	return float64(estimated) >= threshold*float64(window)
