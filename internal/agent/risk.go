@@ -379,14 +379,13 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 	temp := 0.0
 	// Risk is a coarse one-word label, so classify at the model's LOWEST effort
 	// rather than the agent's configured effort — deep reasoning here just burns
-	// quota. With effort the model still thinks first, so drop the tiny answer
-	// cap (0 = provider default) to leave headroom; without effort the tiny cap
-	// is enough.
+	// quota. Leave MaxTokens unset (0 = provider default) so the verdict is never
+	// starved: some models always emit reasoning first (e.g. Ollama
+	// kimi-k2.7-code / minimax-m3, which can't disable thinking) and need room
+	// before the one-word answer — a tiny cap makes the reply come back empty and
+	// the classification silently fail. The model stops on its own after one
+	// word, so the uncapped default costs nothing extra for non-thinking models.
 	effort := lowestEffort(a.provider.ID(), a.currentModel())
-	maxTokens := 32
-	if effort != "" {
-		maxTokens = 0
-	}
 	req := &provider.Request{
 		Model: a.currentModel(),
 		System: []provider.SystemBlock{{
@@ -399,7 +398,6 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 				Text: prompt,
 			}},
 		}},
-		MaxTokens:   maxTokens,
 		Temperature: &temp,
 		Effort:      effort,
 	}

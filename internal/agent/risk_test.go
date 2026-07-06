@@ -118,13 +118,14 @@ func TestAssessBashRisk(t *testing.T) {
 	if req == nil {
 		t.Fatal("no risk request captured")
 	}
-	// The fake model isn't in KnownModels, so it has no configurable effort:
-	// the classifier sends no effort and keeps the tiny answer cap.
+	// The fake model isn't in KnownModels, so it has no configurable effort.
+	// MaxTokens must be left unset (0) so an always-thinking model isn't starved
+	// of room for the one-word verdict.
 	if req.Effort != "" {
 		t.Fatalf("risk request effort = %q, want empty (unknown model)", req.Effort)
 	}
-	if req.MaxTokens != 32 {
-		t.Fatalf("expected MaxTokens 32 without effort, got %d", req.MaxTokens)
+	if req.MaxTokens != 0 {
+		t.Fatalf("expected MaxTokens 0 (headroom), got %d", req.MaxTokens)
 	}
 	if req.Temperature == nil || *req.Temperature != 0 {
 		t.Fatalf("expected Temperature 0, got %+v", req.Temperature)
