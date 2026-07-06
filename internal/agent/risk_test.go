@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/config"
 	"poisson/internal/provider"
 	"poisson/internal/store"
 )
@@ -119,61 +118,59 @@ func TestAssessBashRisk(t *testing.T) {
 	if req == nil {
 		t.Fatal("no risk request captured")
 	}
-	// The default effort is propagated to the risk check, and the tiny token cap
-	// is dropped so reasoning has headroom.
-	if req.Effort != config.DefaultEffort {
-		t.Fatalf("risk request effort = %q, want %q", req.Effort, config.DefaultEffort)
+	// The fake model isn't in KnownModels, so it has no configurable effort:
+	// the classifier sends no effort and keeps the tiny answer cap.
+	if req.Effort != "" {
+		t.Fatalf("risk request effort = %q, want empty (unknown model)", req.Effort)
 	}
-	if req.MaxTokens != 0 {
-		t.Fatalf("expected MaxTokens 0 with effort, got %d", req.MaxTokens)
+	if req.MaxTokens != 32 {
+		t.Fatalf("expected MaxTokens 32 without effort, got %d", req.MaxTokens)
 	}
 	if req.Temperature == nil || *req.Temperature != 0 {
 		t.Fatalf("expected Temperature 0, got %+v", req.Temperature)
 	}
 }
 
-// TestAssessBashRiskNoEffortCapsTokens verifies the fast path: with no reasoning
-// effort the risk check keeps the tiny answer cap and sends no effort.
-func TestAssessBashRiskNoEffortCapsTokens(t *testing.T) {
-	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
-	fp.SetResponses([][]provider.StreamEvent{
-		provider.FakeTextResponse("low", nil),
-		provider.FakeTextResponse("low", nil),
-	})
+// TestAssessBashRiskUsesLowestModelEffort verifies the classifier ignores the
+// agent's configured effort and uses the model's LOWEST supported level, with
+// the answer cap dropped so the (minimal) thinking has headroom.
+func TestAssessBashRiskUsesLowestModelEffort(t *testing.T) {
+	fp := provider.NewFakeProvider("anthropic", []provider.Model{{ID: "claude-opus-4-8", ContextWindow: 1000000}})
+	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("low", nil)})
 	s := newTestStore(t)
-	sid := newTestSession(t, s, "m")
+	sid := newTestSession(t, s, "claude-opus-4-8")
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
-	a.SetModel("m")
-	a.SetEffort("") // no reasoning → keep the tiny answer cap
+	a.SetModel("claude-opus-4-8")
+	a.SetEffort("max") // agent runs heavy; the classifier must NOT inherit this
 
-	a.AssessBashRisk(context.Background(), "ls", "list", "/tmp")
+	a.AssessBashRisk(context.Background(), "git push origin main", "push", "/tmp")
 	req := fp.LastRequest()
-	if req == nil || req.MaxTokens != 32 || req.Effort != "" {
-		t.Fatalf("expected MaxTokens 32 and empty effort, got %+v", req)
+	if req == nil || req.Effort != "low" {
+		t.Fatalf("expected lowest effort \"low\", got %+v", req)
+	}
+	if req.MaxTokens != 0 {
+		t.Fatalf("expected MaxTokens 0 with effort, got %d", req.MaxTokens)
 	}
 }
 
-func TestAssessBashRiskDualRunTakesHigher(t *testing.T) {
+func TestAssessBashRiskSingleRun(t *testing.T) {
 	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
-	fp.SetResponses([][]provider.StreamEvent{
-		provider.FakeTextResponse("low", nil),
-		provider.FakeTextResponse("high", nil),
-	})
+	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("high", nil)})
 
 	s := newTestStore(t)
 	sid := newTestSession(t, s, "m")
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
 	a.SetModel("m")
 
-	res := a.AssessBashRiskEval(context.Background(), "rm -rf /", "cleanup", "/tmp", BashRiskEvalLLM)
+	res := a.AssessBashRiskEval(context.Background(), "make deploy", "deploy", "/tmp", BashRiskEvalLLM)
 	if res.Risk != BashRiskHigh {
-		t.Fatalf("dual run = %q, want high", res.Risk)
+		t.Fatalf("risk = %q, want high", res.Risk)
 	}
-	if len(res.LLMRuns) != 2 {
-		t.Fatalf("LLMRuns = %d, want 2", len(res.LLMRuns))
+	if len(res.LLMRuns) != 1 {
+		t.Fatalf("LLMRuns = %d, want 1 (single round)", len(res.LLMRuns))
 	}
-	if res.LLMRuns[0].Risk != BashRiskLow || res.LLMRuns[1].Risk != BashRiskHigh {
-		t.Fatalf("runs = %+v", res.LLMRuns)
+	if fp.CallCount() != 1 {
+		t.Fatalf("CallCount = %d, want 1", fp.CallCount())
 	}
 }
 

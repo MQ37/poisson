@@ -11,7 +11,10 @@ import (
 )
 
 const (
-	bashRiskLLMRuns    = 2
+	// A single classification round keeps the approval gate cheap; risk is a
+	// coarse low/medium/high label, so a second confirming call mostly just
+	// doubles quota.
+	bashRiskLLMRuns    = 1
 	bashRiskRunTimeout = 20 * time.Second
 )
 
@@ -107,6 +110,18 @@ func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdi
 		return BashRiskMedium
 	}
 	return a.AssessBashRiskEval(ctx, command, description, workdir, BashRiskEvalLLM).Risk
+}
+
+// lowestEffort returns the cheapest reasoning effort the current model supports
+// (the first EffortLevels entry), or "" when the model has no configurable
+// effort. The bash-risk classifier uses this so a one-word answer never
+// inherits the agent's heavier configured effort.
+func lowestEffort(providerID, model string) string {
+	s, ok := provider.GetModelSettings(providerID, model)
+	if !ok || !s.SupportsEffort || len(s.EffortLevels) == 0 {
+		return ""
+	}
+	return s.EffortLevels[0]
 }
 
 // isDestructiveCommand reports whether the command deletes files or directories.
@@ -321,7 +336,8 @@ type bashRiskLLMOutcome struct {
 	Runs   []BashRiskLLMRun
 }
 
-// assessBashRiskLLM runs multiple LLM classifications and keeps the strictest result.
+// assessBashRiskLLM runs bashRiskLLMRuns LLM classifications and keeps the
+// strictest result (a single round by default).
 func (a *Agent) assessBashRiskLLM(ctx context.Context, command, description, workdir string) bashRiskLLMOutcome {
 	var out bashRiskLLMOutcome
 	if a == nil || a.provider == nil {
@@ -361,11 +377,14 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 
 	prompt := fmt.Sprintf("Command:\n%s\n\nPurpose: %s\n\nWorking directory: %s", command, description, workdir)
 	temp := 0.0
-	// A one-word answer needs only a tiny cap, but with reasoning effort the
-	// model must think first — leave headroom (0 = provider default) so thinking
-	// doesn't starve the answer.
+	// Risk is a coarse one-word label, so classify at the model's LOWEST effort
+	// rather than the agent's configured effort — deep reasoning here just burns
+	// quota. With effort the model still thinks first, so drop the tiny answer
+	// cap (0 = provider default) to leave headroom; without effort the tiny cap
+	// is enough.
+	effort := lowestEffort(a.provider.ID(), a.currentModel())
 	maxTokens := 32
-	if a.effort != "" {
+	if effort != "" {
 		maxTokens = 0
 	}
 	req := &provider.Request{
@@ -382,7 +401,7 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 		}},
 		MaxTokens:   maxTokens,
 		Temperature: &temp,
-		Effort:      a.effort,
+		Effort:      effort,
 	}
 
 	ch, err := a.provider.Stream(ctx, req)
