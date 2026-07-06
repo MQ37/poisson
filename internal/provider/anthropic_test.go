@@ -44,10 +44,10 @@ func TestAnthropicPromptCacheBreakpoints(t *testing.T) {
 		t.Errorf("earlier messages must not carry a cache breakpoint")
 	}
 
-	// Wire format must be an object {"type":"ephemeral"}, never a bare string.
+	// Wire format must be an object with a 1h TTL, never a bare string.
 	blob, _ := json.Marshal(ar)
-	if !strings.Contains(string(blob), `"cache_control":{"type":"ephemeral"}`) {
-		t.Fatalf("cache_control must serialize as an object, got: %s", blob)
+	if !strings.Contains(string(blob), `"cache_control":{"type":"ephemeral","ttl":"1h"}`) {
+		t.Fatalf("cache_control must serialize as an object with ttl 1h, got: %s", blob)
 	}
 	if strings.Contains(string(blob), `"cache_control":"`) {
 		t.Fatalf("cache_control serialized as a bare string (invalid): %s", blob)

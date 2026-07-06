@@ -349,8 +349,15 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 // and growing history every turn — this slashes input token cost. The stealth
 // billing block (system[0]) is derived from the first user message, so it is
 // stable per session and safe inside the cached prefix.
+//
+// TTL is "1h" (matches Claude Code): the default 5-minute cache expires
+// between interactive turns whenever the user pauses >5 min, turning every
+// resumed turn into a full-price cache WRITE instead of a 0.1x read. The 1h
+// pool is GA — no anthropic-beta header required. 1h writes bill at 2x input
+// (vs 1.25x for 5m), but reads stay 0.1x, so a single reused turn past the
+// 5-minute mark already pays back the write premium.
 func applyPromptCache(ar *anthropicRequest) {
-	cc := &anthropicCacheControl{Type: "ephemeral"}
+	cc := &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}
 	if n := len(ar.Tools); n > 0 {
 		ar.Tools[n-1].CacheControl = cc // caches all tool definitions
 	}

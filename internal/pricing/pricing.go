@@ -18,7 +18,9 @@ type Rates struct {
 
 var builtIn = map[string]map[string]Rates{
 	"anthropic": {
-		"claude-opus-4-8": {5.0, 25.0, 0.5, 3.0},
+		// input, output, cacheRead (0.1x), cacheWrite. Poisson uses the 1-hour
+		// cache pool, whose writes bill at 2x input ($10/MTok for Opus 4.8).
+		"claude-opus-4-8": {5.0, 25.0, 0.5, 10.0},
 	},
 	"xai": {
 		"grok-build": {1.0, 2.0, 0, 0},
