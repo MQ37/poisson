@@ -225,6 +225,10 @@ func cmdModel(h commandHost, args []string) error {
 				h.Out(styleError, "unknown provider: "+provName)
 				return nil
 			}
+			if !provider.IsConfiguredFromDisk(provName, a.Config()) {
+				h.Out(styleError, "provider "+provName+" is not configured — run: px login "+provName)
+				return nil
+			}
 			warnPersist(h, a.SetProvider(newProv))
 		}
 		model := provider.DefaultModel(provName, a.Config())
@@ -248,6 +252,10 @@ func cmdModel(h commandHost, args []string) error {
 		newProv := provider.NewProviderFromDisk(provName, a.Config())
 		if newProv == nil {
 			h.Out(styleError, "unknown provider: "+provName)
+			return nil
+		}
+		if !provider.IsConfiguredFromDisk(provName, a.Config()) {
+			h.Out(styleError, "provider "+provName+" is not configured — run: px login "+provName)
 			return nil
 		}
 		warnPersist(h, a.SetProvider(newProv))
@@ -347,6 +355,9 @@ func cmdStatus(h commandHost) {
 	head := "Session " + sid
 	if title != "" {
 		head += "  · " + title
+	}
+	if !saved {
+		head += "  · unsaved (send a message to persist)"
 	}
 	b.WriteString(head + "\n")
 	b.WriteString(fmt.Sprintf("  Model:    %s/%s\n", a.Provider().ID(), a.Model()))

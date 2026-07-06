@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"poisson/internal/agent"
+	"poisson/internal/auth"
 	"poisson/internal/config"
 	"poisson/internal/provider"
 	"poisson/internal/store"
@@ -306,8 +307,22 @@ func TestCmdModel(t *testing.T) {
 	}
 }
 
+// configureAuth writes an OAuth entry for each provider into the (temp-HOME)
+// auth store so cmdModel's configured-provider gate lets the switch through.
+func configureAuth(t *testing.T, ids ...string) {
+	t.Helper()
+	st := auth.AuthStore{}
+	for _, id := range ids {
+		st[id] = auth.AuthEntry{Type: "oauth", Access: "test-token"}
+	}
+	if err := auth.Save(st); err != nil {
+		t.Fatalf("save auth: %v", err)
+	}
+}
+
 func TestCmdModelWithProvider(t *testing.T) {
 	s, a, sessionID := newTestStoreAndAgent(t)
+	configureAuth(t, "xai")
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdModel(cmdHost(tui), []string{"xai/grok-build"})
@@ -326,8 +341,25 @@ func TestCmdModelWithProvider(t *testing.T) {
 	}
 }
 
+// An unconfigured provider must not switch (it would report success then fail
+// at request time). The switch is refused with a helpful message.
+func TestCmdModelRefusesUnconfiguredProvider(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t) // temp HOME → xai unconfigured
+	tui := newTUIWithAgent(a, sessionID)
+	before := a.Provider().ID()
+
+	cmdModel(cmdHost(tui), []string{"xai/grok-build"})
+	if a.Provider().ID() != before {
+		t.Fatalf("provider switched to %q despite xai being unconfigured", a.Provider().ID())
+	}
+	if out := testScrollOutput(tui); !strings.Contains(out, "not configured") {
+		t.Errorf("expected 'not configured' message, got %q", out)
+	}
+}
+
 func TestCmdModelUpdatesContextWindow(t *testing.T) {
 	_, a, sessionID := newTestStoreAndAgent(t)
+	configureAuth(t, "xai")
 	tui := newTUIWithAgent(a, sessionID)
 	tui.status.ContextWindow = 12345 // stale value from a previous model
 

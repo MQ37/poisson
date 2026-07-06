@@ -226,9 +226,10 @@ var (
 	pasteEndV2   = []byte("\x1b[201~")
 )
 
-// feed appends raw input bytes to the editor. Returns (submitted string, ok).
-// submitted is non-empty when the user pressed Ctrl+J or Esc+Enter; the
-// caller should dispatch it to the agent.
+// feed appends raw input bytes to the editor and returns (submitted, quit).
+// submitted is the buffer text when the user presses Enter (CR, or the kitty
+// Enter sequence); Ctrl+J and Shift+Enter insert a newline instead. quit is
+// true on Ctrl+D with an empty buffer.
 func (e *editor) feed(data []byte) (string, bool) {
 	if e.paste {
 		if idx := indexOf(data, pasteEndV2); idx >= 0 {

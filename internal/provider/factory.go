@@ -15,15 +15,34 @@ func ResolveDefaultProvider(a auth.AuthStore, cfg *config.Config) (name string, 
 	if name == "" {
 		name = "ollama"
 	}
-	if name == "anthropic" && !auth.IsOAuth(a, "anthropic") && auth.GetAPIKey(a, "anthropic") == "" && cfg.Anthropic.APIKey == "" {
+	if !IsConfigured(name, a, cfg) {
+		warn = "no " + name + " credentials found, using ollama"
 		name = "ollama"
-		warn = "no anthropic credentials found, using ollama"
-	}
-	if name == "openai" && !auth.IsOAuth(a, "openai") {
-		name = "ollama"
-		warn = "no openai credentials found, using ollama"
 	}
 	return name, warn
+}
+
+// IsConfigured reports whether a provider has usable credentials. Ollama runs
+// locally and needs none; the others need an OAuth session or an API key.
+func IsConfigured(name string, a auth.AuthStore, cfg *config.Config) bool {
+	switch name {
+	case "ollama":
+		return true
+	case "anthropic":
+		return auth.IsOAuth(a, "anthropic") || auth.GetAPIKey(a, "anthropic") != "" ||
+			(cfg != nil && cfg.Anthropic.APIKey != "")
+	case "xai", "openai":
+		return auth.IsOAuth(a, name) || auth.GetAPIKey(a, name) != ""
+	default:
+		return false
+	}
+}
+
+// IsConfiguredFromDisk loads auth from disk and reports whether the named
+// provider has usable credentials.
+func IsConfiguredFromDisk(name string, cfg *config.Config) bool {
+	a, _ := auth.Load()
+	return IsConfigured(name, a, cfg)
 }
 
 // NewProvider constructs a provider by name. Returns nil for unknown names.

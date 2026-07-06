@@ -52,15 +52,17 @@ func pickerProviderItems(h commandHost) []pickerItem {
 		{"xai", "Grok OAuth"},
 		{"openai", "GPT ChatGPT subscription"},
 	}
+	cfg := h.Agent().Config()
 	var items []pickerItem
 	for _, p := range providers {
 		var status string
-		if p.id == "ollama" {
+		switch {
+		case p.id == "ollama":
 			// Ollama runs locally and needs no credentials.
 			status = "✓ no auth needed"
-		} else if e, ok := store[p.id]; ok && (e.Type == "none" || e.Key != "" || e.Access != "") {
+		case provider.IsConfigured(p.id, store, cfg):
 			status = "✓ configured"
-		} else {
+		default:
 			status = "✗ not configured"
 		}
 		items = append(items, pickerItem{
