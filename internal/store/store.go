@@ -24,8 +24,6 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS sessions (
     id                  TEXT PRIMARY KEY,
-    parent_id           TEXT,
-    fork_point          TEXT,
     is_subagent         INTEGER DEFAULT 0,
     title               TEXT,
     compaction_summary  TEXT,
@@ -33,11 +31,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at          INTEGER NOT NULL,
     cwd                 TEXT NOT NULL,
     provider            TEXT NOT NULL,
-    model               TEXT NOT NULL,
-    CHECK (
-        (parent_id IS NULL AND fork_point IS NULL) OR
-        (parent_id IS NOT NULL AND fork_point IS NOT NULL)
-    )
+    model               TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -53,7 +47,6 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
-CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     session_id UNINDEXED,

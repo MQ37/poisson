@@ -21,8 +21,8 @@ Electron — just one static binary and your terminal.
 It talks to **Anthropic** (Claude, via your Pro/Max subscription), **OpenAI**
 (GPT-5.5, via your ChatGPT Plus/Pro subscription), **xAI** (Grok, via SuperGrok)
 and **Ollama** (local + cloud models). You can paste
-images, search past sessions full-text, fork and compact context, and approve
-risky shell commands from a popup.
+images, search past sessions full-text, compact context, and approve risky
+shell commands from a popup.
 
 ```bash
 git clone <this-repo> poisson && cd poisson
@@ -39,20 +39,21 @@ git clone <this-repo> poisson && cd poisson
   blocks (Ctrl+T to fold), tool cards you can expand (Ctrl+E), a command palette
   (Ctrl+P), mouse scroll, and a status bar with live context % and exact cost.
 - **Real tools** — `bash`, `read`, `write`, `edit`, `ls`, `glob`, `search`,
-  `exa_search`, `fetch` (Ollama), plus **subagents** (parallel child agents) and
-  **skills**.
+  `exa_search`, `fetch` (Ollama), `recall` (full-text search across past
+  sessions), plus **subagents** (parallel child agents) and **skills**.
 - **Bash safety guard** — every shell command is risk-classified; anything
   dangerous pops an approval prompt (you decide, it never auto-allows installs,
   destructive, or `npx`/`dlx` commands).
 - **Sessions in SQLite** — every message, tool call, and API call is persisted.
-  **Full-text search** (FTS5) across your history, resume any session, fork,
-  and auto-compaction that summarizes old turns when context fills up.
+  **Full-text search** (FTS5) across your history, resume any session, and
+  auto-compaction that summarizes old turns when context fills up.
 - **Exact cost & tokens** — per-API-call token counts and USD cost, live in the
   status bar and via `/cost`.
 - **Image input** — paste an image with **Ctrl+V** or attach `@screenshot.png`.
   Images are downscaled to 1024px and sent to vision-capable models. ([details](docs/images.md))
-- **Multi-provider** — Anthropic (subscription OAuth), xAI (OAuth), Ollama
-  (local daemon or Ollama cloud). Switch model/effort live.
+- **Multi-provider** — Anthropic (subscription OAuth), OpenAI (ChatGPT
+  subscription OAuth), xAI (OAuth), Ollama (local daemon or Ollama cloud).
+  Switch model/effort live.
 - **Message queueing** — type while the agent is working; your messages are sent
   as one follow-up when the turn ends.
 
@@ -124,7 +125,7 @@ override. The knobs:
 # effort = "medium"
 
 [provider]
-# default = "ollama"                 # anthropic | ollama | xai
+# default = "ollama"                 # anthropic | ollama | xai | openai
 
 [anthropic]
 # model = "claude-opus-4-8"
@@ -213,7 +214,7 @@ codebase one person can hold in their head.
 - **Local-first & private** — your data lives in `~/.poisson/poisson.db`. No
   telemetry, no analytics, no phone-home.
 - **Suckless-ish** — simplicity over features, delete-before-add, readable code.
-- **Tested without the network** — the suite (170+ tests) mocks every provider;
+- **Tested without the network** — the suite (500+ tests) mocks every provider;
   it never makes a real API call, and runs clean under `-race`.
 
 ---

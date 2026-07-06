@@ -177,27 +177,6 @@ func TestListSessionsOrdersByUpdatedAt(t *testing.T) {
 	}
 }
 
-func TestSessionForkFields(t *testing.T) {
-	s := newTestStore(t)
-	parent := strPtr("parent-1")
-	fork := strPtr("msg-1")
-	sess := &Session{
-		ID:        "fork-1",
-		ParentID:  parent,
-		ForkPoint: fork,
-		Cwd:       "/tmp",
-		Provider:  "anthropic",
-		Model:     "claude-sonnet-4-20250514",
-	}
-	if err := s.CreateSession(sess); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	got, _ := s.GetSession("fork-1")
-	if got.ParentID == nil || *got.ParentID != "parent-1" || got.ForkPoint == nil || *got.ForkPoint != "msg-1" {
-		t.Fatalf("fork fields wrong: %+v", got)
-	}
-}
-
 func TestSessionSubagent(t *testing.T) {
 	s := newTestStore(t)
 	sess := &Session{

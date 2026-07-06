@@ -33,8 +33,6 @@ func randomHex(n int) string {
 // Session represents a row in the sessions table.
 type Session struct {
 	ID                string
-	ParentID          *string
-	ForkPoint         *string
 	IsSubagent        bool
 	Title             *string
 	CompactionSummary *string
@@ -64,10 +62,10 @@ func (s *Store) CreateSession(sess *Session) error {
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO sessions
-		 (id, parent_id, fork_point, is_subagent, title, compaction_summary,
+		 (id, is_subagent, title, compaction_summary,
 		  created_at, updated_at, cwd, provider, model)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		sess.ID, sess.ParentID, sess.ForkPoint, isSub, sess.Title,
+		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		sess.ID, isSub, sess.Title,
 		sess.CompactionSummary, sess.CreatedAt, sess.UpdatedAt,
 		sess.Cwd, sess.Provider, sess.Model,
 	)
@@ -80,7 +78,7 @@ func (s *Store) CreateSession(sess *Session) error {
 // GetSession returns the session with the given id, or ErrNotFound.
 func (s *Store) GetSession(id string) (*Session, error) {
 	row := s.db.QueryRow(
-		`SELECT id, parent_id, fork_point, is_subagent, title,
+		`SELECT id, is_subagent, title,
 		        compaction_summary, created_at, updated_at, cwd, provider, model
 		 FROM sessions WHERE id = ?`, id)
 	sess, err := scanSession(row)
@@ -97,7 +95,7 @@ func (s *Store) ListSessions(limit, offset int) ([]Session, error) {
 		limit = 50
 	}
 	rows, err := s.db.Query(
-		`SELECT id, parent_id, fork_point, is_subagent, title,
+		`SELECT id, is_subagent, title,
 		        compaction_summary, created_at, updated_at, cwd, provider, model
 		 FROM sessions ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT ? OFFSET ?`,
 		limit, offset)
@@ -185,10 +183,10 @@ type scanner interface {
 
 func scanSession(sc scanner) (*Session, error) {
 	var sess Session
-	var parentID, forkPoint, title, compactionSummary sql.NullString
+	var title, compactionSummary sql.NullString
 	var isSubagent int
 	err := sc.Scan(
-		&sess.ID, &parentID, &forkPoint, &isSubagent, &title,
+		&sess.ID, &isSubagent, &title,
 		&compactionSummary, &sess.CreatedAt, &sess.UpdatedAt,
 		&sess.Cwd, &sess.Provider, &sess.Model,
 	)
@@ -197,14 +195,6 @@ func scanSession(sc scanner) (*Session, error) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("scan session: %w", err)
-	}
-	if parentID.Valid {
-		v := parentID.String
-		sess.ParentID = &v
-	}
-	if forkPoint.Valid {
-		v := forkPoint.String
-		sess.ForkPoint = &v
 	}
 	if title.Valid {
 		v := title.String
