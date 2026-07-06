@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -809,17 +810,42 @@ func (t staticTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 }
 
 func TestRegistry_ExecuteTrimsLargeOutput(t *testing.T) {
+	old := toolSpillDir
+	toolSpillDir = testutil.TempDir(t)
+	defer func() { toolSpillDir = old }()
+
+	const total = 40 * 1024
 	r := NewRegistry()
-	r.Register(staticTool{name: "huge", result: ToolResult{Content: strings.Repeat("x", maxToolOutputBytes+100)}})
+	r.Register(staticTool{name: "huge", result: ToolResult{Content: strings.Repeat("x", total)}})
 	res, err := r.Execute(context.Background(), "huge", nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if len(res.Content) > maxToolOutputBytes+100 {
+	// Inline content is capped near maxToolOutputBytes (prefix + a short note).
+	if len(res.Content) > maxToolOutputBytes+300 {
 		t.Fatalf("tool output was not trimmed: len=%d", len(res.Content))
 	}
 	if !strings.Contains(res.Content, "tool output truncated") {
-		t.Fatalf("missing truncation marker: %q", res.Content[len(res.Content)-80:])
+		t.Fatalf("missing truncation marker: %q", res.Content)
+	}
+	// The note must report the true total size.
+	if !strings.Contains(res.Content, fmt.Sprintf("of %d bytes", total)) {
+		t.Fatalf("note must report total size %d: %q", total, res.Content)
+	}
+	// The full output must be spilled to a readable file in toolSpillDir.
+	spills, _ := filepath.Glob(filepath.Join(toolSpillDir, "poisson-tool-*.txt"))
+	if len(spills) != 1 {
+		t.Fatalf("expected 1 spill file, got %d", len(spills))
+	}
+	if !strings.Contains(res.Content, spills[0]) {
+		t.Fatalf("note must reference the spill path %q: %q", spills[0], res.Content)
+	}
+	full, err := os.ReadFile(spills[0])
+	if err != nil {
+		t.Fatalf("read spill: %v", err)
+	}
+	if len(full) != total {
+		t.Fatalf("spill file has %d bytes, want full %d", len(full), total)
 	}
 }
 

@@ -2,11 +2,16 @@ package tools
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"unicode/utf8"
 )
 
-const maxToolOutputBytes = 50 * 1024
+const maxToolOutputBytes = 5 * 1024
+
+// toolSpillDir is where oversized tool output is written in full so the model
+// can read it back on demand. Overridable in tests.
+var toolSpillDir = "/tmp"
 
 // TrimToolResult bounds tool output before it reaches the model, store, or UI.
 func TrimToolResult(result ToolResult) ToolResult {
@@ -20,7 +25,29 @@ func trimToolText(s string) string {
 	if len(s) <= maxToolOutputBytes {
 		return s
 	}
-	return utf8SafePrefix(s, maxToolOutputBytes) + fmt.Sprintf("\n\n... (tool output truncated at %d bytes)\n", maxToolOutputBytes)
+	prefix := utf8SafePrefix(s, maxToolOutputBytes)
+	if path, err := spillToolOutput(s); err == nil {
+		return prefix + fmt.Sprintf(
+			"\n\n... (tool output truncated: showing %d of %d bytes. Full output saved to %s — read that path if you need the rest.)\n",
+			len(prefix), len(s), path)
+	}
+	// Spill failed — still report the true size so the model isn't misled.
+	return prefix + fmt.Sprintf(
+		"\n\n... (tool output truncated: showing %d of %d bytes.)\n",
+		len(prefix), len(s))
+}
+
+// spillToolOutput writes the full tool output to a temp file, returning its path.
+func spillToolOutput(s string) (string, error) {
+	f, err := os.CreateTemp(toolSpillDir, "poisson-tool-*.txt")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(s); err != nil {
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 func sanitizeToolText(s string) string {
