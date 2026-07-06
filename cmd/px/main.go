@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,14 +30,57 @@ func main() {
 	}
 
 	noSkills := false
+	var opts printOpts
 	var cmdArgs []string
-	for _, a := range os.Args[1:] {
-		if a == "--no-skills" {
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--no-skills":
 			noSkills = true
-			continue
+		case "--yolo":
+			opts.yolo = true
+		case "-p", "--print":
+			opts.print = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				opts.prompt = args[i+1]
+				i++
+			}
+		case "--provider":
+			if i+1 < len(args) {
+				opts.provider = args[i+1]
+				i++
+			}
+		case "--model":
+			if i+1 < len(args) {
+				opts.model = args[i+1]
+				i++
+			}
+		case "--session":
+			if i+1 < len(args) {
+				opts.sessionID = args[i+1]
+				i++
+			}
+		default:
+			cmdArgs = append(cmdArgs, args[i])
 		}
-		cmdArgs = append(cmdArgs, a)
 	}
+
+	if opts.print {
+		opts.noSkills = noSkills
+		if opts.prompt == "" {
+			opts.prompt = strings.TrimSpace(strings.Join(cmdArgs, " "))
+		}
+		if opts.prompt == "" {
+			opts.prompt = readStdin()
+		}
+		if strings.TrimSpace(opts.prompt) == "" {
+			fmt.Fprintln(os.Stderr, "px -p: no prompt (pass a string or pipe via stdin)")
+			os.Exit(2)
+		}
+		runPrint(opts)
+		return
+	}
+
 	if len(cmdArgs) == 0 {
 		runREPL(noSkills)
 		return
@@ -62,6 +106,129 @@ func main() {
 		fmt.Println("  Poisson sessions            list sessions")
 		fmt.Println("  Poisson cost [session-id]   show cost")
 		fmt.Println("  Poisson -v                  print version")
+	}
+}
+
+// printOpts configures headless single-prompt (-p) mode.
+type printOpts struct {
+	print     bool
+	yolo      bool
+	noSkills  bool
+	prompt    string
+	provider  string // override config default
+	model     string // override config default
+	sessionID string // reuse an existing session id
+}
+
+// readStdin slurps all of stdin (for `px -p < file` / pipelines).
+func readStdin() string {
+	data, _ := io.ReadAll(os.Stdin)
+	return string(data)
+}
+
+// runPrint runs a single prompt headlessly: it streams the assistant's text to
+// stdout and tool activity to stderr, then exits. Read-only tools auto-run;
+// risky bash is denied unless --yolo. Used for scripting and pipelines.
+func runPrint(opts printOpts) {
+	cfg, err := config.Load()
+	if err != nil || cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	dbPath := filepath.Join(config.ConfigDir(), "poisson.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	authStore, _ := auth.Load()
+
+	// Resolve provider/model: explicit flags override the config default.
+	provName := opts.provider
+	if provName == "" {
+		provName = cfg.Provider.Default
+	}
+	var prov provider.Provider
+	var model string
+	switch provName {
+	case "anthropic":
+		prov, model = provider.NewAnthropicProvider(authStore, cfg), cfg.Anthropic.Model
+	case "openai":
+		prov, model = provider.NewOpenAIProvider(authStore, cfg), cfg.OpenAI.Model
+	case "xai":
+		prov, model = provider.NewXAIProvider(authStore, cfg), cfg.XAI.Model
+	case "ollama":
+		prov, model = provider.NewOllamaProvider(cfg.Ollama.BaseURL, cfg.Ollama.Model), cfg.Ollama.Model
+	default:
+		fmt.Fprintf(os.Stderr, "px -p: unknown provider %q (use anthropic, openai, xai, ollama)\n", provName)
+		os.Exit(2)
+	}
+	if opts.model != "" {
+		model = opts.model
+	}
+
+	cwd, _ := os.Getwd()
+	sessionID := opts.sessionID
+	if sessionID == "" {
+		sessionID = store.NewSessionID()
+	}
+	if _, err := st.GetSession(sessionID); err != nil {
+		if err := st.CreateSession(&store.Session{
+			ID: sessionID, Cwd: cwd, Provider: provName, Model: model, CreatedAt: time.Now().Unix(),
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "error creating session: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	yolo := opts.yolo
+	var agentRef *agent.Agent
+	humanApproval := func(command, description, workdir string, risk agent.BashRisk) bool {
+		return yolo // headless: only --yolo approves escalated commands
+	}
+	approvalFn := func(command, description, workdir string) bool {
+		if agentRef != nil {
+			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(command, description, workdir)
+		}
+		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
+	}
+	reg := tools.BuildRegistry(tools.BuildOptions{Cwd: cwd, Store: st, ApprovalFn: approvalFn})
+
+	outputChan := make(chan agent.OutputEvent, 256)
+	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
+	agentRef = a
+	a.SetModel(model)
+	var skillList []skills.Skill
+	if !opts.noSkills {
+		skillList, _ = skills.Discover()
+	}
+	a.SetSkills(!opts.noSkills, skillList)
+	a.ReloadConfigDependentTools()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for ev := range outputChan {
+			switch ev.Type {
+			case agent.OutputText:
+				fmt.Print(ev.Text)
+			case agent.OutputToolStart:
+				fmt.Fprintf(os.Stderr, "[tool: %s]\n", ev.ToolName)
+			case agent.OutputError:
+				fmt.Fprintf(os.Stderr, "\n[error: %s]\n", ev.Text)
+			}
+		}
+	}()
+
+	runErr := a.Prompt(opts.prompt)
+	close(outputChan)
+	wg.Wait()
+	fmt.Println()
+	if runErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", runErr)
+		os.Exit(1)
 	}
 }
 
