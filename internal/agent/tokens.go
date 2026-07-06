@@ -26,7 +26,7 @@ func (a *Agent) ContextTokens() (int, int) {
 
 // estimateActiveContextTokens estimates tokens for the next request.
 func (a *Agent) estimateActiveContextTokens() int {
-	estimated := a.estimateMessagesTokens()
+	estimated := int(a.sysTokensEstimate.Load()) + a.estimateMessagesTokens()
 	last, err := a.store.GetLastAPICall(a.sessionID)
 	if err != nil {
 		return estimated
@@ -84,7 +84,7 @@ func (a *Agent) ShouldCompact() bool {
 		threshold = 0.85
 	}
 
-	estimated := a.estimateMessagesTokens()
+	estimated := int(a.sysTokensEstimate.Load()) + a.estimateMessagesTokens()
 	if last, err := a.store.GetLastAPICall(a.sessionID); err == nil &&
 		!last.InputTokensUnknown && last.TotalInputTokens() > estimated {
 		estimated = last.TotalInputTokens()

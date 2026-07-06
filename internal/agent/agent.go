@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"poisson/internal/config"
@@ -81,6 +82,13 @@ type Agent struct {
 	// session tool counters for the status bar (reset on SwitchSession).
 	sessionToolCalls  int
 	sessionToolErrors int
+
+	// sysTokensEstimate caches the estimated token size of the system prompt
+	// (base instructions + AGENTS.md + tool-name list + skills) plus the tool
+	// definition schemas. buildRequest recomputes it each turn from the exact
+	// text it sends; the status bar reads it (from either goroutine) via atomic
+	// so the context counter reflects the whole prompt, not just messages.
+	sysTokensEstimate atomic.Int64
 
 	// compactBackoffUntil suppresses auto-compaction retries after a failure.
 	compactBackoffUntil time.Time
@@ -792,6 +800,17 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 	if a.tools != nil {
 		toolDefs = a.tools.Definitions()
 	}
+
+	// Cache the system-side token estimate for the status bar: the system prompt
+	// plus each tool's serialized schema. Messages and the compaction summary are
+	// counted separately by estimateMessagesTokens, so they are excluded here.
+	sysEst := a.EstimateTokens(sysPrompt)
+	for _, td := range toolDefs {
+		if b, err := json.Marshal(td); err == nil {
+			sysEst += a.EstimateTokens(string(b))
+		}
+	}
+	a.sysTokensEstimate.Store(int64(sysEst))
 
 	model := a.Model()
 	if model == "" {
