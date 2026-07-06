@@ -414,6 +414,33 @@ func TestSearch(t *testing.T) {
 	}
 }
 
+// The model drives search like ripgrep's CLI, passing several space-separated
+// paths in one call (e.g. "dirA dirB file.go"). The tool must search each of
+// them rather than treating the whole string as a single (missing) path.
+func TestSearch_MultipleSpaceSeparatedPaths(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir)
+	s := NewSearchTool(dir)
+
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "one/a.go", "content": "// TODO one\n"}))
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "two/b.go", "content": "// TODO two\n"}))
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "three/c.go", "content": "// TODO three\n"}))
+
+	res, _ := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern": "TODO",
+		"path":    "one two", // two dirs, space-separated; 'three' omitted
+	}))
+	if res.Error != "" {
+		t.Fatalf("search error: %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "a.go") || !strings.Contains(res.Content, "b.go") {
+		t.Errorf("expected matches in both space-separated paths: %q", res.Content)
+	}
+	if strings.Contains(res.Content, "c.go") {
+		t.Errorf("path 'three' was not requested and must not match: %q", res.Content)
+	}
+}
+
 func TestSearch_MaxResultsIsGlobal(t *testing.T) {
 	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)

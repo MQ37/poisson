@@ -29,7 +29,7 @@ func (t *SearchTool) Schema() json.RawMessage {
   "type": "object",
   "properties": {
     "pattern": { "type": "string", "description": "Regex pattern" },
-    "path": { "type": "string", "description": "Directory or file to search (default: cwd)" },
+    "path": { "type": "string", "description": "One or more files/directories to search, space-separated like ripgrep (e.g. 'internal cmd docs'). Default: cwd." },
     "glob": { "type": "string", "description": "File glob filter (e.g. '*.go')" },
     "ignore_case": { "type": "boolean" },
     "max_results": { "type": "integer", "default": 100 }
@@ -74,12 +74,15 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 		maxResults = 100
 	}
 
-	searchPath := in.Path
-	if searchPath == "" {
-		searchPath = t.cwd
+	// rg accepts multiple paths (rg PATTERN path1 path2 ...) and the model uses
+	// that convention, so treat `path` as whitespace-separated paths rather than a
+	// single one. Falls back to cwd when empty.
+	paths := strings.Fields(in.Path)
+	if len(paths) == 0 {
+		paths = []string{t.cwd}
 	}
 
-	args := []string{"--json", "--max-count", strconv.Itoa(maxResults), in.Pattern, searchPath}
+	args := append([]string{"--json", "--max-count", strconv.Itoa(maxResults), in.Pattern}, paths...)
 	if in.IgnoreCase {
 		args = append([]string{"-i"}, args...)
 	}
