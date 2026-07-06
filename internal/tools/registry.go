@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -41,12 +42,21 @@ func (r *Registry) Get(name string) (Tool, bool) {
 }
 
 // Definitions returns ToolDef entries for every registered tool, suitable
-// for sending to the provider.
+// for sending to the provider. Tools are ordered by name so the serialized
+// request is byte-stable across turns — ranging a Go map is randomized, which
+// reshuffles the tools array every request and breaks Anthropic prompt caching
+// (the tools prefix hash changes, forcing a full cache write instead of a read).
 func (r *Registry) Definitions() []ToolDef {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	defs := make([]ToolDef, 0, len(r.tools))
-	for _, t := range r.tools {
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	defs := make([]ToolDef, 0, len(names))
+	for _, name := range names {
+		t := r.tools[name]
 		defs = append(defs, ToolDef{
 			Name:        t.Name(),
 			Description: t.Description(),

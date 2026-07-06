@@ -21,6 +21,38 @@ func mustJSON(t *testing.T, v interface{}) json.RawMessage {
 	return data
 }
 
+// stubTool is a minimal Tool for registry ordering tests.
+type stubTool struct{ name string }
+
+func (s stubTool) Name() string                                    { return s.name }
+func (s stubTool) Description() string                             { return s.name + " desc" }
+func (s stubTool) Schema() json.RawMessage                         { return json.RawMessage(`{"type":"object"}`) }
+func (s stubTool) Execute(context.Context, json.RawMessage) (ToolResult, error) { return ToolResult{}, nil }
+
+// TestDefinitionsStableSortedOrder guards the prompt-cache fix: Definitions()
+// must return a byte-stable, sorted order. Ranging the tools map is randomized,
+// which reshuffled the tools array (and the tool-name list in the system
+// prompt) every request and broke Anthropic caching (cache_read stayed 0).
+func TestDefinitionsStableSortedOrder(t *testing.T) {
+	r := NewRegistry()
+	for _, n := range []string{"read", "write", "bash", "edit", "ls", "glob"} {
+		r.Register(stubTool{name: n})
+	}
+	want := []string{"bash", "edit", "glob", "ls", "read", "write"}
+	for i := 0; i < 50; i++ {
+		defs := r.Definitions()
+		got := make([]string, len(defs))
+		for j, d := range defs {
+			got[j] = d.Name
+		}
+		for k := range want {
+			if got[k] != want[k] {
+				t.Fatalf("iteration %d: order = %v, want sorted %v", i, got, want)
+			}
+		}
+	}
+}
+
 func TestWriteThenRead(t *testing.T) {
 	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)
