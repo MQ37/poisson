@@ -109,7 +109,7 @@ func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry i
 	}
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		resp.Body.Close()
 		return nil, fmt.Errorf("xAI API error (status %d): %s", resp.StatusCode, string(body))
 	}

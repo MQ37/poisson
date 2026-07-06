@@ -17,6 +17,10 @@ const (
 	xaiScopes        = "openid profile email offline_access grok-cli:access api:access"
 )
 
+// xaiHTTPClient bounds every token request (connection + body read) so a stalled
+// device-code poll or a hung refresh can't block the provider auth flow forever.
+var xaiHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // LoginXAI performs the xAI device-code OAuth flow (for headless/VPS/desktop).
 // xAI does not support arbitrary loopback redirect URIs, so device-code is
 // the only reliable flow.
@@ -31,7 +35,7 @@ func loginXAIDeviceCode() (*AuthEntry, error) {
 	form.Set("client_id", xaiClientID)
 	form.Set("scope", xaiScopes)
 
-	resp, err := http.PostForm(xaiDeviceCodeURL, form)
+	resp, err := xaiHTTPClient.PostForm(xaiDeviceCodeURL, form)
 	if err != nil {
 		return nil, fmt.Errorf("device code request: %w", err)
 	}
@@ -70,7 +74,7 @@ func loginXAIDeviceCode() (*AuthEntry, error) {
 		form.Set("client_id", xaiClientID)
 		form.Set("device_code", device.DeviceCode)
 
-		resp, err := http.PostForm(xaiTokenURL, form)
+		resp, err := xaiHTTPClient.PostForm(xaiTokenURL, form)
 		if err != nil {
 			continue
 		}
@@ -113,7 +117,7 @@ func RefreshXAIToken(refreshToken string) (*AuthEntry, error) {
 	form.Set("refresh_token", refreshToken)
 	form.Set("client_id", xaiClientID)
 
-	resp, err := http.PostForm(xaiTokenURL, form)
+	resp, err := xaiHTTPClient.PostForm(xaiTokenURL, form)
 	if err != nil {
 		return nil, fmt.Errorf("refresh: %w", err)
 	}

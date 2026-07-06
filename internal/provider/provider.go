@@ -13,6 +13,10 @@ import (
 	"encoding/json"
 )
 
+// maxErrorBodyBytes bounds how much of a non-200 response body is read for the
+// error message, so a huge or malformed error body can't exhaust memory.
+const maxErrorBodyBytes = 16 << 10 // 16 KiB
+
 // Provider is the abstraction every LLM backend implements.
 type Provider interface {
 	// ID returns a short, stable identifier for this provider

@@ -525,6 +525,38 @@ func TestLs(t *testing.T) {
 	}
 }
 
+// Recursive ls must not leak dotfiles nested in subdirectories, nor descend
+// into hidden subdirectories, when all=false.
+func TestLsRecursiveSkipsNestedHidden(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir)
+	ls := NewLsTool(dir)
+
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "foo/keep.txt", "content": "ok"}))
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "foo/.env", "content": "SECRET=1"}))
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "foo/.hidden/inner.txt", "content": "x"}))
+
+	res, _ := ls.Execute(context.Background(), mustJSON(t, map[string]interface{}{"path": ".", "recursive": true}))
+	if res.Error != "" {
+		t.Fatalf("ls error: %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "keep.txt") {
+		t.Errorf("expected non-hidden nested file keep.txt: %q", res.Content)
+	}
+	if strings.Contains(res.Content, ".env") {
+		t.Errorf("nested dotfile foo/.env must be skipped when all=false: %q", res.Content)
+	}
+	if strings.Contains(res.Content, ".hidden") || strings.Contains(res.Content, "inner.txt") {
+		t.Errorf("hidden subdir and its contents must be skipped when all=false: %q", res.Content)
+	}
+
+	// With all=true, nested hidden entries reappear.
+	res, _ = ls.Execute(context.Background(), mustJSON(t, map[string]interface{}{"path": ".", "recursive": true, "all": true}))
+	if !strings.Contains(res.Content, ".env") || !strings.Contains(res.Content, "inner.txt") {
+		t.Errorf("expected nested hidden entries with all=true: %q", res.Content)
+	}
+}
+
 func TestGlob(t *testing.T) {
 	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir)

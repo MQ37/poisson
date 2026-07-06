@@ -117,7 +117,7 @@ func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, r
 	}
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		resp.Body.Close()
 		return nil, fmt.Errorf("anthropic API error (status %d): %s", resp.StatusCode, string(body))
 	}

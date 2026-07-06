@@ -71,7 +71,9 @@ func (t *LsTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult
 				return filepath.SkipDir
 			}
 			rel, _ := filepath.Rel(dir, path)
-			if !in.All && strings.HasPrefix(rel, ".") && !strings.Contains(rel, "/.") {
+			// Skip dotfiles at any depth: test the entry's own basename and prune
+			// hidden directories so nothing beneath them is walked or listed.
+			if !in.All && strings.HasPrefix(info.Name(), ".") {
 				if info.IsDir() {
 					return filepath.SkipDir
 				}
