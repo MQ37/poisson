@@ -45,11 +45,6 @@ func main() {
 				opts.prompt = args[i+1]
 				i++
 			}
-		case "--provider":
-			if i+1 < len(args) {
-				opts.provider = args[i+1]
-				i++
-			}
 		case "--model":
 			if i+1 < len(args) {
 				opts.model = args[i+1]
@@ -115,8 +110,7 @@ type printOpts struct {
 	yolo      bool
 	noSkills  bool
 	prompt    string
-	provider  string // override config default
-	model     string // override config default
+	model     string // "provider/model" (or bare "provider"); empty = config default
 	sessionID string // reuse an existing session id
 }
 
@@ -144,28 +138,42 @@ func runPrint(opts printOpts) {
 
 	authStore, _ := auth.Load()
 
-	// Resolve provider/model: explicit flags override the config default.
-	provName := opts.provider
-	if provName == "" {
-		provName = cfg.Provider.Default
+	// Resolve provider/model from --model "provider/model" (or bare "provider"),
+	// falling back to the config default.
+	provName := cfg.Provider.Default
+	var model string
+	if opts.model != "" {
+		if p, m, ok := strings.Cut(opts.model, "/"); ok {
+			provName, model = p, m
+		} else {
+			provName = opts.model // bare provider → its default model
+		}
 	}
 	var prov provider.Provider
-	var model string
 	switch provName {
 	case "anthropic":
-		prov, model = provider.NewAnthropicProvider(authStore, cfg), cfg.Anthropic.Model
+		prov = provider.NewAnthropicProvider(authStore, cfg)
+		if model == "" {
+			model = cfg.Anthropic.Model
+		}
 	case "openai":
-		prov, model = provider.NewOpenAIProvider(authStore, cfg), cfg.OpenAI.Model
+		prov = provider.NewOpenAIProvider(authStore, cfg)
+		if model == "" {
+			model = cfg.OpenAI.Model
+		}
 	case "xai":
-		prov, model = provider.NewXAIProvider(authStore, cfg), cfg.XAI.Model
+		prov = provider.NewXAIProvider(authStore, cfg)
+		if model == "" {
+			model = cfg.XAI.Model
+		}
 	case "ollama":
-		prov, model = provider.NewOllamaProvider(cfg.Ollama.BaseURL, cfg.Ollama.Model), cfg.Ollama.Model
+		if model == "" {
+			model = cfg.Ollama.Model
+		}
+		prov = provider.NewOllamaProvider(cfg.Ollama.BaseURL, model)
 	default:
-		fmt.Fprintf(os.Stderr, "px -p: unknown provider %q (use anthropic, openai, xai, ollama)\n", provName)
+		fmt.Fprintf(os.Stderr, "px -p: unknown provider %q (use anthropic/<model>, openai/<model>, xai/<model>, ollama/<model>)\n", provName)
 		os.Exit(2)
-	}
-	if opts.model != "" {
-		model = opts.model
 	}
 
 	cwd, _ := os.Getwd()
