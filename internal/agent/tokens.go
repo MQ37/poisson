@@ -24,21 +24,30 @@ func (a *Agent) ContextTokens() (int, int) {
 	return a.estimateActiveContextTokens(), total
 }
 
-// estimateActiveContextTokens estimates tokens for the next request.
+// estimateActiveContextTokens estimates the tokens the next request will send.
+// It prefers the exact usage from the last real request but takes the LARGER of
+// that and the char/4 estimate: overcounting is safe (it compacts a little
+// early), while undercounting risks a silent context overflow with no easy way
+// to recover. The real usage is ignored when a compaction happened after it,
+// since it then describes the pre-compaction (larger) prompt, not the active
+// context. (pi-mono anchors on the same real usage and adds a char/4 estimate
+// for messages appended since — see docs/TODO.md.)
 func (a *Agent) estimateActiveContextTokens() int {
 	estimated := int(a.sysTokensEstimate.Load()) + a.estimateMessagesTokens()
 	last, err := a.store.GetLastAPICall(a.sessionID)
-	if err != nil {
+	if err != nil || last.InputTokensUnknown {
 		return estimated
 	}
-	// Use the full prompt size (input + cache read + cache write); with prompt
-	// caching, InputTokens alone excludes cached tokens and undercounts context.
-	actual := last.TotalInputTokens()
-	if last.InputTokensUnknown || actual == 0 {
+	// Full turn size incl. cached tokens and the assistant output (both re-enter
+	// the next prompt); InputTokens alone would undercount with prompt caching.
+	actual := last.TotalContextTokens()
+	if actual <= estimated {
 		return estimated
 	}
-	// After compaction active messages shrink; trust the lower estimate.
-	if estimated < actual {
+	// A compaction after this call means its usage reflects the pre-compaction
+	// (larger) prompt, not the active context.
+	if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil &&
+		sess.CompactedSeq > 0 && last.Seq <= sess.CompactedSeq {
 		return estimated
 	}
 	return actual
@@ -64,8 +73,9 @@ func (a *Agent) estimateMessagesTokens() int {
 }
 
 // imageTokenEstimate is the rough vision-token cost of one downscaled
-// (<=1024px) image; used only for the status-bar context estimate.
-const imageTokenEstimate = 800
+// (<=1024px) image; used only for the status-bar context estimate. Matches
+// pi-mono's 4800-char/4 image budget and errs high (better to compact early).
+const imageTokenEstimate = 1200
 
 // ShouldCompact returns true if estimated context exceeds the threshold.
 func (a *Agent) ShouldCompact() bool {
@@ -84,13 +94,7 @@ func (a *Agent) ShouldCompact() bool {
 		threshold = 0.85
 	}
 
-	estimated := int(a.sysTokensEstimate.Load()) + a.estimateMessagesTokens()
-	if last, err := a.store.GetLastAPICall(a.sessionID); err == nil &&
-		!last.InputTokensUnknown && last.TotalInputTokens() > estimated {
-		estimated = last.TotalInputTokens()
-	}
-
-	return float64(estimated) >= threshold*float64(window)
+	return float64(a.estimateActiveContextTokens()) >= threshold*float64(window)
 }
 
 // EstimateTokens returns a rough token count for a text string: len(text)/4.

@@ -41,6 +41,11 @@ type Session struct {
 	Cwd               string
 	Provider          string
 	Model             string
+	// CompactedSeq is the highest api_calls.seq recorded at the time of the last
+	// compaction. A real api_call with Seq <= CompactedSeq predates the
+	// compaction, so its usage describes the pre-compaction (larger) prompt, not
+	// the active context. Zero means never compacted.
+	CompactedSeq int
 }
 
 // ErrNotFound is returned when a single-row lookup yields no rows.
@@ -126,7 +131,7 @@ func (s *Store) DeleteSession(id string) error {
 func (s *Store) GetSession(id string) (*Session, error) {
 	row := s.db.QueryRow(
 		`SELECT id, is_subagent, title,
-		        compaction_summary, created_at, updated_at, cwd, provider, model
+		        compaction_summary, created_at, updated_at, cwd, provider, model, compacted_seq
 		 FROM sessions WHERE id = ?`, id)
 	sess, err := scanSession(row)
 	if err != nil {
@@ -141,7 +146,7 @@ func (s *Store) GetSession(id string) (*Session, error) {
 // (offset ignored); limit == 0 defaults to 50; limit > 0 paginates.
 func (s *Store) ListSessions(limit, offset int) ([]Session, error) {
 	const base = `SELECT id, is_subagent, title,
-	        compaction_summary, created_at, updated_at, cwd, provider, model
+	        compaction_summary, created_at, updated_at, cwd, provider, model, compacted_seq
 	 FROM sessions ORDER BY updated_at DESC, created_at DESC, id DESC`
 	var rows *sql.Rows
 	var err error
@@ -191,9 +196,13 @@ func (s *Store) ApplyCompaction(sessionID string, upToSeq int, summary string) e
 	defer tx.Rollback()
 
 	now := time.Now().Unix()
+	// Watermark the current max api_calls.seq so the context estimator can tell
+	// that any earlier real usage predates this compaction and is now stale.
 	if _, err := tx.Exec(
-		`UPDATE sessions SET compaction_summary = ?, updated_at = ? WHERE id = ?`,
-		summary, now, sessionID); err != nil {
+		`UPDATE sessions SET compaction_summary = ?, updated_at = ?,
+		        compacted_seq = (SELECT COALESCE(MAX(seq), 0) FROM api_calls WHERE session_id = ?)
+		 WHERE id = ?`,
+		summary, now, sessionID, sessionID); err != nil {
 		return fmt.Errorf("set compaction summary: %w", err)
 	}
 	if _, err := tx.Exec(
@@ -242,7 +251,7 @@ func scanSession(sc scanner) (*Session, error) {
 	err := sc.Scan(
 		&sess.ID, &isSubagent, &title,
 		&compactionSummary, &sess.CreatedAt, &sess.UpdatedAt,
-		&sess.Cwd, &sess.Provider, &sess.Model,
+		&sess.Cwd, &sess.Provider, &sess.Model, &sess.CompactedSeq,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

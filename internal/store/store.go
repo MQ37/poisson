@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at          INTEGER NOT NULL,
     cwd                 TEXT NOT NULL,
     provider            TEXT NOT NULL,
-    model               TEXT NOT NULL
+    model               TEXT NOT NULL,
+    compacted_seq       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS messages (

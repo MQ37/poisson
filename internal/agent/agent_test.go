@@ -332,6 +332,42 @@ func TestShouldCompactUsesMessageEstimateWhenLower(t *testing.T) {
 	}
 }
 
+func TestContextTokensPrefersLargerAndDropsStale(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	agent := NewAgent(s, newFakeProvider(), nil, newTestConfig(), sessionID, nil, nil)
+
+	// Real usage present, larger than the (empty) char/4 estimate -> use real.
+	if err := s.RecordAPICall(&store.APICall{
+		SessionID: sessionID, Seq: 1, Model: "test-model",
+		InputTokens: 5000, OutputTokens: 20, CacheReadTokens: 1000,
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if used, _ := agent.ContextTokens(); used != 6020 {
+		t.Fatalf("context = %d, want 6020 (input+output+cacheRead, the larger value)", used)
+	}
+
+	// After a compaction the pre-compaction usage is stale -> fall back to the
+	// (smaller) message estimate instead of the inflated 6020.
+	if err := s.ApplyCompaction(sessionID, 1, "summary"); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if used, _ := agent.ContextTokens(); used >= 6020 {
+		t.Fatalf("context after compaction = %d, want the smaller estimate", used)
+	}
+
+	// A fresh real call after the compaction is trusted again.
+	if err := s.RecordAPICall(&store.APICall{
+		SessionID: sessionID, Seq: 2, Model: "test-model", InputTokens: 3000,
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if used, _ := agent.ContextTokens(); used != 3000 {
+		t.Fatalf("context after fresh call = %d, want 3000", used)
+	}
+}
+
 func TestContentBlocksJSON(t *testing.T) {
 	textJSON, err := contentBlocksToJSON([]provider.ContentBlock{
 		{Type: "text", Text: "hello"},

@@ -32,6 +32,14 @@ func (c *APICall) TotalInputTokens() int {
 	return c.InputTokens + c.CacheReadTokens + c.CacheWriteTokens
 }
 
+// TotalContextTokens is the full size of this turn in the conversation: the
+// prompt (uncached input + cache reads + cache writes) plus the assistant's
+// output, which becomes part of the next request's context. Mirrors pi-mono's
+// calculateContextTokens and is what the context-usage indicator should track.
+func (c *APICall) TotalContextTokens() int {
+	return c.InputTokens + c.OutputTokens + c.CacheReadTokens + c.CacheWriteTokens
+}
+
 // TokenBreakdown is the aggregate token usage for a session.
 type TokenBreakdown struct {
 	InputTokens       int
