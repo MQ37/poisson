@@ -209,6 +209,15 @@ type anthropicTool struct {
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
+// anthropicMaxOutputTokens is the output-token ceiling px requests. max_tokens
+// is required by the API and *includes* thinking tokens, so it must dwarf the
+// thinking budget to leave room for the answer. The old budget+1024 cap let the
+// model spend the whole allowance on thinking and return nothing
+// (stop_reason=max_tokens, no content). 64000 matches what the real Claude Code
+// client requests for this model. Billing is by actual output, so a high cap
+// costs nothing extra on short replies.
+const anthropicMaxOutputTokens = 64000
+
 func anthropicThinkingBudget(effort string) int {
 	switch effort {
 	case "low":
@@ -235,13 +244,15 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 		Temperature: req.Temperature,
 	}
 	if ar.MaxTokens == 0 {
-		ar.MaxTokens = 4096
+		ar.MaxTokens = anthropicMaxOutputTokens
 	}
 	if budget := anthropicThinkingBudget(req.Effort); budget > 0 {
 		ar.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: budget}
 		ar.Temperature = nil
+		// max_tokens must exceed the thinking budget with ample room for the
+		// answer; jump to the full ceiling if a caller passed a tiny max_tokens.
 		if ar.MaxTokens <= budget {
-			ar.MaxTokens = budget + 1024
+			ar.MaxTokens = anthropicMaxOutputTokens
 		}
 	}
 
@@ -556,6 +567,9 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 
 		case "message_delta":
 			var msgDelta struct {
+				Delta struct {
+					StopReason string `json:"stop_reason"`
+				} `json:"delta"`
 				Usage struct {
 					InputTokens      int `json:"input_tokens"`
 					OutputTokens     int `json:"output_tokens"`
@@ -586,7 +600,7 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 			select {
 			case <-ctx.Done():
 				return
-			case ch <- StreamEvent{Type: EventDone, Usage: usage}:
+			case ch <- StreamEvent{Type: EventDone, Usage: usage, StopReason: msgDelta.Delta.StopReason}:
 				doneSent = true
 			}
 

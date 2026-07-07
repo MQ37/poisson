@@ -136,6 +136,10 @@ type StreamEvent struct {
 	ToolCall *ToolCall
 	Error    error
 	Usage    *Usage // exact token counts from the provider (on EventDone)
+	// StopReason is the provider's finish reason on EventDone (e.g. Anthropic
+	// "max_tokens", "end_turn"). Empty when unknown. Used to continue a turn
+	// that was cut off by the output-token cap.
+	StopReason string
 }
 
 // Usage holds exact token counts reported by the provider for one API call.

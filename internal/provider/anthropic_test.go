@@ -498,6 +498,24 @@ func TestAnthropicAPIKeyHeaders(t *testing.T) {
 	}
 }
 
+func TestAnthropicMaxTokensGenerousAndDecoupled(t *testing.T) {
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+	// No explicit max_tokens => generous ceiling, not the old tiny 4096.
+	r := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8"}, false)
+	if r.MaxTokens != anthropicMaxOutputTokens {
+		t.Fatalf("default max_tokens = %d, want %d", r.MaxTokens, anthropicMaxOutputTokens)
+	}
+	// Even at max effort, max_tokens must leave ample room over the thinking
+	// budget (the old budget+1024 cap is what starved the answer).
+	hi := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8", Effort: "max"}, false)
+	if hi.Thinking == nil {
+		t.Fatal("expected thinking enabled at max effort")
+	}
+	if hi.MaxTokens-hi.Thinking.BudgetTokens < 40000 {
+		t.Fatalf("max_tokens (%d) leaves too little over budget (%d)", hi.MaxTokens, hi.Thinking.BudgetTokens)
+	}
+}
+
 func TestAnthropicEffortMapsToThinking(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 

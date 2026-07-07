@@ -181,9 +181,6 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 		Temperature:     req.Temperature,
 		ReasoningEffort: req.Effort,
 	}
-	if ar.MaxTokens == 0 {
-		ar.MaxTokens = 4096
-	}
 
 	// System blocks → system messages.
 	for _, sb := range req.System {

@@ -552,6 +552,80 @@ func TestExpediteInjectsNudgeIntoToolResult(t *testing.T) {
 	}
 }
 
+func TestRunTurnContinuesOnMaxTokens(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	reg := newTestRegistry(testutil.TempDir(t))
+	cfg := newTestConfig()
+	p := newFakeProvider()
+	cut := []provider.StreamEvent{
+		{Type: provider.EventTextDelta, Text: "partial answer"},
+		{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}, StopReason: "max_tokens"},
+	}
+	fin := []provider.StreamEvent{
+		{Type: provider.EventTextDelta, Text: " and the rest"},
+		{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 12, OutputTokens: 4}, StopReason: "end_turn"},
+	}
+	p.SetResponses([][]provider.StreamEvent{cut, fin})
+
+	ch := make(chan OutputEvent, 256)
+	drainEvents(ch)
+	agent := NewAgent(s, p, reg, cfg, sessionID, ch, nil)
+	if err := agent.Prompt("go"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(ch)
+
+	if p.CallCount() != 2 {
+		t.Errorf("CallCount = %d, want 2 (cut + continuation)", p.CallCount())
+	}
+	msgs, _ := s.GetMessages(sessionID)
+	foundContinue := false
+	for _, m := range msgs {
+		if m.Role == "user" && strings.Contains(m.Content, "Continue exactly where you left off") {
+			foundContinue = true
+		}
+	}
+	if !foundContinue {
+		t.Errorf("expected a synthetic continue user turn, got %d msgs", len(msgs))
+	}
+	if last := msgs[len(msgs)-1]; last.Role != "assistant" || !strings.Contains(last.Content, "and the rest") {
+		t.Errorf("expected final assistant continuation, got role=%s", last.Role)
+	}
+}
+
+func TestRunTurnBoundsMaxTokensContinuations(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	reg := newTestRegistry(testutil.TempDir(t))
+	cfg := newTestConfig()
+	p := newFakeProvider()
+	// Always cut off: the turn must stop after maxTurnContinuations, not loop forever.
+	cut := []provider.StreamEvent{
+		{Type: provider.EventTextDelta, Text: "more"},
+		{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 1, OutputTokens: 1}, StopReason: "max_tokens"},
+	}
+	var resps [][]provider.StreamEvent
+	for i := 0; i < maxTurnContinuations+3; i++ {
+		resps = append(resps, cut)
+	}
+	p.SetResponses(resps)
+
+	ch := make(chan OutputEvent, 512)
+	drainEvents(ch)
+	agent := NewAgent(s, p, reg, cfg, sessionID, ch, nil)
+	if err := agent.Prompt("go"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(ch)
+
+	if want := maxTurnContinuations + 1; p.CallCount() != want {
+		t.Errorf("CallCount = %d, want %d (initial + %d continuations)", p.CallCount(), want, maxTurnContinuations)
+	}
+}
+
 func TestRunTurnRetriesEmptyResponse(t *testing.T) {
 	old := emptyResponseBackoff
 	emptyResponseBackoff = time.Millisecond

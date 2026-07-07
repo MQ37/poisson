@@ -548,15 +548,38 @@ func (a *Agent) PromptWithContext(ctx context.Context, userInput string, images 
 // times (Nth retry waits N × emptyResponseBackoff) before surfacing an error.
 const maxEmptyResponseRetries = 3
 
+// maxTurnContinuations bounds how many times a single turn may auto-continue
+// after being cut off by the provider's output-token cap (stop_reason=max_tokens).
+const maxTurnContinuations = 8
+
 // emptyResponseBackoff is a var so tests can shorten it.
 var emptyResponseBackoff = 500 * time.Millisecond
 
 const expediteNudge = "\n\n[User interjection] The user needs results now and has asked you to wrap up immediately. Stop starting new work: summarize what you have accomplished so far — partial results are fine — and finish this turn without any further tool calls."
 
+// appendContinueMessage adds a synthetic user turn asking the model to resume
+// after its previous response was truncated by the output-token cap. A user
+// turn (rather than a second assistant message) keeps roles alternating, which
+// Anthropic requires.
+func (a *Agent) appendContinueMessage() error {
+	content, err := contentBlocksToJSON([]provider.ContentBlock{
+		{Type: "text", Text: "Continue exactly where you left off. Do not repeat what you already wrote."},
+	})
+	if err != nil {
+		return err
+	}
+	return a.store.AppendMessage(&store.Message{
+		SessionID: a.sessionID,
+		Role:      "user",
+		Content:   content,
+	})
+}
+
 // runTurn executes the turn loop: build → stream → collect tools → dispatch →
 // append results → check compaction → repeat until no tool calls.
 func (a *Agent) runTurn(ctx context.Context) error {
 	emptyAttempts := 0
+	continuations := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			a.sendEvent(OutputEvent{Type: OutputDone})
@@ -585,6 +608,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		var redactedThinking []provider.ContentBlock
 		var toolCalls []provider.ToolCall
 		var usage *provider.Usage
+		var stopReason string
 
 		for ev := range ch {
 			switch ev.Type {
@@ -618,6 +642,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 
 			case provider.EventDone:
 				usage = ev.Usage
+				stopReason = ev.StopReason
 
 			case provider.EventError:
 				a.sendEvent(OutputEvent{Type: OutputError, Text: ev.Error.Error()})
@@ -693,8 +718,23 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		// Update status bar.
 		a.UpdateStatus()
 
-		// If the model didn't call any tools, the turn is done.
+		// If the model didn't call any tools, the turn is normally done — unless
+		// it was cut off by the output-token cap mid-answer, in which case we keep
+		// going. A synthetic user turn (rather than a second assistant message)
+		// preserves role alternation, which Anthropic requires. Bounded to avoid
+		// an unbounded loop if the model keeps hitting the cap.
 		if len(toolCalls) == 0 {
+			if stopReason == "max_tokens" && continuations < maxTurnContinuations {
+				continuations++
+				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf(
+					"response hit the output limit — continuing (%d/%d)", continuations, maxTurnContinuations)})
+				if err := a.appendContinueMessage(); err != nil {
+					a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Store error: %v", err)})
+					a.sendEvent(OutputEvent{Type: OutputDone})
+					return fmt.Errorf("append continue message: %w", err)
+				}
+				continue
+			}
 			a.sendEvent(OutputEvent{Type: OutputDone})
 			break
 		}
