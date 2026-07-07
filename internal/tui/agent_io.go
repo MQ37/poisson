@@ -111,6 +111,19 @@ func (t *TUI) enqueueLocked(text string) {
 		return
 	}
 	if strings.HasPrefix(trimmed, "/") {
+		// /btw is a side question meant to run *alongside* a live turn (its own
+		// one-shot request, no shared session/turn state), so dispatch it now.
+		// Every other command mutates turn/session state, so keep blocking those.
+		if fields := strings.Fields(trimmed); len(fields) > 0 && fields[0] == "/btw" {
+			t.editor.setText("")
+			t.history = append(t.history, text)
+			t.histIdx = -1
+			t.draftSaved = ""
+			if err := t.handleSlash(trimmed); err != nil {
+				t.appendErrorLocked(err)
+			}
+			return
+		}
 		t.setEphemeralHintLocked("can't queue a / command while busy", 2*time.Second)
 		return
 	}

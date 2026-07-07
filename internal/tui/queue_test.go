@@ -177,3 +177,22 @@ func TestQueue_PreviewRendering(t *testing.T) {
 		t.Errorf("hint missing queue affordance:\n%s", out)
 	}
 }
+
+// TestQueue_BTWDispatchesWhileBusy: /btw launches immediately during a live
+// turn (side question), rather than being blocked like other slash commands.
+func TestQueue_BTWDispatchesWhileBusy(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.tui.mu.Lock()
+	e.tui.status.Thinking = true
+	e.tui.enqueueLocked("/btw what is 2+2")
+	queued := len(e.tui.queued)
+	_, isBTW := e.tui.activeOverlay.(*btwOverlay)
+	e.tui.mu.Unlock()
+
+	if queued != 0 {
+		t.Errorf("/btw should not be queued, got %d queued", queued)
+	}
+	if !isBTW {
+		t.Error("/btw should open the btw overlay immediately while busy")
+	}
+}
