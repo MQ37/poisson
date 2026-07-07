@@ -178,7 +178,7 @@ func (t *TUI) renderHintLine() string {
 	}
 	base := "Tab:conv · Enter:send · Ctrl+V:image · Ctrl+F:find · Ctrl+P:palette · Ctrl+L:effort · Ctrl+T:think · Ctrl+E:tool · Ctrl+C:cancel"
 	if t.running() {
-		base = "Enter:queue message · Ctrl+C:cancel · Ctrl+T:think · Ctrl+E:tool"
+		base = "Enter:queue message · Ctrl+C:cancel · Ctrl+G:expedite · Ctrl+T:think · Ctrl+E:tool"
 	}
 	if t.status.Hint != "" {
 		return dim + t.status.Hint + " · " + base + reset

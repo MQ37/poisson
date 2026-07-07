@@ -17,6 +17,7 @@ func keybindingLines() []string {
 		"  Ctrl+L       Effort picker",
 		"  Ctrl+T       Toggle thinking block",
 		"  Ctrl+E       Expand/collapse tool card",
+		"  Ctrl+G       Expedite running subagents (finish ASAP)",
 		"  Ctrl+C       Cancel turn · twice to exit",
 		"  Ctrl+D       Exit",
 		"  Mouse wheel  Scroll (when no modal open)",

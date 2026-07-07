@@ -499,6 +499,59 @@ func TestAgentLoopWithToolCall(t *testing.T) {
 	}
 }
 
+func TestExpediteInjectsNudgeIntoToolResult(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cwd := testutil.TempDir(t)
+	testFile := filepath.Join(cwd, "hello.txt")
+	if err := os.WriteFile(testFile, []byte("Hello from file!"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	reg := newTestRegistry(cwd)
+	cfg := newTestConfig()
+	p := newFakeProvider()
+	first, second := provider.FakeToolCallResponse("read",
+		map[string]interface{}{"path": testFile},
+		"done")
+	p.SetResponses([][]provider.StreamEvent{first, second})
+
+	ch := make(chan OutputEvent, 256)
+	drainEvents(ch)
+	agent := NewAgent(s, p, reg, cfg, sessionID, ch, nil)
+
+	// Simulate the parent forwarding Ctrl+G before the turn runs; the flag is
+	// consumed on the first tool-result batch.
+	agent.Expedite()
+
+	if err := agent.Prompt("read hello.txt"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(ch)
+
+	msgs, err := s.GetMessages(sessionID)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	var toolBlocks []contentBlockJSON
+	if err := json.Unmarshal([]byte(msgs[2].Content), &toolBlocks); err != nil {
+		t.Fatalf("parse tool content: %v", err)
+	}
+	gotNudge := false
+	for _, b := range toolBlocks {
+		if b.Type == "tool_result" && strings.Contains(b.ToolResult, "wrap up immediately") {
+			gotNudge = true
+		}
+	}
+	if !gotNudge {
+		t.Errorf("expedite nudge not appended to tool result: %s", msgs[2].Content)
+	}
+	// Flag is single-shot: consumed after one injection.
+	if agent.expedite.Load() {
+		t.Error("expedite flag should be cleared after injection")
+	}
+}
+
 func TestAgentLoopError(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")

@@ -154,6 +154,20 @@ func (c *ChildProcess) SendApproval(approved bool) error {
 	return err
 }
 
+// SendExpedite asks the child to wrap up early by writing an expedite message
+// to its stdin. The child injects a finish-now nudge at its next micro-turn
+// boundary and returns partial results. Thread-safe.
+func (c *ChildProcess) SendExpedite() error {
+	c.stdinMu.Lock()
+	defer c.stdinMu.Unlock()
+	data, err := json.Marshal(map[string]interface{}{"type": "expedite"})
+	if err != nil {
+		return err
+	}
+	_, err = c.stdin.Write(append(data, '\n'))
+	return err
+}
+
 // SendApprovalSafe is a thread-safe version of SendApproval.
 func (c *ChildProcess) SendApprovalSafe(approved bool) error {
 	c.stdinMu.Lock()

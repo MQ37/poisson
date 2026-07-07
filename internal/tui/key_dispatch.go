@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -226,6 +227,11 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		return false, nil
 	}
 
+	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyCtrl && k.Byte == 7 {
+		t.expediteSubagentsLocked()
+		return false, nil
+	}
+
 	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyRune && k.Rune == '.' &&
 		t.editor.text() == "" && t.focusRegion == focusInput {
 		t.openCommandPalette()
@@ -308,4 +314,22 @@ func (t *TUI) processEditorKey(k Key) (bool, error) {
 	t.refreshCompletion()
 	t.markInputDirty()
 	return false, nil
+}
+
+// expediteSubagentsLocked forwards the user's Ctrl+G "finish now" nudge to every
+// running subagent; the main agent's own turn is left untouched. Caller holds t.mu.
+func (t *TUI) expediteSubagentsLocked() {
+	n := 0
+	if t.agent != nil {
+		n = t.agent.ExpediteSubagents()
+	}
+	if n == 0 {
+		t.setEphemeralHintLocked("No subagents running", 2*time.Second)
+		return
+	}
+	unit := "subagent"
+	if n > 1 {
+		unit = "subagents"
+	}
+	t.setEphemeralHintLocked(fmt.Sprintf("Expedited %d %s — wrapping up", n, unit), 3*time.Second)
 }

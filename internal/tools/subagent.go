@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"poisson/internal/store"
 	"poisson/internal/subagent"
@@ -34,6 +35,12 @@ type SubagentTool struct {
 	modelFn    func() string
 	effortFn   func() string
 	approvalFn SubagentApproval
+
+	// live tracks currently-running child processes so ExpediteAll can nudge
+	// them to wrap up. Guarded by liveMu; touched from parallel tool goroutines
+	// (register/unregister) and the TUI goroutine (ExpediteAll).
+	liveMu sync.Mutex
+	live   map[*subagent.ChildProcess]struct{}
 }
 
 // NewSubagentTool creates a subagent tool.
@@ -41,7 +48,34 @@ func NewSubagentTool(cwd string, approvalFn SubagentApproval) *SubagentTool {
 	return &SubagentTool{
 		cwd:        cwd,
 		approvalFn: approvalFn,
+		live:       make(map[*subagent.ChildProcess]struct{}),
 	}
+}
+
+func (t *SubagentTool) trackLive(c *subagent.ChildProcess) {
+	t.liveMu.Lock()
+	t.live[c] = struct{}{}
+	t.liveMu.Unlock()
+}
+
+func (t *SubagentTool) untrackLive(c *subagent.ChildProcess) {
+	t.liveMu.Lock()
+	delete(t.live, c)
+	t.liveMu.Unlock()
+}
+
+// ExpediteAll forwards a "finish now" nudge to every live subagent child,
+// returning how many were signalled. Safe to call from any goroutine.
+func (t *SubagentTool) ExpediteAll() int {
+	t.liveMu.Lock()
+	defer t.liveMu.Unlock()
+	n := 0
+	for c := range t.live {
+		if c.SendExpedite() == nil {
+			n++
+		}
+	}
+	return n
 }
 
 // SetRuntime supplies live provider/model/effort resolvers (called at spawn time).
@@ -122,6 +156,8 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		return ToolResult{Error: "failed to spawn subagent: " + err.Error()}, nil
 	}
 	defer child.Reap()
+	t.trackLive(child)
+	defer t.untrackLive(child)
 
 	var output strings.Builder
 	var toolCount, turns int

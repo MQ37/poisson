@@ -90,6 +90,13 @@ type Agent struct {
 	// so the context counter reflects the whole prompt, not just messages.
 	sysTokensEstimate atomic.Int64
 
+	// expedite is set (in subagent/child mode) when the parent forwards the
+	// user's Ctrl+G "finish now" nudge. At the next micro-turn boundary the turn
+	// loop appends expediteNudge to the last tool result so the model wraps up
+	// with partial results. Written by the child's stdin-reader goroutine, read
+	// by the turn-loop goroutine — hence atomic. Never set in the main agent.
+	expedite atomic.Bool
+
 	// compactBackoffUntil suppresses auto-compaction retries after a failure.
 	compactBackoffUntil time.Time
 
@@ -424,6 +431,29 @@ func defaultModel(p provider.Provider, cfg *config.Config) string {
 // Effort returns the current thinking effort level.
 func (a *Agent) Effort() string { return a.effort }
 
+// Expedite marks this agent to wrap up early. A subagent child sets it when the
+// parent forwards the user's Ctrl+G nudge; the turn loop then injects a
+// finish-now message at the next micro-turn boundary. No-op in the main agent.
+func (a *Agent) Expedite() { a.expedite.Store(true) }
+
+// ExpediteSubagents forwards the user's "finish now" nudge to every running
+// subagent child and returns how many were signalled. The main agent's own
+// turn is left untouched. Used by the TUI Ctrl+G handler.
+func (a *Agent) ExpediteSubagents() int {
+	if a.tools == nil {
+		return 0
+	}
+	t, ok := a.tools.Get("subagent")
+	if !ok {
+		return 0
+	}
+	st, ok := t.(*tools.SubagentTool)
+	if !ok {
+		return 0
+	}
+	return st.ExpediteAll()
+}
+
 // EnsureSession persists the active session row if it does not exist yet.
 // Sessions are created lazily on the first user message, not at process start.
 func (a *Agent) EnsureSession() error {
@@ -508,6 +538,11 @@ func (a *Agent) PromptWithContext(ctx context.Context, userInput string, images 
 	}
 	return err
 }
+
+// expediteNudge is appended to the last tool result when the user asks a
+// subagent to finish early (Ctrl+G). It rides inside the tool-result (user)
+// turn, so it never creates consecutive user messages some providers reject.
+const expediteNudge = "\n\n[User interjection] The user needs results now and has asked you to wrap up immediately. Stop starting new work: summarize what you have accomplished so far — partial results are fine — and finish this turn without any further tool calls."
 
 // runTurn executes the turn loop: build → stream → collect tools → dispatch →
 // append results → check compaction → repeat until no tool calls.
@@ -691,6 +726,11 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				// (and the cwd→dir chain) so the model gets its project rules.
 				toolBlock.ToolResult += a.contextInjectionForFile(
 					turnCwd, toolCalls[i].Name, toolCalls[i].Input, sysCtxPaths)
+			}
+			// If the user asked us to wrap up (Ctrl+G — subagents only), append the
+			// nudge to the last tool result so the model sees it on the next turn.
+			if i == len(results)-1 && a.expedite.Swap(false) {
+				toolBlock.ToolResult += expediteNudge
 			}
 
 			toolContent, err := contentBlocksToJSON([]provider.ContentBlock{toolBlock})

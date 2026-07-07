@@ -643,6 +643,15 @@ func runChildMode() {
 	}
 	a.SetSkills(false, nil)
 
+	// Forward the parent's Ctrl+G nudge to the agent, and start the stdin reader
+	// now so it listens for expedite even in runs that never hit a bash approval.
+	approvalBroker.onExpedite = func() {
+		if childAgentRef != nil {
+			childAgentRef.Expedite()
+		}
+	}
+	approvalBroker.start()
+
 	var toolCount int
 	var wg sync.WaitGroup
 	wg.Add(1)

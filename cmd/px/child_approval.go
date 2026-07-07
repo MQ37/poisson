@@ -15,6 +15,10 @@ type childApprovalBroker struct {
 	serialMu sync.Mutex
 	queue    []chan bool
 	started  bool
+
+	// onExpedite is invoked when the parent sends an "expedite" message. Set
+	// once before start(); read only from the reader goroutine.
+	onExpedite func()
 }
 
 // emitAndWait sends one approval request to the parent and blocks for its
@@ -38,11 +42,20 @@ func (b *childApprovalBroker) start() {
 	go func() {
 		scanner := bufioNewScanner(os.Stdin)
 		for scanner.Scan() {
-			var resp struct {
+			var msg struct {
 				Type     string `json:"type"`
 				Approved bool   `json:"approved"`
 			}
-			if json.Unmarshal(scanner.Bytes(), &resp) != nil || resp.Type != "approval_response" {
+			if json.Unmarshal(scanner.Bytes(), &msg) != nil {
+				continue
+			}
+			if msg.Type == "expedite" {
+				if b.onExpedite != nil {
+					b.onExpedite()
+				}
+				continue
+			}
+			if msg.Type != "approval_response" {
 				continue
 			}
 			b.mu.Lock()
@@ -53,7 +66,7 @@ func (b *childApprovalBroker) start() {
 			ch := b.queue[0]
 			b.queue = b.queue[1:]
 			b.mu.Unlock()
-			ch <- resp.Approved
+			ch <- msg.Approved
 		}
 		b.denyAllWaiters()
 	}()
