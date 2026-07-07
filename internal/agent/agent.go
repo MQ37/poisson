@@ -655,6 +655,8 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			// message: an empty content array is a provider 400 next turn.
 			if emptyAttempts < maxEmptyResponseRetries {
 				emptyAttempts++
+				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf(
+					"empty response from model — retrying (%d/%d)", emptyAttempts, maxEmptyResponseRetries)})
 				select {
 				case <-ctx.Done():
 					a.sendEvent(OutputEvent{Type: OutputDone})

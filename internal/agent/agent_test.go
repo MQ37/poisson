@@ -567,16 +567,32 @@ func TestRunTurnRetriesEmptyResponse(t *testing.T) {
 	p.SetResponses([][]provider.StreamEvent{empty, provider.FakeTextResponse("here you go", nil)})
 
 	ch := make(chan OutputEvent, 256)
-	drainEvents(ch)
+	var events []OutputEvent
+	done := make(chan struct{})
+	go func() {
+		for ev := range ch {
+			events = append(events, ev)
+		}
+		close(done)
+	}()
 	agent := NewAgent(s, p, reg, cfg, sessionID, ch, nil)
 	if err := agent.Prompt("hi"); err != nil {
 		t.Fatalf("Prompt should recover via retry: %v", err)
 	}
-	time.Sleep(20 * time.Millisecond)
 	close(ch)
+	<-done // read events only after the collector goroutine has stopped
 
 	if p.CallCount() != 2 {
 		t.Errorf("CallCount = %d, want 2 (empty + one retry)", p.CallCount())
+	}
+	sawRetryNotice := false
+	for _, ev := range events {
+		if ev.Type == OutputError && strings.Contains(ev.Text, "retrying (1/") {
+			sawRetryNotice = true
+		}
+	}
+	if !sawRetryNotice {
+		t.Errorf("expected a visible retry notice in the event stream, got %+v", events)
 	}
 	msgs, _ := s.GetMessages(sessionID)
 	if len(msgs) < 2 || msgs[len(msgs)-1].Role != "assistant" {
