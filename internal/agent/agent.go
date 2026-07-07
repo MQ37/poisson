@@ -542,11 +542,21 @@ func (a *Agent) PromptWithContext(ctx context.Context, userInput string, images 
 // expediteNudge is appended to the last tool result when the user asks a
 // subagent to finish early (Ctrl+G). It rides inside the tool-result (user)
 // turn, so it never creates consecutive user messages some providers reject.
+// A model occasionally returns a complete-but-empty response (no text,
+// thinking, or tool calls) — a transient provider glitch, seen most with
+// Anthropic. runTurn retries the same request up to maxEmptyResponseRetries
+// times (Nth retry waits N × emptyResponseBackoff) before surfacing an error.
+const maxEmptyResponseRetries = 3
+
+// emptyResponseBackoff is a var so tests can shorten it.
+var emptyResponseBackoff = 500 * time.Millisecond
+
 const expediteNudge = "\n\n[User interjection] The user needs results now and has asked you to wrap up immediately. Stop starting new work: summarize what you have accomplished so far — partial results are fine — and finish this turn without any further tool calls."
 
 // runTurn executes the turn loop: build → stream → collect tools → dispatch →
 // append results → check compaction → repeat until no tool calls.
 func (a *Agent) runTurn(ctx context.Context) error {
+	emptyAttempts := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			a.sendEvent(OutputEvent{Type: OutputDone})
@@ -637,13 +647,27 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			thinkingBuilder.String(), thinkingSig.String(), redactedThinking,
 			textBuilder.String(), toolCalls)
 		if len(assistantBlocks) == 0 {
-			// Model returned nothing (no text, no thinking, no tool calls).
-			// Don't persist an empty assistant message — it would poison the
-			// next request with an empty content array (provider 400).
+			// Model returned nothing (no text, thinking, or tool calls). This is
+			// a transient provider glitch (notably Anthropic), so retry the same
+			// request a few times before giving up — erroring out here would
+			// strand the turn and force the user to re-prompt, leaving two
+			// consecutive user messages in history. Don't persist the empty
+			// message: an empty content array is a provider 400 next turn.
+			if emptyAttempts < maxEmptyResponseRetries {
+				emptyAttempts++
+				select {
+				case <-ctx.Done():
+					a.sendEvent(OutputEvent{Type: OutputDone})
+					return ctx.Err()
+				case <-time.After(time.Duration(emptyAttempts) * emptyResponseBackoff):
+				}
+				continue
+			}
 			a.sendEvent(OutputEvent{Type: OutputError, Text: "model returned no content"})
 			a.sendEvent(OutputEvent{Type: OutputDone})
 			return fmt.Errorf("model returned empty response")
 		}
+		emptyAttempts = 0
 		assistantContent, err := contentBlocksToJSON(assistantBlocks)
 		if err != nil {
 			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})

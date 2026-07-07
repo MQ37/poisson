@@ -552,6 +552,65 @@ func TestExpediteInjectsNudgeIntoToolResult(t *testing.T) {
 	}
 }
 
+func TestRunTurnRetriesEmptyResponse(t *testing.T) {
+	old := emptyResponseBackoff
+	emptyResponseBackoff = time.Millisecond
+	defer func() { emptyResponseBackoff = old }()
+
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	reg := newTestRegistry(testutil.TempDir(t))
+	cfg := newTestConfig()
+	p := newFakeProvider()
+	// First stream is empty (no content); the retry returns real text.
+	empty := []provider.StreamEvent{{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10}}}
+	p.SetResponses([][]provider.StreamEvent{empty, provider.FakeTextResponse("here you go", nil)})
+
+	ch := make(chan OutputEvent, 256)
+	drainEvents(ch)
+	agent := NewAgent(s, p, reg, cfg, sessionID, ch, nil)
+	if err := agent.Prompt("hi"); err != nil {
+		t.Fatalf("Prompt should recover via retry: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	close(ch)
+
+	if p.CallCount() != 2 {
+		t.Errorf("CallCount = %d, want 2 (empty + one retry)", p.CallCount())
+	}
+	msgs, _ := s.GetMessages(sessionID)
+	if len(msgs) < 2 || msgs[len(msgs)-1].Role != "assistant" {
+		t.Fatalf("expected a final assistant message, got %d msgs", len(msgs))
+	}
+	if !strings.Contains(msgs[len(msgs)-1].Content, "here you go") {
+		t.Errorf("assistant message missing retried content: %s", msgs[len(msgs)-1].Content)
+	}
+}
+
+func TestRunTurnGivesUpAfterEmptyRetries(t *testing.T) {
+	old := emptyResponseBackoff
+	emptyResponseBackoff = time.Millisecond
+	defer func() { emptyResponseBackoff = old }()
+
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	reg := newTestRegistry(testutil.TempDir(t))
+	cfg := newTestConfig()
+	p := newFakeProvider()
+	// No responses set: FakeProvider returns an empty done event every call, so
+	// every attempt is empty and the retries are exhausted.
+
+	ch := make(chan OutputEvent, 256)
+	drainEvents(ch)
+	agent := NewAgent(s, p, reg, cfg, sessionID, ch, nil)
+	if err := agent.Prompt("hi"); err == nil {
+		t.Fatal("expected an error after exhausting empty-response retries")
+	}
+	if want := maxEmptyResponseRetries + 1; p.CallCount() != want {
+		t.Errorf("CallCount = %d, want %d (initial + %d retries)", p.CallCount(), want, maxEmptyResponseRetries)
+	}
+}
+
 func TestAgentLoopError(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
