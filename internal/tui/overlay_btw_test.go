@@ -5,50 +5,40 @@ import (
 	"testing"
 )
 
-func TestBTWOverlayMaxHeight(t *testing.T) {
-	o := newBTWOverlay("short question", 12)
-	o.appendText("line one\nline two\nline three\nline four\nline five")
+func TestBTWOverlayFillsScrollRegionFullWidth(t *testing.T) {
+	o := newBTWOverlay("short question")
+	o.appendText("line one\nline two")
 	o.finish(nil)
 	_, lines := o.render(30, 80)
-	if len(lines) > 12 {
-		t.Fatalf("overlay height = %d, want <= 12", len(lines))
+	// The panel fills the scroll region and every line spans the full width,
+	// like the bash-approval overlay.
+	if len(lines) != 30 {
+		t.Fatalf("panel height = %d, want 30 (fills scroll region)", len(lines))
+	}
+	for i, ln := range lines {
+		if w := visibleWidth(ln); w != 80 {
+			t.Fatalf("line %d width = %d, want 80 (full width)", i, w)
+		}
 	}
 }
 
-func TestBTWOverlayTopRight(t *testing.T) {
-	o := newBTWOverlay("hi", 10)
+func TestBTWOverlayTitleAndFooter(t *testing.T) {
+	o := newBTWOverlay("hi")
 	o.finish(nil)
 	anchor, lines := o.render(24, 80)
-	if len(lines) < 3 {
-		t.Fatalf("lines = %d", len(lines))
-	}
 	if anchor != 1 {
-		t.Fatalf("expected top placement, anchor=%d", anchor)
+		t.Fatalf("anchor = %d, want 1", anchor)
 	}
-	top := stripANSI(lines[0])
-	if !strings.HasSuffix(top, "╭") && !strings.Contains(top, "╭") {
-		t.Fatalf("expected top border with ╭, got %q", top)
+	if !strings.Contains(stripANSI(lines[0]), "btw") {
+		t.Fatalf("expected 'btw' title, got %q", stripANSI(lines[0]))
 	}
-	if !strings.HasPrefix(lines[0], " ") && visibleWidth(lines[0]) == 80 {
-		// right-aligned: leading spaces before box
-		plain := stripANSI(lines[0])
-		if !strings.HasPrefix(plain, " ") {
-			t.Fatalf("expected right-aligned box, got %q", plain)
-		}
-	}
-	last := stripANSI(lines[len(lines)-1])
-	if !strings.Contains(last, "╰") {
-		t.Fatalf("expected bottom border with ╰, got %q", last)
-	}
-	for _, ln := range lines {
-		if visibleWidth(ln) > 80 {
-			t.Fatalf("line too wide: %d", visibleWidth(ln))
-		}
+	if !strings.Contains(stripANSI(lines[len(lines)-1]), "Esc") {
+		t.Fatalf("expected Esc in footer, got %q", stripANSI(lines[len(lines)-1]))
 	}
 }
 
 func TestBTWOverlayEscCancel(t *testing.T) {
-	o := newBTWOverlay("q", 6)
+	o := newBTWOverlay("q")
 	cancelled := false
 	o.setCancel(func() { cancelled = true })
 	handled, done, cancel := o.feedKey(Key{Kind: KeyEscape})
@@ -66,21 +56,21 @@ func TestBTWOverlayEscCancel(t *testing.T) {
 }
 
 func TestBTWOverlayScroll(t *testing.T) {
-	o := newBTWOverlay("q", 8)
+	o := newBTWOverlay("q")
 	var lines []string
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 40; i++ {
 		lines = append(lines, "answer line "+strings.Repeat("x", 20))
 	}
 	o.appendText(strings.Join(lines, "\n"))
 	o.finish(nil)
+	// Render once so the overlay knows its scroll bounds.
+	o.render(12, 80)
 	o.feedKey(keyArrowDown())
-	_, _, _, _, scroll, _ := o.snapshot()
-	if scroll == 0 {
+	if _, _, _, _, scroll := o.snapshot(); scroll == 0 {
 		t.Fatal("expected scroll down to increase offset")
 	}
 	o.feedKey(keyArrowUp())
-	_, _, _, _, scroll2, _ := o.snapshot()
-	if scroll2 != 0 {
-		t.Fatalf("scroll = %d after up, want 0", scroll2)
+	if _, _, _, _, scroll := o.snapshot(); scroll != 0 {
+		t.Fatalf("scroll = %d after up, want 0", scroll)
 	}
 }

@@ -6,7 +6,9 @@ import (
 	"sync"
 )
 
-// btwOverlay is a floating top-right box for side questions (/btw).
+// btwOverlay is a full-width, scrollable side-question panel (/btw) rendered
+// like the bash-approval overlay: opaque, on top of the conversation until
+// closed with Esc.
 type btwOverlay struct {
 	mu         sync.Mutex
 	question   string
@@ -14,18 +16,13 @@ type btwOverlay struct {
 	processing bool
 	errMsg     string
 	scroll     int
-	maxHeight  int
 	cancel     context.CancelFunc
 }
 
-func newBTWOverlay(question string, maxHeight int) *btwOverlay {
-	if maxHeight < 4 {
-		maxHeight = 4
-	}
+func newBTWOverlay(question string) *btwOverlay {
 	return &btwOverlay{
 		question:   question,
 		processing: true,
-		maxHeight:  maxHeight,
 	}
 }
 
@@ -51,10 +48,10 @@ func (o *btwOverlay) finish(err error) {
 	}
 }
 
-func (o *btwOverlay) snapshot() (question, answer, errMsg string, processing bool, scroll, maxH int) {
+func (o *btwOverlay) snapshot() (question, answer, errMsg string, processing bool, scroll int) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.question, o.answer, o.errMsg, o.processing, o.scroll, o.maxHeight
+	return o.question, o.answer, o.errMsg, o.processing, o.scroll
 }
 
 func (o *btwOverlay) render(scrollRows, cols int) (int, []string) {
@@ -62,97 +59,108 @@ func (o *btwOverlay) render(scrollRows, cols int) (int, []string) {
 }
 
 func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string) {
-	question, answer, errMsg, processing, scroll, maxH := o.snapshot()
-	if maxH < 4 {
-		maxH = 4
+	question, answer, errMsg, processing, scroll := o.snapshot()
+	panelRows := scrollRows
+	if panelRows < 4 {
+		panelRows = 4
 	}
-	inner := cols / 2
-	if inner > 52 {
-		inner = 52
+	if cols < 12 {
+		cols = 12
 	}
-	if inner < 20 {
-		inner = cols - 4
-		if inner < 12 {
-			inner = 12
-		}
+	bg := approvalPanelBG()
+	mk := func(content string) string { return fillWidthBG(bg, content, cols) }
+	blank := mk("")
+	wrapW := cols - 4
+	if wrapW < 8 {
+		wrapW = 8
 	}
 
-	var body []string
-	q := truncatePlain(question, inner-2)
-	body = append(body, dim+"? "+reset+renderInline(q))
+	title := mk(fgCyan + bold + "  btw · side question" + reset)
 
-	if processing && answer == "" && errMsg == "" {
-		body = append(body, dim+spinnerChar(frame)+" thinking…"+reset)
-	} else if errMsg != "" {
-		body = append(body, fgRed+bold+truncatePlain(errMsg, inner-2)+reset)
-	} else {
-		wrapped := wrapPlain(answer, inner-2)
-		if len(wrapped) == 0 && processing {
-			body = append(body, dim+spinnerChar(frame)+" thinking…"+reset)
+	// Question header (may wrap).
+	var head []string
+	for i, ql := range wrapPlain(question, wrapW) {
+		if i == 0 {
+			head = append(head, mk("  "+dim+"Q: "+reset+ql))
 		} else {
-			body = append(body, wrapped...)
+			head = append(head, mk("     "+ql))
+		}
+	}
+	head = append(head, blank)
+
+	// Answer body (scrollable).
+	var full []string
+	switch {
+	case errMsg != "":
+		for _, ln := range wrapPlain(errMsg, wrapW) {
+			full = append(full, mk("  "+fgRed+bold+ln+reset))
+		}
+	case answer == "" && processing:
+		full = append(full, mk("  "+dim+spinnerChar(frame)+" thinking…"+reset))
+	default:
+		for _, ln := range wrapPlain(answer, wrapW) {
+			full = append(full, mk("  "+ln))
+		}
+		if processing {
+			full = append(full, mk("  "+dim+spinnerChar(frame)+" …"+reset))
 		}
 	}
 
-	maxBody := maxH - 3
-	if maxBody < 1 {
-		maxBody = 1
+	// Body rows = panel minus title, footer, and the question header.
+	bodyRows := panelRows - 2 - len(head)
+	if bodyRows < 1 {
+		bodyRows = 1
 	}
-	needsScroll := len(body) > maxBody
-	footer := ""
-	if processing {
-		footer = dim + "Esc cancel" + reset
-	} else if needsScroll {
-		footer = dim + "Esc close · ↑↓ scroll" + reset
-	} else {
-		footer = dim + "Esc close" + reset
+	needsScroll := len(full) > bodyRows
+	maxScroll := 0
+	if needsScroll {
+		maxScroll = len(full) - bodyRows
 	}
-
-	if len(body) > maxBody {
-		if scroll > len(body)-maxBody {
-			scroll = len(body) - maxBody
-		}
-		if scroll < 0 {
-			scroll = 0
-		}
-		body = body[scroll : scroll+maxBody]
-	} else {
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+	if scroll < 0 {
 		scroll = 0
 	}
+	o.mu.Lock()
+	o.scroll = scroll // persist the clamp so ↓ can't run away
+	o.mu.Unlock()
+	body := full
+	if needsScroll {
+		body = full[scroll : scroll+bodyRows]
+	}
 
-	boxW := inner + 2
-	title := "─ btw "
-	fill := boxW - visibleWidth("╭"+title+"╮")
-	if fill < 0 {
-		fill = 0
+	footerText := "  Esc close"
+	switch {
+	case processing:
+		footerText = "  Esc cancel"
+	case needsScroll:
+		footerText = "  Esc close · ↑↓ scroll"
 	}
-	top := fgGray + "╭" + title + strings.Repeat("─", fill) + "╮" + reset
-	bot := fgGray + "╰" + strings.Repeat("─", inner) + "╯" + reset
+	footer := mk(dim + footerText + reset)
 
-	var lines []string
-	lines = append(lines, alignRight(top, cols))
-	for _, ln := range body {
-		pad := inner - visibleWidth(ln)
-		if pad < 0 {
-			ln = truncateToWidth(ln, inner)
-			pad = inner - visibleWidth(ln)
+	out := make([]string, panelRows)
+	out[0] = title
+	out[panelRows-1] = footer
+	idx := 1
+	for _, h := range head {
+		if idx >= panelRows-1 {
+			break
 		}
-		if pad < 0 {
-			pad = 0
-		}
-		row := fgGray + "│" + reset + " " + ln + strings.Repeat(" ", pad) + " " + fgGray + "│" + reset
-		lines = append(lines, alignRight(row, cols))
+		out[idx] = h
+		idx++
 	}
-	if footer != "" {
-		pad := inner - visibleWidth(footer)
-		if pad < 0 {
-			pad = 0
+	for _, bd := range body {
+		if idx >= panelRows-1 {
+			break
 		}
-		row := fgGray + "│" + reset + " " + footer + strings.Repeat(" ", pad) + " " + fgGray + "│" + reset
-		lines = append(lines, alignRight(row, cols))
+		out[idx] = bd
+		idx++
 	}
-	lines = append(lines, alignRight(bot, cols))
-	return 1, lines
+	for i := idx; i < panelRows-1; i++ {
+		out[i] = blank
+	}
+	return 1, out
 }
 
 func (o *btwOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
@@ -180,14 +188,6 @@ func (o *btwOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
 		return true, true, proc
 	}
 	return false, false, false
-}
-
-func alignRight(line string, cols int) string {
-	w := visibleWidth(line)
-	if w >= cols {
-		return truncateToWidth(line, cols)
-	}
-	return strings.Repeat(" ", cols-w) + line
 }
 
 func wrapPlain(text string, width int) []string {

@@ -9,20 +9,7 @@ import (
 // openBTW opens a floating side-question box (/btw) while the main agent keeps running.
 func (t *TUI) openBTW(question string) {
 	t.cancelOverlayWork()
-	maxH := t.scrollRows * 15 / 100
-	if maxH < 4 {
-		maxH = 4
-	}
-	if maxH > t.scrollRows/3 {
-		maxH = t.scrollRows / 3
-	}
-	if maxH > t.scrollRows-2 {
-		maxH = t.scrollRows - 2
-	}
-	if maxH < 4 {
-		maxH = 4
-	}
-	o := newBTWOverlay(question, maxH)
+	o := newBTWOverlay(question)
 	ctx, cancel := context.WithCancel(context.Background())
 	o.setCancel(cancel)
 	t.activeOverlay = o
