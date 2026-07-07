@@ -873,7 +873,7 @@ func TestRegistry_ExecuteTrimsLargeOutput(t *testing.T) {
 	toolSpillDir = testutil.TempDir(t)
 	defer func() { toolSpillDir = old }()
 
-	const total = 40 * 1024
+	const total = 200 * 1024 // well over maxToolOutputBytes
 	r := NewRegistry()
 	r.Register(staticTool{name: "huge", result: ToolResult{Content: strings.Repeat("x", total)}})
 	res, err := r.Execute(context.Background(), "huge", nil)

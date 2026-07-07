@@ -7,7 +7,7 @@ import (
 	"unicode/utf8"
 )
 
-const maxToolOutputBytes = 5 * 1024
+const maxToolOutputBytes = 50 * 1024
 
 // toolSpillDir is where oversized tool output is written in full so the model
 // can read it back on demand. Overridable in tests.
