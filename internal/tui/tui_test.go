@@ -97,6 +97,64 @@ func TestExpandAtFilesFenceEscalation(t *testing.T) {
 	}
 }
 
+func TestExpandAtFilesDirectoryListing(t *testing.T) {
+	dir := testutil.TempDir(t)
+	// One level: two files, one subdir. The subdir has a nested file that must
+	// NOT appear (listing is one level deep only).
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("y"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "worker"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "worker", "inner.js"), []byte("z"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := expandAtFiles("list @" + dir)
+	if err != nil {
+		t.Fatalf("expandAtFiles on directory must not error: %v", err)
+	}
+	if !strings.Contains(got, "(directory):") {
+		t.Errorf("expected directory label, got: %q", got)
+	}
+	if !strings.Contains(got, "main.go") || !strings.Contains(got, "README.md") {
+		t.Errorf("expected files listed, got: %q", got)
+	}
+	if !strings.Contains(got, "worker/") {
+		t.Errorf("expected subdir suffixed with '/', got: %q", got)
+	}
+	if strings.Contains(got, "inner.js") {
+		t.Errorf("listing must be one level deep only (no nested inner.js): %q", got)
+	}
+	if !strings.Contains(got, "list ") {
+		t.Errorf("expected surrounding text preserved, got: %q", got)
+	}
+}
+
+func TestExpandAtFilesFileStillInlines(t *testing.T) {
+	// Regression guard: a plain file must still expand to fenced contents
+	// (the directory branch must not swallow files).
+	dir := testutil.TempDir(t)
+	path := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(path, []byte("hello world"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := expandAtFiles("@" + path)
+	if err != nil {
+		t.Fatalf("expandAtFiles: %v", err)
+	}
+	if !strings.Contains(got, "hello world") {
+		t.Errorf("expected file contents inlined, got: %q", got)
+	}
+	if strings.Contains(got, "(directory):") {
+		t.Errorf("file must not be treated as a directory: %q", got)
+	}
+}
+
 func TestMatchSlash(t *testing.T) {
 	cases := []struct {
 		partial string

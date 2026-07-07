@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 )
@@ -58,10 +59,46 @@ func readAtFile(path string) ([]byte, error) {
 	return data, nil
 }
 
+// listAtDir returns a one-level (non-recursive) listing of dir's entries,
+// sorted by name, with subdirectories suffixed by "/". Only the directory's own
+// entries are listed — nothing nested.
+func listAtDir(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() {
+			name += "/"
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return strings.Join(names, "\n"), nil
+}
+
 func expandAtFiles(input string) (string, error) {
 	var firstErr error
 	result := atFileRe.ReplaceAllStringFunc(input, func(match string) string {
 		path := match[1:]
+		// A directory expands to a one-level listing (subdirs suffixed "/")
+		// instead of erroring; a file expands to its fenced contents.
+		if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+			listing, err := listAtDir(path)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("read @%s: %w", path, err)
+				}
+				return match
+			}
+			fence := "```"
+			for strings.Contains(listing, fence) {
+				fence += "`"
+			}
+			return fmt.Sprintf("%s\n%s (directory):\n%s\n%s", fence, path, listing, fence)
+		}
 		data, err := readAtFile(path)
 		if err != nil {
 			if firstErr == nil {
