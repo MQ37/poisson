@@ -129,7 +129,9 @@ func (t *TUI) Run() error {
 				t.mu.Lock()
 				blockBG := t.blocksBackgroundInput()
 				t.mu.Unlock()
-				if !blockBG {
+				// Approval keeps the conversation visible above the prompt, so allow
+				// wheel-scrolling it too (other full-screen overlays stay blocked).
+				if !blockBG || t.approving.Load() {
 					if delta, ok := parseMouseWheelScroll(data); ok {
 						t.handleScrollDelta(delta)
 						continue
@@ -143,7 +145,24 @@ func (t *TUI) Run() error {
 							t.approvalDenyAndMaybeCancelRun()
 							continue
 						}
-						if k.isNavUp() || k.isNavDown() {
+						// Let the user review the conversation while deciding: Tab
+						// toggles conversation focus and scroll keys move the
+						// conversation, all with the approval still pending.
+						t.mu.Lock()
+						convFocus := t.focusRegion == focusConv
+						routes := approvalRoutesToHandler(k, convFocus, t.scrollRows)
+						t.mu.Unlock()
+						if routes {
+							if quit, err := t.feedKey(k); err != nil {
+								t.appendError(err)
+							} else if quit {
+								t.waitForAgentStop()
+								return
+							}
+							continue
+						}
+						// Input focus: arrows scroll the (possibly long) command panel.
+						if !convFocus && (k.isNavUp() || k.isNavDown()) {
 							t.mu.Lock()
 							if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
 								delta := 1

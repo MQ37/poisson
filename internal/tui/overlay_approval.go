@@ -92,7 +92,7 @@ func (o *approvalOverlay) renderInputPanel(panelRows, cols int) []string {
 	blank := mk("")
 
 	title := mk(fgYellow + bold + "⚠  Approval required" + reset)
-	footer := mk(dim + "[A/y/Enter] Allow   [D/n/Esc] Deny   Ctrl+C cancel" + reset)
+	footer := mk(dim + "[A/y/Enter] Allow · [D/n/Esc] Deny · Tab/PgUp review convo · Ctrl+C cancel" + reset)
 
 	var meta []string
 	for _, ln := range approvalPurposeLines(o.description, cols) {

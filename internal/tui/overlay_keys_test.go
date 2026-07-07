@@ -146,3 +146,27 @@ func TestApproveBufferedAnswerBeforeReceive(t *testing.T) {
 		t.Fatal("Approve timed out — answer likely dropped")
 	}
 }
+func TestApprovalRoutesToHandler(t *testing.T) {
+	cases := []struct {
+		name      string
+		k         Key
+		convFocus bool
+		want      bool
+	}{
+		{"Tab always routes (toggle focus)", Key{Kind: KeyTab}, false, true},
+		{"PgUp always routes (scroll convo)", Key{Kind: KeyPageUp}, false, true},
+		{"PgDn always routes", Key{Kind: KeyPageDown}, false, true},
+		{"Shift+Up always routes", Key{Kind: KeyShiftArrowUp}, false, true},
+		{"Up in input focus stays (panel scroll)", Key{Kind: KeyArrowUp}, false, false},
+		{"Up in conv focus routes (scroll convo)", Key{Kind: KeyArrowUp}, true, true},
+		{"Esc in conv focus routes", Key{Kind: KeyEscape}, true, true},
+		{"Esc in input focus stays (deny)", Key{Kind: KeyEscape}, false, false},
+		{"answer letter stays (input)", Key{Kind: KeyRune, Rune: 'a'}, false, false},
+		{"answer letter stays (conv)", Key{Kind: KeyRune, Rune: 'n'}, true, false},
+	}
+	for _, c := range cases {
+		if got := approvalRoutesToHandler(c.k, c.convFocus, 24); got != c.want {
+			t.Errorf("%s: approvalRoutesToHandler = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

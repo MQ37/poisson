@@ -15,6 +15,25 @@ func (t *TUI) feed(data []byte) (bool, error) {
 	return false, nil
 }
 
+// approvalRoutesToHandler reports whether a key pressed while a bash approval is
+// pending should flow to the normal handler (feedKey) rather than being treated
+// as an approval answer. This lets the user Tab into conversation focus and
+// scroll the conversation while the approval stays pending. Answer keys
+// (a/y/d/n/Enter/Esc in input focus) and command-panel arrows are handled by
+// the caller.
+func approvalRoutesToHandler(k Key, convFocus bool, scrollRows int) bool {
+	if k.Kind == KeyTab {
+		return true
+	}
+	if _, ok := scrollDeltaForKey(k, scrollRows); ok {
+		return true
+	}
+	if convFocus && (k.isNavUp() || k.isNavDown() || k.Kind == KeyEscape) {
+		return true
+	}
+	return false
+}
+
 func (t *TUI) searchBlocksEditorKey(k Key) bool {
 	switch k.Kind {
 	case KeyTab, KeyEnter:
