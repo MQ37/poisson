@@ -127,19 +127,3 @@ func (d *dirtyTracker) consume() dirtySnapshot {
 	d.cursor = false
 	return snap
 }
-
-// mergeScrollRows coalesces scroll row indices for tests.
-func mergeScrollRows(rows []int) []int {
-	if len(rows) == 0 {
-		return nil
-	}
-	m := make(map[int]struct{}, len(rows))
-	for _, r := range rows {
-		m[r] = struct{}{}
-	}
-	out := make([]int, 0, len(m))
-	for r := range m {
-		out = append(out, r)
-	}
-	return out
-}

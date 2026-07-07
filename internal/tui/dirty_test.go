@@ -34,8 +34,9 @@ func TestDirtyTrackerPartialMerge(t *testing.T) {
 	if !snap.input || !snap.cursor {
 		t.Fatalf("input/cursor flags: input=%v cursor=%v", snap.input, snap.cursor)
 	}
-	got := mergeScrollRows(snap.scroll)
+	got := append([]int(nil), snap.scroll...)
 	slices.Sort(got)
+	got = slices.Compact(got)
 	want := []int{3, 4}
 	if len(got) != len(want) {
 		t.Fatalf("scroll rows = %v, want %v", got, want)

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"poisson/internal/agent"
 	"poisson/internal/config"
@@ -98,39 +97,6 @@ func cmdResume(h commandHost, args []string) error {
 	}
 	h.Out(styleSystem, fmt.Sprintf("resumed session: %s (%s/%s)", label, sess.Provider, sess.Model))
 	return nil
-}
-
-// cmdSessions lists recent sessions.
-func cmdSessions(h commandHost) {
-	a := h.Agent()
-	sessions, err := a.Store().ListSessions(20, 0)
-	if err != nil {
-		h.Out(styleError, "error listing sessions: "+err.Error())
-		return
-	}
-	if len(sessions) == 0 {
-		h.Out(styleSystem, "no sessions")
-		return
-	}
-	var b strings.Builder
-	for _, sess := range sessions {
-		msgCount := 0
-		if msgs, err := a.Store().GetMessages(sess.ID); err == nil {
-			msgCount = len(msgs)
-		}
-		date := time.Unix(sess.CreatedAt, 0).Format("2006-01-02")
-		marker := " "
-		if sess.ID == h.SessionID() {
-			marker = ">"
-		}
-		label := sess.ID
-		if sess.Title != nil && strings.TrimSpace(*sess.Title) != "" {
-			label = *sess.Title
-		}
-		b.WriteString(fmt.Sprintf("%s %s  %s  %d msgs  %s/%s\n",
-			marker, label, date, msgCount, sess.Provider, sess.Model))
-	}
-	h.Out(styleSystem, b.String())
 }
 
 // cmdSearch searches message content.

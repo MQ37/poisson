@@ -30,7 +30,6 @@ func newTestStoreAndAgent(t *testing.T) (*store.Store, *agent.Agent, string) {
 	}
 	t.Cleanup(func() { s.Close() })
 
-
 	sessionID := "test-cmd-session"
 	cfg := config.DefaultConfig()
 	if err := s.CreateSession(&store.Session{
@@ -208,48 +207,6 @@ func TestCmdResumeNoArg(t *testing.T) {
 	cmdResume(cmdHost(tui), nil)
 	if out := testScrollOutput(tui); !strings.Contains(out, "usage") {
 		t.Errorf("expected usage, got %q", out)
-	}
-}
-
-// --- /sessions ---
-
-func TestCmdSessions(t *testing.T) {
-	s, a, sessionID := newTestStoreAndAgent(t)
-	tui := newTUIWithAgent(a, sessionID)
-
-	s.CreateSession(&store.Session{
-		ID:        "other-session",
-		Cwd:       ".",
-		Provider:  "fake",
-		Model:     "test-model",
-		CreatedAt: time.Now().Unix(),
-		UpdatedAt: time.Now().Unix(),
-	})
-
-	cmdSessions(cmdHost(tui))
-	out := testScrollOutput(tui)
-	if !strings.Contains(out, "test-cmd-session") {
-		t.Errorf("expected current session in output, got %q", out)
-	}
-	if !strings.Contains(out, "other-session") {
-		t.Errorf("expected other session in output, got %q", out)
-	}
-}
-
-func TestCmdSessionsEmpty(t *testing.T) {
-	_, a, sessionID := newTestStoreAndAgent(t)
-	tui := newTUIWithAgent(a, sessionID)
-	dir := testutil.TempDir(t)
-	dbPath := filepath.Join(dir, "empty.db")
-	s, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("open empty store: %v", err)
-	}
-	t.Cleanup(func() { s.Close() })
-	tui.agent = agent.NewAgent(s, provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 4096}}), tools.NewRegistry(), config.DefaultConfig(), sessionID, make(chan agent.OutputEvent, 64), func(context.Context, string, string, string) bool { return false })
-	cmdSessions(cmdHost(tui))
-	if out := testScrollOutput(tui); !strings.Contains(out, "no sessions") {
-		t.Errorf("expected no sessions, got %q", out)
 	}
 }
 
