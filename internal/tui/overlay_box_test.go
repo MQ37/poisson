@@ -7,7 +7,7 @@ import (
 
 func TestRenderBoxedListHasBorder(t *testing.T) {
 	body := []string{"  alpha", fgCyan + bold + "▶ beta" + reset}
-	_, lines := renderBoxedList("Providers", "", body, 24, 80, 72)
+	_, lines := renderBoxedList("Providers", "", body, 24, 80, 72, "")
 	if len(lines) < 4 {
 		t.Fatalf("expected boxed lines, got %d", len(lines))
 	}
@@ -54,7 +54,7 @@ func TestPickerClickRowSelects(t *testing.T) {
 
 func TestBoxLinesEqualWidth(t *testing.T) {
 	body := []string{"  alpha", fgCyan + bold + "▶ beta" + reset}
-	_, lines := renderBoxedList("Models (ollama)", "", body, 24, 80, 72)
+	_, lines := renderBoxedList("Models (ollama)", "", body, 24, 80, 72, "")
 	if len(lines) < 3 {
 		t.Fatal("expected box lines")
 	}

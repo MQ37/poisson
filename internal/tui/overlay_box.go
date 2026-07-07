@@ -61,12 +61,16 @@ func boxBodyLine(width int, content string) string {
 	return fgYellow + bold + "│" + reset + "  " + content + strings.Repeat(" ", pad) + "  " + fgYellow + bold + "│" + reset
 }
 
-func boxFooterLine(width int) string {
-	return boxBodyLine(width, dim+overlayFooterHint+reset)
+func boxFooterLine(width int, hint string) string {
+	if hint == "" {
+		hint = overlayFooterHint
+	}
+	return boxBodyLine(width, dim+hint+reset)
 }
 
 // renderBoxedList draws a bordered list modal centered in the scroll region.
-func renderBoxedList(title, filter string, body []string, scrollRows, cols, maxInner int) (listBoxChrome, []string) {
+// footerHint overrides the default footer keybinding line when non-empty.
+func renderBoxedList(title, filter string, body []string, scrollRows, cols, maxInner int, footerHint string) (listBoxChrome, []string) {
 	chrome := listBoxChrome{}
 	if scrollRows < 4 || cols < 20 {
 		lines := make([]string, len(body))
@@ -91,7 +95,7 @@ func renderBoxedList(title, filter string, body []string, scrollRows, cols, maxI
 		lines = append(lines, boxBodyLine(width, ln))
 	}
 	chrome.itemCount = len(body)
-	lines = append(lines, boxFooterLine(width))
+	lines = append(lines, boxFooterLine(width, footerHint))
 	lines = append(lines, boxBottomBorder(width))
 
 	height := len(lines)

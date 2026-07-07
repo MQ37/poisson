@@ -26,6 +26,9 @@ type filterableListOverlay struct {
 	onDelete        func(id string) error
 	pendingDeleteID string
 	note            string
+
+	// footerHint overrides the default keybinding footer (empty = default).
+	footerHint string
 }
 
 // titleForRender shows the delete confirmation / transient note in the box
@@ -103,7 +106,7 @@ func (p *filterableListOverlay) render(scrollRows, cols int) (int, []string) {
 	visible := p.filtered()
 	if len(visible) == 0 {
 		body := []string{dim + "(no matches)" + reset}
-		chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.listWidth)
+		chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.listWidth, p.footerHint)
 		p.chrome = chrome
 		return p.chrome.anchor, lines
 	}
@@ -153,7 +156,7 @@ func (p *filterableListOverlay) render(scrollRows, cols int) (int, []string) {
 		body = append(body, style+marker+it.label+reset+cur+hint)
 	}
 
-	chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.listWidth)
+	chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.listWidth, p.footerHint)
 	p.chrome = chrome
 	return p.chrome.anchor, lines
 }
