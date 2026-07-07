@@ -121,20 +121,20 @@ func pickerEffortItems(h commandHost) []pickerItem {
 func pickerSessionItems(h commandHost) ([]pickerItem, error) {
 	a := h.Agent()
 	curID := h.SessionID()
-	sessions, err := a.Store().ListSessions(20, 0)
+	// List every session (the picker scrolls with the arrows) and fetch all
+	// message counts in one query instead of loading each conversation.
+	sessions, err := a.Store().ListSessions(-1, 0)
 	if err != nil {
 		return nil, err
 	}
+	counts, _ := a.Store().MessageCountsBySession()
 	items := make([]pickerItem, 0, len(sessions)+1)
 	curFound := false
 	for _, sess := range sessions {
 		if sess.ID == curID {
 			curFound = true
 		}
-		msgCount := 0
-		if msgs, err := a.Store().GetMessages(sess.ID); err == nil {
-			msgCount = len(msgs)
-		}
+		msgCount := counts[sess.ID]
 		date := time.Unix(sess.CreatedAt, 0).Format("2006-01-02")
 		label := sess.ID
 		if sess.Title != nil && strings.TrimSpace(*sess.Title) != "" {

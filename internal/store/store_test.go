@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 	"path/filepath"
 	"testing"
 
@@ -60,6 +61,37 @@ func TestOpenAndSchema(t *testing.T) {
 		t.Fatalf("RecordAPICall: %v", err)
 	}
 
+}
+
+func TestListSessionsAllAndCounts(t *testing.T) {
+	s := newTestStore(t)
+	for i := 0; i < 60; i++ {
+		mustCreateSession(t, s, "s"+strconv.Itoa(i))
+	}
+	if err := s.AppendMessage(&Message{SessionID: "s0", Role: "user", Content: textContent("a")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendMessage(&Message{SessionID: "s0", Role: "assistant", Content: textContent("b")}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.ListSessions(-1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 60 {
+		t.Fatalf("ListSessions(-1) = %d, want 60 (all)", len(all))
+	}
+	def, _ := s.ListSessions(0, 0)
+	if len(def) != 50 {
+		t.Fatalf("ListSessions(0) = %d, want 50 (default)", len(def))
+	}
+	counts, err := s.MessageCountsBySession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["s0"] != 2 {
+		t.Fatalf("counts[s0] = %d, want 2", counts["s0"])
+	}
 }
 
 func TestDeleteSession(t *testing.T) {

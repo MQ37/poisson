@@ -75,6 +75,29 @@ func (s *Store) CreateSession(sess *Session) error {
 	return nil
 }
 
+// MessageCountsBySession returns the number of active (non-deleted,
+// non-compacted) messages per session id — one query, so the session picker
+// can show counts for every session without loading each conversation.
+func (s *Store) MessageCountsBySession() (map[string]int, error) {
+	rows, err := s.db.Query(
+		`SELECT session_id, COUNT(*) FROM messages
+		 WHERE deleted_at IS NULL AND compacted = 0 GROUP BY session_id`)
+	if err != nil {
+		return nil, fmt.Errorf("count messages: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]int)
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, fmt.Errorf("scan message count: %w", err)
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
 // DeleteSession permanently removes a session and every row that references it
 // (messages, FTS index entries, api_calls, compactions), in one transaction.
 // Foreign keys are enforced with no cascade, so children must go first.
@@ -114,15 +137,22 @@ func (s *Store) GetSession(id string) (*Session, error) {
 
 // ListSessions returns recently-used sessions first (updated_at desc), paginated
 // by limit/offset.
+// ListSessions returns sessions newest-first. limit < 0 returns all sessions
+// (offset ignored); limit == 0 defaults to 50; limit > 0 paginates.
 func (s *Store) ListSessions(limit, offset int) ([]Session, error) {
-	if limit <= 0 {
-		limit = 50
+	const base = `SELECT id, is_subagent, title,
+	        compaction_summary, created_at, updated_at, cwd, provider, model
+	 FROM sessions ORDER BY updated_at DESC, created_at DESC, id DESC`
+	var rows *sql.Rows
+	var err error
+	if limit < 0 {
+		rows, err = s.db.Query(base)
+	} else {
+		if limit == 0 {
+			limit = 50
+		}
+		rows, err = s.db.Query(base+` LIMIT ? OFFSET ?`, limit, offset)
 	}
-	rows, err := s.db.Query(
-		`SELECT id, is_subagent, title,
-		        compaction_summary, created_at, updated_at, cwd, provider, model
-		 FROM sessions ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT ? OFFSET ?`,
-		limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}
