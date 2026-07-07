@@ -18,6 +18,51 @@ type filterableListOverlay struct {
 	pick      func(id string) bool // returns done
 	chrome    listBoxChrome
 	listWidth int
+
+	// onDelete, when set (session picker only), enables Ctrl+D to delete the
+	// selected row after an Enter confirmation. pendingDeleteID holds the row
+	// awaiting confirmation; note is a transient one-line status (cleared on the
+	// next key).
+	onDelete        func(id string) error
+	pendingDeleteID string
+	note            string
+}
+
+// titleForRender shows the delete confirmation / transient note in the box
+// title so item-line/click mapping is unaffected.
+func (p *filterableListOverlay) titleForRender() string {
+	if p.pendingDeleteID != "" {
+		return "Delete " + truncatePlain(p.labelFor(p.pendingDeleteID), 24) + "?  Enter = delete · Esc = cancel"
+	}
+	if p.note != "" {
+		return p.note
+	}
+	return p.title
+}
+
+func (p *filterableListOverlay) labelFor(id string) string {
+	for _, it := range p.items {
+		if it.id == id {
+			return it.label
+		}
+	}
+	return id
+}
+
+func (p *filterableListOverlay) removeItem(id string) {
+	out := p.items[:0]
+	for _, it := range p.items {
+		if it.id != id {
+			out = append(out, it)
+		}
+	}
+	p.items = out
+	if vis := p.filtered(); p.idx >= len(vis) {
+		p.idx = len(vis) - 1
+	}
+	if p.idx < 0 {
+		p.idx = 0
+	}
 }
 
 func newFilterableListOverlay(title string, items []filterableListItem, currentID string, pick func(string) bool, listWidth int) *filterableListOverlay {
@@ -58,7 +103,7 @@ func (p *filterableListOverlay) render(scrollRows, cols int) (int, []string) {
 	visible := p.filtered()
 	if len(visible) == 0 {
 		body := []string{dim + "(no matches)" + reset}
-		chrome, lines := renderBoxedList(p.title, p.filter, body, scrollRows, cols, p.listWidth)
+		chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.listWidth)
 		p.chrome = chrome
 		return p.chrome.anchor, lines
 	}
@@ -108,7 +153,7 @@ func (p *filterableListOverlay) render(scrollRows, cols int) (int, []string) {
 		body = append(body, style+marker+it.label+reset+cur+hint)
 	}
 
-	chrome, lines := renderBoxedList(p.title, p.filter, body, scrollRows, cols, p.listWidth)
+	chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.listWidth)
 	p.chrome = chrome
 	return p.chrome.anchor, lines
 }
@@ -134,6 +179,41 @@ func (p *filterableListOverlay) clickRow(lineInOverlay int) (handled bool, done 
 }
 
 func (p *filterableListOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
+	// The note is transient — any key clears last frame's status.
+	p.note = ""
+
+	// Delete-confirmation mode: Enter deletes, any other key cancels. Consume
+	// the key either way so Esc cancels the prompt (not the whole overlay).
+	if p.pendingDeleteID != "" {
+		id := p.pendingDeleteID
+		p.pendingDeleteID = ""
+		if k.isEnter() {
+			if p.onDelete != nil {
+				if err := p.onDelete(id); err != nil {
+					p.note = "delete failed: " + err.Error()
+					return true, false, false
+				}
+			}
+			p.removeItem(id)
+			p.note = "deleted"
+		}
+		return true, false, false
+	}
+
+	// Ctrl+D deletes the selected row (session picker only; onDelete gates it).
+	if p.onDelete != nil && k.Kind == KeyCtrl && k.Byte == 4 {
+		vis := p.filtered()
+		if len(vis) == 0 || vis[p.idx].id == "" {
+			return true, false, false
+		}
+		if vis[p.idx].id == p.currentID {
+			p.note = "can't delete the active session"
+			return true, false, false
+		}
+		p.pendingDeleteID = vis[p.idx].id
+		return true, false, false
+	}
+
 	switch {
 	case k.isNavUp():
 		if p.idx > 0 {

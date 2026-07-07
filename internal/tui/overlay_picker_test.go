@@ -114,3 +114,66 @@ func TestPaletteOverlayFilter(t *testing.T) {
 		t.Fatalf("filtered = %v", vis)
 	}
 }
+func TestSessionPickerDeleteConfirmFlow(t *testing.T) {
+	var deleted string
+	newOverlay := func() *filterableListOverlay {
+		ov := newFilterableListOverlay("Sessions", []filterableListItem{
+			{id: "s1", label: "one"},
+			{id: "s2", label: "two"},
+			{id: "cur", label: "current"},
+		}, "cur", func(string) bool { return true }, boxListMaxInner)
+		ov.onDelete = func(id string) error { deleted = id; return nil }
+		return ov
+	}
+
+	// Ctrl+D arms a confirmation; nothing is deleted yet.
+	ov := newOverlay()
+	deleted = ""
+	ov.idx = 1 // s2
+	ov.feedKey(Key{Kind: KeyCtrl, Byte: 4})
+	if ov.pendingDeleteID != "s2" {
+		t.Fatalf("pendingDeleteID = %q, want s2", ov.pendingDeleteID)
+	}
+	if deleted != "" {
+		t.Fatal("must not delete before Enter confirmation")
+	}
+	// Enter confirms: onDelete fires and the row is removed.
+	ov.feedKey(Key{Kind: KeyEnter})
+	if deleted != "s2" {
+		t.Fatalf("onDelete id = %q, want s2", deleted)
+	}
+	for _, it := range ov.items {
+		if it.id == "s2" {
+			t.Fatal("s2 should be gone from the list")
+		}
+	}
+
+	// Esc cancels an armed delete without removing anything or closing.
+	ov = newOverlay()
+	deleted = ""
+	ov.idx = 0 // s1
+	ov.feedKey(Key{Kind: KeyCtrl, Byte: 4})
+	_, _, cancel := ov.feedKey(Key{Kind: KeyEscape})
+	if cancel {
+		t.Fatal("Esc during confirm must cancel the prompt, not close the overlay")
+	}
+	if ov.pendingDeleteID != "" || deleted != "" {
+		t.Fatal("Esc must cancel the pending delete")
+	}
+
+	// The active/current session cannot be deleted.
+	ov = newOverlay()
+	deleted = ""
+	for i, it := range ov.items {
+		if it.id == "cur" {
+			ov.idx = i
+		}
+	}
+	ov.feedKey(Key{Kind: KeyCtrl, Byte: 4})
+	if ov.pendingDeleteID != "" {
+		t.Fatal("must not arm deletion of the active session")
+	}
+	if ov.note == "" {
+		t.Fatal("expected a note explaining the active session can't be deleted")
+	}
+}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -59,6 +60,38 @@ func TestOpenAndSchema(t *testing.T) {
 		t.Fatalf("RecordAPICall: %v", err)
 	}
 
+}
+
+func TestDeleteSession(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "del-1")
+	mustCreateSession(t, s, "keep-2")
+	if err := s.AppendMessage(&Message{SessionID: "del-1", Role: "user", Content: textContent("zebrafish delete me")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendMessage(&Message{SessionID: "keep-2", Role: "user", Content: textContent("keep this one")}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.DeleteSession("del-1"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := s.GetSession("del-1"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetSession(del-1) err = %v, want ErrNotFound", err)
+	}
+	if msgs, _ := s.GetMessages("del-1"); len(msgs) != 0 {
+		t.Errorf("deleted session still has %d messages", len(msgs))
+	}
+	if res, _ := s.Search("zebrafish", 10); len(res) != 0 {
+		t.Errorf("FTS still returns %d hits from the deleted session", len(res))
+	}
+	// The other session is untouched.
+	if _, err := s.GetSession("keep-2"); err != nil {
+		t.Errorf("keep-2 should survive delete: %v", err)
+	}
+	if msgs, _ := s.GetMessages("keep-2"); len(msgs) != 1 {
+		t.Errorf("keep-2 should keep its 1 message, got %d", len(msgs))
+	}
 }
 
 func TestAppendMessageRequiresSession(t *testing.T) {

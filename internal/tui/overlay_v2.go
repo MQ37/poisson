@@ -126,9 +126,13 @@ func (t *TUI) openSessionPicker() {
 		}, "", func(string) error { return nil }))
 		return
 	}
-	t.setActiveOverlay(newPickerOverlay("Sessions", items, t.sessionID, func(id string) error {
+	ov := newPickerOverlay("Sessions", items, t.sessionID, func(id string) error {
 		return cmdResume(h, []string{id})
-	}))
+	})
+	// Ctrl+D in the session picker deletes the selected session (after an Enter
+	// confirmation). The active session is guarded against deletion in the overlay.
+	ov.onDelete = func(id string) error { return t.agent.Store().DeleteSession(id) }
+	t.setActiveOverlay(ov)
 }
 
 // openSearchLocked opens search. Caller must hold t.mu (e.g. feedKey, handleSlash).

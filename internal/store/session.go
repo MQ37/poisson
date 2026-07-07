@@ -75,6 +75,30 @@ func (s *Store) CreateSession(sess *Session) error {
 	return nil
 }
 
+// DeleteSession permanently removes a session and every row that references it
+// (messages, FTS index entries, api_calls, compactions), in one transaction.
+// Foreign keys are enforced with no cascade, so children must go first.
+// Irreversible.
+func (s *Store) DeleteSession(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin delete: %w", err)
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM messages_fts WHERE session_id = ?`,
+		`DELETE FROM messages WHERE session_id = ?`,
+		`DELETE FROM api_calls WHERE session_id = ?`,
+		`DELETE FROM compactions WHERE session_id = ?`,
+		`DELETE FROM sessions WHERE id = ?`,
+	} {
+		if _, err := tx.Exec(q, id); err != nil {
+			return fmt.Errorf("delete session %s: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // GetSession returns the session with the given id, or ErrNotFound.
 func (s *Store) GetSession(id string) (*Session, error) {
 	row := s.db.QueryRow(

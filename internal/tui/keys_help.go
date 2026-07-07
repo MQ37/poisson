@@ -12,7 +12,7 @@ func keybindingLines() []string {
 		"  Shift+←/→    Previous/next prompt (conv focus)",
 		"  Ctrl+F       Find in scrollback",
 		"  Ctrl+P / .   Command palette",
-		"  Ctrl+S       Session picker",
+		"  Ctrl+S       Session picker (Ctrl+D deletes the selected session)",
 		"  Ctrl+M       Model picker",
 		"  Ctrl+L       Effort picker",
 		"  Ctrl+T       Toggle thinking block",
