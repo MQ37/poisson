@@ -16,6 +16,7 @@ var paletteCommands = []paletteItem{
 	{"/model", "model picker"},
 	{"/providers", "provider picker"},
 	{"/cost", "token cost breakdown"},
+	{"/status", "session info + context files & skills"},
 	{"/clear", "clear scrollback"},
 	{"/search", "find in scrollback; /search <q> searches all sessions"},
 	{"/compact", "compact context now"},
