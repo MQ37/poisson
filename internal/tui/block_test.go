@@ -26,6 +26,27 @@ func TestBlockLayoutCache(t *testing.T) {
 	}
 }
 
+// TestBlockLayoutStylesEveryWrappedLine guards against a real bug: a
+// multi-line user message only had its style prefix on the FIRST wrapped
+// row, so a continuation line rendered unstyled whenever it was repainted
+// without the first row in the same batch (dirty-row repaints position the
+// cursor per row — they don't replay a full top-to-bottom stream, so color
+// state can't be assumed to "carry over" from a row outside the repaint).
+func TestBlockLayoutStylesEveryWrappedLine(t *testing.T) {
+	long := strings.Repeat("word ", 40) // wraps across several rows at width 20
+	b := Block{id: 1, kind: blockUser, raw: long}
+	rows := b.layoutPlain(20)
+	if len(rows) < 2 {
+		t.Fatalf("expected multiple wrapped rows, got %d", len(rows))
+	}
+	prefix := kindStylePrefix(blockUser)
+	for i, row := range rows {
+		if !strings.HasPrefix(row.Text, prefix) {
+			t.Errorf("row %d missing style prefix: %q", i, row.Text)
+		}
+	}
+}
+
 func TestBlockMergeStreaming(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendBlock(blockAssistant, "aa")

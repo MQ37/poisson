@@ -159,14 +159,16 @@ func (b *Block) layoutPlain(width int) []ScreenRow {
 			rows = append(rows, ScreenRow{Text: chunk + reset, Tag: RowTag{BlockID: b.id, RowIdx: len(rows)}})
 		}
 	default:
+		// Every wrapped line repeats the style prefix, not just the first: rows
+		// can be repainted individually (dirty-row tracking positions the
+		// cursor per row, it doesn't replay a full top-to-bottom stream), so a
+		// continuation line can't rely on color state "carrying over" from a
+		// row that isn't part of that repaint — it would render in whatever
+		// SGR state happens to be ambient, i.e. unstyled.
 		prefix := kindStylePrefix(b.kind)
 		var chunks []string
-		for i, chunk := range wrapLine(b.raw, width) {
-			p := prefix
-			if i > 0 {
-				p = ""
-			}
-			chunks = append(chunks, p+chunk+reset)
+		for _, chunk := range wrapLine(b.raw, width) {
+			chunks = append(chunks, prefix+chunk+reset)
 		}
 		rows = screenRowsFromChunks(b.id, chunks)
 	}
