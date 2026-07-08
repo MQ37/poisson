@@ -881,7 +881,7 @@ func TestContextWindowBeforeSessionUsesConfigModel(t *testing.T) {
 	s := newTestStore(t)
 	cfg := config.DefaultConfig() // OpenAI.Model defaults to gpt-5.5
 	p := provider.NewFakeProvider("openai", nil)
-	id := store.NewSessionID()    // deliberately not created yet
+	id := store.NewSessionID() // deliberately not created yet
 	a := NewAgent(s, p, newTestRegistry(testutil.TempDir(t)), cfg, id, nil, nil)
 
 	if got := a.ContextWindow(); got != 400000 {
@@ -1092,7 +1092,7 @@ func TestEffectiveEffort(t *testing.T) {
 		// claude-opus supports medium.
 		{"medium", "anthropic", "claude-opus-4-8", "medium"},
 		// xAI grok-build supports only high/max.
-		{"medium", "xai", "grok-build", ""},  // SupportsEffort=false
+		{"medium", "xai", "grok-build", ""}, // SupportsEffort=false
 		// Unknown model keeps the effort.
 		{"medium", "fake", "test-model", "medium"},
 		// Empty effort stays empty.
@@ -1103,5 +1103,33 @@ func TestEffectiveEffort(t *testing.T) {
 		if got != c.want {
 			t.Errorf("effectiveEffort(%q, %q, %q) = %q, want %q", c.effort, c.prov, c.model, got, c.want)
 		}
+	}
+}
+
+func TestRunTurnsResetsAndCounts(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	fp := newFakeProvider()
+	ch := make(chan OutputEvent, 256)
+	drainEvents(ch)
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sessionID, ch, nil)
+
+	// FakeProvider.callCount is cumulative, so queue both turns' responses upfront.
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("one", &provider.Usage{InputTokens: 10, OutputTokens: 2}),
+		provider.FakeTextResponse("two", &provider.Usage{InputTokens: 10, OutputTokens: 2}),
+	})
+	if err := a.Prompt("hi"); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if got := a.RunTurns(); got != 1 {
+		t.Fatalf("RunTurns after one turn = %d, want 1", got)
+	}
+	// A second prompt must reset the counter, not accumulate.
+	if err := a.Prompt("again"); err != nil {
+		t.Fatalf("prompt: %v", err)
+	}
+	if got := a.RunTurns(); got != 1 {
+		t.Fatalf("RunTurns after reset = %d, want 1 (not accumulated)", got)
 	}
 }

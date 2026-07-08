@@ -75,3 +75,17 @@ func TestCmdStatusSkillsDisabled(t *testing.T) {
 		t.Errorf("expected disabled skills note:\n%s", out)
 	}
 }
+
+func TestHeaderShowsTurnsAndContextWhileRunning(t *testing.T) {
+	s := StatusSnapshot{
+		Thinking: true, Turns: 3,
+		ContextTokens: 5000, ContextWindow: 200000,
+		ShowTokens: false, // off, but running -> context must still show
+	}
+	out := s.RenderHeader(120)
+	for _, want := range []string{"turn", "3", formatNum(5000), formatNum(200000)} {
+		if !strings.Contains(out, want) {
+			t.Errorf("running header missing %q: %q", want, out)
+		}
+	}
+}

@@ -176,10 +176,16 @@ func (t *TUI) Run() error {
 							continue
 						}
 						allowed, ok := keyApprovalAnswer(k)
-						if ok {
-							t.approvalAnswer <- allowed
-						} else {
+						switch {
+						case !ok:
 							t.flashApprovalHint()
+						case allowed:
+							t.approvalAnswer <- true
+						default:
+							// Denying a command stops the turn so the user can type right
+							// away, instead of leaving the model to continue past the denial
+							// and forcing a follow-up Ctrl+C.
+							t.approvalDenyAndMaybeCancelRun()
 						}
 						continue
 					}

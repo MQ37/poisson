@@ -97,6 +97,11 @@ type Agent struct {
 	// by the turn-loop goroutine — hence atomic. Never set in the main agent.
 	expedite atomic.Bool
 
+	// runTurns counts provider requests in the current run (reset each Prompt,
+	// incremented per turn-loop iteration). The status bar shows it while the
+	// agent works. Written by the turn-loop goroutine, read by the TUI goroutine.
+	runTurns atomic.Int64
+
 	// compactBackoffUntil suppresses auto-compaction retries after a failure.
 	compactBackoffUntil time.Time
 
@@ -436,6 +441,9 @@ func (a *Agent) Effort() string { return a.effort }
 // finish-now message at the next micro-turn boundary. No-op in the main agent.
 func (a *Agent) Expedite() { a.expedite.Store(true) }
 
+// RunTurns returns the number of provider requests made in the current run.
+func (a *Agent) RunTurns() int { return int(a.runTurns.Load()) }
+
 // ExpediteSubagents forwards the user's "finish now" nudge to every running
 // subagent child and returns how many were signalled. The main agent's own
 // turn is left untouched. Used by the TUI Ctrl+G handler.
@@ -529,6 +537,7 @@ func (a *Agent) PromptWithContext(ctx context.Context, userInput string, images 
 		return fmt.Errorf("append user message: %w", err)
 	}
 
+	a.runTurns.Store(0)
 	err = a.runTurn(ctx)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		// Keep the conversation visible — just stop generation. runTurn already
@@ -585,6 +594,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			a.sendEvent(OutputEvent{Type: OutputDone})
 			return err
 		}
+		a.runTurns.Add(1)
 		// BUILD
 		req, err := a.buildRequest()
 		if err != nil {

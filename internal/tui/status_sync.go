@@ -17,6 +17,7 @@ func (t *TUI) syncHeaderFromAgentLocked() {
 	// reset with the session (e.g. on /new) rather than lingering from status
 	// events of the previous session.
 	t.status.ToolCalls, t.status.ToolErrors = a.SessionToolStats()
+	t.status.Turns = a.RunTurns()
 	t.status.WarnContext = t.status.ContextPct > 75.0
 
 	if tb, err := a.Store().GetSessionTokenBreakdown(a.SessionID()); err == nil {
