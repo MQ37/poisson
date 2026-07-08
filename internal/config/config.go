@@ -45,8 +45,9 @@ type OllamaConfig struct {
 
 // CompactionConfig controls auto-compaction.
 type CompactionConfig struct {
-	Threshold float64 // fraction of context window (0.0–1.0)
-	Model     string  // summarization model (empty = session model)
+	Threshold     float64 // fraction of context window (0.0–1.0)
+	ReserveTokens int     // absolute headroom; compact at min(threshold*window, window-reserve)
+	Model         string  // summarization model (empty = session model)
 }
 
 // StealthConfig holds Anthropic Claude Code stealth constants.
@@ -121,8 +122,9 @@ func defaultConfig() *Config {
 			Model:   "glm-5.2:cloud",
 		},
 		Compaction: CompactionConfig{
-			Threshold: 0.85,
-			Model:     "",
+			Threshold:     0.85,
+			ReserveTokens: 16384,
+			Model:         "",
 		},
 		Stealth: DefaultStealthConfig(),
 		TUI: TUIConfig{
@@ -340,6 +342,13 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 		}
 		cfg.Compaction.Threshold = f
 	}
+	if v, ok := lookup(m, "compaction", "reserve_tokens"); ok {
+		f, err := asFloat(v)
+		if err != nil {
+			return nil, fmt.Errorf("compaction.reserve_tokens: %w", err)
+		}
+		cfg.Compaction.ReserveTokens = int(f)
+	}
 	if v, ok := lookup(m, "compaction", "model"); ok {
 		s, err := asString(v)
 		if err != nil {
@@ -527,4 +536,3 @@ func asIntArray(v interface{}) ([]int, error) {
 	}
 	return out, nil
 }
-

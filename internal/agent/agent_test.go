@@ -368,6 +368,56 @@ func TestContextTokensPrefersLargerAndDropsStale(t *testing.T) {
 	}
 }
 
+func TestContextTokensAnchorPlusTrailing(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	agent := NewAgent(s, newFakeProvider(), nil, newTestConfig(), sessionID, nil, nil)
+
+	call := &store.APICall{SessionID: sessionID, Seq: 1, Model: "test-model", InputTokens: 5000, OutputTokens: 100}
+	if err := s.RecordAPICall(call); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	// user (covered by anchor), assistant produced by the call (the anchor), and
+	// a trailing tool result appended after it.
+	if err := s.AppendMessage(&store.Message{SessionID: sessionID, Role: "user", Content: strings.Repeat("u", 8000)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendMessage(&store.Message{SessionID: sessionID, Role: "assistant", Content: "ok", APICallID: &call.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AppendMessage(&store.Message{SessionID: sessionID, Role: "tool", Content: strings.Repeat("x", 400)}); err != nil {
+		t.Fatal(err)
+	}
+
+	// anchor (input+output = 5100) + trailing (only the 400-char tool msg = 100),
+	// NOT the 8000-char user msg which the anchor already accounts for.
+	if used, _ := agent.ContextTokens(); used != 5200 {
+		t.Fatalf("context = %d, want 5200 (anchor 5100 + trailing 100)", used)
+	}
+}
+
+func TestCompactionLimitReserve(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cfg := newTestConfig()
+	cfg.Compaction.Threshold = 0.85
+	cfg.Compaction.ReserveTokens = 16384
+	agent := NewAgent(s, newFakeProvider(), nil, cfg, sessionID, nil, nil)
+
+	cases := []struct {
+		window, want int
+	}{
+		{200000, 170000}, // threshold (0.85*200000) hits before window-reserve (183616)
+		{32768, 16384},   // window-reserve (16384) hits before threshold (27852)
+		{8192, 6963},     // reserve >= window -> ignored, fall back to threshold
+	}
+	for _, c := range cases {
+		if got := agent.compactionLimit(c.window); got != c.want {
+			t.Errorf("compactionLimit(%d) = %d, want %d", c.window, got, c.want)
+		}
+	}
+}
+
 func TestContentBlocksJSON(t *testing.T) {
 	textJSON, err := contentBlocksToJSON([]provider.ContentBlock{
 		{Type: "text", Text: "hello"},
