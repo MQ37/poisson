@@ -291,6 +291,50 @@ func TestShouldCompact(t *testing.T) {
 	}
 }
 
+// TestSubagentSessionAutoCompacts verifies compaction isn't a main-agent-only
+// feature: a subagent's Agent instance (IsSubagent: true, same runTurn loop
+// runChildMode drives) auto-compacts mid-turn exactly like the main session
+// once its context exceeds the threshold, and keeps going afterward.
+func TestSubagentSessionAutoCompacts(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := "test-subagent-session"
+	if err := s.CreateSession(&store.Session{
+		ID: sessionID, Cwd: ".", Provider: "fake", Model: "test-model", IsSubagent: true,
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	cfg := newTestConfig()
+	cfg.Compaction.Threshold = 0.001 // 0.001 * 8192 ≈ 8 tokens: the tool turn's 20 trips it.
+
+	prov := newFakeProvider()
+	first, second := provider.FakeToolCallResponse("ls", map[string]string{"path": "."}, "done exploring")
+	summary := provider.FakeTextResponse("## Big Picture\nExplored the dir.", nil)
+	prov.SetResponses([][]provider.StreamEvent{first, summary, second})
+
+	reg := newTestRegistry(".")
+	agent := NewAgent(s, prov, reg, cfg, sessionID, nil, nil)
+
+	if err := agent.Prompt("look around"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+
+	sess, err := s.GetSession(sessionID)
+	if err != nil || sess == nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if sess.CompactionSummary == nil || *sess.CompactionSummary == "" {
+		t.Fatal("subagent session should have auto-compacted, but has no summary")
+	}
+	if !strings.Contains(*sess.CompactionSummary, "Explored the dir") {
+		t.Errorf("summary = %q, want the fake summarizer's text", *sess.CompactionSummary)
+	}
+	// tool-call turn, compaction summarize call, post-compaction final turn.
+	if prov.CallCount() != 3 {
+		t.Errorf("CallCount = %d, want 3", prov.CallCount())
+	}
+}
+
 func TestShouldCompactAtThreshold(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")

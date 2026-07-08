@@ -664,7 +664,11 @@ func runChildMode() {
 				writeChildEvent(map[string]interface{}{"type": "text", "text": ev.Text})
 			case agent.OutputToolStart:
 				toolCount++
-				writeChildEvent(map[string]interface{}{"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput, "turns": a.RunTurns()})
+				ctxUsed, ctxWindow := a.ContextTokens()
+				writeChildEvent(map[string]interface{}{
+					"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput,
+					"turns": a.RunTurns(), "contextTokens": ctxUsed, "contextWindow": ctxWindow,
+				})
 			case agent.OutputToolResult:
 				payload := map[string]interface{}{
 					"type":   "tool_result",
@@ -687,13 +691,14 @@ func runChildMode() {
 	close(outputChan)
 	wg.Wait()
 
-	ctxUsed, _ := a.ContextTokens()
+	ctxUsed, ctxWindow := a.ContextTokens()
 	writeChildEvent(map[string]interface{}{
 		"type":          "done",
 		"success":       success,
 		"toolCount":     toolCount,
 		"turns":         a.RunTurns(),
 		"contextTokens": ctxUsed,
+		"contextWindow": ctxWindow,
 	})
 }
 

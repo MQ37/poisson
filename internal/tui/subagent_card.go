@@ -10,10 +10,12 @@ import (
 // layoutSubagentCard renders a compact one-line subagent widget in the spirit
 // of the Grok CLI. The spinner/glyph, name, and elapsed timer are anchored on
 // the LEFT so the runtime is always visible no matter how long the task is;
-// the task (+ model) fills the remaining width and is truncated with an ellipsis.
+// the task (+ model) fills the remaining width and is truncated with an
+// ellipsis. Turn count and context usage (once reported) ride the same
+// segment as the timer.
 //
-//	⁘ explore  3.2s  Explore checkout flow · glm-5.2:cloud
-//	✓ explore  5.6s  Explore checkout flow · glm-5.2:cloud
+//	⁘ explore  3.2s  3 turns  1,234 / 200,000  Explore checkout flow · glm-5.2:cloud
+//	✓ explore  5.6s  4 turns  8,000 / 200,000  Explore checkout flow · glm-5.2:cloud
 func layoutSubagentCard(b *Block, width int) []ScreenRow {
 	if width < 12 {
 		width = 12
@@ -56,6 +58,16 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 			dur += "  " + turnsText
 		} else {
 			dur = turnsText
+		}
+	}
+
+	// Context usage, formatted exactly like the main header's N / window.
+	if b.meta.SubagentContextWindow > 0 {
+		ctxText := formatNum(b.meta.SubagentContextTokens) + " / " + formatNum(b.meta.SubagentContextWindow)
+		if dur != "" {
+			dur += "  " + ctxText
+		} else {
+			dur = ctxText
 		}
 	}
 
@@ -189,17 +201,19 @@ func (s *scrollback) finalizeOrphanSubagents() {
 	}
 }
 
-// updateSubagentTurns records a live turn-count update from the child, keyed
-// by the outer tool_call ID (matches appendSubagentCard/completeSubagentCard).
-// A no-op if no running widget matches — the update may race a fast-finishing
-// subagent's completion.
-func (s *scrollback) updateSubagentTurns(providerCallID string, turns int) {
+// updateSubagentProgress records a live turn-count + context-usage update
+// from the child, keyed by the outer tool_call ID (matches
+// appendSubagentCard/completeSubagentCard). A no-op if no running widget
+// matches — the update may race a fast-finishing subagent's completion.
+func (s *scrollback) updateSubagentProgress(providerCallID string, turns, contextTokens, contextWindow int) {
 	for i := len(s.blocks) - 1; i >= 0; i-- {
 		b := &s.blocks[i]
 		if b.kind != blockSubagent || b.meta.ProviderCallID != providerCallID {
 			continue
 		}
 		b.meta.SubagentTurns = turns
+		b.meta.SubagentContextTokens = contextTokens
+		b.meta.SubagentContextWindow = contextWindow
 		b.invalidateLayout()
 		return
 	}

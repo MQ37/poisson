@@ -42,9 +42,10 @@ type SubagentTool struct {
 	liveMu sync.Mutex
 	live   map[*subagent.ChildProcess]struct{}
 
-	// progressFn reports a live turn-count update for the running widget,
-	// correlated via the tool_call ID attached to Execute's context.
-	progressFn func(toolCallID string, turns int)
+	// progressFn reports a live turn-count + context-usage update for the
+	// running widget, correlated via the tool_call ID attached to Execute's
+	// context.
+	progressFn func(toolCallID string, turns, contextTokens, contextWindow int)
 }
 
 // NewSubagentTool creates a subagent tool.
@@ -89,9 +90,9 @@ func (t *SubagentTool) SetRuntime(providerFn, modelFn, effortFn func() string) {
 	t.effortFn = effortFn
 }
 
-// SetProgressFn supplies the live turn-count progress callback (called from
-// Execute's goroutine as the child reports each new turn).
-func (t *SubagentTool) SetProgressFn(fn func(toolCallID string, turns int)) {
+// SetProgressFn supplies the live turn-count + context-usage progress
+// callback (called from Execute's goroutine as the child reports each new turn).
+func (t *SubagentTool) SetProgressFn(fn func(toolCallID string, turns, contextTokens, contextWindow int)) {
 	t.progressFn = fn
 }
 
@@ -170,13 +171,13 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	defer t.untrackLive(child)
 
 	var output strings.Builder
-	var toolCount, turns int
+	var toolCount, turns, contextTokens, contextWindow int
 	var success bool
 	var childErr string
 	toolCallID, hasToolCallID := ToolCallIDFromContext(ctx)
 	reportProgress := func() {
 		if hasToolCallID && t.progressFn != nil {
-			t.progressFn(toolCallID, turns)
+			t.progressFn(toolCallID, turns, contextTokens, contextWindow)
 		}
 	}
 
@@ -225,6 +226,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 				toolCount++
 				if ev.Turns > 0 {
 					turns = ev.Turns
+					contextTokens, contextWindow = ev.ContextTokens, ev.ContextWindow
 					reportProgress()
 				}
 
@@ -247,6 +249,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 				success = ev.Success
 				if ev.Turns > 0 {
 					turns = ev.Turns
+					contextTokens, contextWindow = ev.ContextTokens, ev.ContextWindow
 					reportProgress() // final count, before the card flips to done
 				}
 				if ev.Error != "" {

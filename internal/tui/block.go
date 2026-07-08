@@ -22,23 +22,25 @@ const (
 
 // BlockMeta holds optional metadata for rich rendering (tool cards, collapse, etc.).
 type BlockMeta struct {
-	ToolName         string
-	ProviderCallID   string
-	ToolInput        []byte
-	SubagentTask     string // subagent widget: the task prompt (truncated for display)
-	SubagentModel    string // subagent widget: provider/model label
-	SubagentTurns    int    // subagent widget: live/final turn count reported by the child
-	Expediting       bool   // subagent widget: user pressed Ctrl+G, child is wrapping up
-	ToolResult string
-	ToolError  string
-	ToolDone   bool
-	Expanded   bool // tool result body expanded (PR-16)
-	ToolScroll int  // scroll offset inside expanded result
-	Collapsed        bool
-	ThinkingRedacted bool
-	Streaming        bool // true while assistant/thinking/tool stream is in flight
-	StartedAt  time.Time
-	DurationMs int64
+	ToolName              string
+	ProviderCallID        string
+	ToolInput             []byte
+	SubagentTask          string // subagent widget: the task prompt (truncated for display)
+	SubagentModel         string // subagent widget: provider/model label
+	SubagentTurns         int    // subagent widget: live/final turn count reported by the child
+	SubagentContextTokens int    // subagent widget: live/final context tokens used, reported by the child
+	SubagentContextWindow int    // subagent widget: the child's own model context window
+	Expediting            bool   // subagent widget: user pressed Ctrl+G, child is wrapping up
+	ToolResult            string
+	ToolError             string
+	ToolDone              bool
+	Expanded              bool // tool result body expanded (PR-16)
+	ToolScroll            int  // scroll offset inside expanded result
+	Collapsed             bool
+	ThinkingRedacted      bool
+	Streaming             bool // true while assistant/thinking/tool stream is in flight
+	StartedAt             time.Time
+	DurationMs            int64
 }
 
 // Block is one logical document unit in the scrollback.

@@ -158,6 +158,17 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		return fmt.Errorf("apply compaction: %w", err)
 	}
 
+	// keepActiveTail normally leaves messages after the last user turn active.
+	// When summarizeCount consumed everything (no later user message existed to
+	// split at), the active set is now empty and the next request would open
+	// with no messages at all. Append a synthetic user turn so it stays valid
+	// — the same pattern appendContinueMessage uses for max-tokens continuation.
+	if keepActiveTail && summarizeCount == len(msgs) {
+		if err := a.appendContinueMessage(); err != nil {
+			return fmt.Errorf("append post-compaction continuation: %w", err)
+		}
+	}
+
 	// 7. Record api_call for summarization (exact tokens + cost).
 	if usage != nil {
 		_ = a.recordCompactionAPICall(compactionModel, usage)
@@ -220,7 +231,13 @@ func (a *Agent) chooseSummarizeCount(msgs []store.Message, keepActiveTail bool) 
 	if keepActiveTail {
 		count := lastUserIndex(msgs)
 		if count <= 0 {
-			return 0, ErrNothingToCompact
+			// No completed prior turn to split at: the whole history is one
+			// continuous tool-calling run since the single task/prompt that
+			// started it (the normal subagent trajectory — one task, many tool
+			// rounds, no further "user" messages in between). Summarize
+			// everything; compact() appends a synthetic user turn afterward so
+			// the next request still opens with a user message.
+			return len(msgs), nil
 		}
 		return count, nil
 	}

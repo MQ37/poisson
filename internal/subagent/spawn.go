@@ -15,10 +15,10 @@ import (
 
 // SpawnInput holds the parameters for spawning a child Poisson process.
 type SpawnInput struct {
-	Task       string
-	Cwd        string
-	SessionID  string
-	Name       string
+	Task      string
+	Cwd       string
+	SessionID string
+	Name      string
 	Provider  string
 	Model     string
 	Effort    string
@@ -51,6 +51,7 @@ type ChildEvent struct {
 	Success       bool            `json:"success,omitempty"`
 	Turns         int             `json:"turns,omitempty"`
 	ContextTokens int             `json:"contextTokens,omitempty"`
+	ContextWindow int             `json:"contextWindow,omitempty"`
 	Error         string          `json:"error,omitempty"`
 }
 

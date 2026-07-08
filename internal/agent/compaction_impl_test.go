@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -141,22 +140,33 @@ func TestCompactAutoKeepsActiveTail(t *testing.T) {
 // TestCompactAutoNothingWhenSingleTurn verifies auto-compaction bails without
 // touching messages when only the current turn exists (nothing older to
 // summarize), rather than emptying the active set.
-func TestCompactAutoNothingWhenSingleTurn(t *testing.T) {
+// TestCompactAutoAppendsContinuationOnSingleTurn covers the normal subagent
+// trajectory: one task, then an extended tool-calling run with no further
+// "user" message to split at. Auto-compaction must still be able to trigger
+// (summarize everything) instead of silently doing nothing forever — it
+// appends a synthetic user turn so the next request still opens with a user
+// message.
+func TestCompactAutoAppendsContinuationOnSingleTurn(t *testing.T) {
 	s := newTestStore(t)
 	sid := newTestSession(t, s, "test-model")
 	seedMessages(t, s, sid, []string{"user", "assistant", "tool"})
 
 	fp := newFakeProvider()
+	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("## Big Picture\nDid stuff.", nil)})
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) bool { return true })
 
-	if err := a.compact(context.Background(), false, true); !errors.Is(err, ErrNothingToCompact) {
-		t.Fatalf("compact = %v, want ErrNothingToCompact", err)
+	if err := a.compact(context.Background(), false, true); err != nil {
+		t.Fatalf("compact = %v, want success", err)
+	}
+	sess, err := s.GetSession(sid)
+	if err != nil || sess == nil || sess.CompactionSummary == nil || *sess.CompactionSummary == "" {
+		t.Fatal("expected a compaction summary to be stored")
 	}
 	msgs, err := s.GetMessages(sid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(msgs) != 3 {
-		t.Fatalf("active messages = %d, want 3 (unchanged)", len(msgs))
+	if len(msgs) != 1 || msgs[0].Role != "user" {
+		t.Fatalf("active messages = %+v, want exactly one synthetic user continuation", msgs)
 	}
 }

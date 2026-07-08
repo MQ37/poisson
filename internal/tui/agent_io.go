@@ -10,8 +10,6 @@ import (
 	"poisson/internal/agent"
 )
 
-
-
 func (t *TUI) submit(text string) error {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" && len(t.pendingAttachments) == 0 {
@@ -194,7 +192,7 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		t.nextToolID++
 		t.scroll.appendToolCall(id, ev.ToolCallID, ev.ToolName, ev.ToolInput)
 	case agent.OutputSubagentProgress:
-		t.scroll.updateSubagentTurns(ev.ToolCallID, ev.SubagentTurns)
+		t.scroll.updateSubagentProgress(ev.ToolCallID, ev.SubagentTurns, ev.ContextTokens, ev.ContextWindow)
 	case agent.OutputToolResult:
 		if ev.ToolName == "subagent" {
 			t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolError, 0)

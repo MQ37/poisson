@@ -37,9 +37,11 @@ const (
 	OutputCompacting = "compacting"
 	OutputCompacted  = "compacted"
 	OutputDone       = "done"
-	// OutputSubagentProgress carries a live turn-count update for a running
-	// subagent widget. ToolCallID correlates to the OutputToolStart that
-	// created it; SubagentTurns is the child's turn count so far.
+	// OutputSubagentProgress carries a live turn-count + context-usage update
+	// for a running subagent widget. ToolCallID correlates to the
+	// OutputToolStart that created it; SubagentTurns is the child's turn count
+	// so far, and ContextTokens/ContextWindow (reused from the status fields)
+	// are the child's own context usage.
 	OutputSubagentProgress = "subagent_progress"
 )
 
@@ -54,8 +56,8 @@ type OutputEvent struct {
 	ToolResultContent string          // tool_result
 	ToolError         string          // tool_result
 	ContextPct        float64         // status
-	ContextTokens     int             // status
-	ContextWindow     int             // status
+	ContextTokens     int             // status, subagent_progress
+	ContextWindow     int             // status, subagent_progress
 	Cost              float64         // status
 	Model             string          // status
 	OutputTokens      int             // status
@@ -67,8 +69,8 @@ type OutputEvent struct {
 	Effort            string          // status
 	SubagentTurns     int             // subagent_progress
 
-	CompactionTokensBefore int // compacted
-	CompactionTokensAfter  int // compacted
+	CompactionTokensBefore int  // compacted
+	CompactionTokensAfter  int  // compacted
 	ThinkingRedacted       bool // thinking (opaque redacted block)
 }
 
@@ -456,14 +458,17 @@ func (a *Agent) Expedite() { a.expedite.Store(true) }
 // RunTurns returns the number of provider requests made in the current run.
 func (a *Agent) RunTurns() int { return int(a.runTurns.Load()) }
 
-// SendSubagentProgress emits a live turn-count update for a running subagent
-// widget. toolCallID correlates to the OutputToolStart that created it (see
-// tools.WithToolCallID). Called from the subagent tool's own goroutine while
-// its child is still running, concurrently with the rest of the turn loop —
-// sendEvent is the same channel-send already used for tool_result from that
-// goroutine, so this is safe.
-func (a *Agent) SendSubagentProgress(toolCallID string, turns int) {
-	a.sendEvent(OutputEvent{Type: OutputSubagentProgress, ToolCallID: toolCallID, SubagentTurns: turns})
+// SendSubagentProgress emits a live turn-count + context-usage update for a
+// running subagent widget. toolCallID correlates to the OutputToolStart that
+// created it (see tools.WithToolCallID). Called from the subagent tool's own
+// goroutine while its child is still running, concurrently with the rest of
+// the turn loop — sendEvent is the same channel-send already used for
+// tool_result from that goroutine, so this is safe.
+func (a *Agent) SendSubagentProgress(toolCallID string, turns, contextTokens, contextWindow int) {
+	a.sendEvent(OutputEvent{
+		Type: OutputSubagentProgress, ToolCallID: toolCallID, SubagentTurns: turns,
+		ContextTokens: contextTokens, ContextWindow: contextWindow,
+	})
 }
 
 // ExpediteSubagents forwards the user's "finish now" nudge to every running
