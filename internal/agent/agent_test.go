@@ -638,6 +638,48 @@ func TestExpediteInjectsNudgeIntoToolResult(t *testing.T) {
 	}
 }
 
+// TestExpediteForcesToolsOffNextTurn verifies the "harsh" half of expedite: the
+// current tool call is always let to finish, but the very next completion must
+// be tool-less so the model can't just acknowledge the nudge and keep working.
+func TestExpediteForcesToolsOffNextTurn(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cwd := testutil.TempDir(t)
+	testFile := filepath.Join(cwd, "hello.txt")
+	if err := os.WriteFile(testFile, []byte("Hello from file!"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	reg := newTestRegistry(cwd)
+	cfg := newTestConfig()
+	p := newFakeProvider()
+	first, second := provider.FakeToolCallResponse("read",
+		map[string]interface{}{"path": testFile},
+		"done")
+	p.SetResponses([][]provider.StreamEvent{first, second})
+
+	ch := make(chan OutputEvent, 256)
+	drainEvents(ch)
+	agent := NewAgent(s, p, reg, cfg, sessionID, ch, nil)
+	agent.Expedite()
+
+	if err := agent.Prompt("read hello.txt"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(ch)
+
+	reqs := p.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", len(reqs))
+	}
+	if len(reqs[0].Tools) == 0 {
+		t.Error("first turn should still offer tools (nudge hasn't fired yet)")
+	}
+	if len(reqs[1].Tools) != 0 {
+		t.Errorf("turn right after the nudge must have no tools, got %d", len(reqs[1].Tools))
+	}
+}
+
 func TestRunTurnContinuesOnMaxTokens(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")

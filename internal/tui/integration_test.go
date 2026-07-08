@@ -793,8 +793,10 @@ func TestTUIInteg_SubagentDoesNotPolluteConversation(t *testing.T) {
 }
 
 // TestTUIInteg_SubagentPinnedWhileRunning verifies a running subagent is shown
-// in the pinned region above the conversation (not inline), and moves inline
-// once it completes.
+// BOTH in the pinned region above the conversation (a glanceable status the
+// user won't miss while scrolled elsewhere) AND inline at its actual point in
+// the conversation, exactly like any other tool call — and stays inline once
+// it completes.
 func TestTUIInteg_SubagentPinnedWhileRunning(t *testing.T) {
 	e := newTUIIntegEnv(t, nil)
 	e.feedEvent(agent.OutputEvent{
@@ -804,7 +806,7 @@ func TestTUIInteg_SubagentPinnedWhileRunning(t *testing.T) {
 		ToolInput:  mustJSONTUI(t, map[string]string{"task": "explore the code", "name": "explore"}),
 	})
 
-	// While running: pinned line exists; inline flow does NOT contain it.
+	// While running: pinned line exists AND the conversation shows it too.
 	e.tui.mu.Lock()
 	if e.tui.scroll.runningSubagentCount() != 1 {
 		t.Errorf("runningSubagentCount = %d, want 1", e.tui.scroll.runningSubagentCount())
@@ -816,10 +818,14 @@ func TestTUIInteg_SubagentPinnedWhileRunning(t *testing.T) {
 	if len(pinned) != 1 || !strings.Contains(stripANSI(pinned[0]), "explore") {
 		t.Errorf("pinned running line missing: %v", pinned)
 	}
+	var foundWhileRunning bool
 	for _, r := range inline {
 		if strings.Contains(stripANSI(r.Text), "explore the code") {
-			t.Errorf("running subagent must not appear inline: %q", stripANSI(r.Text))
+			foundWhileRunning = true
 		}
+	}
+	if !foundWhileRunning {
+		t.Error("running subagent should also appear inline in the conversation")
 	}
 
 	// Complete it: now it appears inline (a record), and the pinned region empties.
@@ -840,6 +846,52 @@ func TestTUIInteg_SubagentPinnedWhileRunning(t *testing.T) {
 	}
 	if !foundInline {
 		t.Error("completed subagent should appear inline in the conversation")
+	}
+}
+
+// TestTUIInteg_SubagentResumeOrphanedRun verifies a subagent whose tool_use
+// was persisted but never got a matching tool_result (the app exited/crashed
+// mid-run) still replays as a finished widget on resume, visible inline in
+// the conversation, instead of being dropped or left spinning forever.
+func TestTUIInteg_SubagentResumeOrphanedRun(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	sid := e.sid
+	e.store.AppendMessage(&store.Message{
+		SessionID: sid, Role: "user", Content: `[{"type":"text","text":"go explore"}]`,
+	})
+	e.store.AppendMessage(&store.Message{
+		SessionID: sid, Role: "assistant",
+		Content: `[{"type":"tool_use","tool_call_id":"c1","tool_name":"subagent","tool_input":{"task":"Explore the module","name":"explore"}}]`,
+	})
+	// No tool_result row: the process died before the subagent finished.
+
+	e.tui.mu.Lock()
+	e.tui.resetSessionViewLocked()
+	e.tui.mu.Unlock()
+
+	if e.firstBlockOfKind(blockSubagent) == -1 {
+		t.Fatal("orphaned subagent should still replay as a widget (blockSubagent)")
+	}
+	e.tui.mu.Lock()
+	inline := e.tui.scroll.visible(20, 100)
+	e.tui.mu.Unlock()
+	var found bool
+	for _, r := range inline {
+		if strings.Contains(stripANSI(r.Text), "explore") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("orphaned subagent should be visible inline in the conversation")
+	}
+	var card *Block
+	for i := range e.tui.scroll.blocks {
+		if e.tui.scroll.blocks[i].kind == blockSubagent {
+			card = &e.tui.scroll.blocks[i]
+		}
+	}
+	if card == nil || !card.meta.ToolDone || card.meta.Streaming {
+		t.Errorf("orphaned subagent should be finalized as done, got %+v", card.meta)
 	}
 }
 

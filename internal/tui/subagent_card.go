@@ -46,6 +46,19 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 		dur = formatDuration(elapsed)
 	}
 
+	if b.meta.SubagentTurns > 0 {
+		unit := "turn"
+		if b.meta.SubagentTurns != 1 {
+			unit = "turns"
+		}
+		turnsText := fmt.Sprintf("%d %s", b.meta.SubagentTurns, unit)
+		if dur != "" {
+			dur += "  " + turnsText
+		} else {
+			dur = turnsText
+		}
+	}
+
 	detail := b.meta.SubagentTask
 	if m := b.meta.SubagentModel; m != "" {
 		if detail != "" {
@@ -173,6 +186,22 @@ func (s *scrollback) finalizeOrphanSubagents() {
 		b.meta.ToolDone = true
 		b.meta.DurationMs = 0 // unknown after resume
 		b.invalidateLayout()
+	}
+}
+
+// updateSubagentTurns records a live turn-count update from the child, keyed
+// by the outer tool_call ID (matches appendSubagentCard/completeSubagentCard).
+// A no-op if no running widget matches — the update may race a fast-finishing
+// subagent's completion.
+func (s *scrollback) updateSubagentTurns(providerCallID string, turns int) {
+	for i := len(s.blocks) - 1; i >= 0; i-- {
+		b := &s.blocks[i]
+		if b.kind != blockSubagent || b.meta.ProviderCallID != providerCallID {
+			continue
+		}
+		b.meta.SubagentTurns = turns
+		b.invalidateLayout()
+		return
 	}
 }
 

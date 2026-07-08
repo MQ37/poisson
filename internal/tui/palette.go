@@ -44,9 +44,10 @@ const (
 	kittyKbOn  = "\x1b[>1u"
 	kittyKbOff = "\x1b[<u"
 
-	// SGR mouse tracking for scroll wheel (terminals without wheel still ignore).
-	mouseOn  = "\x1b[?1000h\x1b[?1006h"
-	mouseOff = "\x1b[?1006l\x1b[?1000l"
+	// SGR mouse tracking: 1000 (clicks/wheel) + 1002 (motion while a button is
+	// held, for drag text-selection) + 1006 (extended coordinates).
+	mouseOn  = "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+	mouseOff = "\x1b[?1006l\x1b[?1002l\x1b[?1000l"
 )
 
 // cup positions the cursor at row (1-based), col (1-based).

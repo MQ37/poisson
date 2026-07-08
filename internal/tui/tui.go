@@ -121,6 +121,17 @@ type TUI struct {
 
 	introScrollTop bool // scroll to welcome chart on first paint
 	startupIntro   startupIntroMeta
+
+	// sel is the current mouse text selection over the conversation, if any.
+	// Cleared by Esc, a new press, or typed input. Copied with Ctrl+Y.
+	sel selectionState
+
+	// mouseBuf carries a trailing partial SGR mouse sequence across separate
+	// stdin reads. A fast drag floods many motion reports; a single read()
+	// can return a prefix cut mid-sequence, and without this the whole burst
+	// (including complete events already in the same read) would silently
+	// fall through to the keyboard decoder and be dropped.
+	mouseBuf []byte
 }
 
 // startupIntroMeta holds the welcome chart text source for re-painting after resets.

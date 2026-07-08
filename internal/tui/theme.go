@@ -5,6 +5,11 @@ import (
 	"strings"
 )
 
+// reverseVideo swaps fg/bg without depending on the active theme's colors;
+// reset (theme-defined) turns it back off. Used for the mouse text selection
+// highlight.
+const reverseVideo = "\x1b[7m"
+
 // detectTruecolor returns true if the environment indicates 24-bit color support.
 // Checks COLORTERM=truecolor|24bit and TERM containing 24bit/truecolor.
 func detectTruecolor() bool {

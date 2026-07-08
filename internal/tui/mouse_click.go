@@ -2,27 +2,72 @@ package tui
 
 import "strings"
 
-// handleMouseInput consumes pure mouse reports (wheel + click). Returns true if
-// the input goroutine should skip further processing.
+// maxMouseBufBytes bounds the carry-over buffer for a partial mouse sequence.
+// A complete SGR report is well under this; a stream that never completes
+// (foreign/malformed bytes) gets dropped instead of buffered forever.
+const maxMouseBufBytes = 64
+
+// handleMouseInput consumes pure mouse reports (wheel, click, drag-select),
+// reassembling sequences that a read() split mid-escape-code. Returns true if
+// the input goroutine should skip further processing of data.
 func (t *TUI) handleMouseInput(data []byte) bool {
-	if !dataIsOnlyMouse(data) {
+	buf := data
+	if len(t.mouseBuf) > 0 {
+		buf = append(append([]byte(nil), t.mouseBuf...), data...)
+	}
+	if !hasMousePrefix(buf) {
 		return false
 	}
-	events := parseMouseEvents(data)
-	if len(events) == 0 {
-		return false
+	events, rest := consumeMouseEvents(buf)
+	if hasMousePrefix(rest) && len(rest) <= maxMouseBufBytes {
+		t.mouseBuf = rest
+	} else {
+		// rest is either empty, or bytes that turned out not to be a mouse
+		// sequence continuation (or an unreasonably long non-completing one) —
+		// nothing more to carry over.
+		t.mouseBuf = nil
 	}
-	ev := events[len(events)-1]
+	for _, ev := range events {
+		t.handleOneMouseEvent(ev)
+	}
+	return true
+}
+
+// hasMousePrefix reports whether data opens an SGR mouse report (CSI <).
+func hasMousePrefix(data []byte) bool {
+	return len(data) >= 3 && data[0] == 27 && data[1] == '[' && data[2] == '<'
+}
+
+// consumeMouseEvents parses as many complete SGR mouse reports as possible
+// from the front of data, returning them plus whatever's left (either empty,
+// an incomplete trailing sequence to carry over, or non-mouse bytes once a
+// mixed chunk stops looking like a mouse report).
+func consumeMouseEvents(data []byte) (events []MouseEvent, rest []byte) {
+	for len(data) > 0 && hasMousePrefix(data) {
+		adv := advancePastMouse(data)
+		if adv <= 0 {
+			break // incomplete trailing sequence; caller carries it over
+		}
+		events = append(events, parseMouseEvents(data[:adv])...)
+		data = data[adv:]
+	}
+	return events, data
+}
+
+// handleOneMouseEvent dispatches a single parsed mouse report: wheel scroll,
+// left-button press/drag/release (click or text selection), or an ignored
+// button/state.
+func (t *TUI) handleOneMouseEvent(ev MouseEvent) {
+	t.mu.Lock()
 
 	if delta, ok := mouseWheelDelta(ev.Button); ok {
-		t.mu.Lock()
 		if t.approving.Load() {
 			if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
 				// Wheel-up shows earlier command lines (opposite of scrollback delta).
 				ao.scrollBy(-delta)
 				t.dirty.markInput()
 				t.mu.Unlock()
-				return true
+				return
 			}
 		}
 		if t.blocksBackgroundInput() {
@@ -35,10 +80,10 @@ func (t *TUI) handleMouseInput(data []byte) bool {
 				}
 				t.dirty.markFull()
 				t.mu.Unlock()
-				return true
+				return
 			}
 			t.mu.Unlock()
-			return true
+			return
 		}
 		w := t.contentWidth()
 		if t.scroll.focusedToolExpanded(w) {
@@ -46,25 +91,37 @@ func (t *TUI) handleMouseInput(data []byte) bool {
 				t.markScrollDirty()
 			}
 			t.mu.Unlock()
-			return true
+			return
 		}
 		t.mu.Unlock()
 		t.handleScrollDelta(delta)
-		return true
+		return
 	}
 
-	if ev.Button == 0 && ev.Press {
-		t.handleMouseClick(ev.Row)
-		return true
+	if ev.Button == 0 && ev.Press && !ev.Motion {
+		t.beginPressLocked(ev.Row, ev.Col)
+		t.mu.Unlock()
+		return
+	}
+	if ev.Button&3 == 0 && ev.Motion {
+		t.extendSelectionLocked(ev.Row, ev.Col)
+		t.mu.Unlock()
+		return
+	}
+	if ev.Button&3 == 0 && !ev.Press && !ev.Motion {
+		t.endSelectionLocked(ev.Row)
+		t.mu.Unlock()
+		return
 	}
 
-	return true // consume release / other buttons
+	t.mu.Unlock() // consume other buttons / states
 }
 
-func (t *TUI) handleMouseClick(row int) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
+// dispatchOverlayClickLocked handles a click landing on overlay chrome (list
+// picker, completion dropdown, search box) or blocked by a non-search
+// overlay. Returns true if it fully handled the click — drag-select never
+// applies to overlay chrome. Must be called with t.mu held.
+func (t *TUI) dispatchOverlayClickLocked(row int) bool {
 	if lo := asListClickOverlay(t.activeOverlay); lo != nil {
 		chrome := lo.listChrome()
 		scrollStart := t.headerRows + 1
@@ -75,30 +132,46 @@ func (t *TUI) handleMouseClick(row int) {
 				t.dirty.markFull()
 			}
 			t.closeOverlayAfter(prev, done, false)
-			return
+			return true
 		}
 		if chrome.totalLines > 0 && (lineInOverlay < 0 || lineInOverlay >= chrome.totalLines) {
 			t.dismissOverlay()
 		}
-		return
+		return true
 	}
 
 	if t.handleCompletionClick(row) {
-		return
+		return true
 	}
 
 	if so, ok := t.activeOverlay.(*searchOverlay); ok {
 		anchor, lines := so.render(t.scrollRows, t.cols)
 		searchRow := t.headerRows + 1 + anchor - 1 + t.overlayPinOffset()
 		if row >= searchRow && row < searchRow+len(lines) {
-			return
+			return true
 		}
 	}
 
 	if t.activeOverlay != nil {
 		if _, ok := t.activeOverlay.(*searchOverlay); !ok {
-			return
+			return true
 		}
+	}
+
+	return false
+}
+
+func (t *TUI) handleMouseClick(row int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.handleMouseClickLocked(row)
+}
+
+// handleMouseClickLocked toggles thinking/tool-card expand for a plain click
+// (no drag) inside the conversation area. Must be called with t.mu held.
+func (t *TUI) handleMouseClickLocked(row int) {
+	if t.dispatchOverlayClickLocked(row) {
+		return
 	}
 
 	scrollStart := t.headerRows + 1 // 1-based first scroll row

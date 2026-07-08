@@ -423,6 +423,14 @@ func keyApprovalAnswer(k Key) (allowed, ok bool) {
 
 func (k Key) isCtrlC() bool { return k.Kind == KeyCtrl && k.Byte == 3 }
 
+// isCtrlY is the copy-selection shortcut. Plain Ctrl+<letter> (unlike
+// kitty_mod combos such as Ctrl+Shift+C) is never intercepted by the terminal
+// itself, and decodes the same whether or not the kitty keyboard protocol is
+// active — Ctrl+Shift+C collided with kitty's own default "copy_to_clipboard"
+// binding (kitty_mod defaults to ctrl+shift), so the key never reached px at
+// all.
+func (k Key) isCtrlY() bool { return k.Kind == KeyCtrl && k.Byte == 25 }
+
 func (k Key) isEnter() bool { return k.Kind == KeyEnter }
 
 func (k Key) isNavUp() bool {

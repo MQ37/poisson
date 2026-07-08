@@ -17,6 +17,8 @@ type FakeProvider struct {
 	callCount int
 	// lastRequest captures the most recent Request passed to Stream.
 	lastRequest *Request
+	// requests captures every Request passed to Stream, in call order.
+	requests []*Request
 }
 
 // NewFakeProvider creates a FakeProvider with the given id and model list.
@@ -39,6 +41,10 @@ func (p *FakeProvider) Models() ([]Model, error) { return p.models, nil }
 // LastRequest returns the most recent Request passed to Stream (for assertions).
 func (p *FakeProvider) LastRequest() *Request { return p.lastRequest }
 
+// Requests returns every Request passed to Stream, in call order (for
+// assertions that need to inspect a specific turn, not just the last one).
+func (p *FakeProvider) Requests() []*Request { return p.requests }
+
 // CallCount returns the number of times Stream was called.
 func (p *FakeProvider) CallCount() int { return p.callCount }
 
@@ -48,6 +54,7 @@ func (p *FakeProvider) CallCount() int { return p.callCount }
 func (p *FakeProvider) Stream(ctx context.Context, req *Request) (<-chan StreamEvent, error) {
 	p.callCount++
 	p.lastRequest = req
+	p.requests = append(p.requests, req)
 
 	var events []StreamEvent
 	if p.callCount <= len(p.responses) {

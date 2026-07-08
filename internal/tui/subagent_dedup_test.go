@@ -52,7 +52,10 @@ func TestAnimateSpinnerInLineNoDup(t *testing.T) {
 }
 
 // TestSubagentWidgetRendersNameOnce is a full-paint regression: a running
-// subagent widget must show its name exactly once on screen.
+// subagent widget shows its name exactly twice on screen — once pinned above
+// the conversation (glanceable even if the user is scrolled elsewhere) and
+// once inline at its actual point in the conversation — never more (which
+// would indicate a rendering bug duplicating one of the two copies).
 func TestSubagentWidgetRendersNameOnce(t *testing.T) {
 	e := newTUIIntegEnv(t, nil)
 	e.tui.cols = 120
@@ -67,8 +70,8 @@ func TestSubagentWidgetRendersNameOnce(t *testing.T) {
 	e.tui.paint(e.tui.dirty.consume())
 	out := stripANSI(e.tui.writer.(*bytes.Buffer).String())
 
-	if n := strings.Count(out, "worker"); n != 1 {
-		t.Errorf("subagent name rendered %d times, want 1", n)
+	if n := strings.Count(out, "worker"); n != 2 {
+		t.Errorf("subagent name rendered %d times, want 2 (pinned + inline)", n)
 	}
 
 	// Verify it's the pinned widget line (spinner + name + timer).

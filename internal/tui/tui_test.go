@@ -37,10 +37,28 @@ func TestExpandAtFiles(t *testing.T) {
 	}
 }
 
-func TestExpandAtFilesMissingFile(t *testing.T) {
-	_, err := expandAtFiles("@/nonexistent/path/file.go")
-	if err == nil {
-		t.Error("expected error for missing file, got nil")
+// A nonexistent @path is left as plain text instead of erroring — @word is a
+// common false positive (e.g. "{@link Foo}" in a pasted JSDoc comment), and
+// erroring the whole send on every such paste is worse than a no-op.
+func TestExpandAtFilesMissingFileIsLeftAsPlainText(t *testing.T) {
+	input := "see @/nonexistent/path/file.go for details"
+	got, err := expandAtFiles(input)
+	if err != nil {
+		t.Fatalf("expandAtFiles: %v", err)
+	}
+	if got != input {
+		t.Errorf("expected unchanged input, got %q", got)
+	}
+}
+
+func TestExpandAtFilesJSDocLinkTagPassesThrough(t *testing.T) {
+	input := "cannot be judged until the client is known {@link TOOL_CLIENT_BLOCKLIST} rule"
+	got, err := expandAtFiles(input)
+	if err != nil {
+		t.Fatalf("expandAtFiles: %v", err)
+	}
+	if got != input {
+		t.Errorf("expected unchanged input, got %q", got)
 	}
 }
 

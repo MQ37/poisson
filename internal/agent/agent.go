@@ -37,6 +37,10 @@ const (
 	OutputCompacting = "compacting"
 	OutputCompacted  = "compacted"
 	OutputDone       = "done"
+	// OutputSubagentProgress carries a live turn-count update for a running
+	// subagent widget. ToolCallID correlates to the OutputToolStart that
+	// created it; SubagentTurns is the child's turn count so far.
+	OutputSubagentProgress = "subagent_progress"
 )
 
 // OutputEvent is a serialized terminal rendering event. The TUI goroutine
@@ -61,6 +65,7 @@ type OutputEvent struct {
 	ToolCalls         int             // status
 	ToolErrors        int             // status
 	Effort            string          // status
+	SubagentTurns     int             // subagent_progress
 
 	CompactionTokensBefore int // compacted
 	CompactionTokensAfter  int // compacted
@@ -91,11 +96,18 @@ type Agent struct {
 	sysTokensEstimate atomic.Int64
 
 	// expedite is set (in subagent/child mode) when the parent forwards the
-	// user's Ctrl+G "finish now" nudge. At the next micro-turn boundary the turn
-	// loop appends expediteNudge to the last tool result so the model wraps up
-	// with partial results. Written by the child's stdin-reader goroutine, read
-	// by the turn-loop goroutine — hence atomic. Never set in the main agent.
+	// user's Ctrl+G "finish now" nudge. The current tool call is always let to
+	// finish (no hard interrupt); at the next micro-turn boundary the turn loop
+	// appends expediteNudge to the last tool result AND arms
+	// expediteForceNoTools, so the very next completion is forced to be the
+	// final answer — the model literally cannot call another tool. Written by
+	// the child's stdin-reader goroutine, read by the turn-loop goroutine —
+	// hence atomic. Never set in the main agent.
 	expedite atomic.Bool
+	// expediteForceNoTools omits Tools from exactly one upcoming request, right
+	// after an expedite nudge fires, so the model must respond with plain text
+	// instead of possibly starting another tool call despite the nudge.
+	expediteForceNoTools atomic.Bool
 
 	// runTurns counts provider requests in the current run (reset each Prompt,
 	// incremented per turn-loop iteration). The status bar shows it while the
@@ -444,6 +456,16 @@ func (a *Agent) Expedite() { a.expedite.Store(true) }
 // RunTurns returns the number of provider requests made in the current run.
 func (a *Agent) RunTurns() int { return int(a.runTurns.Load()) }
 
+// SendSubagentProgress emits a live turn-count update for a running subagent
+// widget. toolCallID correlates to the OutputToolStart that created it (see
+// tools.WithToolCallID). Called from the subagent tool's own goroutine while
+// its child is still running, concurrently with the rest of the turn loop —
+// sendEvent is the same channel-send already used for tool_result from that
+// goroutine, so this is safe.
+func (a *Agent) SendSubagentProgress(toolCallID string, turns int) {
+	a.sendEvent(OutputEvent{Type: OutputSubagentProgress, ToolCallID: toolCallID, SubagentTurns: turns})
+}
+
 // ExpediteSubagents forwards the user's "finish now" nudge to every running
 // subagent child and returns how many were signalled. The main agent's own
 // turn is left untouched. Used by the TUI Ctrl+G handler.
@@ -601,6 +623,11 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Build error: %v", err)})
 			a.sendEvent(OutputEvent{Type: OutputDone})
 			return fmt.Errorf("build request: %w", err)
+		}
+		if a.expediteForceNoTools.Swap(false) {
+			// Hard stop: no tools means no possible tool_use block, so this
+			// completion must be the final text answer.
+			req.Tools = nil
 		}
 
 		// CALL
@@ -767,7 +794,8 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			wg.Add(1)
 			go func(idx int, call tools.ToolCall) {
 				defer wg.Done()
-				res, err := a.tools.Execute(ctx, call.Name, call.Input)
+				callCtx := tools.WithToolCallID(ctx, call.ID)
+				res, err := a.tools.Execute(callCtx, call.Name, call.Input)
 				if err != nil {
 					res = tools.TrimToolResult(tools.ToolResult{Error: err.Error()})
 				}
@@ -804,9 +832,12 @@ func (a *Agent) runTurn(ctx context.Context) error {
 					turnCwd, toolCalls[i].Name, toolCalls[i].Input, sysCtxPaths)
 			}
 			// If the user asked us to wrap up (Ctrl+G — subagents only), append the
-			// nudge to the last tool result so the model sees it on the next turn.
+			// nudge to the last tool result and force the next completion to be
+			// tool-less, so the model can't just acknowledge the nudge and keep
+			// working — it must produce the final answer right away.
 			if i == len(results)-1 && a.expedite.Swap(false) {
 				toolBlock.ToolResult += expediteNudge
+				a.expediteForceNoTools.Store(true)
 			}
 
 			toolContent, err := contentBlocksToJSON([]provider.ContentBlock{toolBlock})

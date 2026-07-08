@@ -215,12 +215,11 @@ func (s *scrollback) layoutAll(width int) ([]ScreenRow, []int) {
 	cumulative := make([]int, len(s.blocks)+1)
 	var out []ScreenRow
 	for i := range s.blocks {
-		// Running subagent widgets are shown pinned above the conversation, not
-		// inline, until they finish (then they appear here as a record).
-		if s.blocks[i].kind == blockSubagent && s.blocks[i].meta.Streaming {
-			cumulative[i+1] = len(out)
-			continue
-		}
+		// Running subagent widgets are ALSO pinned above the conversation (a
+		// glanceable status the user won't miss while scrolled elsewhere), but
+		// they render inline here too, at their actual point in the
+		// conversation — exactly like any other tool call — so scrolling back
+		// through history shows where each subagent was spawned.
 		rows := s.blocks[i].layoutPlain(width)
 		out = append(out, rows...)
 		cumulative[i+1] = len(out)
@@ -273,6 +272,54 @@ func (s *scrollback) visible(height, width int) []ScreenRow {
 		return nil
 	}
 	return wrapped[start:end]
+}
+
+// viewportStart returns the absolute index (into layoutAll's row list) of the
+// first row currently on screen. Combined with a viewport-relative row, this
+// gives a stable address for mouse-driven text selection that survives
+// scrolling (layoutAll is stable for a given width).
+func (s *scrollback) viewportStart(height, width int) int {
+	_, start, _ := s.viewportRange(height, width)
+	return start
+}
+
+// selectedText extracts the plain (ANSI-stripped) text spanning absolute rows
+// [loRow,hiRow] at the given width, clipped to [loCol,hiCol] on the first/last
+// row. Returns "" if the range is out of bounds.
+func (s *scrollback) selectedText(width, loRow, loCol, hiRow, hiCol int) string {
+	wrapped, _ := s.layoutAll(width)
+	if len(wrapped) == 0 || loRow >= len(wrapped) {
+		return ""
+	}
+	if hiRow >= len(wrapped) {
+		hiRow = len(wrapped) - 1
+	}
+	var lines []string
+	for r := loRow; r <= hiRow; r++ {
+		runes := []rune(stripANSI(wrapped[r].Text))
+		start, end := 0, len(runes)
+		if r == loRow {
+			start = clampInt(loCol, 0, len(runes))
+		}
+		if r == hiRow {
+			end = clampInt(hiCol+1, 0, len(runes))
+		}
+		if start > end {
+			start = end
+		}
+		lines = append(lines, strings.TrimRight(string(runes[start:end]), " "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 func (s *scrollback) pinned() bool { return s.scrollOffset == 0 }

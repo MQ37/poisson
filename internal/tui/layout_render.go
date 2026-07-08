@@ -176,7 +176,7 @@ func (t *TUI) renderHintLine() string {
 	if t.focusRegion == focusConv {
 		return dim + "Tab:input · PgUp/Dn:scroll · Shift+←/→:prompts · Ctrl+E:tool" + reset
 	}
-	base := "Tab:conv · Enter:send · Ctrl+V:image · Ctrl+F:find · Ctrl+P:palette · Ctrl+L:effort · Ctrl+T:think · Ctrl+E:tool · Ctrl+G:expedite · Ctrl+C:cancel"
+	base := "Tab:conv · Enter:send · Ctrl+V:image · Ctrl+F:find · Ctrl+P:palette · Ctrl+L:effort · Ctrl+T:think · Ctrl+E:tool · Ctrl+Y:copy · Ctrl+G:expedite · Ctrl+C:cancel"
 	if t.running() {
 		base = "Enter:queue message · Ctrl+C:cancel · Ctrl+G:expedite · Ctrl+T:think · Ctrl+E:tool"
 	}

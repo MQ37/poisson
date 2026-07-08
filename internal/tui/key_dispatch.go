@@ -55,6 +55,14 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		t.editor.wrapWidth = inputWrapWidth(t.cols)
 	}
 
+	if k.isCtrlY() {
+		t.copySelectionLocked()
+		return false, nil
+	}
+	if t.sel.set {
+		t.clearSelectionLocked()
+	}
+
 	if k.isCtrlC() {
 		if _, ok := t.activeOverlay.(*searchOverlay); ok {
 			t.dismissOverlay()

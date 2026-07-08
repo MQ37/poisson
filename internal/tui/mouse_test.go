@@ -49,3 +49,26 @@ func TestDataIsOnlyMouse(t *testing.T) {
 		t.Fatal("mixed should be false")
 	}
 }
+func TestParseMouseEventsMotionBit(t *testing.T) {
+	events := parseMouseEvents([]byte("\x1b[<32;12;5M"))
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	ev := events[0]
+	if !ev.Motion {
+		t.Fatal("expected Motion=true for btn 32")
+	}
+	if ev.Button != 0 {
+		t.Fatalf("expected motion bit stripped from Button, got %d", ev.Button)
+	}
+	if ev.Col != 12 || ev.Row != 5 {
+		t.Fatalf("Col/Row = %d/%d, want 12/5", ev.Col, ev.Row)
+	}
+}
+
+func TestParseMouseEventsPlainClickNoMotion(t *testing.T) {
+	events := parseMouseEvents([]byte("\x1b[<0;3;2M"))
+	if events[0].Motion {
+		t.Fatal("plain click must not report Motion")
+	}
+}

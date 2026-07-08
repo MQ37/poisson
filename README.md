@@ -173,6 +173,13 @@ Enter send · Ctrl+V image · Ctrl+F find · Ctrl+P palette
 Ctrl+L effort · Ctrl+T fold thinking · Ctrl+E expand tool · Ctrl+C cancel/clear
 ```
 
+Click-drag over the conversation selects text — no Shift key needed — and
+auto-scrolls when you drag past the top/bottom edge. **Ctrl+Y** copies the
+selection to the system clipboard (via OSC 52, works over SSH). Plain
+Ctrl+<letter> is used instead of Ctrl+Shift+C because most terminals
+(including kitty's default `kitty_mod+c`) already bind Ctrl+Shift+C to their
+own native copy action and never forward it to the app.
+
 Slash commands: `/help` `/status` `/model` `/effort` `/providers` `/sessions`
 `/resume` `/search` `/new` `/clear` `/name` `/compact` `/cost` `/reload`
 `/btw` `/quit`. Type `@` to fuzzy-attach a file (or `@image.png` for an image).

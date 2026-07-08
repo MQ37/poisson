@@ -71,7 +71,8 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 		sr:            sr,
 		sc:            sc,
 		screenLines:   screenLines,
-		visible:       t.scroll.visible(t.convScrollRows(), wrapWidth),
+		// Scrollback wraps at contentWidth, not the (narrower) input wrapWidth.
+		visible: t.scroll.visible(t.convScrollRows(), t.contentWidth()),
 	}
 }
 
@@ -169,7 +170,7 @@ func (t *TUI) paintScrollRegion(b *strings.Builder, lay layoutSnapshot, only []i
 		b.WriteString(cup(screenRow, 1))
 		b.WriteString(clearLine())
 		if i < len(lay.visible) {
-			b.WriteString(truncateToWidth(t.formatVisibleScrollLine(i, lay), lay.wrapWidth))
+			b.WriteString(t.formatVisibleScrollLineTrunc(i, lay))
 		}
 	}
 }
@@ -344,7 +345,7 @@ func (t *TUI) paintCompletionZone(b *strings.Builder, lay layoutSnapshot, lines 
 		}
 		vi := row - lay.scrollStart - pinRows
 		if vi >= 0 && vi < len(lay.visible) {
-			b.WriteString(truncateToWidth(t.formatVisibleScrollLine(vi, lay), lay.wrapWidth))
+			b.WriteString(t.formatVisibleScrollLineTrunc(vi, lay))
 		}
 	}
 }
@@ -357,7 +358,40 @@ func (t *TUI) paintConvPinRow(b *strings.Builder, row, width int) {
 
 func (t *TUI) formatVisibleScrollLine(vi int, lay layoutSnapshot) string {
 	line := t.formatScrollLine(lay.visible[vi].Text)
-	return t.applySearchHighlight(vi, lay, line)
+	line = t.applySearchHighlight(vi, lay, line)
+	return t.applySelectionHighlight(vi, line)
+}
+
+// formatVisibleScrollLineTrunc renders and truncates a scrollback row at
+// contentWidth — the width scrollback rows actually wrap at (layoutAll, click
+// hit-testing, and selection all agree on contentWidth; lay.wrapWidth is
+// narrower, sized for the input editor's "› " prompt gutter).
+func (t *TUI) formatVisibleScrollLineTrunc(vi int, lay layoutSnapshot) string {
+	return truncateToWidth(t.formatVisibleScrollLine(vi, lay), t.contentWidth())
+}
+
+// applySelectionHighlight reverse-videos the portion of viewport row vi that
+// falls inside the current mouse text selection, if any.
+func (t *TUI) applySelectionHighlight(vi int, line string) string {
+	if !t.sel.set {
+		return line
+	}
+	loRow, loCol, hiRow, hiCol := t.sel.bounds()
+	global := t.scroll.viewportStart(t.convScrollRows(), t.contentWidth()) + vi
+	if global < loRow || global > hiRow {
+		return line
+	}
+	start, end := 0, len([]rune(stripANSI(line)))
+	if global == loRow {
+		start = loCol
+	}
+	if global == hiRow {
+		end = hiCol + 1
+	}
+	if start >= end {
+		return line
+	}
+	return highlightPlainSpans(line, [][2]int{{start, end}}, reverseVideo, reset)
 }
 
 func (t *TUI) formatScrollLine(text string) string {
@@ -425,7 +459,7 @@ func (t *TUI) clearOverlayGhostRows(b *strings.Builder, lay layoutSnapshot, star
 		}
 		vi := row - lay.scrollStart - pinRows
 		if vi >= 0 && vi < len(lay.visible) {
-			b.WriteString(truncateToWidth(t.formatVisibleScrollLine(vi, lay), lay.wrapWidth))
+			b.WriteString(t.formatVisibleScrollLineTrunc(vi, lay))
 		}
 	}
 }
@@ -447,7 +481,7 @@ func (t *TUI) applySearchHighlight(vi int, lay layoutSnapshot, line string) stri
 	if !ok || so.query == "" {
 		return line
 	}
-	_, start, _ := t.scroll.viewportRange(t.convScrollRows(), lay.wrapWidth)
+	_, start, _ := t.scroll.viewportRange(t.convScrollRows(), t.contentWidth())
 	global := start + vi
 	for _, m := range so.matchRows() {
 		if m == global {

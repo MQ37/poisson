@@ -312,6 +312,7 @@ func runREPL(noSkills bool) {
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
 	agentRef = a
 	tools.BindSubagentRuntime(reg, func() string { return a.Provider().ID() }, func() string { return a.Model() }, func() string { return a.Effort() })
+	tools.BindSubagentProgress(reg, a.SendSubagentProgress)
 
 	var skillList []skills.Skill
 	if !noSkills {
@@ -663,7 +664,7 @@ func runChildMode() {
 				writeChildEvent(map[string]interface{}{"type": "text", "text": ev.Text})
 			case agent.OutputToolStart:
 				toolCount++
-				writeChildEvent(map[string]interface{}{"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput})
+				writeChildEvent(map[string]interface{}{"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput, "turns": a.RunTurns()})
 			case agent.OutputToolResult:
 				payload := map[string]interface{}{
 					"type":   "tool_result",
@@ -691,7 +692,7 @@ func runChildMode() {
 		"type":          "done",
 		"success":       success,
 		"toolCount":     toolCount,
-		"turns":         1,
+		"turns":         a.RunTurns(),
 		"contextTokens": ctxUsed,
 	})
 }

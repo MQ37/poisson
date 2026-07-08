@@ -2,10 +2,11 @@ package tui
 
 // MouseEvent is a parsed SGR mouse report (DECSET 1006).
 type MouseEvent struct {
-	Button int  // 0=left, 1=middle, 2=right, 64=wheel up, 65=wheel down
+	Button int  // 0=left, 1=middle, 2=right, 64=wheel up, 65=wheel down (drag bit stripped)
 	Col    int  // 1-based terminal column
 	Row    int  // 1-based terminal row
 	Press  bool // true on M (press), false on m (release)
+	Motion bool // pointer moved while a button was held (DECSET 1002)
 }
 
 // parseMouseEvents extracts all SGR mouse sequences from data.
@@ -40,11 +41,13 @@ func parseMouseEvents(data []byte) []MouseEvent {
 			i++
 			continue
 		}
+		const motionBit = 32
 		out = append(out, MouseEvent{
-			Button: btn,
+			Button: btn &^ motionBit,
 			Col:    col,
 			Row:    row,
 			Press:  final == 'M',
+			Motion: btn&motionBit != 0,
 		})
 		i = j + 1
 	}

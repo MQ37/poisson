@@ -41,6 +41,10 @@ type SubagentTool struct {
 	// (register/unregister) and the TUI goroutine (ExpediteAll).
 	liveMu sync.Mutex
 	live   map[*subagent.ChildProcess]struct{}
+
+	// progressFn reports a live turn-count update for the running widget,
+	// correlated via the tool_call ID attached to Execute's context.
+	progressFn func(toolCallID string, turns int)
 }
 
 // NewSubagentTool creates a subagent tool.
@@ -83,6 +87,12 @@ func (t *SubagentTool) SetRuntime(providerFn, modelFn, effortFn func() string) {
 	t.providerFn = providerFn
 	t.modelFn = modelFn
 	t.effortFn = effortFn
+}
+
+// SetProgressFn supplies the live turn-count progress callback (called from
+// Execute's goroutine as the child reports each new turn).
+func (t *SubagentTool) SetProgressFn(fn func(toolCallID string, turns int)) {
+	t.progressFn = fn
 }
 
 func (t *SubagentTool) Name() string { return "subagent" }
@@ -163,6 +173,12 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	var toolCount, turns int
 	var success bool
 	var childErr string
+	toolCallID, hasToolCallID := ToolCallIDFromContext(ctx)
+	reportProgress := func() {
+		if hasToolCallID && t.progressFn != nil {
+			t.progressFn(toolCallID, turns)
+		}
+	}
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -207,6 +223,10 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 
 			case "tool":
 				toolCount++
+				if ev.Turns > 0 {
+					turns = ev.Turns
+					reportProgress()
+				}
 
 			case "tool_result":
 
@@ -227,6 +247,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 				success = ev.Success
 				if ev.Turns > 0 {
 					turns = ev.Turns
+					reportProgress() // final count, before the card flips to done
 				}
 				if ev.Error != "" {
 					childErr = ev.Error

@@ -174,10 +174,12 @@ func highlightPlainSpans(line string, spans [][2]int, pre, post string) string {
 	plainIdx := 0
 	inSpan := false
 
+	wroteInSpan := false // a plain rune has been emitted since pre was last (re-)written
 	for i := 0; i < len(line); {
 		if !inSpan && spanIdx < len(spans) && plainIdx == spans[spanIdx][0] {
 			b.WriteString(pre)
 			inSpan = true
+			wroteInSpan = false
 		}
 
 		if line[i] == 0x1b && i+1 < len(line) {
@@ -191,6 +193,15 @@ func highlightPlainSpans(line string, spans [][2]int, pre, post string) string {
 				j++
 			}
 			b.WriteString(line[i:j])
+			// The line's own styling (e.g. a markdown code span) may embed a reset
+			// that would otherwise cancel pre (reverse-video/color) early, leaving
+			// the rest of the span unhighlighted. Re-assert pre after an embedded
+			// escape, but only once we've actually emitted a highlighted character
+			// — a style run made of several escapes right at the span's start (e.g.
+			// color+bold) must not get pre written twice before any visible text.
+			if inSpan && wroteInSpan {
+				b.WriteString(pre)
+			}
 			i = j
 			continue
 		}
@@ -202,6 +213,9 @@ func highlightPlainSpans(line string, spans [][2]int, pre, post string) string {
 		b.WriteString(line[i : i+size])
 		plainIdx += 1
 		i += size
+		if inSpan {
+			wroteInSpan = true
+		}
 
 		if inSpan && spanIdx < len(spans) && plainIdx == spans[spanIdx][1] {
 			b.WriteString(post)

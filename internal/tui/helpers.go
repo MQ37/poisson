@@ -83,9 +83,15 @@ func expandAtFiles(input string) (string, error) {
 	var firstErr error
 	result := atFileRe.ReplaceAllStringFunc(input, func(match string) string {
 		path := match[1:]
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			// Not a real file/dir — e.g. "@link" in a pasted JSDoc comment, an
+			// @handle, etc. Leave it as plain text instead of erroring the send.
+			return match
+		}
 		// A directory expands to a one-level listing (subdirs suffixed "/")
 		// instead of erroring; a file expands to its fenced contents.
-		if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+		if info.IsDir() {
 			listing, err := listAtDir(path)
 			if err != nil {
 				if firstErr == nil {

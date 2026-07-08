@@ -27,6 +27,7 @@ type BlockMeta struct {
 	ToolInput        []byte
 	SubagentTask     string // subagent widget: the task prompt (truncated for display)
 	SubagentModel    string // subagent widget: provider/model label
+	SubagentTurns    int    // subagent widget: live/final turn count reported by the child
 	Expediting       bool   // subagent widget: user pressed Ctrl+G, child is wrapping up
 	ToolResult string
 	ToolError  string

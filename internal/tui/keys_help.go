@@ -21,6 +21,8 @@ func keybindingLines() []string {
 		"  Ctrl+C       Cancel turn · twice to exit",
 		"  Ctrl+D       Exit",
 		"  Mouse wheel  Scroll (when no modal open)",
+		"  Click+drag   Select text (auto-scrolls at the edge)",
+		"  Ctrl+Y       Copy selected text",
 	}
 }
 

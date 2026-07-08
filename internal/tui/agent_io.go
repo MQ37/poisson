@@ -193,6 +193,8 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		id := t.nextToolID
 		t.nextToolID++
 		t.scroll.appendToolCall(id, ev.ToolCallID, ev.ToolName, ev.ToolInput)
+	case agent.OutputSubagentProgress:
+		t.scroll.updateSubagentTurns(ev.ToolCallID, ev.SubagentTurns)
 	case agent.OutputToolResult:
 		if ev.ToolName == "subagent" {
 			t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolError, 0)
