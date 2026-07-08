@@ -91,3 +91,31 @@ func TestSubagentWidgetRendersNameOnce(t *testing.T) {
 		t.Errorf("widget line missing timer: %q", widgetLine)
 	}
 }
+
+func TestSubagentCardShowsExpediting(t *testing.T) {
+	s := newScrollback(200)
+	s.appendSubagentCard(1, "call-1", "explore", "Explore the flow", "glm-5.2:cloud")
+
+	if got := s.markSubagentsExpediting(); got != 1 {
+		t.Fatalf("markSubagentsExpediting = %d, want 1", got)
+	}
+	var card *Block
+	for i := range s.blocks {
+		if s.blocks[i].kind == blockSubagent {
+			card = &s.blocks[i]
+		}
+	}
+	if card == nil || !card.meta.Expediting {
+		t.Fatal("running subagent card not marked expediting")
+	}
+	out := layoutSubagentCard(card, 80)
+	if len(out) == 0 || !strings.Contains(out[0].Text, "wrapping up") {
+		t.Fatalf("card does not show wrapping-up marker: %+v", out)
+	}
+	// A completed card must not show the marker.
+	s.completeSubagentCard("call-1", "", 1000)
+	out = layoutSubagentCard(card, 80)
+	if strings.Contains(out[0].Text, "wrapping up") {
+		t.Fatalf("completed card still shows wrapping-up: %q", out[0].Text)
+	}
+}

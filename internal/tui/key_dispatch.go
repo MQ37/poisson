@@ -346,6 +346,9 @@ func (t *TUI) expediteSubagentsLocked() {
 		t.setEphemeralHintLocked("No subagents running", 2*time.Second)
 		return
 	}
+	// Reflect the wrap-up in the pinned subagent cards so the user sees it took.
+	t.scroll.markSubagentsExpediting()
+	t.markScrollDirty()
 	unit := "subagent"
 	if n > 1 {
 		unit = "subagents"

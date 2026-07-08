@@ -55,6 +55,12 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 		}
 	}
 
+	// While the subagent is wrapping up after Ctrl+G, surface it in the card.
+	expediteTag := ""
+	if !b.meta.ToolDone && b.meta.Expediting {
+		expediteTag = "⏩ wrapping up"
+	}
+
 	// left (plain) = "⁘ name  3.2s"; styled separately below.
 	leftPlain := glyph + " " + name
 	if dur != "" {
@@ -63,6 +69,10 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 	styledLeft := statusStyle + glyph + reset + " " + fgCyan + bold + name + reset
 	if dur != "" {
 		styledLeft += "  " + statusStyle + dur + reset
+	}
+	if expediteTag != "" {
+		leftPlain += "  " + expediteTag
+		styledLeft += "  " + fgYellow + expediteTag + reset
 	}
 
 	gap := 2
@@ -164,6 +174,24 @@ func (s *scrollback) finalizeOrphanSubagents() {
 		b.meta.DurationMs = 0 // unknown after resume
 		b.invalidateLayout()
 	}
+}
+
+// markSubagentsExpediting flags every still-running subagent widget as wrapping
+// up (after the user pressed Ctrl+G) and returns how many were marked.
+func (s *scrollback) markSubagentsExpediting() int {
+	n := 0
+	for i := range s.blocks {
+		b := &s.blocks[i]
+		if b.kind != blockSubagent || b.meta.ToolDone || !b.meta.Streaming {
+			continue
+		}
+		if !b.meta.Expediting {
+			b.meta.Expediting = true
+			b.invalidateLayout()
+		}
+		n++
+	}
+	return n
 }
 
 // hasRunningSubagent reports whether any subagent widget is still running.
