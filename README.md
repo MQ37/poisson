@@ -121,6 +121,11 @@ Everything lives in **`~/.poisson/`** (created on first run, mode `0700`):
 override. The knobs:
 
 ```toml
+# Default model as "<provider>/<model>" — sets the provider and its model in one
+# line (a bare "<model>" applies to the default provider). Overrides the
+# per-provider settings below.
+# model = "anthropic/claude-sonnet-5"
+
 # Reasoning effort for every request (low | medium | high | xhigh | max)
 # effort = "medium"
 
@@ -128,7 +133,7 @@ override. The knobs:
 # default = "ollama"                 # anthropic | ollama | xai | openai
 
 [anthropic]
-# model = "claude-opus-4-8"
+# model = "claude-opus-4-8"          # or claude-sonnet-5 (both adaptive-reasoning)
 # api_key = "sk-ant-..."             # optional; OAuth (auth.json) preferred
 
 [openai]

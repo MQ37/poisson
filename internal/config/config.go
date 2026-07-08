@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // Pricing holds per-model token pricing (USD per 1M tokens).
@@ -335,6 +336,25 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 		cfg.Ollama.Model = s
 	}
 
+	// Top-level `model = "<provider>/<model>"` is the one-liner default: it sets
+	// both the default provider and that provider's model. A bare value (no
+	// slash) applies to the current default provider. Parsed last so it wins over
+	// provider.default and the per-provider model keys.
+	if v, ok := lookup(m, "model"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("model: %w", err)
+		}
+		if prov, mdl, hasSlash := strings.Cut(s, "/"); hasSlash {
+			cfg.Provider.Default = prov
+			if err := setProviderModel(cfg, prov, mdl); err != nil {
+				return nil, fmt.Errorf("model: %w", err)
+			}
+		} else if err := setProviderModel(cfg, cfg.Provider.Default, s); err != nil {
+			return nil, fmt.Errorf("model: %w", err)
+		}
+	}
+
 	if v, ok := lookup(m, "compaction", "threshold"); ok {
 		f, err := asFloat(v)
 		if err != nil {
@@ -485,6 +505,24 @@ func lookup(m map[string]interface{}, path ...string) (interface{}, bool) {
 }
 
 // asString coerces a TOML value to string, rejecting non-string types.
+// setProviderModel points a provider's Model field at model. Used by the
+// top-level `model = "<provider>/<model>"` config knob.
+func setProviderModel(cfg *Config, prov, model string) error {
+	switch prov {
+	case "anthropic":
+		cfg.Anthropic.Model = model
+	case "openai":
+		cfg.OpenAI.Model = model
+	case "xai":
+		cfg.XAI.Model = model
+	case "ollama":
+		cfg.Ollama.Model = model
+	default:
+		return fmt.Errorf("unknown provider %q (want anthropic|openai|xai|ollama)", prov)
+	}
+	return nil
+}
+
 func asString(v interface{}) (string, error) {
 	if s, ok := v.(string); ok {
 		return s, nil

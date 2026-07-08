@@ -12,16 +12,28 @@ type ModelSettings struct {
 	SupportsEffort bool
 	EffortLevels   []string // e.g. ["low", "medium", "high", "xhigh", "max"]
 	Vision         bool     // accepts image input
+	// AdaptiveThinking selects Anthropic's adaptive reasoning: the model decides
+	// how much to think, driven by output_config.effort, instead of a fixed
+	// budget_tokens. Matches what the real Claude Code client sends.
+	AdaptiveThinking bool
 }
 
 // KnownModels is a registry of model metadata indexed by provider/model ID.
 var KnownModels = map[string]ModelSettings{
-	// Anthropic — only claude-opus-4-8
+	// Anthropic — claude-opus-4-8 and claude-sonnet-5, both adaptive-thinking.
 	"anthropic/claude-opus-4-8": {
-		ContextWindow:  1000000,
-		SupportsEffort: true,
-		EffortLevels:   []string{"low", "medium", "high", "xhigh", "max"},
-		Vision:         true,
+		ContextWindow:    1000000,
+		SupportsEffort:   true,
+		EffortLevels:     []string{"low", "medium", "high", "xhigh", "max"},
+		Vision:           true,
+		AdaptiveThinking: true,
+	},
+	"anthropic/claude-sonnet-5": {
+		ContextWindow:    1000000,
+		SupportsEffort:   true,
+		EffortLevels:     []string{"low", "medium", "high", "xhigh", "max"},
+		Vision:           true,
+		AdaptiveThinking: true,
 	},
 	// OpenAI — gpt-5.5 via the ChatGPT Codex subscription (Responses API).
 	// Codex caps the subscription context at 400K; effort tops out at xhigh.

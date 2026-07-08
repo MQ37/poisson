@@ -529,13 +529,38 @@ func TestAnthropicEffortMapsToThinking(t *testing.T) {
 		t.Fatalf("request must not contain top-level effort field: %s", body)
 	}
 
-	// xhigh effort: thinking enabled, max_tokens raised above budget.
+	// Adaptive model (opus) + xhigh: adaptive thinking + output_config.effort,
+	// no budget_tokens, generous max_tokens.
 	hi := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8", MaxTokens: 100, Effort: "xhigh"}, false)
-	if hi.Thinking == nil || hi.Thinking.Type != "enabled" {
-		t.Fatalf("expected thinking enabled for xhigh")
+	if hi.Thinking == nil || hi.Thinking.Type != "adaptive" {
+		t.Fatalf("expected adaptive thinking for xhigh, got %+v", hi.Thinking)
 	}
-	if hi.Thinking.BudgetTokens <= 0 || hi.MaxTokens <= hi.Thinking.BudgetTokens {
-		t.Fatalf("max_tokens (%d) must exceed thinking budget (%d)", hi.MaxTokens, hi.Thinking.BudgetTokens)
+	if hi.OutputConfig == nil || hi.OutputConfig.Effort != "xhigh" {
+		t.Fatalf("expected output_config.effort=xhigh, got %+v", hi.OutputConfig)
+	}
+	if hi.MaxTokens != anthropicMaxOutputTokens {
+		t.Fatalf("max_tokens = %d, want %d", hi.MaxTokens, anthropicMaxOutputTokens)
+	}
+	if body, _ := json.Marshal(hi); strings.Contains(string(body), "budget_tokens") {
+		t.Fatalf("adaptive request must omit budget_tokens: %s", body)
+	}
+
+	// "max" clamps to xhigh (the top value the real client sends).
+	mx := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8", Effort: "max"}, false)
+	if mx.OutputConfig == nil || mx.OutputConfig.Effort != "xhigh" {
+		t.Fatalf("max should clamp to xhigh, got %+v", mx.OutputConfig)
+	}
+
+	// A non-adaptive model falls back to budget-based thinking.
+	leg := p.buildAnthropicRequest(&Request{Model: "claude-legacy-x", MaxTokens: 100, Effort: "xhigh"}, false)
+	if leg.Thinking == nil || leg.Thinking.Type != "enabled" {
+		t.Fatalf("expected budget thinking for non-adaptive model, got %+v", leg.Thinking)
+	}
+	if leg.Thinking.BudgetTokens <= 0 || leg.MaxTokens <= leg.Thinking.BudgetTokens {
+		t.Fatalf("max_tokens (%d) must exceed budget (%d)", leg.MaxTokens, leg.Thinking.BudgetTokens)
+	}
+	if leg.OutputConfig != nil {
+		t.Fatalf("budget mode must not set output_config")
 	}
 }
 

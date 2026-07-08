@@ -364,3 +364,41 @@ output = 99.0
 		t.Errorf("CacheWrite = %v, want 3.0 (default)", p.CacheWritePerMTok)
 	}
 }
+
+func TestModelKeySetsProviderAndModel(t *testing.T) {
+	m, err := Parse("model = \"anthropic/claude-sonnet-5\"\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	cfg, err := mapToConfig(m)
+	if err != nil {
+		t.Fatalf("mapToConfig: %v", err)
+	}
+	if cfg.Provider.Default != "anthropic" {
+		t.Errorf("provider default = %q, want anthropic", cfg.Provider.Default)
+	}
+	if cfg.Anthropic.Model != "claude-sonnet-5" {
+		t.Errorf("anthropic model = %q, want claude-sonnet-5", cfg.Anthropic.Model)
+	}
+}
+
+func TestModelKeyBareAppliesToDefaultProvider(t *testing.T) {
+	m, err := Parse("model = \"llama-9\"\n\n[provider]\ndefault = \"ollama\"\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	cfg, err := mapToConfig(m)
+	if err != nil {
+		t.Fatalf("mapToConfig: %v", err)
+	}
+	if cfg.Provider.Default != "ollama" || cfg.Ollama.Model != "llama-9" {
+		t.Errorf("got %s/%s, want ollama/llama-9", cfg.Provider.Default, cfg.Ollama.Model)
+	}
+}
+
+func TestModelKeyUnknownProvider(t *testing.T) {
+	m, _ := Parse("model = \"bogus/x\"\n")
+	if _, err := mapToConfig(m); err == nil {
+		t.Fatal("expected error for unknown provider in model key")
+	}
+}

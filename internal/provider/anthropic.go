@@ -146,19 +146,25 @@ func cloneRequest(req *Request) *Request {
 
 // anthropicRequest is the JSON body sent to the Messages API.
 type anthropicRequest struct {
-	Model       string             `json:"model"`
-	Messages    []anthropicMessage `json:"messages"`
-	System      []anthropicSystem  `json:"system,omitempty"`
-	Tools       []anthropicTool    `json:"tools,omitempty"`
-	MaxTokens   int                `json:"max_tokens"`
-	Stream      bool               `json:"stream"`
-	Temperature *float64           `json:"temperature,omitempty"`
-	Thinking    *anthropicThinking `json:"thinking,omitempty"`
+	Model        string                 `json:"model"`
+	Messages     []anthropicMessage     `json:"messages"`
+	System       []anthropicSystem      `json:"system,omitempty"`
+	Tools        []anthropicTool        `json:"tools,omitempty"`
+	MaxTokens    int                    `json:"max_tokens"`
+	Stream       bool                   `json:"stream"`
+	Temperature  *float64               `json:"temperature,omitempty"`
+	Thinking     *anthropicThinking     `json:"thinking,omitempty"`
+	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
 }
 
 type anthropicThinking struct {
 	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	Display      string `json:"display,omitempty"`
+}
+
+type anthropicOutputConfig struct {
+	Effort string `json:"effort"`
 }
 
 type anthropicMessage struct {
@@ -167,14 +173,14 @@ type anthropicMessage struct {
 }
 
 type anthropicContentBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   json.RawMessage `json:"content,omitempty"`   // for tool_result
-	IsError   bool            `json:"is_error,omitempty"`  // for tool_result
+	Type      string                `json:"type"`
+	Text      string                `json:"text,omitempty"`
+	ID        string                `json:"id,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Input     json.RawMessage       `json:"input,omitempty"`
+	ToolUseID string                `json:"tool_use_id,omitempty"`
+	Content   json.RawMessage       `json:"content,omitempty"`   // for tool_result
+	IsError   bool                  `json:"is_error,omitempty"`  // for tool_result
 	Thinking  string                `json:"thinking,omitempty"`  // for thinking
 	Signature string                `json:"signature,omitempty"` // for thinking
 	Data      string                `json:"data,omitempty"`      // for redacted_thinking
@@ -218,6 +224,20 @@ type anthropicTool struct {
 // costs nothing extra on short replies.
 const anthropicMaxOutputTokens = 64000
 
+// anthropicAdaptiveEffort maps a Poisson effort level to an Anthropic
+// output_config.effort value. "max" clamps to "xhigh" — the highest value the
+// real Claude Code client is observed to send. "" (unknown/off) disables it.
+func anthropicAdaptiveEffort(effort string) string {
+	switch effort {
+	case "low", "medium", "high", "xhigh":
+		return effort
+	case "max":
+		return "xhigh"
+	default:
+		return ""
+	}
+}
+
 func anthropicThinkingBudget(effort string) int {
 	switch effort {
 	case "low":
@@ -246,7 +266,17 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 	if ar.MaxTokens == 0 {
 		ar.MaxTokens = anthropicMaxOutputTokens
 	}
-	if budget := anthropicThinkingBudget(req.Effort); budget > 0 {
+	settings, _ := GetModelSettings("anthropic", req.Model)
+	if effort := anthropicAdaptiveEffort(req.Effort); settings.AdaptiveThinking && effort != "" {
+		// Adaptive reasoning: the model decides how much to think, steered by
+		// output_config.effort — exactly what the real Claude Code client sends.
+		ar.Thinking = &anthropicThinking{Type: "adaptive", Display: "summarized"}
+		ar.OutputConfig = &anthropicOutputConfig{Effort: effort}
+		ar.Temperature = nil
+		if ar.MaxTokens < anthropicMaxOutputTokens {
+			ar.MaxTokens = anthropicMaxOutputTokens
+		}
+	} else if budget := anthropicThinkingBudget(req.Effort); budget > 0 {
 		ar.Thinking = &anthropicThinking{Type: "enabled", BudgetTokens: budget}
 		ar.Temperature = nil
 		// max_tokens must exceed the thinking budget with ample room for the
@@ -398,7 +428,7 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool) {
 
 	if isOAuth {
 		req.Header.Set("Authorization", "Bearer "+access)
-		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20")
+		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,effort-2025-11-24")
 		if p.config != nil {
 			req.Header.Set("user-agent", "claude-cli/"+p.config.Stealth.CCVersion)
 		} else {
