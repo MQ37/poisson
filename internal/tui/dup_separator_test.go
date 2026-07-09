@@ -7,17 +7,35 @@ import (
 	"testing"
 )
 
-// countSeparatorRows counts rows on the virtual screen whose content is a
-// long run of the chrome separator glyph (dash, or dot in conv-focus mode).
+// countSeparatorRows counts rows on the virtual screen that are PURELY the
+// chrome separator glyph repeated (dash, or dot in conv-focus mode) — exactly
+// what paintInputRegion writes (strings.Repeat(glyph, wrapWidth), nothing
+// else). Deliberately stricter than "contains several dashes/dots": a picker
+// overlay's box border ("╭─ Effort ─...─╮") and the footer hint line (many
+// "·" delimiters between hint items, e.g. "Tab:conv · Enter:send · ...") both
+// contain plenty of the same glyphs mixed with other content, and must NOT
+// be mistaken for a duplicated separator.
 func countSeparatorRows(v *vterm) int {
 	n := 0
 	for row := 1; row < len(v.rows); row++ {
-		line := v.visibleRow(row)
-		if strings.Count(line, "─") > 10 || strings.Count(line, "·") > 10 {
+		line := strings.TrimRight(v.visibleRow(row), " ")
+		if line == "" {
+			continue
+		}
+		if isAllRune(line, '─') || isAllRune(line, '·') {
 			n++
 		}
 	}
 	return n
+}
+
+func isAllRune(s string, r rune) bool {
+	for _, c := range s {
+		if c != r {
+			return false
+		}
+	}
+	return true
 }
 
 // runInputStress drives one keystroke-by-keystroke sequence (each followed
