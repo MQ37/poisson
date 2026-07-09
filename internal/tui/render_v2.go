@@ -33,6 +33,17 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 	if wantedInput != t.lastInputRows {
 		t.lastInputRows = wantedInput
 		t.dirty.markFull()
+		// markFull only takes effect on the NEXT dirty.consume() — too late for
+		// whichever paint() call is running prepareLayout right now. Without this,
+		// a partial repaint proceeds with the NEW row positions (e.g. the
+		// separator moving down a row because the input shrank) while the OLD
+		// separator's row, now just above it, never gets touched: it's outside
+		// both the new input region (which starts lower) and this partial
+		// repaint's untouched scroll region, so it lingers until the next tick
+		// — a duplicated separator for one frame, or longer under a slow/laggy
+		// terminal. layoutJustChanged lets THIS call's paint() upgrade itself to
+		// a full repaint immediately instead of waiting a tick to self-heal.
+		t.layoutJustChanged = true
 	}
 	t.inputRows = wantedInput
 	t.scrollRows = t.rows - t.headerRows - t.inputRows
@@ -59,18 +70,18 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 		firstRow = sr - bodyRows + 1
 	}
 	return layoutSnapshot{
-		wrapWidth:     wrapWidth,
-		scrollStart:   scrollStart,
-		inputTop:      inputTop,
-		attachRows:    attachRows,
-		queuedRows:    queuedRows,
-		bodyRows:      bodyRows,
-		bodyStart:     bodyStart,
-		hintRow:       bodyStart + bodyRows,
-		firstRow:      firstRow,
-		sr:            sr,
-		sc:            sc,
-		screenLines:   screenLines,
+		wrapWidth:   wrapWidth,
+		scrollStart: scrollStart,
+		inputTop:    inputTop,
+		attachRows:  attachRows,
+		queuedRows:  queuedRows,
+		bodyRows:    bodyRows,
+		bodyStart:   bodyStart,
+		hintRow:     bodyStart + bodyRows,
+		firstRow:    firstRow,
+		sr:          sr,
+		sc:          sc,
+		screenLines: screenLines,
 		// Scrollback wraps at contentWidth, not the (narrower) input wrapWidth.
 		visible: t.scroll.visible(t.convScrollRows(), t.contentWidth()),
 	}
@@ -87,6 +98,10 @@ func (t *TUI) paint(snap dirtySnapshot) {
 	t.status.SpinnerFrame = t.renderFrame
 
 	lay := t.prepareLayout()
+	if t.layoutJustChanged {
+		t.layoutJustChanged = false
+		snap.full = true
+	}
 	if snap.full {
 		t.paintFull(lay)
 	} else {
@@ -637,4 +652,3 @@ func (t *TUI) markSpinnerTick() {
 		t.dirty.markStatus()
 	}
 }
-

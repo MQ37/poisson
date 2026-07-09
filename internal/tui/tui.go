@@ -60,11 +60,16 @@ type TUI struct {
 	dirty  dirtyTracker
 	keyDec Decoder
 
-	renderFrame    int
-	activeTools    int
-	nextToolID     int64
-	lastInputRows  int
-	activeOverlay  overlay
+	renderFrame   int
+	activeTools   int
+	nextToolID    int64
+	lastInputRows int
+	// layoutJustChanged is set by prepareLayout when it just detected an input
+	// height change (and queued a full repaint for the NEXT tick) — paint
+	// reads and clears it to upgrade its OWN current call to a full repaint
+	// too, instead of leaving a stale partial-repaint gap for one frame.
+	layoutJustChanged bool
+	activeOverlay     overlay
 
 	// Lifecycle.
 	stopped atomic.Bool
@@ -76,8 +81,8 @@ type TUI struct {
 	draftSaved string // restore on arrow-down past newest
 
 	// Completion dropdown (slash commands, @file paths).
-	completion           *completion
-	lastCompletionRows   int // scroll rows last painted by the dropdown
+	completion         *completion
+	lastCompletionRows int // scroll rows last painted by the dropdown
 
 	// Focus: Tab toggles between input editor and conversation scroll.
 	focusRegion focusRegion
@@ -106,18 +111,18 @@ type TUI struct {
 	grabImage func() ([]byte, error)
 
 	// Submission signaling.
-	lastCtrlC        time.Time
-	turnCancelled    bool // set when user cancels an in-flight turn; cleared on OutputDone
-	exitArmed        bool // next Ctrl+C should offer quit after cancel
-	lastOverlayLines int  // rows painted by previous overlay (ghost clear)
-	compacting       atomic.Bool
+	lastCtrlC          time.Time
+	turnCancelled      bool // set when user cancels an in-flight turn; cleared on OutputDone
+	exitArmed          bool // next Ctrl+C should offer quit after cancel
+	lastOverlayLines   int  // rows painted by previous overlay (ghost clear)
+	compacting         atomic.Bool
 	searchHadConvFocus bool
 
 	// cancelRun/cancelCtx are set while an agent prompt is in flight. The input
 	// goroutine uses them to cancel a running request (and pending approval) on Ctrl+C.
-	cancelCtx  context.Context
-	cancelRun  context.CancelFunc
-	cancelMu   sync.Mutex
+	cancelCtx context.Context
+	cancelRun context.CancelFunc
+	cancelMu  sync.Mutex
 
 	introScrollTop bool // scroll to welcome chart on first paint
 	startupIntro   startupIntroMeta
@@ -161,15 +166,15 @@ func newTUI(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent)
 	applyTheme(theme)
 
 	return &TUI{
-		agent:          a,
-		sessionID:      sessionID,
-		output:         outputChan,
-		writer:         os.Stdout,
-		fd:             int(os.Stdin.Fd()),
-		scroll:         newScrollback(8192),
-		editor:         newEditor(),
-		history:        []string{},
-		histIdx:        -1,
+		agent:     a,
+		sessionID: sessionID,
+		output:    outputChan,
+		writer:    os.Stdout,
+		fd:        int(os.Stdin.Fd()),
+		scroll:    newScrollback(8192),
+		editor:    newEditor(),
+		history:   []string{},
+		histIdx:   -1,
 		status: StatusSnapshot{
 			SessionID:  sessionID,
 			Cwd:        cwdOf(),
