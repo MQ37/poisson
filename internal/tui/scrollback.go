@@ -188,6 +188,18 @@ func sanitizeControls(s string) string {
 		switch {
 		case r == '\t':
 			b.WriteString("    ")
+		case r == '\n' || r == '\r':
+			// Must survive control-char stripping: appendBlock already normalized
+			// \r\n/\r to \n upstream specifically so line breaks and markdown fence
+			// structure stay intact (its own doc comment says so). r < 0x20 below
+			// would otherwise also match \n (0x0A) and silently drop it — harmless
+			// while no OTHER control char is present (the ContainsAny fast path
+			// above bails out early and returns s unchanged), but as soon as a
+			// chunk also contains e.g. a literal tab (common in code blocks the
+			// model indents with \t), this loop ran and ate every newline in the
+			// whole chunk, not just the tab — collapsing multi-paragraph markdown
+			// into one flat, unstructured line.
+			b.WriteRune(r)
 		case r < 0x20 || r == 0x7f:
 		default:
 			b.WriteRune(r)
