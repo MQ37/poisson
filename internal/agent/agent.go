@@ -518,6 +518,18 @@ type ImageAttachment struct {
 	MediaType string
 }
 
+// TextSegment is one piece of a user message's text: either something the
+// user typed directly, or a file's contents inlined via an @path reference
+// (FileRef holds the source path, empty for plain typed text). Splitting a
+// message into segments — rather than one flat string — preserves enough
+// structure for the TUI to redraw a file segment as a collapsible card on
+// resume instead of dumping its content inline forever; the model still sees
+// the exact same text, just spread across adjacent text blocks.
+type TextSegment struct {
+	Text    string
+	FileRef string
+}
+
 // Prompt appends the user message to the store and runs the turn loop.
 func (a *Agent) Prompt(userInput string) error {
 	return a.PromptWithContext(context.Background(), userInput)
@@ -526,13 +538,24 @@ func (a *Agent) Prompt(userInput string) error {
 // PromptWithContext is Prompt with cancellation support. Any images are sent as
 // image content blocks alongside the text in the user message.
 func (a *Agent) PromptWithContext(ctx context.Context, userInput string, images ...ImageAttachment) error {
+	return a.PromptSegmentsWithContext(ctx, []TextSegment{{Text: userInput}}, images...)
+}
+
+// PromptSegments is PromptSegmentsWithContext using a background context.
+func (a *Agent) PromptSegments(segments []TextSegment, images ...ImageAttachment) error {
+	return a.PromptSegmentsWithContext(context.Background(), segments, images...)
+}
+
+// PromptSegmentsWithContext is PromptWithContext for a message split into
+// segments (see TextSegment) instead of one flat string.
+func (a *Agent) PromptSegmentsWithContext(ctx context.Context, segments []TextSegment, images ...ImageAttachment) error {
 	if err := a.EnsureSession(); err != nil {
 		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Session error: %v", err)})
 		a.sendEvent(OutputEvent{Type: OutputDone})
 		return fmt.Errorf("ensure session: %w", err)
 	}
 
-	// INGEST: append user message (images first, then the text).
+	// INGEST: append user message (images first, then the text segments).
 	var blocks []provider.ContentBlock
 	for _, im := range images {
 		if im.Path == "" {
@@ -544,8 +567,16 @@ func (a *Agent) PromptWithContext(ctx context.Context, userInput string, images 
 		}
 		blocks = append(blocks, provider.ContentBlock{Type: "image", MediaType: mt, ImagePath: im.Path})
 	}
-	if userInput != "" || len(blocks) == 0 {
-		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: userInput})
+	textBlocks := 0
+	for _, seg := range segments {
+		if seg.Text == "" && seg.FileRef == "" {
+			continue
+		}
+		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: seg.Text, FileRef: seg.FileRef})
+		textBlocks++
+	}
+	if textBlocks == 0 && len(blocks) == 0 {
+		blocks = append(blocks, provider.ContentBlock{Type: "text"})
 	}
 	content, err := contentBlocksToJSON(blocks)
 	if err != nil {
@@ -996,6 +1027,7 @@ type contentBlockJSON struct {
 	Redacted          bool            `json:"redacted,omitempty"`
 	MediaType         string          `json:"media_type,omitempty"`
 	ImagePath         string          `json:"image_path,omitempty"`
+	FileRef           string          `json:"file_ref,omitempty"`
 }
 
 // contentBlocksToJSON serializes a slice of ContentBlocks into a JSON string
@@ -1019,6 +1051,7 @@ func contentBlocksToJSON(blocks []provider.ContentBlock) (string, error) {
 			Redacted:          b.Redacted,
 			MediaType:         b.MediaType,
 			ImagePath:         b.ImagePath,
+			FileRef:           b.FileRef,
 		}
 	}
 	data, err := json.Marshal(out)
@@ -1054,6 +1087,7 @@ func messageToProvider(msg store.Message) (provider.Message, error) {
 			Redacted:          b.Redacted,
 			MediaType:         b.MediaType,
 			ImagePath:         b.ImagePath,
+			FileRef:           b.FileRef,
 		}
 	}
 	return provider.Message{

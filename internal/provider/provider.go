@@ -83,13 +83,21 @@ type Message struct {
 //   - tool_result: ToolCallID, ToolResult
 //   - thinking:    Thinking, ThinkingSignature, Redacted (Anthropic extended thinking)
 type ContentBlock struct {
-	Type       string          // text | tool_use | tool_result | thinking
-	Text       string          // text blocks
-	ToolCallID string          // tool_use + tool_result
-	ToolName   string          // tool_use
-	ToolInput  json.RawMessage // tool_use
-	ToolResult  string // tool_result
-	ToolIsError bool   `json:"tool_is_error,omitempty"` // tool_result: Poisson error flag
+	Type        string          // text | tool_use | tool_result | thinking
+	Text        string          // text blocks
+	ToolCallID  string          // tool_use + tool_result
+	ToolName    string          // tool_use
+	ToolInput   json.RawMessage // tool_use
+	ToolResult  string          // tool_result
+	ToolIsError bool            `json:"tool_is_error,omitempty"` // tool_result: Poisson error flag
+
+	// FileRef marks a text block (Type == "text") whose content was inlined
+	// from a file via an @path reference, holding the source path. Display
+	// metadata only — Text still carries the full fenced content that was (and
+	// still is) sent to the model; providers never read this field. It lets the
+	// TUI redraw the block as a collapsible card on resume instead of dumping
+	// the file inline forever.
+	FileRef string
 
 	// Image blocks (Type == "image"). MediaType is e.g. "image/png"; ImagePath
 	// points at the (downscaled) file on disk. Providers read + encode it when

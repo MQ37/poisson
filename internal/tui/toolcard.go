@@ -217,6 +217,29 @@ func (s *scrollback) appendToolCall(id int64, providerCallID, name string, input
 	s.trim()
 }
 
+// appendFileRefCard adds a collapsible card for an @path reference the user
+// typed — the same tool-card look as a "read" call, expandable via Ctrl+E
+// like any other tool card. It's synthetic (no matching tool_use/tool_result
+// in the conversation, resolved the instant it's created): @-expansion
+// happens client-side before the turn even starts, so there's nothing to
+// wait on. Used both live (right after the user's message) and on resume
+// (hydrate.go, reconstructed from the FileRef the content block carries) so
+// the file's content never has to be dumped inline into the user's message
+// just to be visible.
+func (s *scrollback) appendFileRefCard(id int64, path, content string) {
+	b := s.newBlock(blockToolCall, "")
+	b.meta = BlockMeta{
+		ToolName:   "@file",
+		ToolInput:  toolInputJSON("@file", map[string]string{"path": path}),
+		ToolResult: content,
+		ToolDone:   true,
+		StartedAt:  time.Now(),
+	}
+	s.blocks = append(s.blocks, b)
+	s.totalAdded++
+	s.trim()
+}
+
 // completeToolCall attaches a result to the matching open tool card.
 // When providerCallID is set, pair by id so parallel results can arrive out of order.
 // Otherwise fall back to oldest open card (FIFO).

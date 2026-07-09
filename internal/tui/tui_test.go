@@ -21,10 +21,11 @@ func TestExpandAtFiles(t *testing.T) {
 	}
 
 	input := "Review this: @" + path
-	got, err := expandAtFiles(input)
+	segs, err := expandAtFilesSegments(input)
 	if err != nil {
-		t.Fatalf("expandAtFiles: %v", err)
+		t.Fatalf("expandAtFilesSegments: %v", err)
 	}
+	got := segmentsText(segs)
 
 	if !strings.Contains(got, "```") {
 		t.Errorf("expected fenced code block, got: %q", got)
@@ -35,6 +36,16 @@ func TestExpandAtFiles(t *testing.T) {
 	if !strings.Contains(got, "Review this:") {
 		t.Errorf("expected surrounding text preserved, got: %q", got)
 	}
+
+	foundRef := ""
+	for _, s := range segs {
+		if s.FileRef != "" {
+			foundRef = s.FileRef
+		}
+	}
+	if foundRef != path {
+		t.Errorf("expected one segment with FileRef %q, got segments: %+v", path, segs)
+	}
 }
 
 // A nonexistent @path is left as plain text instead of erroring — @word is a
@@ -42,33 +53,38 @@ func TestExpandAtFiles(t *testing.T) {
 // erroring the whole send on every such paste is worse than a no-op.
 func TestExpandAtFilesMissingFileIsLeftAsPlainText(t *testing.T) {
 	input := "see @/nonexistent/path/file.go for details"
-	got, err := expandAtFiles(input)
+	segs, err := expandAtFilesSegments(input)
 	if err != nil {
-		t.Fatalf("expandAtFiles: %v", err)
+		t.Fatalf("expandAtFilesSegments: %v", err)
 	}
-	if got != input {
+	if got := segmentsText(segs); got != input {
 		t.Errorf("expected unchanged input, got %q", got)
+	}
+	for _, s := range segs {
+		if s.FileRef != "" {
+			t.Errorf("expected no FileRef segment for a missing file, got %+v", s)
+		}
 	}
 }
 
 func TestExpandAtFilesJSDocLinkTagPassesThrough(t *testing.T) {
 	input := "cannot be judged until the client is known {@link TOOL_CLIENT_BLOCKLIST} rule"
-	got, err := expandAtFiles(input)
+	segs, err := expandAtFilesSegments(input)
 	if err != nil {
-		t.Fatalf("expandAtFiles: %v", err)
+		t.Fatalf("expandAtFilesSegments: %v", err)
 	}
-	if got != input {
+	if got := segmentsText(segs); got != input {
 		t.Errorf("expected unchanged input, got %q", got)
 	}
 }
 
 func TestExpandAtFilesNoMatch(t *testing.T) {
 	input := "just some text with no file refs"
-	got, err := expandAtFiles(input)
+	segs, err := expandAtFilesSegments(input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != input {
+	if got := segmentsText(segs); got != input {
 		t.Errorf("expected unchanged input, got %q", got)
 	}
 }
@@ -79,7 +95,7 @@ func TestExpandAtFilesTooLarge(t *testing.T) {
 	if err := os.WriteFile(path, make([]byte, maxAtFileBytes+1), 0644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := expandAtFiles("@" + path)
+	_, err := expandAtFilesSegments("@" + path)
 	if err == nil {
 		t.Fatal("expected error for oversized file")
 	}
@@ -91,7 +107,7 @@ func TestExpandAtFilesBinary(t *testing.T) {
 	if err := os.WriteFile(path, []byte{0x00, 'a', 'b'}, 0644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := expandAtFiles("@" + path)
+	_, err := expandAtFilesSegments("@" + path)
 	if err == nil {
 		t.Fatal("expected error for binary file")
 	}
@@ -104,10 +120,11 @@ func TestExpandAtFilesFenceEscalation(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := expandAtFiles("@" + path)
+	segs, err := expandAtFilesSegments("@" + path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	got := segmentsText(segs)
 	// The outer fence should be longer than ``` to avoid breaking.
 	// Both the opening and closing fence use 4+ backticks (2 occurrences).
 	if n := strings.Count(got, "````"); n != 2 {
@@ -132,10 +149,11 @@ func TestExpandAtFilesDirectoryListing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := expandAtFiles("list @" + dir)
+	segs, err := expandAtFilesSegments("list @" + dir)
 	if err != nil {
-		t.Fatalf("expandAtFiles on directory must not error: %v", err)
+		t.Fatalf("expandAtFilesSegments on directory must not error: %v", err)
 	}
+	got := segmentsText(segs)
 	if !strings.Contains(got, "(directory):") {
 		t.Errorf("expected directory label, got: %q", got)
 	}
@@ -161,10 +179,11 @@ func TestExpandAtFilesFileStillInlines(t *testing.T) {
 	if err := os.WriteFile(path, []byte("hello world"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := expandAtFiles("@" + path)
+	segs, err := expandAtFilesSegments("@" + path)
 	if err != nil {
-		t.Fatalf("expandAtFiles: %v", err)
+		t.Fatalf("expandAtFilesSegments: %v", err)
 	}
+	got := segmentsText(segs)
 	if !strings.Contains(got, "hello world") {
 		t.Errorf("expected file contents inlined, got: %q", got)
 	}

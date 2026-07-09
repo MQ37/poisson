@@ -56,7 +56,7 @@ func toolInputPreview(toolName string, input []byte) string {
 		if json.Unmarshal(input, &in) == nil && in.Path != "" {
 			return fmt.Sprintf("%s (%d bytes)", previewText(in.Path, 80), len(in.Content))
 		}
-	case "read":
+	case "read", "@file":
 		var in struct {
 			Path string `json:"path"`
 		}

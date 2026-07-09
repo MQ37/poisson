@@ -29,7 +29,7 @@ func (t *TUI) submit(text string) error {
 		return t.handleSlash(trimmed)
 	}
 	// Stage @image.png refs as attachments (stripped from the text); text files
-	// stay inline via expandAtFiles.
+	// stay inline via expandAtFilesSegments.
 	cleaned, err := t.attachImageRefs(text)
 	if err != nil {
 		t.appendErrorLocked(err)
@@ -37,7 +37,7 @@ func (t *TUI) submit(text string) error {
 		t.clearAttachments()
 		return nil
 	}
-	expanded, err := expandAtFiles(cleaned)
+	segments, err := expandAtFilesSegments(cleaned)
 	if err != nil {
 		t.appendErrorLocked(err)
 		t.editor.setText("")
@@ -55,16 +55,34 @@ func (t *TUI) submit(text string) error {
 		display = "🖼 (image)"
 	}
 	t.scroll.append(StyledLine{Style: styleUser, Text: display})
+	t.appendFileRefCardsLocked(segments)
 	t.editor.setText("")
 	images := t.takeAttachmentsForSend()
-	t.startTurn(expanded, images...)
+	t.startTurn(segments, images...)
 	return nil
 }
 
-// startTurn kicks off an agent turn for an already-displayed prompt. The user
-// message must already be in the scrollback; startTurn only manages the
+// appendFileRefCardsLocked appends a collapsible "read"-style card for every
+// @path reference among segments, right after the user's message bubble —
+// live and on resume both go through this same path (hydrate.go calls it too)
+// so a file's content is never dumped inline into the message just to be
+// visible. Caller must hold t.mu.
+func (t *TUI) appendFileRefCardsLocked(segments []agent.TextSegment) {
+	for _, seg := range segments {
+		if seg.FileRef == "" {
+			continue
+		}
+		id := t.nextToolID
+		t.nextToolID++
+		t.scroll.appendFileRefCard(id, seg.FileRef, stripFence(seg.Text))
+	}
+}
+
+// startTurn kicks off an agent turn for an already-displayed prompt, split
+// into segments (see agent.TextSegment). The user message and any file-ref
+// cards must already be in the scrollback; startTurn only manages the
 // in-flight state and the worker goroutine. Caller must hold t.mu.
-func (t *TUI) startTurn(prompt string, images ...agent.ImageAttachment) {
+func (t *TUI) startTurn(segments []agent.TextSegment, images ...agent.ImageAttachment) {
 	t.status.Thinking = true
 	t.status.Hint = ""
 	t.markScrollDirty()
@@ -95,7 +113,7 @@ func (t *TUI) startTurn(prompt string, images ...agent.ImageAttachment) {
 			t.drainQueueLocked()
 			t.mu.Unlock()
 		}()
-		_ = t.agent.PromptWithContext(ctx, prompt, images...)
+		_ = t.agent.PromptSegmentsWithContext(ctx, segments, images...)
 	}()
 }
 
@@ -147,17 +165,21 @@ func (t *TUI) drainQueueLocked() {
 	}
 	msgs := t.queued
 	t.queued = nil
-	parts := make([]string, 0, len(msgs))
-	for _, m := range msgs {
-		expanded, err := expandAtFiles(m)
+	var combined []agent.TextSegment
+	for i, m := range msgs {
+		segs, err := expandAtFilesSegments(m)
 		if err != nil {
-			expanded = m
+			segs = []agent.TextSegment{{Text: m}}
 		}
-		parts = append(parts, expanded)
+		if i > 0 {
+			combined = append(combined, agent.TextSegment{Text: "\n\n"})
+		}
+		combined = append(combined, segs...)
 		t.scroll.append(StyledLine{Style: styleUser, Text: m})
+		t.appendFileRefCardsLocked(segs)
 	}
 	t.scroll.scrollToBottom()
-	t.startTurn(strings.Join(parts, "\n\n"))
+	t.startTurn(combined)
 }
 
 func (t *TUI) handleEvent(ev agent.OutputEvent) {

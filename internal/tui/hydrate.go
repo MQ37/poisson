@@ -16,6 +16,7 @@ type msgBlock struct {
 	ToolIsError bool            `json:"tool_is_error,omitempty"`
 	Thinking    string          `json:"thinking,omitempty"`
 	Redacted    bool            `json:"redacted,omitempty"`
+	FileRef     string          `json:"file_ref,omitempty"`
 }
 
 func parseMessageBlocks(content string) []msgBlock {
@@ -58,14 +59,37 @@ func (t *TUI) hydrateScrollbackLocked() {
 		blocks := parseMessageBlocks(m.Content)
 		switch m.Role {
 		case "user":
+			// A message's text may be split across several adjacent blocks — e.g. a
+			// literal @path reference was expanded to its own block (FileRef set) at
+			// send time, isolating its content so it renders as a collapsible card
+			// (below) instead of dumping the file inline. Concatenate directly (no
+			// added separator): any intentional whitespace between two adjacent
+			// tokens, e.g. "@a.go @b.go", already lives inside a plain-text block's
+			// own Text and must not be lost the way a whitespace-only-block filter
+			// would lose it.
 			var parts []string
+			var fileRefs []msgBlock
 			for _, b := range blocks {
-				if b.Type == "text" && strings.TrimSpace(b.Text) != "" {
-					parts = append(parts, b.Text)
+				if b.Type != "text" || b.Text == "" {
+					continue
 				}
+				if b.FileRef != "" {
+					// Reconstruct the literal @path token the user typed — its display
+					// placeholder, not the fenced file dump, which appears as its own
+					// card below instead.
+					parts = append(parts, "@"+b.FileRef)
+					fileRefs = append(fileRefs, b)
+					continue
+				}
+				parts = append(parts, b.Text)
 			}
 			if len(parts) > 0 {
-				t.scroll.append(StyledLine{Style: styleUser, Text: strings.Join(parts, "\n")})
+				t.scroll.append(StyledLine{Style: styleUser, Text: strings.Join(parts, "")})
+			}
+			for _, b := range fileRefs {
+				id := nextToolID
+				nextToolID++
+				t.scroll.appendFileRefCard(id, b.FileRef, stripFence(b.Text))
 			}
 		case "assistant":
 			for _, b := range blocks {
