@@ -17,6 +17,36 @@ func TestWrapWordsProse(t *testing.T) {
 	}
 }
 
+// TestWrapLineHardWrapsOnNewline is a regression test: wrapLine (unlike
+// wrapWords, which it wraps) must treat an embedded \n as a hard line break,
+// not a regular character — this renderer positions the cursor per row and
+// writes raw bytes, so a literal \n left inside one wrapped chunk moves the
+// cursor instead of soft-wrapping, corrupting the display.
+func TestWrapLineHardWrapsOnNewline(t *testing.T) {
+	got := wrapLine("line one\nline two\nline three", 20)
+	want := []string{"line one", "line two", "line three"}
+	if len(got) != len(want) {
+		t.Fatalf("wrapLine = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestWrapLineHardWrapsOnNewlineThenSoftWrapsEachParagraph(t *testing.T) {
+	got := wrapLine("a long first paragraph that needs wrapping\nshort", 15)
+	for _, ln := range got {
+		if strings.Contains(ln, "\n") {
+			t.Fatalf("wrapped chunk still contains a raw newline: %q in %q", ln, got)
+		}
+	}
+	if got[len(got)-1] != "short" {
+		t.Errorf("last chunk = %q, want %q", got[len(got)-1], "short")
+	}
+}
+
 func TestWrapWordsBreaksAtSpace(t *testing.T) {
 	text := "hello world!"
 	lines := wrapWords(text, 8)

@@ -77,6 +77,49 @@ func TestConvFocusStepPrompts(t *testing.T) {
 	}
 }
 
+// TestConvFocusStepPromptsMultiLineMessage is a regression test: a single
+// multi-line submitted message must count as exactly one turn for
+// Shift+Left/Right navigation, not one turn per line it happens to wrap
+// across in the source text.
+func TestConvFocusStepPromptsMultiLineMessage(t *testing.T) {
+	tui := newTUI(nil, "s1", nil)
+	tui.rows = 24
+	tui.cols = 80
+	tui.scrollRows = 16
+	tui.scroll.append(StyledLine{Style: styleUser, Text: "first line\nsecond line\nthird line"})
+	tui.scroll.append(StyledLine{Style: styleAssistant, Text: "reply"})
+	tui.scroll.append(StyledLine{Style: styleUser, Text: "a single-line follow-up"})
+	tui.enterConvFocus()
+
+	idxs := tui.scroll.userBlockIndices()
+	if len(idxs) != 2 {
+		t.Fatalf("userBlockIndices = %v, want exactly 2 turns (one 3-line message + one 1-line message)", idxs)
+	}
+
+	tui.stepConvPrompt(-1)
+	if tui.convUserIdx != 0 {
+		t.Fatalf("idx=%d want 0 (the multi-line message)", tui.convUserIdx)
+	}
+	line := tui.pinnedPromptLine(60)
+	if !containsPlain(line, "turn 1/2") {
+		t.Fatalf("pinned line = %q, want turn 1/2", stripANSI(line))
+	}
+	// The pinned header is a single fixed-height row: an embedded newline must
+	// be flattened, not left as a literal byte that would move the cursor and
+	// corrupt the row.
+	if strings.Contains(stripANSI(line), "\n") {
+		t.Fatalf("pinned line must not contain a raw newline: %q", stripANSI(line))
+	}
+	if !containsPlain(line, "first line second line third line") {
+		t.Fatalf("pinned line = %q, want the multi-line message flattened to one line", stripANSI(line))
+	}
+
+	tui.stepConvPrompt(1)
+	if tui.convUserIdx != 1 {
+		t.Fatalf("idx=%d want 1 (the single-line follow-up) — one Shift+Right press must skip the WHOLE multi-line message, not just one of its lines", tui.convUserIdx)
+	}
+}
+
 func TestTabTogglesConvFocus(t *testing.T) {
 	tui := newTUI(nil, "s1", nil)
 	tui.rows = 24

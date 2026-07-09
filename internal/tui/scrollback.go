@@ -103,6 +103,18 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 		s.trim()
 		return
 	}
+	if kind == blockUser {
+		// A submitted message is one semantic turn however many lines it spans.
+		// Splitting per line like the fallback below would make
+		// userBlockIndices/stepConvPrompt (Shift+Left/Right conversation-turn
+		// navigation) treat each line of one multi-line message as its own
+		// separate turn. wrapLine hard-wraps on \n correctly, so storing the
+		// whole raw multi-line text in one block renders fine.
+		s.blocks = append(s.blocks, s.newBlock(kind, sanitizeControls(text)))
+		s.totalAdded++
+		s.trim()
+		return
+	}
 	for _, part := range strings.Split(text, "\n") {
 		s.blocks = append(s.blocks, s.newBlock(kind, sanitizeControls(part)))
 	}
@@ -395,10 +407,23 @@ func (s *scrollback) appendToolCallReplay(id int64, providerCallID, name string,
 	s.trim()
 }
 
-// wrapLine wraps a single logical line to width runes per chunk (word-aware when
-// spaces are present; hard wrap for long tokens).
+// wrapLine wraps text to width runes per chunk (word-aware when spaces are
+// present; hard wrap for long tokens). Despite historically being named for
+// "a single logical line", callers commonly pass raw multi-paragraph text
+// (a user's typed message, a tool's multi-line result) — embedded \n must
+// start a new wrapped line, not get left as a literal byte inside one: this
+// renderer positions the cursor per row and writes raw bytes, so an
+// unexpected \n moves the cursor instead of being a soft line break,
+// corrupting the display.
 func wrapLine(text string, width int) []string {
-	return wrapWords(text, width)
+	if !strings.Contains(text, "\n") {
+		return wrapWords(text, width)
+	}
+	var out []string
+	for _, para := range strings.Split(text, "\n") {
+		out = append(out, wrapWords(para, width)...)
+	}
+	return out
 }
 
 // stylePrefix returns the ANSI prefix for a given line style.

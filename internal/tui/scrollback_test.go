@@ -58,13 +58,34 @@ func TestScrollbackVisibleNoPanicOnOverflow(t *testing.T) {
 
 func TestScrollbackSplitsNewlines(t *testing.T) {
 	s := newScrollback(1024)
-	// Non-streaming multiline (user echo) must become separate rows.
-	s.append(StyledLine{Style: styleUser, Text: "AAA\nBBB\nCCC"})
+	// Non-streaming, non-user multiline (e.g. a multi-line error/system
+	// message) becomes separate rows.
+	s.append(StyledLine{Style: styleError, Text: "AAA\nBBB\nCCC"})
 	if s.blockCount() != 3 {
 		t.Fatalf("expected 3 blocks, got %d", s.blockCount())
 	}
 	if s.blockRaw(0) != "AAA" || s.blockRaw(1) != "BBB" || s.blockRaw(2) != "CCC" {
 		t.Errorf("blocks = %q/%q/%q", s.blockRaw(0), s.blockRaw(1), s.blockRaw(2))
+	}
+}
+
+// TestScrollbackUserMultilineStaysOneBlock is a regression test: a user's
+// multi-line message was being split into one blockUser per source line
+// (same non-streaming path as any other kind), so userBlockIndices — and
+// Shift+Left/Right conversation-turn navigation, which counts on one block
+// per submitted message — treated each line of a single multi-line message
+// as its own separate turn.
+func TestScrollbackUserMultilineStaysOneBlock(t *testing.T) {
+	s := newScrollback(1024)
+	s.append(StyledLine{Style: styleUser, Text: "line one\nline two\nline three"})
+	if s.blockCount() != 1 {
+		t.Fatalf("expected 1 block for one multi-line message, got %d", s.blockCount())
+	}
+	if got := s.blockRaw(0); got != "line one\nline two\nline three" {
+		t.Errorf("block raw = %q, want the full multi-line text preserved", got)
+	}
+	if idxs := s.userBlockIndices(); len(idxs) != 1 {
+		t.Errorf("userBlockIndices = %v, want exactly 1 turn for 1 submitted message", idxs)
 	}
 }
 

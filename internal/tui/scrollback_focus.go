@@ -1,5 +1,7 @@
 package tui
 
+import "strings"
+
 // userBlockIndices returns block indices for every user prompt in order.
 func (s *scrollback) userBlockIndices() []int {
 	var out []int
@@ -61,6 +63,10 @@ func (s *scrollback) scrollBlockToTop(blockIdx, viewHeight, width, skipTopRows i
 }
 
 // userPromptText returns plain text for a user block index.
+// userPromptText returns a blockUser block's text flattened to one line —
+// used for the pinned conv-focus header, a single fixed-height row that
+// can't render an embedded newline (it would move the cursor instead of
+// wrapping, corrupting that row).
 func (s *scrollback) userPromptText(blockIdx int) string {
 	if blockIdx < 0 || blockIdx >= len(s.blocks) {
 		return ""
@@ -69,5 +75,5 @@ func (s *scrollback) userPromptText(blockIdx int) string {
 	if b.kind != blockUser {
 		return ""
 	}
-	return stripANSI(b.raw)
+	return strings.ReplaceAll(stripANSI(b.raw), "\n", " ")
 }
