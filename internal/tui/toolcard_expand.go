@@ -38,6 +38,9 @@ func toolResultFullText(b *Block) string {
 }
 
 func toolResultNeedsExpand(b *Block) bool {
+	if isDiffTool(b.meta.ToolName) && b.meta.ToolError == "" {
+		return toolDiffNeedsExpand(b)
+	}
 	text := toolResultFullText(b)
 	if len(text) > toolResultCollapsedBytes {
 		return true
@@ -127,15 +130,7 @@ func (s *scrollback) scrollFocusedTool(width, delta int) bool {
 		if b.id != s.focusedToolID || !b.meta.Expanded || !b.meta.ToolDone {
 			continue
 		}
-		inner := width - 4
-		if inner < 1 {
-			inner = 1
-		}
-		lines := wrapLine(toolResultFullText(b), inner)
-		if len(lines) > toolResultExpandedMax {
-			lines = lines[:toolResultExpandedMax]
-		}
-		maxScroll := len(lines) - toolResultExpandedView
+		maxScroll := toolExpandLineCount(b, width) - toolResultExpandedView
 		if maxScroll < 0 {
 			maxScroll = 0
 		}
@@ -184,15 +179,7 @@ func (s *scrollback) focusedToolExpanded(width int) bool {
 	for i := range s.blocks {
 		b := &s.blocks[i]
 		if b.id == s.focusedToolID && b.meta.Expanded && b.meta.ToolDone {
-			inner := width - 4
-			if inner < 1 {
-				inner = 1
-			}
-			lines := wrapLine(toolResultFullText(b), inner)
-			if len(lines) > toolResultExpandedMax {
-				lines = lines[:toolResultExpandedMax]
-			}
-			return len(lines) > toolResultExpandedView
+			return toolExpandLineCount(b, width) > toolResultExpandedView
 		}
 	}
 	return false

@@ -45,7 +45,17 @@ func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 			chunks = append(chunks, fgYellow+formatToolCardBodyLine(chunk, width)+reset)
 		}
 	}
-	if b.meta.ToolDone && !b.meta.Expanded {
+	diffCard := b.meta.ToolDone && isDiffTool(name) && b.meta.ToolError == ""
+	if diffCard {
+		lines := diffCardCollapsedLines(b, width)
+		if b.meta.Expanded {
+			lines = diffCardExpandedLines(b, width)
+		}
+		for _, ln := range lines {
+			chunks = append(chunks, formatToolCardBodyLineANSI(ln, width))
+		}
+	}
+	if b.meta.ToolDone && !b.meta.Expanded && !diffCard {
 		style := fgGray
 		if b.meta.ToolError != "" {
 			style = fgRed
@@ -54,7 +64,7 @@ func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 			chunks = append(chunks, style+toolCardBodyLine(ln, width)+reset)
 		}
 	}
-	if b.meta.ToolDone && b.meta.Expanded {
+	if b.meta.ToolDone && b.meta.Expanded && !diffCard {
 		for _, ln := range toolCardExpandedResultLines(b, width) {
 			style := fgGray
 			if b.meta.ToolError != "" {

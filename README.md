@@ -36,8 +36,9 @@ git clone <this-repo> poisson && cd poisson
 ## ✨ Features
 
 - **Streaming REPL TUI** — hand-rolled ANSI, no TUI framework. Live thinking
-  blocks (Ctrl+T to fold), tool cards you can expand (Ctrl+E), a command palette
-  (Ctrl+P), mouse scroll, and a status bar with live context % and exact cost.
+  blocks (Ctrl+T to fold), tool cards you can expand (Ctrl+E) — including
+  colored diffs for `edit`/`write` — a command palette (Ctrl+P), mouse scroll,
+  and a status bar with live context % and exact cost.
 - **Real tools** — `bash`, `read`, `write`, `edit`, `ls`, `glob`, `search`,
   `exa_search`, `fetch` (Ollama), `recall` (full-text search across past
   sessions), plus **subagents** (parallel child agents) and **skills**.

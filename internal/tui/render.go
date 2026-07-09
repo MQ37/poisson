@@ -56,12 +56,25 @@ func toolInputPreview(toolName string, input []byte) string {
 		if json.Unmarshal(input, &in) == nil && in.Path != "" {
 			return fmt.Sprintf("%s (%d bytes)", previewText(in.Path, 80), len(in.Content))
 		}
-	case "read", "edit":
+	case "read":
 		var in struct {
 			Path string `json:"path"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Path != "" {
 			return previewText(in.Path, 100)
+		}
+	case "edit":
+		var in struct {
+			Path  string `json:"path"`
+			Edits []any  `json:"edits"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Path != "" {
+			n := len(in.Edits)
+			unit := "edit"
+			if n != 1 {
+				unit = "edits"
+			}
+			return fmt.Sprintf("%s (%d %s)", previewText(in.Path, 80), n, unit)
 		}
 	case "search", "glob":
 		var in struct {
