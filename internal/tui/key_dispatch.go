@@ -290,20 +290,27 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 		}
 	}
 
+	// Up/Down only recall history at the input's top/bottom edge; otherwise
+	// they must fall through to processEditorKey below to move the cursor
+	// between lines, same as any other editor key. Returning unconditionally
+	// here (regardless of the boundary check) swallowed every up/down
+	// keystroke in a multi-line input that wasn't already at an edge — no
+	// history recall AND no cursor movement, appearing as "up/down don't do
+	// anything anymore".
 	if t.completion.empty() && t.activeOverlay == nil && t.focusRegion == focusInput {
 		switch k.Kind {
 		case KeyArrowUp:
 			if t.editorAtScrollTop() {
 				t.navigateHistory(-1)
 				t.markInputDirty()
+				return false, nil
 			}
-			return false, nil
 		case KeyArrowDown:
 			if t.editorAtScrollBottom() {
 				t.navigateHistory(1)
 				t.markInputDirty()
+				return false, nil
 			}
-			return false, nil
 		}
 	}
 

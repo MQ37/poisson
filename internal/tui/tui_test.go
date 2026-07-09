@@ -444,6 +444,45 @@ func TestArrowHistoryAtEditorEdges(t *testing.T) {
 	}
 }
 
+// TestArrowMovesCursorInMultiLineInput is a regression test: the up/down
+// dispatch in feedKey unconditionally returned after checking the history-nav
+// boundary (editorAtScrollTop/Bottom), instead of only returning when history
+// nav actually fired. That swallowed every up/down keystroke that wasn't
+// already at the input's top/bottom edge — no history recall AND no cursor
+// movement, i.e. up/down did nothing at all while editing a multi-line
+// message. Drives through tui.feed (the real dispatch path), not editor.feed
+// directly — TestEditorArrowUpMultiLine already covers the editor in
+// isolation and did not catch this, since the bug was in feedKey's wrapper
+// around it.
+func TestArrowMovesCursorInMultiLineInput(t *testing.T) {
+	tui := newTUI(nil, "s-abc", nil)
+	tui.rows = 24
+	tui.cols = 80
+	tui.editor.wrapWidth = 79
+	tui.editor.insertText("line1\nline2")
+	tui.editor.row = 1
+	tui.editor.col = 2
+
+	tui.feed([]byte{27, '[', 'A'}) // up arrow, NOT at the input's top row
+	if tui.editor.row != 0 {
+		t.Fatalf("up arrow should move cursor to row 0, got row=%d (text unchanged: %v)", tui.editor.row, tui.editor.text() == "line1\nline2")
+	}
+	if tui.editor.col != 2 {
+		t.Fatalf("up arrow should preserve col 2, got col=%d", tui.editor.col)
+	}
+	if tui.editor.text() != "line1\nline2" {
+		t.Fatalf("up arrow must not trigger history nav here, text = %q", tui.editor.text())
+	}
+
+	tui.feed([]byte{27, '[', 'B'}) // down arrow, back to row 1
+	if tui.editor.row != 1 {
+		t.Fatalf("down arrow should move cursor to row 1, got row=%d", tui.editor.row)
+	}
+	if tui.editor.col != 2 {
+		t.Fatalf("down arrow should preserve col 2, got col=%d", tui.editor.col)
+	}
+}
+
 func TestNavigateHistory(t *testing.T) {
 	tui := newTUI(nil, "s-abc", nil)
 	tui.history = []string{"first", "second", "third"}
