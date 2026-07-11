@@ -46,7 +46,36 @@ func TestDataIsOnlyMouse(t *testing.T) {
 		t.Fatal("wheel only")
 	}
 	if dataIsOnlyMouse([]byte("\x1b[<0;1;1Mx")) {
-		t.Fatal("mixed should be false")
+		t.Fatal("mixed should be false (trailing garbage)")
+	}
+	// Regression: a leading non-mouse byte (a real keystroke) must not be
+	// silently treated as part of "only mouse" just because a valid mouse
+	// sequence follows it in the same chunk — the caller in lifecycle.go's
+	// input loop drops the whole chunk without feeding it to the key decoder
+	// whenever this returns true.
+	if dataIsOnlyMouse([]byte("x\x1b[<64;1;1M")) {
+		t.Fatal("mixed should be false (leading keystroke before a mouse sequence)")
+	}
+}
+
+// TestParseMouseWheelIgnoresLeadingKeystroke is the end-to-end regression:
+// a keystroke coalesced into the same read() chunk as a wheel event must not
+// be recognized as a pure wheel scroll (which would make lifecycle.go's input
+// loop discard it instead of pushing it to the key decoder).
+func TestParseMouseWheelIgnoresLeadingKeystroke(t *testing.T) {
+	if _, ok := parseMouseWheel([]byte("x\x1b[<65;10;5M")); ok {
+		t.Fatal("parseMouseWheel treated a chunk with a leading keystroke as a pure wheel event")
+	}
+}
+
+// TestAdvancePastMouseDoesNotScanAhead: a broken/incomplete sequence at
+// position 0 must not make advancePastMouse skip ahead to a later valid one.
+func TestAdvancePastMouseDoesNotScanAhead(t *testing.T) {
+	if adv := advancePastMouse([]byte("x\x1b[<64;1;1M")); adv != 0 {
+		t.Fatalf("advancePastMouse = %d, want 0 (no match at position 0)", adv)
+	}
+	if adv := advancePastMouse([]byte("\x1b[<64;1;1M")); adv != len("\x1b[<64;1;1M") {
+		t.Fatalf("advancePastMouse = %d, want %d (whole sequence consumed)", adv, len("\x1b[<64;1;1M"))
 	}
 }
 func TestParseMouseEventsMotionBit(t *testing.T) {

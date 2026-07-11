@@ -97,29 +97,37 @@ func dataIsOnlyMouse(data []byte) bool {
 	}
 }
 
+// advancePastMouse parses a complete SGR mouse sequence starting at data[0]
+// and returns the index just past it, or 0 if data doesn't begin with one (no
+// prefix, malformed, or truncated). It never scans ahead looking for a valid
+// sequence elsewhere in data: an earlier version did, so a chunk with a
+// leading non-mouse byte (or a broken mouse-sequence start) followed later by
+// a real one was silently treated as if that leading content didn't exist —
+// callers such as dataIsOnlyMouse then reported the whole chunk as "just a
+// mouse event" and the caller's own leading byte (a real keystroke, in the
+// wheel-scroll path in lifecycle.go) was dropped without ever reaching the
+// key decoder.
 func advancePastMouse(data []byte) int {
-	for i := 0; i < len(data); i++ {
-		if i+6 >= len(data) || data[i] != 27 || data[i+1] != '[' || data[i+2] != '<' {
-			continue
-		}
-		j := i + 3
-		readMouseInt(data, &j)
-		if j >= len(data) || data[j] != ';' {
-			continue
-		}
-		j++
-		readMouseInt(data, &j)
-		if j >= len(data) || data[j] != ';' {
-			continue
-		}
-		j++
-		readMouseInt(data, &j)
-		if j >= len(data) {
-			continue
-		}
-		if data[j] == 'M' || data[j] == 'm' {
-			return j + 1
-		}
+	if len(data) < 3 || data[0] != 27 || data[1] != '[' || data[2] != '<' {
+		return 0
+	}
+	j := 3
+	readMouseInt(data, &j)
+	if j >= len(data) || data[j] != ';' {
+		return 0
+	}
+	j++
+	readMouseInt(data, &j)
+	if j >= len(data) || data[j] != ';' {
+		return 0
+	}
+	j++
+	readMouseInt(data, &j)
+	if j >= len(data) {
+		return 0
+	}
+	if data[j] == 'M' || data[j] == 'm' {
+		return j + 1
 	}
 	return 0
 }
