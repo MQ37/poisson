@@ -8,7 +8,10 @@ import (
 
 // ApprovalFn is called before executing dangerous bash commands. ctx is the
 // tool's turn context so a cancelled turn also cancels the risk classification.
-type ApprovalFn func(ctx context.Context, command, description, workdir string) bool
+// reason is an optional human-supplied explanation when denied (empty when
+// allowed, or when the human left it blank) — surfaced to the model so it
+// understands *why* a command was rejected, not just that it was.
+type ApprovalFn func(ctx context.Context, command, description, workdir string) (allowed bool, reason string)
 
 // BuildOptions configures which tools to register.
 type BuildOptions struct {
@@ -31,7 +34,7 @@ func BuildRegistry(opts BuildOptions) *Registry {
 
 	approval := opts.ApprovalFn
 	if approval == nil {
-		approval = func(context.Context, string, string, string) bool { return false }
+		approval = func(context.Context, string, string, string) (bool, string) { return false, "" }
 	}
 
 	reg.Register(NewBashTool(opts.Cwd, opts.Sandbox, approval))

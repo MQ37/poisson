@@ -142,11 +142,13 @@ func (c *ChildProcess) ReadEvent() (*ChildEvent, error) {
 	return &ev, nil
 }
 
-// SendApproval writes an approval response to the child's stdin.
-func (c *ChildProcess) SendApproval(approved bool) error {
+// SendApproval writes an approval response to the child's stdin. reason is an
+// optional human-supplied explanation when denying (empty when allowed).
+func (c *ChildProcess) SendApproval(approved bool, reason string) error {
 	data, err := json.Marshal(map[string]interface{}{
 		"type":     "approval_response",
 		"approved": approved,
+		"reason":   reason,
 	})
 	if err != nil {
 		return err
@@ -170,10 +172,10 @@ func (c *ChildProcess) SendExpedite() error {
 }
 
 // SendApprovalSafe is a thread-safe version of SendApproval.
-func (c *ChildProcess) SendApprovalSafe(approved bool) error {
+func (c *ChildProcess) SendApprovalSafe(approved bool, reason string) error {
 	c.stdinMu.Lock()
 	defer c.stdinMu.Unlock()
-	return c.SendApproval(approved)
+	return c.SendApproval(approved, reason)
 }
 
 // Wait waits for the child process to exit and returns its error (if any).

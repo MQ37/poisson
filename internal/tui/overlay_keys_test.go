@@ -129,14 +129,15 @@ func TestApproveBufferedAnswerBeforeReceive(t *testing.T) {
 	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		result <- allowed
 	}()
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for !tui.approving.Load() && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	// Send before Approve blocks on receive (simulates fast key).
-	tui.approvalAnswer <- true
+	tui.approvalAnswer <- approvalReply{Allowed: true}
 	select {
 	case got := <-result:
 		if !got {

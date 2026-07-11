@@ -40,8 +40,8 @@ func TestBuildRegistry_ParentWithStore(t *testing.T) {
 	reg := BuildRegistry(BuildOptions{
 		Cwd:   dir,
 		Store: st,
-		SubApproval: func(string, string, string, string, string) bool {
-			return false
+		SubApproval: func(string, string, string, string, string) (bool, string) {
+			return false, ""
 		},
 	})
 	for _, w := range []string{"recall", "subagent"} {
@@ -64,7 +64,7 @@ func TestBuildRegistry_Child(t *testing.T) {
 		Cwd:         dir,
 		Store:       st,
 		Child:       true,
-		SubApproval: func(string, string, string, string, string) bool { return true },
+		SubApproval: func(string, string, string, string, string) (bool, string) { return true, "" },
 	})
 	for _, w := range []string{"read", "write", "edit", "bash", "search", "ls", "glob", "exa_search", "recall"} {
 		if _, ok := reg.Get(w); !ok {

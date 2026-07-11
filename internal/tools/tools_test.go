@@ -649,7 +649,7 @@ func TestBashTool_NoAllowlist(t *testing.T) {
 		t.Fatal("expected safe command to be gated (no allowlist), got auto-run")
 	}
 
-	b := NewBashTool(dir, false, func(context.Context, string, string, string) bool { return true })
+	b := NewBashTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" })
 	res, _ = b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "echo hello",
 		"description": "print hello",
@@ -723,7 +723,7 @@ func TestBashTool_UnsafeDenied(t *testing.T) {
 
 func TestBashTool_UnsafeApproved(t *testing.T) {
 	dir := testutil.TempDir(t)
-	approved := func(_ context.Context, command, desc, wd string) bool { return true }
+	approved := func(_ context.Context, command, desc, wd string) (bool, string) { return true, "" }
 	b := NewBashTool(dir, false, approved)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -746,11 +746,11 @@ func TestBashTool_PromptsForApproval(t *testing.T) {
 	dir := testutil.TempDir(t)
 	var gotCmd, gotDesc string
 	called := false
-	approvalFn := func(_ context.Context, command, desc, wd string) bool {
+	approvalFn := func(_ context.Context, command, desc, wd string) (bool, string) {
 		called = true
 		gotCmd = command
 		gotDesc = desc
-		return false // deny, but we only care that it was asked
+		return false, "" // deny, but we only care that it was asked
 	}
 	b := NewBashTool(dir, false, approvalFn)
 
@@ -772,6 +772,46 @@ func TestBashTool_PromptsForApproval(t *testing.T) {
 	}
 }
 
+// TestBashTool_DenialReasonReachesToolResult verifies a human-supplied denial
+// reason ends up in the tool result so the model sees why, not just that.
+func TestBashTool_DenialReasonReachesToolResult(t *testing.T) {
+	dir := testutil.TempDir(t)
+	approvalFn := func(_ context.Context, command, desc, wd string) (bool, string) {
+		return false, "not right now, finish the other task first"
+	}
+	b := NewBashTool(dir, false, approvalFn)
+
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "rm -rf build",
+		"description": "clean build dir",
+	}))
+	if !strings.Contains(res.Error, "rejected by user") {
+		t.Errorf("error = %q, want it to say rejected by user", res.Error)
+	}
+	if !strings.Contains(res.Error, "reason: not right now, finish the other task first") {
+		t.Errorf("error = %q, want the human's reason included", res.Error)
+	}
+}
+
+// TestBashTool_DenialWithoutReason verifies an empty reason doesn't leave a
+// dangling "reason:" clause in the tool result.
+func TestBashTool_DenialWithoutReason(t *testing.T) {
+	dir := testutil.TempDir(t)
+	approvalFn := func(_ context.Context, command, desc, wd string) (bool, string) { return false, "" }
+	b := NewBashTool(dir, false, approvalFn)
+
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "rm -rf build",
+		"description": "clean build dir",
+	}))
+	if !strings.Contains(res.Error, "rejected by user") {
+		t.Errorf("error = %q, want it to say rejected by user", res.Error)
+	}
+	if strings.Contains(res.Error, "reason:") {
+		t.Errorf("error = %q, must not contain a dangling reason clause when empty", res.Error)
+	}
+}
+
 // TestBashTool_MissingDescFallback verifies a gated call without a description
 // still reaches approval with a placeholder purpose (the guard-reason fallback
 // was removed together with the deterministic allowlist).
@@ -779,10 +819,10 @@ func TestBashTool_MissingDescFallback(t *testing.T) {
 	dir := testutil.TempDir(t)
 	var gotDesc string
 	called := false
-	approvalFn := func(_ context.Context, command, desc, wd string) bool {
+	approvalFn := func(_ context.Context, command, desc, wd string) (bool, string) {
 		called = true
 		gotDesc = desc
-		return false
+		return false, ""
 	}
 	b := NewBashTool(dir, false, approvalFn)
 

@@ -142,7 +142,12 @@ func (t *TUI) Run() error {
 				for _, k := range t.keyDec.Push(data) {
 					if t.approving.Load() {
 						if k.isCtrlC() {
-							t.approvalDenyAndMaybeCancelRun()
+							// Panic button: send the denial right now, discarding any
+							// reason typed so far, even if a reason prompt is up.
+							t.approvalDenyAndMaybeCancelRun("")
+							continue
+						}
+						if t.feedDenyReasonKey(k) {
 							continue
 						}
 						// Let the user review the conversation while deciding: Tab
@@ -180,12 +185,17 @@ func (t *TUI) Run() error {
 						case !ok:
 							t.flashApprovalHint()
 						case allowed:
-							t.approvalAnswer <- true
+							t.approvalAnswer <- approvalReply{Allowed: true}
 						default:
-							// Denying a command stops the turn so the user can type right
-							// away, instead of leaving the model to continue past the denial
-							// and forcing a follow-up Ctrl+C.
-							t.approvalDenyAndMaybeCancelRun()
+							// Denying commits to the deny, but doesn't send it yet: show an
+							// optional reason prompt first. feedDenyReasonKey (above) takes
+							// over from here until Enter/Esc finalizes it.
+							t.mu.Lock()
+							if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
+								ao.beginDenyReason()
+								t.dirty.markInput()
+							}
+							t.mu.Unlock()
 						}
 						continue
 					}
@@ -231,18 +241,20 @@ func (t *TUI) restoreTerminal() {
 	_ = term.Restore(t.fd, t.oldState)
 }
 
-// approvalDenyAndMaybeCancelRun rejects the pending approval and cancels an
-// in-flight agent turn when one exists.
-func (t *TUI) approvalDenyAndMaybeCancelRun() {
+// approvalDenyAndMaybeCancelRun rejects the pending approval (with an optional
+// human-supplied reason, forwarded to the model) and cancels an in-flight
+// agent turn when one exists.
+func (t *TUI) approvalDenyAndMaybeCancelRun(reason string) {
+	reply := approvalReply{Allowed: false, Reason: reason}
 	select {
-	case t.approvalAnswer <- false:
+	case t.approvalAnswer <- reply:
 	default:
 		select {
 		case <-t.approvalAnswer:
 		default:
 		}
 		select {
-		case t.approvalAnswer <- false:
+		case t.approvalAnswer <- reply:
 		default:
 		}
 	}
@@ -252,4 +264,42 @@ func (t *TUI) approvalDenyAndMaybeCancelRun() {
 	if cancel != nil {
 		t.cancelActiveRun()
 	}
+}
+
+// feedDenyReasonKey routes a keystroke to the reason text field once the user
+// has committed to denying (d/n/Esc) but hasn't confirmed yet. Enter/Escape
+// finalize the deny with whatever's typed (possibly empty); Ctrl+C is handled
+// by the caller before this is reached and always sends an empty reason.
+// Returns false when there's no pending reason prompt, so the caller falls
+// through to its normal approval-key handling.
+func (t *TUI) feedDenyReasonKey(k Key) bool {
+	t.mu.Lock()
+	ao, ok := t.activeOverlay.(*approvalOverlay)
+	if !ok || !ao.denying {
+		t.mu.Unlock()
+		return false
+	}
+	var finalize bool
+	switch k.Kind {
+	case KeyEnter, KeyEscape:
+		finalize = true
+	case KeyBackspace:
+		if trimOverlayFilter(&ao.reason) {
+			t.dirty.markInput()
+		}
+	case KeyRune:
+		if appendOverlayFilterRune(&ao.reason, k.Rune) {
+			t.dirty.markInput()
+		}
+	case KeyPaste:
+		if appendOverlayFilterText(&ao.reason, k.Text, nil) {
+			t.dirty.markInput()
+		}
+	}
+	reason := ao.reason
+	t.mu.Unlock()
+	if finalize {
+		t.approvalDenyAndMaybeCancelRun(reason)
+	}
+	return true
 }

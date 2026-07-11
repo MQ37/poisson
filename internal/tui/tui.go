@@ -95,7 +95,7 @@ type TUI struct {
 	// instead of feeding it to the editor.
 	approvalMu     sync.Mutex
 	approving      atomic.Bool
-	approvalAnswer chan bool
+	approvalAnswer chan approvalReply
 	overlayQuit    atomic.Bool
 
 	// queued holds messages the user submitted while a turn was in flight. They
@@ -187,7 +187,7 @@ func newTUI(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent)
 		headerRows:     1,
 		lastInputRows:  3,
 		done:           make(chan struct{}),
-		approvalAnswer: make(chan bool, 1),
+		approvalAnswer: make(chan approvalReply, 1),
 		grabImage:      grabClipboardImage,
 	}
 }

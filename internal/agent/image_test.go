@@ -27,7 +27,7 @@ func TestPromptWithImageAttachment(t *testing.T) {
 	sid := newTestSession(t, s, "test-model")
 	fp := newFakeProvider()
 	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("a red square", nil)})
-	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 64), func(context.Context, string, string, string) bool { return true })
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 64), func(context.Context, string, string, string) (bool, string) { return true, "" })
 
 	if err := a.PromptWithContext(context.Background(), "what is this?",
 		ImageAttachment{Path: imgPath, MediaType: "image/png"}); err != nil {
@@ -77,7 +77,7 @@ func TestPromptImageOnlyNoText(t *testing.T) {
 	sid := newTestSession(t, s, "test-model")
 	fp := newFakeProvider()
 	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("ok", nil)})
-	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 64), func(context.Context, string, string, string) bool { return true })
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 64), func(context.Context, string, string, string) (bool, string) { return true, "" })
 
 	if err := a.PromptWithContext(context.Background(), "", ImageAttachment{Path: imgPath}); err != nil {
 		t.Fatalf("prompt: %v", err)
@@ -115,7 +115,7 @@ func TestCompactionReplacesImagesWithPlaceholder(t *testing.T) {
 	}
 	fp := newFakeProvider()
 	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("summary", nil)})
-	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) bool { return true })
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
 
 	if err := a.Compact(); err != nil {
 		t.Fatalf("compact: %v", err)

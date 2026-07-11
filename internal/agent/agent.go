@@ -82,7 +82,7 @@ type Agent struct {
 	config     *config.Config
 	sessionID  string
 	outputChan chan OutputEvent
-	approvalFn func(ctx context.Context, command, description, workdir string) bool
+	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)
 	model      string
 	effort     string
 
@@ -139,7 +139,7 @@ func NewAgent(
 	cfg *config.Config,
 	sessionID string,
 	outputChan chan OutputEvent,
-	approvalFn func(ctx context.Context, command, description, workdir string) bool,
+	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string),
 ) *Agent {
 	model := defaultModel(p, cfg)
 	a := &Agent{

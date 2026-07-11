@@ -29,7 +29,8 @@ func TestApproveLifecycle(t *testing.T) {
 	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		result <- allowed
 	}()
 
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -40,7 +41,7 @@ func TestApproveLifecycle(t *testing.T) {
 		t.Fatal("Approve never entered approving state")
 	}
 
-	tui.approvalAnswer <- true
+	tui.approvalAnswer <- approvalReply{Allowed: true}
 
 	var got bool
 	select {
@@ -93,7 +94,8 @@ func TestApproveWhileAgentRunning(t *testing.T) {
 	tui.status.Thinking = true
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		result <- allowed
 	}()
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for !tui.approving.Load() && time.Now().Before(deadline) {
@@ -102,9 +104,8 @@ func TestApproveWhileAgentRunning(t *testing.T) {
 	if !tui.approving.Load() {
 		t.Fatal("approving not set while agent running")
 	}
-	allowed := true
 	select {
-	case tui.approvalAnswer <- allowed:
+	case tui.approvalAnswer <- approvalReply{Allowed: true}:
 	default:
 		t.Fatal("approval answer channel full")
 	}
@@ -195,7 +196,8 @@ func TestApproveCancelsRiskAssessment(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("git push origin main", "danger", "/tmp", agent.BashRiskUnknown)
+		allowed, _ := tui.Approve("git push origin main", "danger", "/tmp", agent.BashRiskUnknown)
+		result <- allowed
 	}()
 
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -218,7 +220,7 @@ func TestApproveCancelsRiskAssessment(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 
-	tui.approvalAnswer <- true
+	tui.approvalAnswer <- approvalReply{Allowed: true}
 	select {
 	case <-result:
 	case <-time.After(time.Second):
@@ -246,7 +248,8 @@ func TestApproveCancelledByRunCancel(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		result <- tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		result <- allowed
 	}()
 
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -265,6 +268,158 @@ func TestApproveCancelledByRunCancel(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Approve timed out after cancel")
+	}
+}
+
+// TestFeedDenyReasonKeyPassthroughWhenNotDenying verifies feedDenyReasonKey
+// only takes over once the user has committed to denying (beginDenyReason) —
+// otherwise the caller must fall through to its normal approval-key handling.
+func TestFeedDenyReasonKeyPassthroughWhenNotDenying(t *testing.T) {
+	tui := newTestTUIHelper()
+	tui.mu.Lock()
+	tui.activeOverlay = newApprovalOverlay("rm -rf x", "danger", "")
+	tui.mu.Unlock()
+
+	if tui.feedDenyReasonKey(Key{Kind: KeyRune, Rune: 'x'}) {
+		t.Fatal("expected passthrough (false) before beginDenyReason")
+	}
+}
+
+// TestFeedDenyReasonKeyTypesAndFinalizes drives the reason prompt directly:
+// commit to deny, type a reason (with a backspace correction), then confirm
+// with Enter — asserting the exact reply sent on approvalAnswer.
+func TestFeedDenyReasonKeyTypesAndFinalizes(t *testing.T) {
+	tui := newTestTUIHelper()
+	tui.mu.Lock()
+	ao := newApprovalOverlay("rm -rf x", "danger", "")
+	ao.beginDenyReason()
+	tui.activeOverlay = ao
+	tui.mu.Unlock()
+
+	for _, r := range "not nowz" {
+		if !tui.feedDenyReasonKey(Key{Kind: KeyRune, Rune: r}) {
+			t.Fatalf("expected feedDenyReasonKey to handle rune %q", r)
+		}
+	}
+	if !tui.feedDenyReasonKey(Key{Kind: KeyBackspace}) {
+		t.Fatal("expected feedDenyReasonKey to handle backspace")
+	}
+
+	tui.mu.Lock()
+	if ao.reason != "not now" {
+		t.Fatalf("reason = %q, want %q", ao.reason, "not now")
+	}
+	tui.mu.Unlock()
+
+	if !tui.feedDenyReasonKey(Key{Kind: KeyEnter}) {
+		t.Fatal("expected feedDenyReasonKey to handle Enter")
+	}
+
+	select {
+	case reply := <-tui.approvalAnswer:
+		if reply.Allowed {
+			t.Fatal("expected denial")
+		}
+		if reply.Reason != "not now" {
+			t.Fatalf("reply.Reason = %q, want %q", reply.Reason, "not now")
+		}
+	default:
+		t.Fatal("expected a reply on approvalAnswer")
+	}
+}
+
+// TestApproveEndToEndDenyReason drives the whole path through Approve():
+// commit to deny, type a reason, confirm with Enter, and check the reason
+// comes back from Approve() itself — this is what bash.go forwards to the
+// model as "command rejected by user - reason: ...".
+func TestApproveEndToEndDenyReason(t *testing.T) {
+	tui := newTestTUIHelper()
+	type outcome struct {
+		allowed bool
+		reason  string
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		result <- outcome{allowed, reason}
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for !tui.approving.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !tui.approving.Load() {
+		t.Fatal("Approve never entered approving state")
+	}
+
+	// Commit to deny (mirrors the 'd' key handler in lifecycle.go), then type
+	// a reason and confirm.
+	tui.mu.Lock()
+	ao, ok := tui.activeOverlay.(*approvalOverlay)
+	if !ok {
+		tui.mu.Unlock()
+		t.Fatal("expected an approvalOverlay active")
+	}
+	ao.beginDenyReason()
+	tui.mu.Unlock()
+
+	for _, r := range "too risky" {
+		tui.feedDenyReasonKey(Key{Kind: KeyRune, Rune: r})
+	}
+	tui.feedDenyReasonKey(Key{Kind: KeyEnter})
+
+	select {
+	case got := <-result:
+		if got.allowed {
+			t.Fatal("expected deny")
+		}
+		if got.reason != "too risky" {
+			t.Fatalf("reason = %q, want %q", got.reason, "too risky")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Approve timed out")
+	}
+}
+
+// TestApproveEndToEndDenyEmptyReason verifies leaving the reason blank and
+// pressing Enter denies with an empty reason — the "optional" part.
+func TestApproveEndToEndDenyEmptyReason(t *testing.T) {
+	tui := newTestTUIHelper()
+	type outcome struct {
+		allowed bool
+		reason  string
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		result <- outcome{allowed, reason}
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for !tui.approving.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !tui.approving.Load() {
+		t.Fatal("Approve never entered approving state")
+	}
+
+	tui.mu.Lock()
+	ao, _ := tui.activeOverlay.(*approvalOverlay)
+	ao.beginDenyReason()
+	tui.mu.Unlock()
+
+	tui.feedDenyReasonKey(Key{Kind: KeyEnter}) // no reason typed
+
+	select {
+	case got := <-result:
+		if got.allowed {
+			t.Fatal("expected deny")
+		}
+		if got.reason != "" {
+			t.Fatalf("reason = %q, want empty", got.reason)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Approve timed out")
 	}
 }
 

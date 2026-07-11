@@ -44,7 +44,7 @@ func newTestStoreAndAgent(t *testing.T) (*store.Store, *agent.Agent, string) {
 	}
 	prov := provider.NewFakeProvider("ollama", []provider.Model{{ID: cfg.Ollama.Model, ContextWindow: 8192}})
 	reg := tools.NewRegistry()
-	a := agent.NewAgent(s, prov, reg, cfg, sessionID, make(chan agent.OutputEvent, 64), func(context.Context, string, string, string) bool { return false })
+	a := agent.NewAgent(s, prov, reg, cfg, sessionID, make(chan agent.OutputEvent, 64), func(context.Context, string, string, string) (bool, string) { return false, "" })
 	return s, a, sessionID
 }
 
@@ -401,7 +401,7 @@ func TestCmdCostEphemeralSession(t *testing.T) {
 	sessionID := store.NewSessionID()
 	cfg := config.DefaultConfig()
 	prov := provider.NewFakeProvider("ollama", []provider.Model{{ID: cfg.Ollama.Model, ContextWindow: 8192}})
-	a := agent.NewAgent(s, prov, tools.NewRegistry(), cfg, sessionID, make(chan agent.OutputEvent, 64), func(context.Context, string, string, string) bool { return false })
+	a := agent.NewAgent(s, prov, tools.NewRegistry(), cfg, sessionID, make(chan agent.OutputEvent, 64), func(context.Context, string, string, string) (bool, string) { return false, "" })
 	tui := newTUIWithAgent(a, sessionID)
 
 	cmdCost(cmdHost(tui))

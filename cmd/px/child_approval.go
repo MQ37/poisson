@@ -10,10 +10,17 @@ import (
 // Approval requests are queued FIFO; each waits indefinitely for a response.
 // The parent (which owns the human prompt) has no timeout, so neither do we;
 // stdin EOF or a killed process is the only way out.
+// approvalReply is a parent's answer to one approval_request: whether it was
+// allowed, and (when denied) an optional human-supplied reason.
+type approvalReply struct {
+	Approved bool
+	Reason   string
+}
+
 type childApprovalBroker struct {
 	mu       sync.Mutex
 	serialMu sync.Mutex
-	queue    []chan bool
+	queue    []chan approvalReply
 	started  bool
 
 	// onExpedite is invoked when the parent sends an "expedite" message. Set
@@ -25,11 +32,12 @@ type childApprovalBroker struct {
 // response. serialMu keeps a single approval outstanding, so the FIFO queue
 // never holds more than one waiter — otherwise concurrent bash approvals in a
 // turn could be paired with each other's responses.
-func (b *childApprovalBroker) emitAndWait(req map[string]interface{}) bool {
+func (b *childApprovalBroker) emitAndWait(req map[string]interface{}) (bool, string) {
 	b.serialMu.Lock()
 	defer b.serialMu.Unlock()
 	writeChildEvent(req)
-	return b.wait()
+	r := b.wait()
+	return r.Approved, r.Reason
 }
 
 func (b *childApprovalBroker) start() {
@@ -45,6 +53,7 @@ func (b *childApprovalBroker) start() {
 			var msg struct {
 				Type     string `json:"type"`
 				Approved bool   `json:"approved"`
+				Reason   string `json:"reason"`
 			}
 			if json.Unmarshal(scanner.Bytes(), &msg) != nil {
 				continue
@@ -66,7 +75,7 @@ func (b *childApprovalBroker) start() {
 			ch := b.queue[0]
 			b.queue = b.queue[1:]
 			b.mu.Unlock()
-			ch <- msg.Approved
+			ch <- approvalReply{Approved: msg.Approved, Reason: msg.Reason}
 		}
 		b.denyAllWaiters()
 	}()
@@ -77,7 +86,7 @@ func (b *childApprovalBroker) denyAllWaiters() {
 	defer b.mu.Unlock()
 	for _, ch := range b.queue {
 		select {
-		case ch <- false:
+		case ch <- approvalReply{}:
 		default:
 		}
 	}
@@ -86,9 +95,9 @@ func (b *childApprovalBroker) denyAllWaiters() {
 
 // wait blocks until the next approval_response is received for this request,
 // or the stdin reader hits EOF (parent gone) and denies all waiters.
-func (b *childApprovalBroker) wait() bool {
+func (b *childApprovalBroker) wait() approvalReply {
 	b.start()
-	respCh := make(chan bool, 1)
+	respCh := make(chan approvalReply, 1)
 	b.mu.Lock()
 	b.queue = append(b.queue, respCh)
 	b.mu.Unlock()

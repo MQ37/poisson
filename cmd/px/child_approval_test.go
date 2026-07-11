@@ -32,7 +32,7 @@ func TestChildApprovalBrokerSerializesConcurrent(t *testing.T) {
 	}
 	results := make(chan res, 2)
 	emit := func(id string) {
-		approved := broker.emitAndWait(map[string]interface{}{"type": "approval_request", "command": id})
+		approved, _ := broker.emitAndWait(map[string]interface{}{"type": "approval_request", "command": id})
 		results <- res{id, approved}
 	}
 	go emit("A")
@@ -98,8 +98,8 @@ func TestChildApprovalBrokerFIFO(t *testing.T) {
 	var broker childApprovalBroker
 	results := make(chan bool, 2)
 	go func() {
-		results <- broker.wait()
-		results <- broker.wait()
+		results <- broker.wait().Approved
+		results <- broker.wait().Approved
 	}()
 
 	waitForQueueLen := func(n int) {
@@ -145,7 +145,7 @@ func TestChildApprovalBrokerWaitsIndefinitely(t *testing.T) {
 	start := time.Now()
 	done := make(chan bool, 1)
 	go func() {
-		done <- broker.wait()
+		done <- broker.wait().Approved
 	}()
 
 	time.Sleep(150 * time.Millisecond)
@@ -182,7 +182,7 @@ func TestChildApprovalBrokerEOFAutoDeny(t *testing.T) {
 	var broker childApprovalBroker
 	done := make(chan bool, 1)
 	go func() {
-		done <- broker.wait()
+		done <- broker.wait().Approved
 	}()
 
 	time.Sleep(50 * time.Millisecond)
@@ -223,7 +223,7 @@ func TestChildApprovalBrokerDropsOrphanResponse(t *testing.T) {
 
 	done := make(chan bool, 1)
 	go func() {
-		done <- broker.wait()
+		done <- broker.wait().Approved
 	}()
 
 	time.Sleep(50 * time.Millisecond)
@@ -240,4 +240,53 @@ func TestChildApprovalBrokerDropsOrphanResponse(t *testing.T) {
 		t.Fatal("timeout")
 	}
 
+}
+
+// TestChildApprovalBrokerForwardsReason verifies a denial reason sent by the
+// parent reaches emitAndWait's caller alongside the approved flag.
+func TestChildApprovalBrokerForwardsReason(t *testing.T) {
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdin, oldStdout := os.Stdin, os.Stdout
+	os.Stdin, os.Stdout = inR, outW
+	t.Cleanup(func() { os.Stdin, os.Stdout = oldStdin, oldStdout })
+
+	var broker childApprovalBroker
+	type res struct {
+		approved bool
+		reason   string
+	}
+	results := make(chan res, 1)
+	go func() {
+		approved, reason := broker.emitAndWait(map[string]interface{}{"type": "approval_request", "command": "x"})
+		results <- res{approved, reason}
+	}()
+
+	scanner := bufio.NewScanner(outR)
+	if !scanner.Scan() {
+		t.Fatal("no request emitted")
+	}
+
+	data, _ := json.Marshal(map[string]interface{}{
+		"type":     "approval_response",
+		"approved": false,
+		"reason":   "not right now",
+	})
+	if _, err := inW.Write(append(data, '\n')); err != nil {
+		t.Fatalf("write response: %v", err)
+	}
+
+	r := <-results
+	if r.approved {
+		t.Fatal("expected denial")
+	}
+	if r.reason != "not right now" {
+		t.Fatalf("reason = %q, want %q", r.reason, "not right now")
+	}
 }

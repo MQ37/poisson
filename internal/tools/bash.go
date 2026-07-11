@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -14,13 +15,13 @@ import (
 type BashTool struct {
 	cwd        string
 	sandbox    bool
-	approvalFn func(ctx context.Context, command, description, workdir string) bool
+	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)
 }
 
 // NewBashTool creates a bash tool. The approval function is called when a
 // command is not auto-safe and not in sandbox mode; if it returns false the
 // command is denied. Pass nil to auto-deny all unsafe commands.
-func NewBashTool(cwd string, sandbox bool, approvalFn func(ctx context.Context, command, description, workdir string) bool) *BashTool {
+func NewBashTool(cwd string, sandbox bool, approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)) *BashTool {
 	return &BashTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
 }
 
@@ -83,12 +84,16 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		if purpose == "" {
 			purpose = "(no description provided)"
 		}
-		approved := false
+		approved, reason := false, ""
 		if t.approvalFn != nil {
-			approved = t.approvalFn(ctx, in.Command, purpose, dir)
+			approved, reason = t.approvalFn(ctx, in.Command, purpose, dir)
 		}
 		if !approved {
-			return ToolResult{Error: "command denied"}, nil
+			msg := "command rejected by user"
+			if reason = strings.TrimSpace(reason); reason != "" {
+				msg += " - reason: " + reason
+			}
+			return ToolResult{Error: msg}, nil
 		}
 	}
 

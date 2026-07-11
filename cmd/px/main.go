@@ -193,10 +193,10 @@ func runPrint(opts printOpts) {
 
 	yolo := opts.yolo
 	var agentRef *agent.Agent
-	humanApproval := func(command, description, workdir string, risk agent.BashRisk) bool {
-		return yolo // headless: only --yolo approves escalated commands
+	humanApproval := func(command, description, workdir string, risk agent.BashRisk) (bool, string) {
+		return yolo, "" // headless: only --yolo approves escalated commands
 	}
-	approvalFn := func(ctx context.Context, command, description, workdir string) bool {
+	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
 		if agentRef != nil {
 			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(ctx, command, description, workdir)
 		}
@@ -283,20 +283,20 @@ func runREPL(noSkills bool) {
 	// terminal runs raw with a nonblocking Ctrl+C poller otherwise.
 	var approveUI tui.Approver
 	var agentRef *agent.Agent
-	humanApproval := func(command, description, workdir string, risk agent.BashRisk) bool {
+	humanApproval := func(command, description, workdir string, risk agent.BashRisk) (bool, string) {
 		if approveUI != nil {
 			return approveUI.Approve(command, description, workdir, risk)
 		}
-		return false
+		return false, ""
 	}
-	approvalFn := func(ctx context.Context, command, description, workdir string) bool {
+	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
 		if agentRef != nil {
 			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(ctx, command, description, workdir)
 		}
 		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
 
-	subApprovalFn := func(command, description, workdir, agentName, risk string) bool {
+	subApprovalFn := func(command, description, workdir, agentName, risk string) (bool, string) {
 		_ = agentName // overlay uses command context; name available for future UI
 		return humanApproval(command, description, workdir, agent.ParseBashRisk(risk))
 	}
@@ -600,9 +600,9 @@ func runChildMode() {
 	var approvalBroker childApprovalBroker
 
 	var childAgentRef *agent.Agent
-	humanChildApproval := func(command, description, workdir string, risk agent.BashRisk) bool {
+	humanChildApproval := func(command, description, workdir string, risk agent.BashRisk) (bool, string) {
 		if sandbox {
-			return true
+			return true, ""
 		}
 		return approvalBroker.emitAndWait(map[string]interface{}{
 			"type":        "approval_request",
@@ -613,9 +613,9 @@ func runChildMode() {
 			"agent":       os.Getenv("POISSON_SUBAGENT_NAME"),
 		})
 	}
-	approvalFn := func(ctx context.Context, command, description, workdir string) bool {
+	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
 		if sandbox {
-			return true
+			return true, ""
 		}
 		if childAgentRef != nil {
 			return agent.WrapRiskGatedApproval(childAgentRef, humanChildApproval)(ctx, command, description, workdir)

@@ -2,6 +2,14 @@ package tui
 
 import "strings"
 
+// approvalReply is the user's answer to a pending bash approval: whether it
+// was allowed, and (when denied) an optional human-supplied reason forwarded
+// to the model so it understands why, not just that.
+type approvalReply struct {
+	Allowed bool
+	Reason  string
+}
+
 // approvalOverlay replaces the input region while the user approves a bash command.
 // Long commands scroll with ↑/↓ inside the panel.
 type approvalOverlay struct {
@@ -10,6 +18,13 @@ type approvalOverlay struct {
 	workdir     string
 	risk        string // "pending", "low", "medium", "high", "failed"
 	scroll      int
+
+	// denying is set once the user has committed to denying (d/n/Esc) but
+	// hasn't confirmed yet: the panel switches to collecting an optional
+	// reason, and reason accumulates what they type until Enter/Esc finalizes
+	// the denial (or Ctrl+C sends it immediately with reason left empty).
+	denying bool
+	reason  string
 }
 
 func newApprovalOverlay(command, description, workdir string) *approvalOverlay {
@@ -19,6 +34,11 @@ func newApprovalOverlay(command, description, workdir string) *approvalOverlay {
 		workdir:     workdir,
 		risk:        "pending",
 	}
+}
+
+// beginDenyReason switches the panel into reason-collection mode.
+func (o *approvalOverlay) beginDenyReason() {
+	o.denying = true
 }
 
 func (o *approvalOverlay) setRisk(risk string) {
@@ -78,6 +98,57 @@ func approvalPurposeLines(description string, inner int) []string {
 	return lines
 }
 
+// renderDenyReasonPanel paints the optional-reason prompt shown after the
+// user commits to denying (d/n/Esc), replacing the normal approval panel.
+func (o *approvalOverlay) renderDenyReasonPanel(panelRows, cols int) []string {
+	if panelRows < 3 {
+		panelRows = 3
+	}
+	if cols < 12 {
+		cols = 12
+	}
+	bg := approvalPanelBG()
+	mk := func(content string) string { return fillWidthBG(bg, content, cols) }
+	blank := mk("")
+
+	title := mk(fgYellow + bold + "Command denied — reason (optional)" + reset)
+	footer := mk(dim + "[Enter] send · [Ctrl+C] send without reason" + reset)
+
+	oneLine := strings.ReplaceAll(strings.TrimSpace(o.command), "\n", " ")
+	cmdSummary := mk(dim + "Command: " + reset + truncatePlain(oneLine, cols-12))
+
+	label := "Reason: "
+	avail := cols - len([]rune(label)) - 3 // "  " indent + trailing cursor glyph
+	if avail < 4 {
+		avail = 4
+	}
+	shown := o.reason
+	if rw := []rune(shown); len(rw) > avail {
+		// Keep the tail visible while typing long text.
+		shown = string(rw[len(rw)-avail:])
+	}
+	inputLine := mk("  " + label + shown + reset + fgYellow + "█" + reset)
+
+	out := make([]string, panelRows)
+	out[0] = title
+	out[panelRows-1] = footer
+	idx := 1
+	out[idx] = cmdSummary
+	idx++
+	if idx < panelRows-1 {
+		out[idx] = blank
+		idx++
+	}
+	if idx < panelRows-1 {
+		out[idx] = inputLine
+		idx++
+	}
+	for i := idx; i < panelRows-1; i++ {
+		out[i] = blank
+	}
+	return out
+}
+
 // renderInputPanel paints the approval UI into the bottom input region. Each
 // line is a full-width opaque background band (panelRows lines total).
 func (o *approvalOverlay) renderInputPanel(panelRows, cols int) []string {
@@ -86,6 +157,9 @@ func (o *approvalOverlay) renderInputPanel(panelRows, cols int) []string {
 	}
 	if cols < 12 {
 		cols = 12
+	}
+	if o.denying {
+		return o.renderDenyReasonPanel(panelRows, cols)
 	}
 	bg := approvalPanelBG()
 	mk := func(content string) string { return fillWidthBG(bg, content, cols) }

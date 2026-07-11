@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func alwaysApproveSubagent(_, _, _, _, _ string) bool { return true }
+func alwaysApproveSubagent(_, _, _, _, _ string) (bool, string) { return true, "" }
 
 // A subagent must always run the same provider + model as the main session —
 // never a silent fallback to some other hardcoded model, which would change

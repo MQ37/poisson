@@ -22,7 +22,8 @@ func removeDBFiles(path string) {
 
 // SubagentApproval handles bash approval requests forwarded from the child.
 // risk is the child's assessed level (low/medium/high); empty means unknown.
-type SubagentApproval func(command, description, workdir, agentName, risk string) bool
+// reason is an optional human-supplied explanation when denied.
+type SubagentApproval func(command, description, workdir, agentName, risk string) (allowed bool, reason string)
 
 // SubagentTool spawns a one-shot child Poisson process for isolated work. The
 // child's conversation is ephemeral (a throwaway temp DB) and its internal
@@ -242,11 +243,11 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 				if ctx.Err() != nil {
 					goto done
 				}
-				approved := false
+				approved, reason := false, ""
 				if t.approvalFn != nil {
-					approved = t.approvalFn(ev.Command, ev.Description, ev.Cwd, ev.Agent, ev.Risk)
+					approved, reason = t.approvalFn(ev.Command, ev.Description, ev.Cwd, ev.Agent, ev.Risk)
 				}
-				if err := child.SendApprovalSafe(approved); err != nil {
+				if err := child.SendApprovalSafe(approved, reason); err != nil {
 					childErr = "approval response failed: " + err.Error()
 					goto done
 				}

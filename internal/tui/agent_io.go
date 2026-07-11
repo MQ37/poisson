@@ -249,7 +249,7 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 // Approve renders an approval prompt for a dangerous bash command and waits
 // for the user's answer. When risk is already known, the overlay shows it
 // immediately without a second LLM call.
-func (t *TUI) Approve(command, description, workdir string, risk agent.BashRisk) bool {
+func (t *TUI) Approve(command, description, workdir string, risk agent.BashRisk) (bool, string) {
 	t.approvalMu.Lock()
 	defer t.approvalMu.Unlock()
 
@@ -302,17 +302,17 @@ drained:
 		cancelCh = runCtx.Done()
 	}
 
-	var allowed bool
+	var reply approvalReply
 	select {
-	case allowed = <-t.approvalAnswer:
+	case reply = <-t.approvalAnswer:
 	case <-t.done:
 		t.mu.Lock()
 		t.activeOverlay = nil
 		t.lastOverlayLines = 0
 		t.mu.Unlock()
-		return false
+		return false, ""
 	case <-cancelCh:
-		allowed = false
+		reply = approvalReply{Allowed: false}
 	}
 
 	t.mu.Lock()
@@ -320,7 +320,7 @@ drained:
 	t.lastOverlayLines = 0
 	t.markScrollDirty()
 	t.mu.Unlock()
-	return allowed
+	return reply.Allowed, reply.Reason
 }
 
 func bashRiskLabel(risk agent.BashRisk) string {

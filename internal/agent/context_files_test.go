@@ -51,7 +51,7 @@ func newCtxAgent(t *testing.T, cwd string, st *store.Store, sid string, resp [][
 	prov.SetResponses(resp)
 	reg := tools.NewRegistry()
 	reg.Register(tools.NewReadTool(cwd))
-	a := NewAgent(st, prov, reg, cfg, sid, make(chan OutputEvent, 256), func(context.Context, string, string, string) bool { return true })
+	a := NewAgent(st, prov, reg, cfg, sid, make(chan OutputEvent, 256), func(context.Context, string, string, string) (bool, string) { return true, "" })
 	a.SetModel(cfg.Ollama.Model)
 	return a
 }

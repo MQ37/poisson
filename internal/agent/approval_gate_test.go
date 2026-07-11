@@ -20,12 +20,13 @@ func TestWrapRiskGatedApprovalAutoLow(t *testing.T) {
 	a.SetModel("m")
 
 	asked := false
-	approve := WrapRiskGatedApproval(a, func(_, _, _ string, _ BashRisk) bool {
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, _ BashRisk) (bool, string) {
 		asked = true
-		return false
+		return false, ""
 	})
 
-	if !approve(context.Background(), "gh run list --limit 5", "list runs", "/tmp") {
+	allowed, _ := approve(context.Background(), "gh run list --limit 5", "list runs", "/tmp")
+	if !allowed {
 		t.Fatal("expected auto-allow for low risk")
 	}
 	if asked {
@@ -46,12 +47,13 @@ func TestWrapRiskGatedApprovalRequiresHumanForHigh(t *testing.T) {
 	a.SetModel("m")
 
 	var gotRisk BashRisk
-	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) bool {
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) (bool, string) {
 		gotRisk = risk
-		return true
+		return true, ""
 	})
 
-	if !approve(context.Background(), "rm -rf x", "delete", "/tmp") {
+	allowed, _ := approve(context.Background(), "rm -rf x", "delete", "/tmp")
+	if !allowed {
 		t.Fatal("expected human allow")
 	}
 	if gotRisk != BashRiskHigh {
@@ -72,15 +74,15 @@ func TestWrapRiskGatedApprovalRequiresHumanWhenLLMFails(t *testing.T) {
 	a.SetModel("m")
 
 	asked := false
-	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) bool {
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) (bool, string) {
 		asked = true
 		if risk == BashRiskLow {
 			t.Fatalf("risk = low, want non-low fallback")
 		}
-		return false
+		return false, ""
 	})
 
-	_ = approve(context.Background(), "make install", "build", "/tmp")
+	_, _ = approve(context.Background(), "make install", "build", "/tmp")
 	if !asked {
 		t.Fatal("expected human prompt for non-low risk")
 	}
@@ -88,14 +90,15 @@ func TestWrapRiskGatedApprovalRequiresHumanWhenLLMFails(t *testing.T) {
 
 func TestWrapRiskGatedApprovalNilAgent(t *testing.T) {
 	asked := false
-	approve := WrapRiskGatedApproval(nil, func(_, _, _ string, risk BashRisk) bool {
+	approve := WrapRiskGatedApproval(nil, func(_, _, _ string, risk BashRisk) (bool, string) {
 		asked = true
 		if risk != BashRiskUnknown {
 			t.Fatalf("risk = %q, want unknown", risk)
 		}
-		return true
+		return true, ""
 	})
-	if !approve(context.Background(), "rm -rf /", "x", "/") {
+	allowed, _ := approve(context.Background(), "rm -rf /", "x", "/")
+	if !allowed {
 		t.Fatal("expected ask to allow")
 	}
 	if !asked {
@@ -116,16 +119,30 @@ func TestWrapRiskGatedApprovalMediumNotAuto(t *testing.T) {
 	a.SetModel("m")
 
 	asked := false
-	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) bool {
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) (bool, string) {
 		asked = true
 		if risk != BashRiskMedium {
 			t.Fatalf("risk = %q, want medium", risk)
 		}
-		return false
+		return false, ""
 	})
-	_ = approve(context.Background(), "npm install x", "add pkg", "/tmp")
+	_, _ = approve(context.Background(), "npm install x", "add pkg", "/tmp")
 	if !asked {
 		t.Fatal("medium must not auto-allow")
 	}
 }
 
+// TestWrapRiskGatedApprovalForwardsReason verifies a human's denial reason
+// passes straight through the risk gate unmodified.
+func TestWrapRiskGatedApprovalForwardsReason(t *testing.T) {
+	approve := WrapRiskGatedApproval(nil, func(_, _, _ string, _ BashRisk) (bool, string) {
+		return false, "not now, finish the tests first"
+	})
+	allowed, reason := approve(context.Background(), "rm -rf /", "x", "/")
+	if allowed {
+		t.Fatal("expected deny")
+	}
+	if reason != "not now, finish the tests first" {
+		t.Fatalf("reason = %q, want it forwarded unmodified", reason)
+	}
+}
