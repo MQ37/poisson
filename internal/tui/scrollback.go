@@ -32,12 +32,19 @@ type StyledLine struct {
 // scrollback is an append-only ring of document blocks. Blocks are laid out
 // to screen rows lazily with per-block caching.
 type scrollback struct {
-	blocks              []Block
-	maxLines            int // max logical blocks (name kept for compat)
-	scrollOffset        int // screen rows scrolled up from bottom; 0 = live tail
-	totalAdded          int
-	nextID              int64
-	focusedToolID       int64 // expanded tool card receiving ↑↓ scroll
+	blocks        []Block
+	maxLines      int // max logical blocks (name kept for compat)
+	scrollOffset  int // screen rows scrolled up from bottom; 0 = live tail
+	totalAdded    int
+	nextID        int64
+	focusedToolID int64 // expanded tool card receiving ↑↓ scroll
+
+	// lastWidth/lastRowCount cache the wrapped row count as of the last time
+	// clampScrollOffset ran (every paint), so compensateGrowth can tell freshly
+	// streamed-in tail growth apart from a width change (resize re-wraps
+	// everything and legitimately changes the count for unrelated reasons).
+	lastWidth    int
+	lastRowCount int
 }
 
 func newScrollback(max int) *scrollback {
@@ -251,11 +258,29 @@ func (s *scrollback) layoutAll(width int) ([]ScreenRow, []int) {
 	return out, cumulative
 }
 
+// compensateGrowth keeps the viewport pinned to the same absolute content
+// while the user is scrolled up and new rows stream in at the tail.
+// scrollOffset means "rows from the bottom", but the bottom keeps moving as
+// the assistant streams — left alone, that silently drags a scrolled-up
+// view down to a new slice of content on every single streamed line, even
+// though the user never touched a scroll key. Only applied when width
+// matches the last check: a resize re-wraps everything and legitimately
+// changes the row count for unrelated reasons, and the clamp below already
+// keeps a stale offset in range in that case.
+func (s *scrollback) compensateGrowth(width, rowCount int) {
+	if s.scrollOffset > 0 && width == s.lastWidth && rowCount > s.lastRowCount {
+		s.scrollOffset += rowCount - s.lastRowCount
+	}
+	s.lastWidth = width
+	s.lastRowCount = rowCount
+}
+
 func (s *scrollback) clampScrollOffset(height, width int) {
 	if height < 1 {
 		height = 1
 	}
 	wrapped, _ := s.layoutAll(width)
+	s.compensateGrowth(width, len(wrapped))
 	max := len(wrapped) - height
 	if max < 0 {
 		max = 0
