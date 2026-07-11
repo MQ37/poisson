@@ -133,6 +133,70 @@ func TestQueue_DrainSendsCombinedTurn(t *testing.T) {
 	}
 }
 
+// TestQueue_DrainMatchesResume is a regression test: a drained queue of
+// several messages must render identically live and on resume — one bubble,
+// not one per originally-queued message (they're already sent and stored as
+// a single combined turn; hydrate.go always reconstructs one stored user row
+// as one bubble, so live must match that instead of showing N).
+func TestQueue_DrainMatchesResume(t *testing.T) {
+	e := newTUIIntegEnv(t, [][]provider.StreamEvent{
+		{{Type: provider.EventTextDelta, Text: "done"}, {Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 5, OutputTokens: 2}}},
+	})
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case ev := <-e.tui.output:
+				e.tui.mu.Lock()
+				e.tui.handleEvent(ev)
+				e.tui.markAfterEvent(ev)
+				e.tui.mu.Unlock()
+			}
+		}
+	}()
+	defer close(stop)
+
+	e.tui.mu.Lock()
+	e.tui.queued = []string{"first task", "second task"}
+	e.tui.drainQueueLocked()
+	liveUserBlocks := 0
+	for _, b := range e.tui.scroll.blocks {
+		if b.kind == blockUser {
+			liveUserBlocks++
+		}
+	}
+	e.tui.mu.Unlock()
+
+	waitUntil(t, func() bool {
+		e.tui.mu.Lock()
+		defer e.tui.mu.Unlock()
+		return !e.tui.status.Thinking
+	})
+
+	e.tui.mu.Lock()
+	e.tui.resetSessionViewLocked()
+	resumedUserBlocks := 0
+	for _, b := range e.tui.scroll.blocks {
+		if b.kind == blockUser {
+			resumedUserBlocks++
+		}
+	}
+	e.tui.mu.Unlock()
+
+	if liveUserBlocks != resumedUserBlocks {
+		t.Errorf("live shows %d user bubble(s), resume shows %d — must match", liveUserBlocks, resumedUserBlocks)
+	}
+	if liveUserBlocks != 1 {
+		t.Errorf("drained queue rendered as %d bubbles, want exactly 1 (one combined turn)", liveUserBlocks)
+	}
+	st := e.scrollText()
+	if !strings.Contains(st, "first task") || !strings.Contains(st, "second task") {
+		t.Errorf("queued messages missing from resumed scrollback: %q", st)
+	}
+}
+
 // TestQueue_CancelClearsQueue: Ctrl+C abandons queued messages.
 func TestQueue_CancelClearsQueue(t *testing.T) {
 	e := newTUIIntegEnv(t, nil)

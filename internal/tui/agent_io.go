@@ -155,6 +155,13 @@ func (t *TUI) enqueueLocked(text string) {
 // drainQueueLocked appends every queued message to the conversation and starts
 // one combined follow-up turn. No-op if the queue is empty or a compaction is
 // running. Caller must hold t.mu.
+//
+// Queued messages are rendered as ONE bubble, not one per queued message: they
+// are already sent (and stored) as a single combined turn, and hydrate.go
+// always reconstructs one stored user row as one bubble on resume. Showing N
+// separate live bubbles for what resume always shows as one would make live
+// and resume disagree — simpler and more consistent to treat "queued together,
+// sent at once" as the single message it actually becomes.
 func (t *TUI) drainQueueLocked() {
 	if len(t.queued) == 0 {
 		return
@@ -166,6 +173,7 @@ func (t *TUI) drainQueueLocked() {
 	msgs := t.queued
 	t.queued = nil
 	var combined []agent.TextSegment
+	display := make([]string, 0, len(msgs))
 	for i, m := range msgs {
 		segs, err := expandAtFilesSegments(m)
 		if err != nil {
@@ -175,9 +183,10 @@ func (t *TUI) drainQueueLocked() {
 			combined = append(combined, agent.TextSegment{Text: "\n\n"})
 		}
 		combined = append(combined, segs...)
-		t.scroll.append(StyledLine{Style: styleUser, Text: m})
-		t.appendFileRefCardsLocked(segs)
+		display = append(display, m)
 	}
+	t.scroll.append(StyledLine{Style: styleUser, Text: strings.Join(display, "\n\n")})
+	t.appendFileRefCardsLocked(combined)
 	t.scroll.scrollToBottom()
 	t.startTurn(combined)
 }
