@@ -175,6 +175,18 @@ func TestBuildSystemPromptNoContext(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptAlwaysIncludesCavemanStyle(t *testing.T) {
+	// No config option gates this — it's always on, checked with the minimal
+	// options a caller could pass (no tools, no context, no skills).
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "respond terse, like smart caveman") {
+		t.Error("missing always-on caveman communication style")
+	}
+	if !strings.Contains(prompt, "Write normal (no compression) for: security warnings") {
+		t.Error("missing safety/boundary exception (security warnings must not be compressed)")
+	}
+}
+
 func TestBuildSystemPromptWithSkills(t *testing.T) {
 	opts := BuildSystemPromptOptions{
 		Cwd:        "/test",

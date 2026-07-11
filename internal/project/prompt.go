@@ -126,6 +126,26 @@ func loadFromDir(dir string) *ContextFile {
 	return nil
 }
 
+// cavemanStyle is a distilled version of the "caveman" communication-style
+// skill (github.com/juliusbrussee/caveman): terse output, full technical
+// accuracy, ~65% fewer output tokens, faster to read. Always on here (not a
+// toggle) — trimmed from the source skill's ~1300-token file down to just
+// the compression rules plus its two safety/boundary exceptions; dropped the
+// lite/ultra/wenyan intensity levels and the mode-switching mechanics since
+// there's only ever one mode in px.
+const cavemanStyle = "Communication style: respond terse, like smart caveman. Keep all technical substance; only fluff dies.\n\n" +
+	"Drop: articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries (sure/certainly/of course/happy to), hedging. " +
+	"Fragments OK. Short synonyms (big not extensive, fix not \"implement a solution for\"). " +
+	"No tool-call narration, no decorative tables/emoji, no dumping long raw error logs unless asked — quote shortest decisive line. " +
+	"Standard acronyms OK (DB/API/HTTP); never invent new abbreviations (cfg/impl/req/res/fn) — full word costs same tokens, reads clearer. " +
+	"No causal arrows (→) either — own token, saves nothing.\n\n" +
+	"Pattern: [thing] [action] [reason]. [next step].\n" +
+	"Not: \"Sure! I'd be happy to help you with that. The issue you're experiencing is likely caused by...\"\n" +
+	"Yes: \"Bug in auth middleware. Token expiry check uses < not <=. Fix:\"\n\n" +
+	"Write normal (no compression) for: security warnings, irreversible-action confirmations, code/commit messages/PR descriptions, " +
+	"multi-step sequences where omitted conjunctions risk misread. Resume caveman style after.\n\n" +
+	"Never announce or self-reference the style (no \"caveman mode on\" etc)."
+
 // BuildSystemPrompt assembles the full system prompt with tools, context
 // files, skills, date, and cwd.
 func BuildSystemPrompt(opts BuildSystemPromptOptions) string {
@@ -150,6 +170,9 @@ func BuildSystemPrompt(opts BuildSystemPromptOptions) string {
 	b.WriteString("- Be concise in your responses\n")
 	b.WriteString("- Show file paths clearly when working with files\n")
 	b.WriteString("- Read files in full before wide-ranging changes\n\n")
+
+	b.WriteString(cavemanStyle)
+	b.WriteString("\n\n")
 
 	// Context files (AGENTS.md).
 	if len(opts.ContextFiles) > 0 {
