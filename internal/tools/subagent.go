@@ -130,18 +130,24 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		agentName = "subagent"
 	}
 
+	// A subagent must always run the same provider + model as the main
+	// session — never a silent fallback to some other model, which would
+	// change cost/behavior/quality without the user ever choosing it. If the
+	// resolvers aren't wired or the main session can't report a provider/model
+	// right now, that's a real configuration problem: fail loudly instead of
+	// guessing.
+	if t.providerFn == nil || t.modelFn == nil {
+		return ToolResult{Error: "subagent runtime not configured: provider/model resolver missing"}, nil
+	}
+	prov := t.providerFn()
+	if prov == "" {
+		return ToolResult{Error: "subagent cannot start: main session reported no provider"}, nil
+	}
+	model := t.modelFn()
+	if model == "" {
+		return ToolResult{Error: "subagent cannot start: main session reported no model"}, nil
+	}
 	childSessionID := store.NewSubagentID()
-	prov, model := "ollama", "glm-5.2:cloud"
-	if t.providerFn != nil {
-		if p := t.providerFn(); p != "" {
-			prov = p
-		}
-	}
-	if t.modelFn != nil {
-		if m := t.modelFn(); m != "" {
-			model = m
-		}
-	}
 	effort := ""
 	if t.effortFn != nil {
 		effort = t.effortFn()
