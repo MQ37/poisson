@@ -152,7 +152,7 @@ func (a *Agent) ContextWindow() int {
 	model := a.currentModel()
 	provID := a.provider.ID()
 
-	if s, ok := provider.GetModelSettings(provID, model); ok {
+	if s, ok := provider.MergedModelSettings(a.config, provID, model); ok {
 		if s.ContextWindow > 0 {
 			return s.ContextWindow
 		}

@@ -66,6 +66,22 @@ type TUIConfig struct {
 	ShowCost   bool
 }
 
+// ModelOverride holds user-declared metadata for one provider/model pair,
+// from [models.<provider>.<model>] in config.toml. It layers on top of (or,
+// for a model the code has never heard of, entirely replaces) the built-in
+// registry in provider.KnownModels — see provider.MergedModelSettings.
+//
+// Every field's zero value means "not set here" and falls back to the
+// built-in default: ContextWindow 0, EffortLevels nil. Vision and
+// AdaptiveThinking are pointers for the same reason a plain bool can't tell
+// "the user wrote false" apart from "the user didn't mention this field".
+type ModelOverride struct {
+	ContextWindow    int
+	EffortLevels     []string // empty (non-nil) slice explicitly means "no effort support"
+	Vision           *bool
+	AdaptiveThinking *bool
+}
+
 // DefaultEffort is the reasoning effort applied when the user hasn't chosen one,
 // so a level is always shown in the status bar.
 const DefaultEffort = "medium"
@@ -86,6 +102,8 @@ type Config struct {
 	Effort     string // reasoning effort: low | medium | high | xhigh | max
 	// Pricing is keyed [provider][model] → Pricing.
 	Pricing map[string]map[string]Pricing
+	// ModelOverrides is keyed [provider][model] → ModelOverride.
+	ModelOverrides map[string]map[string]ModelOverride
 }
 
 // defaultConfig returns a Config populated with all built-in defaults.
@@ -150,6 +168,7 @@ func defaultConfig() *Config {
 				"*": {},
 			},
 		},
+		ModelOverrides: map[string]map[string]ModelOverride{},
 	}
 }
 
@@ -221,6 +240,23 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # [pricing.ollama."kimi-k2.7-code:cloud"]
 # input = 0
 # output = 0
+
+# Model metadata — context window, supported reasoning-effort levels, vision,
+# adaptive thinking. Teaches Poisson about a model the code doesn't know
+# about (an unlisted model still works without this, just with a generic
+# fallback context window and no effort/vision/adaptive-thinking support),
+# or overrides a built-in entry. Every field optional; omitted ones keep
+# whatever the built-in registry already has for that model. Quote model
+# names containing '.' or ':' the same as in [pricing.*] above.
+# [models.anthropic."claude-opus-4-9"]
+# context_window = 1000000
+# effort_levels = ["low", "medium", "high", "xhigh", "max"]
+# vision = true
+# adaptive_thinking = true
+# [models.ollama."qwen3-coder:cloud"]
+# context_window = 262144
+# effort_levels = ["high", "max"]
+# vision = false
 `
 
 // ConfigDir returns the path to ~/.poisson/, creating it (mode 0700) if missing.
@@ -481,6 +517,61 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 		}
 	}
 
+	// Model metadata overrides: [models.<provider>.<model>] → context_window,
+	// effort_levels, vision, adaptive_thinking. Teaches Poisson about a model
+	// unlisted in provider.KnownModels, or overrides one that is listed.
+	if md, ok := m["models"]; ok {
+		mdMap, ok := md.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("models: expected table")
+		}
+		for provider, pval := range mdMap {
+			pmap, ok := pval.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("models.%s: expected table", provider)
+			}
+			if cfg.ModelOverrides[provider] == nil {
+				cfg.ModelOverrides[provider] = map[string]ModelOverride{}
+			}
+			for model, mval := range pmap {
+				mmap, ok := mval.(map[string]interface{})
+				if !ok {
+					return nil, fmt.Errorf("models.%s.%s: expected table", provider, model)
+				}
+				mo := cfg.ModelOverrides[provider][model] // start from existing override if any
+				if v, ok := mmap["context_window"]; ok {
+					f, err := asFloat(v)
+					if err != nil {
+						return nil, fmt.Errorf("models.%s.%s.context_window: %w", provider, model, err)
+					}
+					mo.ContextWindow = int(f)
+				}
+				if v, ok := mmap["effort_levels"]; ok {
+					levels, err := asStringArray(v)
+					if err != nil {
+						return nil, fmt.Errorf("models.%s.%s.effort_levels: %w", provider, model, err)
+					}
+					mo.EffortLevels = levels
+				}
+				if v, ok := mmap["vision"]; ok {
+					b, err := asBool(v)
+					if err != nil {
+						return nil, fmt.Errorf("models.%s.%s.vision: %w", provider, model, err)
+					}
+					mo.Vision = &b
+				}
+				if v, ok := mmap["adaptive_thinking"]; ok {
+					b, err := asBool(v)
+					if err != nil {
+						return nil, fmt.Errorf("models.%s.%s.adaptive_thinking: %w", provider, model, err)
+					}
+					mo.AdaptiveThinking = &b
+				}
+				cfg.ModelOverrides[provider][model] = mo
+			}
+		}
+	}
+
 	return cfg, nil
 }
 
@@ -571,6 +662,24 @@ func asIntArray(v interface{}) ([]int, error) {
 			return nil, fmt.Errorf("expected int in array, got %T", e)
 		}
 		out[i] = n
+	}
+	return out, nil
+}
+
+// asStringArray returns a non-nil (possibly empty) []string, distinguishing
+// "key present, empty array" from "key absent" for ModelOverride.EffortLevels.
+func asStringArray(v interface{}) ([]string, error) {
+	arr, ok := v.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("expected array, got %T", v)
+	}
+	out := make([]string, len(arr))
+	for i, e := range arr {
+		s, ok := e.(string)
+		if !ok {
+			return nil, fmt.Errorf("expected string in array, got %T", e)
+		}
+		out[i] = s
 	}
 	return out, nil
 }

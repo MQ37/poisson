@@ -3,6 +3,8 @@ package provider
 import (
 	"sort"
 	"strings"
+
+	"poisson/internal/config"
 )
 
 // ModelSettings holds per-model configuration that providers use to build
@@ -73,17 +75,59 @@ var KnownModels = map[string]ModelSettings{
 	},
 }
 
-// GetModelSettings looks up model metadata by provider/model ID.
+// GetModelSettings looks up model metadata by provider/model ID in the
+// built-in registry only. Most callers want MergedModelSettings instead,
+// which also applies config.toml's [models.*] overrides.
 func GetModelSettings(providerID, modelID string) (ModelSettings, bool) {
 	s, ok := KnownModels[providerID+"/"+modelID]
 	return s, ok
+}
+
+// MergedModelSettings returns ModelSettings for providerID/modelID, starting
+// from the built-in KnownModels entry (if any) and layering cfg's
+// [models.<provider>.<model>] override on top. A model unlisted in
+// KnownModels but present in the override still returns ok=true — this is
+// how config.toml teaches Poisson about a model the code has never heard of.
+// ok=false only when neither source has an entry.
+func MergedModelSettings(cfg *config.Config, providerID, modelID string) (ModelSettings, bool) {
+	base, known := GetModelSettings(providerID, modelID)
+	override, hasOverride := modelOverride(cfg, providerID, modelID)
+	if !known && !hasOverride {
+		return ModelSettings{}, false
+	}
+	if !hasOverride {
+		return base, true
+	}
+	if override.ContextWindow > 0 {
+		base.ContextWindow = override.ContextWindow
+	}
+	if override.EffortLevels != nil {
+		base.EffortLevels = override.EffortLevels
+		base.SupportsEffort = len(override.EffortLevels) > 0
+	}
+	if override.Vision != nil {
+		base.Vision = *override.Vision
+	}
+	if override.AdaptiveThinking != nil {
+		base.AdaptiveThinking = *override.AdaptiveThinking
+	}
+	return base, true
+}
+
+func modelOverride(cfg *config.Config, providerID, modelID string) (config.ModelOverride, bool) {
+	if cfg == nil {
+		return config.ModelOverride{}, false
+	}
+	mo, ok := cfg.ModelOverrides[providerID][modelID]
+	return mo, ok
 }
 
 // CuratedModels returns the KnownModels entries for a provider as Model values,
 // sorted by ID. This is the curated menu the model picker shows — the source of
 // truth for which models are offered, independent of whatever a provider's live
 // listing (e.g. Ollama's /api/tags) happens to report. Empty when the provider
-// has no curated entries.
+// has no curated entries. Most callers want MergedCuratedModels instead, which
+// also surfaces config.toml-only models.
 func CuratedModels(providerID string) []Model {
 	prefix := providerID + "/"
 	var out []Model
@@ -93,6 +137,32 @@ func CuratedModels(providerID string) []Model {
 			continue
 		}
 		out = append(out, Model{ID: id, Name: id, ContextWindow: s.ContextWindow})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// MergedCuratedModels is CuratedModels plus any models that only exist in
+// cfg's [models.<provider>.*] overrides (a model the code has never heard
+// of, taught entirely via config.toml) — so those show up in the /model
+// picker too, not just when set directly in config.
+func MergedCuratedModels(cfg *config.Config, providerID string) []Model {
+	out := CuratedModels(providerID)
+	seen := make(map[string]bool, len(out))
+	for i := range out {
+		seen[out[i].ID] = true
+		if s, ok := MergedModelSettings(cfg, providerID, out[i].ID); ok {
+			out[i].ContextWindow = s.ContextWindow
+		}
+	}
+	if cfg != nil {
+		for modelID := range cfg.ModelOverrides[providerID] {
+			if seen[modelID] {
+				continue
+			}
+			s, _ := MergedModelSettings(cfg, providerID, modelID)
+			out = append(out, Model{ID: modelID, Name: modelID, ContextWindow: s.ContextWindow})
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out

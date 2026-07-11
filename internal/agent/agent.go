@@ -151,7 +151,7 @@ func NewAgent(
 		outputChan: outputChan,
 		approvalFn: approvalFn,
 		model:      model,
-		effort:     effectiveEffort(initialEffort(cfg), p.ID(), model),
+		effort:     effectiveEffort(cfg, initialEffort(cfg), p.ID(), model),
 
 		loadedContextDirs: map[string]bool{},
 	}
@@ -170,11 +170,11 @@ func initialEffort(cfg *config.Config) string {
 // effectiveEffort validates effort against the model's supported levels. If the
 // model is known and doesn't support the requested level, the first supported
 // level is used instead. Unknown models keep the effort (the provider decides).
-func effectiveEffort(effort, providerID, model string) string {
+func effectiveEffort(cfg *config.Config, effort, providerID, model string) string {
 	if effort == "" {
 		return ""
 	}
-	s, ok := provider.GetModelSettings(providerID, model)
+	s, ok := provider.MergedModelSettings(cfg, providerID, model)
 	if !ok {
 		return effort // unknown model — keep it, provider will handle
 	}
@@ -211,7 +211,7 @@ func (a *Agent) SwitchSession(sessionID string) {
 	a.sessionID = sessionID
 	a.sessionToolCalls = 0
 	a.sessionToolErrors = 0
-	a.effort = effectiveEffort(initialEffort(a.config), a.provider.ID(), a.model)
+	a.effort = effectiveEffort(a.config, initialEffort(a.config), a.provider.ID(), a.model)
 	a.resetContextTracker()
 }
 
@@ -239,7 +239,7 @@ func (a *Agent) cwd() string {
 // failed write is returned so the caller can surface it.
 func (a *Agent) SetProvider(p provider.Provider) error {
 	a.provider = p
-	a.effort = effectiveEffort(a.effort, p.ID(), a.model)
+	a.effort = effectiveEffort(a.config, a.effort, p.ID(), a.model)
 	sess, err := a.store.GetSession(a.sessionID)
 	if err != nil {
 		return nil
@@ -253,7 +253,7 @@ func (a *Agent) SetProvider(p provider.Provider) error {
 // for the error semantics.
 func (a *Agent) SetModel(model string) error {
 	a.model = model
-	a.effort = effectiveEffort(a.effort, a.provider.ID(), model)
+	a.effort = effectiveEffort(a.config, a.effort, a.provider.ID(), model)
 	sess, err := a.store.GetSession(a.sessionID)
 	if err != nil {
 		return nil

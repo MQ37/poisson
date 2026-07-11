@@ -161,6 +161,17 @@ override. The knobs:
 # [pricing.anthropic.claude-opus-4-8]
 # input = 5.0
 # output = 25.0
+
+# Model metadata: context window, effort levels, vision, adaptive thinking.
+# Teaches Poisson about a model it doesn't ship a built-in entry for (still
+# works without this — just a generic fallback context window and no
+# effort/vision support), or overrides one that's built in. Every field
+# optional; omitted ones keep the built-in default. Shows up in /model too.
+# [models.anthropic."claude-opus-4-9"]
+# context_window = 1000000
+# effort_levels = ["low", "medium", "high", "xhigh", "max"]
+# vision = true
+# adaptive_thinking = true
 ```
 
 ---

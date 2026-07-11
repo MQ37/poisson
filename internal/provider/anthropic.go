@@ -267,7 +267,7 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 	if ar.MaxTokens == 0 {
 		ar.MaxTokens = anthropicMaxOutputTokens
 	}
-	settings, _ := GetModelSettings("anthropic", req.Model)
+	settings, _ := MergedModelSettings(p.config, "anthropic", req.Model)
 	if effort := anthropicAdaptiveEffort(req.Effort); settings.AdaptiveThinking && effort != "" {
 		// Adaptive reasoning: the model decides how much to think, steered by
 		// output_config.effort — exactly what the real Claude Code client sends.

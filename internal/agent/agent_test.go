@@ -1185,7 +1185,7 @@ func TestEffectiveEffort(t *testing.T) {
 		{"", "ollama", "glm-5.2:cloud", ""},
 	}
 	for _, c := range cases {
-		got := effectiveEffort(c.effort, c.prov, c.model)
+		got := effectiveEffort(config.DefaultConfig(), c.effort, c.prov, c.model)
 		if got != c.want {
 			t.Errorf("effectiveEffort(%q, %q, %q) = %q, want %q", c.effort, c.prov, c.model, got, c.want)
 		}

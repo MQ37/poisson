@@ -107,7 +107,7 @@ func (t *TUI) modelSupportsVision() bool {
 	if t.agent == nil {
 		return false
 	}
-	s, ok := provider.GetModelSettings(t.agent.Provider().ID(), t.agent.Model())
+	s, ok := provider.MergedModelSettings(t.agent.Config(), t.agent.Provider().ID(), t.agent.Model())
 	return ok && s.Vision
 }
 

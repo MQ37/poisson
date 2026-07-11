@@ -81,7 +81,7 @@ func pickerModelItems(h commandHost) ([]pickerItem, error) {
 	// intentional — e.g. Ollama cloud models we support show up with correct
 	// context windows even when not yet pulled, and unlisted /api/tags entries
 	// don't. Fall back to the provider's live listing when uncurated.
-	models := provider.CuratedModels(a.Provider().ID())
+	models := provider.MergedCuratedModels(a.Config(), a.Provider().ID())
 	if len(models) == 0 {
 		var err error
 		models, err = a.Provider().Models()
@@ -103,7 +103,7 @@ func pickerModelItems(h commandHost) ([]pickerItem, error) {
 func pickerEffortItems(h commandHost) []pickerItem {
 	a := h.Agent()
 	levels := effortPickerLevels
-	if s, ok := provider.GetModelSettings(a.Provider().ID(), a.Model()); ok && s.SupportsEffort && len(s.EffortLevels) > 0 {
+	if s, ok := provider.MergedModelSettings(a.Config(), a.Provider().ID(), a.Model()); ok && s.SupportsEffort && len(s.EffortLevels) > 0 {
 		levels = append([]string(nil), s.EffortLevels...)
 	}
 	cur := a.Effort()

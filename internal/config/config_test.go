@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -362,6 +363,100 @@ output = 99.0
 	}
 	if p.CacheWritePerMTok != 3.0 {
 		t.Errorf("CacheWrite = %v, want 3.0 (default)", p.CacheWritePerMTok)
+	}
+}
+
+func TestLoadModelOverridesFullySpecified(t *testing.T) {
+	in := `
+[models.anthropic."claude-opus-4-9"]
+context_window = 1000000
+effort_levels = ["low", "medium", "high", "xhigh", "max"]
+vision = true
+adaptive_thinking = true
+
+[models.ollama."qwen3-coder:cloud"]
+context_window = 262144
+effort_levels = ["high", "max"]
+vision = false
+`
+	writeTempConfig(t, in)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	opus := cfg.ModelOverrides["anthropic"]["claude-opus-4-9"]
+	if opus.ContextWindow != 1000000 {
+		t.Errorf("ContextWindow = %d, want 1000000", opus.ContextWindow)
+	}
+	if want := []string{"low", "medium", "high", "xhigh", "max"}; !reflect.DeepEqual(opus.EffortLevels, want) {
+		t.Errorf("EffortLevels = %v, want %v", opus.EffortLevels, want)
+	}
+	if opus.Vision == nil || !*opus.Vision {
+		t.Errorf("Vision = %v, want true", opus.Vision)
+	}
+	if opus.AdaptiveThinking == nil || !*opus.AdaptiveThinking {
+		t.Errorf("AdaptiveThinking = %v, want true", opus.AdaptiveThinking)
+	}
+
+	qwen := cfg.ModelOverrides["ollama"]["qwen3-coder:cloud"]
+	if qwen.ContextWindow != 262144 {
+		t.Errorf("ContextWindow = %d, want 262144", qwen.ContextWindow)
+	}
+	if qwen.Vision == nil || *qwen.Vision {
+		t.Errorf("Vision = %v, want false (explicit)", qwen.Vision)
+	}
+	if qwen.AdaptiveThinking != nil {
+		t.Errorf("AdaptiveThinking = %v, want nil (unset)", qwen.AdaptiveThinking)
+	}
+}
+
+func TestLoadModelOverridesPartialKeepsFieldsUnset(t *testing.T) {
+	// Only context_window given; everything else must stay unset (nil/empty),
+	// not silently coerced to a zero value that would look like an explicit
+	// "false"/"no effort support".
+	in := `
+[models.xai."grok-5"]
+context_window = 300000
+`
+	writeTempConfig(t, in)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	grok := cfg.ModelOverrides["xai"]["grok-5"]
+	if grok.ContextWindow != 300000 {
+		t.Errorf("ContextWindow = %d, want 300000", grok.ContextWindow)
+	}
+	if grok.EffortLevels != nil {
+		t.Errorf("EffortLevels = %v, want nil (unset)", grok.EffortLevels)
+	}
+	if grok.Vision != nil {
+		t.Errorf("Vision = %v, want nil (unset)", grok.Vision)
+	}
+	if grok.AdaptiveThinking != nil {
+		t.Errorf("AdaptiveThinking = %v, want nil (unset)", grok.AdaptiveThinking)
+	}
+}
+
+func TestLoadModelOverridesEmptyEffortLevelsMeansNoSupport(t *testing.T) {
+	// An explicit empty array must be distinguishable from "not mentioned":
+	// it means "no effort support", not "keep the default".
+	in := `
+[models.ollama."plain-model"]
+effort_levels = []
+`
+	writeTempConfig(t, in)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	m := cfg.ModelOverrides["ollama"]["plain-model"]
+	if m.EffortLevels == nil {
+		t.Fatal("EffortLevels = nil, want non-nil empty slice")
+	}
+	if len(m.EffortLevels) != 0 {
+		t.Errorf("EffortLevels = %v, want empty", m.EffortLevels)
 	}
 }
 

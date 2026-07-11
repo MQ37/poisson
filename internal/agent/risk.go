@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"poisson/internal/config"
 	"poisson/internal/guard"
 	"poisson/internal/provider"
 )
@@ -116,8 +117,8 @@ func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdi
 // (the first EffortLevels entry), or "" when the model has no configurable
 // effort. The bash-risk classifier uses this so a one-word answer never
 // inherits the agent's heavier configured effort.
-func lowestEffort(providerID, model string) string {
-	s, ok := provider.GetModelSettings(providerID, model)
+func lowestEffort(cfg *config.Config, providerID, model string) string {
+	s, ok := provider.MergedModelSettings(cfg, providerID, model)
 	if !ok || !s.SupportsEffort || len(s.EffortLevels) == 0 {
 		return ""
 	}
@@ -385,7 +386,7 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 	// before the one-word answer — a tiny cap makes the reply come back empty and
 	// the classification silently fail. The model stops on its own after one
 	// word, so the uncapped default costs nothing extra for non-thinking models.
-	effort := lowestEffort(a.provider.ID(), a.currentModel())
+	effort := lowestEffort(a.config, a.provider.ID(), a.currentModel())
 	req := &provider.Request{
 		Model: a.currentModel(),
 		System: []provider.SystemBlock{{
