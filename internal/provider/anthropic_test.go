@@ -426,6 +426,42 @@ data: {"type":"message_stop"}
 	}
 }
 
+// TestAnthropicStealthHeadersAdaptiveEffort verifies the effort-2025-11-24
+// beta flag appears only on a request that actually uses adaptive thinking
+// (thinking.type=adaptive) — verified against real Claude Code captures
+// (cc-sniff): present on adaptive requests, absent on a plain
+// thinking:disabled one. Companion to TestAnthropicStealthHeaders, which
+// checks the negative case.
+func TestAnthropicStealthHeadersAdaptiveEffort(t *testing.T) {
+	server := newFakeSSEServer("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	defer server.Close()
+
+	cfg := &config.Config{Stealth: config.DefaultStealthConfig()}
+	authStore := auth.AuthStore{
+		"anthropic": {Type: "oauth", Access: "oauth-token-123", Refresh: "refresh-456", Expires: 9999999999999},
+	}
+	p := NewAnthropicProvider(authStore, cfg)
+	p.baseURL = server.URL
+
+	_, err := p.Stream(context.Background(), &Request{
+		Model:     "claude-opus-4-8", // adaptive-capable, per TestAnthropicEffortMapsToThinking
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "test"}}}},
+		MaxTokens: 1,
+		Effort:    "xhigh",
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	req := server.lastRequest
+	if req == nil {
+		t.Fatal("no request captured")
+	}
+	if !strings.Contains(req.Header.Get("anthropic-beta"), "effort-2025-11-24") {
+		t.Errorf("anthropic-beta = %q, want effort-2025-11-24 for an adaptive-thinking request", req.Header.Get("anthropic-beta"))
+	}
+}
+
 func TestAnthropicStealthHeaders(t *testing.T) {
 	server := newFakeSSEServer("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	defer server.Close()
@@ -462,6 +498,13 @@ func TestAnthropicStealthHeaders(t *testing.T) {
 	}
 	if !strings.HasPrefix(req.Header.Get("user-agent"), "claude-cli/") {
 		t.Errorf("user-agent = %q, want claude-cli/...", req.Header.Get("user-agent"))
+	}
+	// claude-sonnet-4-20250514 with no Effort set doesn't use adaptive thinking
+	// (see TestAnthropicEffortMapsToThinking) — the effort beta flag must be
+	// absent, matching real Claude Code captures where it only appears on
+	// requests that actually send thinking.type=adaptive.
+	if strings.Contains(req.Header.Get("anthropic-beta"), "effort-2025-11-24") {
+		t.Errorf("anthropic-beta = %q, must not carry effort-2025-11-24 for a non-adaptive request", req.Header.Get("anthropic-beta"))
 	}
 	if req.Header.Get("x-app") != "cli" {
 		t.Errorf("x-app = %q, want 'cli'", req.Header.Get("x-app"))

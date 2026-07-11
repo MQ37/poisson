@@ -92,7 +92,8 @@ func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, r
 	if err != nil {
 		return nil, err
 	}
-	p.setHeaders(httpReq, isOAuth)
+	adaptive := anthropicReq.Thinking != nil && anthropicReq.Thinking.Type == "adaptive"
+	p.setHeaders(httpReq, isOAuth, adaptive)
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
@@ -416,7 +417,7 @@ func applyPromptCache(ar *anthropicRequest) {
 }
 
 // setHeaders configures the HTTP request headers based on auth type.
-func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool) {
+func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool, adaptiveEffort bool) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -428,7 +429,17 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool) {
 
 	if isOAuth {
 		req.Header.Set("Authorization", "Bearer "+access)
-		req.Header.Set("anthropic-beta", "claude-code-20250219,oauth-2025-04-20,effort-2025-11-24")
+		// effort-2025-11-24 only appears on requests that actually use adaptive
+		// thinking — verified against real Claude Code captures (cc-sniff):
+		// present when thinking.type is "adaptive", absent on a plain
+		// thinking:disabled request. Sending it unconditionally would diverge
+		// from the real client's header shape, which this stealth path exists
+		// to match exactly.
+		beta := "claude-code-20250219,oauth-2025-04-20"
+		if adaptiveEffort {
+			beta += ",effort-2025-11-24"
+		}
+		req.Header.Set("anthropic-beta", beta)
 		if p.config != nil {
 			req.Header.Set("user-agent", "claude-cli/"+p.config.Stealth.CCVersion)
 		} else {
