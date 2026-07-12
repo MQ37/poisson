@@ -32,11 +32,17 @@ type childApprovalBroker struct {
 // response. serialMu keeps a single approval outstanding, so the FIFO queue
 // never holds more than one waiter — otherwise concurrent bash approvals in a
 // turn could be paired with each other's responses.
+//
+// register() runs BEFORE writeChildEvent, not after: if the write happened
+// first, a reply that lands before the waiter is queued would find an empty
+// queue and get silently dropped (reader goroutine's `if len(b.queue) == 0`
+// case), leaving this call blocked on a channel nobody will ever send to.
 func (b *childApprovalBroker) emitAndWait(req map[string]interface{}) (bool, string) {
 	b.serialMu.Lock()
 	defer b.serialMu.Unlock()
+	respCh := b.register()
 	writeChildEvent(req)
-	r := b.wait()
+	r := <-respCh
 	return r.Approved, r.Reason
 }
 
@@ -93,13 +99,23 @@ func (b *childApprovalBroker) denyAllWaiters() {
 	b.queue = nil
 }
 
-// wait blocks until the next approval_response is received for this request,
-// or the stdin reader hits EOF (parent gone) and denies all waiters.
-func (b *childApprovalBroker) wait() approvalReply {
+// register starts the stdin reader (if not already running) and queues a
+// reply channel for the next approval_response, before any request that
+// would trigger one has been sent. The caller blocks on the returned channel;
+// a reply is delivered by the reader goroutine in start(), or by
+// denyAllWaiters() on stdin EOF (parent gone).
+func (b *childApprovalBroker) register() chan approvalReply {
 	b.start()
 	respCh := make(chan approvalReply, 1)
 	b.mu.Lock()
 	b.queue = append(b.queue, respCh)
 	b.mu.Unlock()
-	return <-respCh
+	return respCh
+}
+
+// wait registers a waiter and blocks until its response arrives. Exists
+// alongside register()/emitAndWait for tests that exercise the queue/reply
+// path directly, without going through a real request write.
+func (b *childApprovalBroker) wait() approvalReply {
+	return <-b.register()
 }

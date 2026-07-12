@@ -150,7 +150,7 @@ func (a *Agent) EstimateTokens(text string) int {
 // ContextWindow returns the context window size for the current model.
 func (a *Agent) ContextWindow() int {
 	model := a.currentModel()
-	provID := a.provider.ID()
+	provID := a.providerID()
 
 	if s, ok := provider.MergedModelSettings(a.config, provID, model); ok {
 		if s.ContextWindow > 0 {

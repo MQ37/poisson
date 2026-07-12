@@ -148,6 +148,13 @@ func NewAgent(
 	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string),
 ) *Agent {
 	model := defaultModel(p, cfg)
+	// p may legitimately be nil (e.g. risk-eval's guard-only mode, which never
+	// calls the LLM) — providerID must degrade the same way defaultModel above
+	// already does, or this panics on a nil-interface method call.
+	providerID := ""
+	if p != nil {
+		providerID = p.ID()
+	}
 	a := &Agent{
 		store:      s,
 		provider:   p,
@@ -157,7 +164,7 @@ func NewAgent(
 		outputChan: outputChan,
 		approvalFn: approvalFn,
 		model:      model,
-		effort:     effectiveEffort(cfg, initialEffort(cfg), p.ID(), model),
+		effort:     effectiveEffort(cfg, initialEffort(cfg), providerID, model),
 
 		loadedContextDirs: map[string]bool{},
 	}
@@ -217,7 +224,7 @@ func (a *Agent) SwitchSession(sessionID string) {
 	a.sessionID = sessionID
 	a.sessionToolCalls = 0
 	a.sessionToolErrors = 0
-	a.effort = effectiveEffort(a.config, initialEffort(a.config), a.provider.ID(), a.model)
+	a.effort = effectiveEffort(a.config, initialEffort(a.config), a.providerID(), a.model)
 	a.resetContextTracker()
 }
 
@@ -230,6 +237,17 @@ func (a *Agent) resetContextTracker() {
 }
 
 // cwd resolves the working directory for the active session.
+// providerID returns the active provider's ID, or "" if none is set (e.g.
+// risk-eval's guard-only mode, which never touches the LLM). Every read of
+// a.provider.ID() must go through this instead of calling it directly —
+// a.provider can legitimately be nil, and a raw .ID() call panics.
+func (a *Agent) providerID() string {
+	if a.provider == nil {
+		return ""
+	}
+	return a.provider.ID()
+}
+
 func (a *Agent) cwd() string {
 	if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil && sess.Cwd != "" {
 		return sess.Cwd
@@ -245,12 +263,12 @@ func (a *Agent) cwd() string {
 // failed write is returned so the caller can surface it.
 func (a *Agent) SetProvider(p provider.Provider) error {
 	a.provider = p
-	a.effort = effectiveEffort(a.config, a.effort, p.ID(), a.model)
+	a.effort = effectiveEffort(a.config, a.effort, a.providerID(), a.model)
 	sess, err := a.store.GetSession(a.sessionID)
 	if err != nil {
 		return nil
 	}
-	sess.Provider = p.ID()
+	sess.Provider = a.providerID()
 	sess.UpdatedAt = time.Now().Unix()
 	return a.store.UpdateSession(sess)
 }
@@ -259,7 +277,7 @@ func (a *Agent) SetProvider(p provider.Provider) error {
 // for the error semantics.
 func (a *Agent) SetModel(model string) error {
 	a.model = model
-	a.effort = effectiveEffort(a.config, a.effort, a.provider.ID(), model)
+	a.effort = effectiveEffort(a.config, a.effort, a.providerID(), model)
 	sess, err := a.store.GetSession(a.sessionID)
 	if err != nil {
 		return nil
@@ -324,7 +342,7 @@ func (a *Agent) ReloadConfigDependentTools() {
 	if a.tools == nil || a.config == nil {
 		return
 	}
-	if a.provider.ID() == "ollama" && tools.IsOllamaReachable(a.config) {
+	if a.providerID() == "ollama" && tools.IsOllamaReachable(a.config) {
 		a.tools.Register(tools.NewFetchTool(a.config.Ollama.BaseURL))
 	} else {
 		a.tools.Unregister("fetch")
@@ -514,7 +532,7 @@ func (a *Agent) EnsureSession() error {
 	return a.store.CreateSession(&store.Session{
 		ID:        a.sessionID,
 		Cwd:       cwd,
-		Provider:  a.provider.ID(),
+		Provider:  a.providerID(),
 		Model:     a.Model(),
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -705,9 +723,17 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			req.Tools = nil
 		}
 
-		// CALL
-		ch, err := a.streamWithRetryNotice(ctx, req)
+		// CALL — streamCtx is scoped to this one round: cancelling it on every
+		// exit below (not just via the caller's ctx) is what lets the provider's
+		// pump goroutine unblock and close its HTTP body if this loop ever stops
+		// draining ch before the pump is done sending on it (see EventError
+		// below). Without a per-round cancel, ctx here is context.Background()
+		// on the interactive REPL's main turn loop, so a pump left blocked on a
+		// send has no way to ever unblock.
+		streamCtx, cancel := context.WithCancel(ctx)
+		ch, err := a.streamWithRetryNotice(streamCtx, req)
 		if err != nil {
+			cancel()
 			if ctx.Err() != nil {
 				// Cancelled (e.g. user Ctrl+C) while connecting or mid-backoff
 				// retry — same silent shape as every other ctx-cancellation exit
@@ -764,11 +790,20 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				stopReason = ev.StopReason
 
 			case provider.EventError:
+				// Cancel before returning: this bails out of `range ch` while the
+				// pump goroutine may still be running, so its next (or fallback)
+				// send on ch must see streamCtx cancelled to take its ctx.Done()
+				// escape instead of blocking forever with no reader left.
+				cancel()
 				a.sendEvent(OutputEvent{Type: OutputError, Text: ev.Error.Error()})
 				a.sendEvent(OutputEvent{Type: OutputDone})
 				return fmt.Errorf("stream error: %w", ev.Error)
 			}
 		}
+		// Stream drained to completion (channel closed by the pump) — release
+		// this round's context promptly rather than waiting for runTurn to
+		// eventually return, since a turn can loop over many rounds.
+		cancel()
 
 		if err := ctx.Err(); err != nil {
 			a.sendEvent(OutputEvent{Type: OutputDone})
@@ -1209,7 +1244,7 @@ func (a *Agent) recordAPICallFlags(usage *provider.Usage, isCompaction bool, mod
 	if model == "" {
 		model = a.currentModel()
 	}
-	providerID := a.provider.ID()
+	providerID := a.providerID()
 
 	cacheRead, cacheWrite := usage.CacheReadTokens, usage.CacheWriteTokens
 
@@ -1253,7 +1288,7 @@ func (a *Agent) nextAPICallSeq() int {
 func (a *Agent) currentModel() string {
 	sess, err := a.store.GetSession(a.sessionID)
 	if err != nil || sess == nil {
-		switch a.provider.ID() {
+		switch a.providerID() {
 		case "ollama":
 			return a.config.Ollama.Model
 		case "anthropic":

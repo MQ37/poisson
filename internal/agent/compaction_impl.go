@@ -183,7 +183,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 	}
 	compCost := 0.0
 	if usage != nil {
-		compCost = a.computeCost(a.provider.ID(), compactionModel,
+		compCost = a.computeCost(a.providerID(), compactionModel,
 			usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
 	}
 	if err := a.store.RecordCompaction(&store.Compaction{
@@ -283,7 +283,16 @@ func lastUserIndex(msgs []store.Message) int {
 	return -1
 }
 
-// adjustCompactionCount ensures we don't split assistant/tool_use from tool results.
+// adjustCompactionCount ensures we don't split assistant/tool_use from tool
+// results, by walking count forward past any run of "tool"-role messages it
+// lands inside. Guarantee chooseSummarizeCount's halving search depends on:
+// if the input count already sits inside a tool run, the walk never returns
+// something >= that run's start except when the run reaches len(msgs) with
+// no boundary ahead — in that one case, retreat to the run's start instead of
+// snapping forward to len(msgs). Without the retreat, a halving search that
+// repeatedly lands inside a trailing tool run (common after a turn with
+// several parallel tool calls) would walk forward to len(msgs) every time and
+// never shrink, spinning forever.
 func adjustCompactionCount(msgs []store.Message, count int) int {
 	if count <= 0 {
 		return 0
@@ -291,8 +300,15 @@ func adjustCompactionCount(msgs []store.Message, count int) int {
 	if count > len(msgs) {
 		count = len(msgs)
 	}
+	start := count
 	for count < len(msgs) && msgs[count].Role == "tool" {
 		count++
+	}
+	if count == len(msgs) && count > start {
+		count = start
+		for count > 0 && msgs[count-1].Role == "tool" {
+			count--
+		}
 	}
 	return count
 }

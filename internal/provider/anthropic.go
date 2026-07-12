@@ -670,6 +670,13 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 			case <-ctx.Done():
 				return
 			case ch <- StreamEvent{Type: EventError, Error: fmt.Errorf("anthropic: %s: %s", errEvent.Error.Type, errEvent.Error.Message)}:
+				// EventError is terminal, same as every other case above (e.g.
+				// message_stop) — the consumer is entitled to stop ranging the
+				// channel the instant it sees one. Without this return, the loop
+				// kept scanning, hit clean EOF, and the "!doneSent" fallback below
+				// did a second terminal send to a reader that already left,
+				// blocking forever whenever ctx has no deadline.
+				return
 			}
 		}
 	}

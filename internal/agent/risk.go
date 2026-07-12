@@ -386,7 +386,7 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 	// before the one-word answer — a tiny cap makes the reply come back empty and
 	// the classification silently fail. The model stops on its own after one
 	// word, so the uncapped default costs nothing extra for non-thinking models.
-	effort := lowestEffort(a.config, a.provider.ID(), a.currentModel())
+	effort := lowestEffort(a.config, a.providerID(), a.currentModel())
 	req := &provider.Request{
 		Model: a.currentModel(),
 		System: []provider.SystemBlock{{
