@@ -113,6 +113,19 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		}
 		summarizationMsgs = append(summarizationMsgs, pm)
 	}
+	// toSummarize's last message can be any role — the boundary search only
+	// guarantees the KEPT tail starts with "user", not that the summarized
+	// transcript ENDS with one. This is a separate request built from scratch,
+	// so it must independently end with a user message or Anthropic's newer
+	// models reject it: "This model does not support assistant message
+	// prefill. The conversation must end with a user message."
+	summarizationMsgs = append(summarizationMsgs, provider.Message{
+		Role: "user",
+		Content: []provider.ContentBlock{{
+			Type: "text",
+			Text: "Now produce the structured summary as instructed above. Do not continue the conversation.",
+		}},
+	})
 
 	compactionModel := a.currentModel()
 	if a.config != nil && a.config.Compaction.Model != "" {

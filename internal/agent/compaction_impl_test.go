@@ -84,6 +84,42 @@ func TestCompactManualKeepsUserFirst(t *testing.T) {
 	}
 }
 
+// TestCompactionRequestAlwaysEndsWithUserMessage reproduces a real 400 from
+// Anthropic's newer models: "This model does not support assistant message
+// prefill. The conversation must end with a user message." toSummarize (the
+// messages being fed to the summarizer, as opposed to the kept tail) ends
+// wherever the boundary search happens to land — usually an assistant or tool
+// message, since the search only guarantees the KEPT tail starts with "user",
+// not that the summarized transcript ENDS with one. The summarization request
+// is a separate provider.Request built from scratch, so it must independently
+// satisfy the same "ends with user" rule any Anthropic request does.
+func TestCompactionRequestAlwaysEndsWithUserMessage(t *testing.T) {
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	// assistant, tool, assistant: the boundary search stops at the next "user"
+	// (there isn't one), so summarizeCount == len(msgs) and toSummarize's last
+	// message is the trailing assistant reply — exactly what triggers the 400.
+	seedMessages(t, s, sid, []string{"user", "assistant", "tool", "assistant"})
+
+	fp := newFakeProvider()
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("## Big Picture\nsummary", nil),
+	})
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	req := fp.LastRequest()
+	if req == nil || len(req.Messages) == 0 {
+		t.Fatal("expected a captured compaction request")
+	}
+	if last := req.Messages[len(req.Messages)-1]; last.Role != "user" {
+		t.Fatalf("compaction request's last message role = %q, want %q (Anthropic rejects a request ending in assistant role as unsupported message prefill)", last.Role, "user")
+	}
+}
+
 func TestCompactSummarizesAllMessages(t *testing.T) {
 	s := newTestStore(t)
 	sid := newTestSession(t, s, "test-model")
