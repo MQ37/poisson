@@ -423,6 +423,110 @@ func TestApproveEndToEndDenyEmptyReason(t *testing.T) {
 	}
 }
 
+// TestDenyWithReasonLeavesRunRunning verifies that denying with a non-empty
+// reason lets the model see the rejection and keep going, instead of cutting
+// the turn off — only an EMPTY reason (Ctrl+C's panic-deny, or confirming an
+// unfilled reason prompt) should cancel the in-flight run.
+func TestDenyWithReasonLeavesRunRunning(t *testing.T) {
+	tui := newTestTUIHelper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tui.cancelMu.Lock()
+	tui.cancelCtx = ctx
+	tui.cancelRun = cancel
+	tui.cancelMu.Unlock()
+
+	type outcome struct {
+		allowed bool
+		reason  string
+	}
+	result := make(chan outcome, 1)
+	go func() {
+		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		result <- outcome{allowed, reason}
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for !tui.approving.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !tui.approving.Load() {
+		t.Fatal("Approve never entered approving state")
+	}
+
+	tui.mu.Lock()
+	ao, _ := tui.activeOverlay.(*approvalOverlay)
+	ao.beginDenyReason()
+	tui.mu.Unlock()
+
+	for _, r := range "not now" {
+		tui.feedDenyReasonKey(Key{Kind: KeyRune, Rune: r})
+	}
+	tui.feedDenyReasonKey(Key{Kind: KeyEnter})
+
+	select {
+	case got := <-result:
+		if got.allowed {
+			t.Fatal("expected deny")
+		}
+		if got.reason != "not now" {
+			t.Fatalf("reason = %q, want %q", got.reason, "not now")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Approve timed out")
+	}
+
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("run context was cancelled (%v) despite a non-empty deny reason", err)
+	}
+}
+
+// TestDenyWithEmptyReasonCancelsRun verifies the pre-existing "deny stops
+// the turn" behavior is preserved when no reason is given.
+func TestDenyWithEmptyReasonCancelsRun(t *testing.T) {
+	tui := newTestTUIHelper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	tui.cancelMu.Lock()
+	tui.cancelCtx = ctx
+	tui.cancelRun = cancel
+	tui.cancelMu.Unlock()
+
+	result := make(chan bool, 1)
+	go func() {
+		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		result <- allowed
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for !tui.approving.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !tui.approving.Load() {
+		t.Fatal("Approve never entered approving state")
+	}
+
+	tui.mu.Lock()
+	ao, _ := tui.activeOverlay.(*approvalOverlay)
+	ao.beginDenyReason()
+	tui.mu.Unlock()
+
+	tui.feedDenyReasonKey(Key{Kind: KeyEnter}) // no reason typed
+
+	select {
+	case got := <-result:
+		if got {
+			t.Fatal("expected deny")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Approve timed out")
+	}
+
+	if err := ctx.Err(); err == nil {
+		t.Fatal("expected the run context to be cancelled after an empty-reason deny")
+	}
+}
+
 func TestSplitPrefixUnicode(t *testing.T) {
 	line := "prefix @café"
 	col := len([]rune(line))

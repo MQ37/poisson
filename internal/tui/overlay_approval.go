@@ -112,7 +112,7 @@ func (o *approvalOverlay) renderDenyReasonPanel(panelRows, cols int) []string {
 	blank := mk("")
 
 	title := mk(fgYellow + bold + "Command denied — reason (optional)" + reset)
-	footer := mk(dim + "[Enter] send · [Ctrl+C] send without reason" + reset)
+	footer := mk(dim + "[Enter] send — reason continues the turn, blank stops it · [Ctrl+C] stop now" + reset)
 
 	oneLine := strings.ReplaceAll(strings.TrimSpace(o.command), "\n", " ")
 	cmdSummary := mk(dim + "Command: " + reset + truncatePlain(oneLine, cols-12))

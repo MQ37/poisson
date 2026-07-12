@@ -241,9 +241,14 @@ func (t *TUI) restoreTerminal() {
 	_ = term.Restore(t.fd, t.oldState)
 }
 
-// approvalDenyAndMaybeCancelRun rejects the pending approval (with an optional
-// human-supplied reason, forwarded to the model) and cancels an in-flight
-// agent turn when one exists.
+// approvalDenyAndMaybeCancelRun rejects the pending approval. With no reason
+// (Ctrl+C's panic-deny, or an empty reason confirmed from the prompt) it also
+// cancels the in-flight agent turn, same as before this feature existed —
+// there's nothing to tell the model, so there's nothing for it to usefully
+// continue with. With a non-empty reason, the turn is left running: the
+// reason is forwarded to the model as the tool's result and the agent loop
+// continues normally, letting the model adjust its plan instead of being cut
+// off mid-turn.
 func (t *TUI) approvalDenyAndMaybeCancelRun(reason string) {
 	reply := approvalReply{Allowed: false, Reason: reason}
 	select {
@@ -257,6 +262,9 @@ func (t *TUI) approvalDenyAndMaybeCancelRun(reason string) {
 		case t.approvalAnswer <- reply:
 		default:
 		}
+	}
+	if reason != "" {
+		return
 	}
 	t.cancelMu.Lock()
 	cancel := t.cancelRun
