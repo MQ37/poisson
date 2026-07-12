@@ -143,6 +143,45 @@ func TestCompactSummarizesAllMessages(t *testing.T) {
 	}
 }
 
+// TestCompactRecordsSummaryTokensNotZero reproduces a reported UX bug: after
+// a manual /compact that summarizes the whole conversation (nothing left in
+// the active set), the notice showed "191,321 -> 0 tokens" — a nonsensical
+// after-count, since the compaction summary itself (what's ACTUALLY carried
+// forward into every future request, per agent.go's system-block injection)
+// costs real tokens. The old code summed only the active messages' tokens,
+// ignoring the summary entirely whenever it emptied the active set to zero.
+func TestCompactRecordsSummaryTokensNotZero(t *testing.T) {
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	seedMessages(t, s, sid, []string{"user", "assistant", "user", "assistant"})
+
+	summary := "## Big Picture\n" + strings.Repeat("detail ", 200) // long enough for a non-trivial token estimate
+	fp := newFakeProvider()
+	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse(summary, nil)})
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	msgs, err := s.GetMessages(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("active messages = %d, want 0 (precondition: whole conversation compacted)", len(msgs))
+	}
+
+	want := a.EstimateTokens(summary)
+	comp, err := s.GetLastCompaction(sid)
+	if err != nil || comp == nil {
+		t.Fatalf("GetLastCompaction: %v, %+v", err, comp)
+	}
+	if comp.TokensAfter != want {
+		t.Fatalf("TokensAfter = %d, want %d (the summary's own token cost, not 0)", comp.TokensAfter, want)
+	}
+}
+
 // TestCompactAutoKeepsActiveTail verifies auto-compaction never empties the
 // active set: it summarizes everything before the current turn and keeps that
 // turn (starting with a user message) active, so the run loop's next request is

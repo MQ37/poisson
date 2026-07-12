@@ -68,8 +68,13 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		return ErrNothingToCompact
 	}
 
-	// 2. Choose how many leading messages to summarize.
-	estimatedTokens := 0
+	// 2. Choose how many leading messages to summarize. estimatedTokens is the
+	// "before" figure reported to the user, so it must include any pre-existing
+	// compaction summary too (not just active messages) — that summary is real
+	// context the model already carries on every request, per agent.go's
+	// system-block injection.
+	sessBefore, _ := a.store.GetSession(a.sessionID)
+	estimatedTokens := a.summaryTokens(sessBefore)
 	for _, m := range msgs {
 		estimatedTokens += a.EstimateTokens(m.Content)
 	}
@@ -88,9 +93,8 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 	// model to incorporate relevant details and omit stale ones — NOT to
 	// blindly preserve everything (that caused unbounded summary growth across
 	// repeated compactions). The model summarizes fresh, naturally compressing.
-	if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil &&
-		sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
-		instruction += "\n\nA previous context summary is included below. Incorporate relevant details and omit stale or superseded ones — do not blindly preserve everything.\n\n[Previous summary]\n" + *sess.CompactionSummary
+	if sessBefore != nil && sessBefore.CompactionSummary != nil && strings.TrimSpace(*sessBefore.CompactionSummary) != "" {
+		instruction += "\n\nA previous context summary is included below. Incorporate relevant details and omit stale or superseded ones — do not blindly preserve everything.\n\n[Previous summary]\n" + *sessBefore.CompactionSummary
 	}
 	summarizationMsgs = append(summarizationMsgs, provider.Message{
 		Role: "user",
@@ -187,13 +191,12 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		_ = a.recordCompactionAPICall(compactionModel, usage)
 	}
 
-	// 8. Record compaction row (audit).
-	remainingTokens := 0
-	if remain, err := a.store.GetMessages(a.sessionID); err == nil {
-		for _, m := range remain {
-			remainingTokens += a.EstimateTokens(m.Content)
-		}
-	}
+	// 8. Record compaction row (audit). The "after" figure must include the
+	// summary just applied, not just active messages — otherwise summarizing
+	// the whole conversation (nothing left active) always reports a nonsensical
+	// "0 tokens" even though the summary itself is what's actually carried
+	// forward from here on.
+	remainingTokens := a.estimateMessagesTokens()
 	compCost := 0.0
 	if usage != nil {
 		compCost = a.computeCost(a.providerID(), compactionModel,
