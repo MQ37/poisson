@@ -270,14 +270,23 @@ func (p *OllamaProvider) Stream(ctx context.Context, req *Request) (<-chan Strea
 		return nil, fmt.Errorf("ollama: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(buf))
-	if err != nil {
-		return nil, fmt.Errorf("ollama: build request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-
-	resp, err := p.client.Do(httpReq)
+	// DoWithRetry retries connection failures and transient server errors
+	// (429/5xx) with exponential backoff, indefinitely, before this function
+	// returns. A fresh request is built on every attempt so a body already
+	// consumed by a failed attempt is never resent short or empty. Ollama is
+	// most often local (localhost daemon) rather than a flaky WAN link, so a
+	// connection-refused here usually just means "start ollama" — the
+	// reconnecting status this surfaces is the honest signal to do that,
+	// rather than a special-cased instant hard-fail.
+	resp, err := DoWithRetry(ctx, DefaultRetryableStatus, func(attemptCtx context.Context) (*http.Response, error) {
+		httpReq, err := http.NewRequestWithContext(attemptCtx, http.MethodPost, p.baseURL+"/v1/chat/completions", bytes.NewReader(buf))
+		if err != nil {
+			return nil, fmt.Errorf("ollama: build request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "text/event-stream")
+		return p.client.Do(httpReq)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("ollama: request: %w", err)
 	}

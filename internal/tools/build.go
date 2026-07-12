@@ -69,7 +69,7 @@ func BindSubagentRuntime(reg *Registry, providerFn, modelFn, effortFn func() str
 
 // BindSubagentProgress wires a live turn-count + context-usage progress
 // callback (for the running subagent card) onto the subagent tool.
-func BindSubagentProgress(reg *Registry, fn func(toolCallID string, turns, contextTokens, contextWindow int)) {
+func BindSubagentProgress(reg *Registry, fn func(toolCallID string, turns, contextTokens, contextWindow int, status string)) {
 	t, ok := reg.Get("subagent")
 	if !ok {
 		return

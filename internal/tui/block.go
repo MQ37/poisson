@@ -30,6 +30,7 @@ type BlockMeta struct {
 	SubagentTurns         int    // subagent widget: live/final turn count reported by the child
 	SubagentContextTokens int    // subagent widget: live/final context tokens used, reported by the child
 	SubagentContextWindow int    // subagent widget: the child's own model context window
+	SubagentStatus        string // subagent widget: non-empty while the child is retrying a network failure (see agent.OutputRetrying) — shown in place of the turn/context line
 	Expediting            bool   // subagent widget: user pressed Ctrl+G, child is wrapping up
 	ToolResult            string
 	ToolError             string

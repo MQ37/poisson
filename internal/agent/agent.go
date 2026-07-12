@@ -36,7 +36,13 @@ const (
 	OutputError      = "error"
 	OutputCompacting = "compacting"
 	OutputCompacted  = "compacted"
-	OutputDone       = "done"
+	// OutputRetrying carries a network-resilience notice: the provider hit a
+	// connection failure or transient server error (5xx/429) and is retrying
+	// with backoff (see provider.DoWithRetry). Sent at most twice per outage
+	// — once when a fresh outage starts, once when it recovers — never once
+	// per attempt, so a long outage doesn't spam the conversation.
+	OutputRetrying = "retrying"
+	OutputDone     = "done"
 	// OutputSubagentProgress carries a live turn-count + context-usage update
 	// for a running subagent widget. ToolCallID correlates to the
 	// OutputToolStart that created it; SubagentTurns is the child's turn count
@@ -460,14 +466,18 @@ func (a *Agent) RunTurns() int { return int(a.runTurns.Load()) }
 
 // SendSubagentProgress emits a live turn-count + context-usage update for a
 // running subagent widget. toolCallID correlates to the OutputToolStart that
-// created it (see tools.WithToolCallID). Called from the subagent tool's own
-// goroutine while its child is still running, concurrently with the rest of
-// the turn loop — sendEvent is the same channel-send already used for
-// tool_result from that goroutine, so this is safe.
-func (a *Agent) SendSubagentProgress(toolCallID string, turns, contextTokens, contextWindow int) {
+// created it (see tools.WithToolCallID). status is normally "" (ordinary
+// progress); when the child is mid-network-retry it carries a short
+// human-readable status ("connection lost: ... — reconnecting…" /
+// "reconnected — resuming") for the widget to show in place of its turn/
+// context line. Called from the subagent tool's own goroutine while its
+// child is still running, concurrently with the rest of the turn loop —
+// sendEvent is the same channel-send already used for tool_result from that
+// goroutine, so this is safe.
+func (a *Agent) SendSubagentProgress(toolCallID string, turns, contextTokens, contextWindow int, status string) {
 	a.sendEvent(OutputEvent{
 		Type: OutputSubagentProgress, ToolCallID: toolCallID, SubagentTurns: turns,
-		ContextTokens: contextTokens, ContextWindow: contextWindow,
+		ContextTokens: contextTokens, ContextWindow: contextWindow, Text: status,
 	})
 }
 
@@ -644,6 +654,35 @@ func (a *Agent) appendContinueMessage() error {
 
 // runTurn executes the turn loop: build → stream → collect tools → dispatch →
 // append results → check compaction → repeat until no tool calls.
+// streamWithRetryNotice calls a.provider.Stream with a provider.RetryTrace
+// attached to ctx, translating backoff retries (connection failures,
+// transient 5xx/429) into at most two OutputRetrying events for this one
+// call: one when a fresh outage starts (the first retry), one when it
+// recovers. Never once per attempt — an outage that takes many retries to
+// clear must not spam the conversation with a line per attempt.
+func (a *Agent) streamWithRetryNotice(ctx context.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+	// Preserve MaxElapsed from any trace the caller already attached (e.g.
+	// cmd/px/main.go's child mode bounding a subagent's retry budget) —
+	// WithRetryTrace replaces whatever trace is on ctx, so building a new one
+	// from scratch here would silently drop that budget.
+	var maxElapsed time.Duration
+	if existing := provider.RetryTraceFromContext(ctx); existing != nil {
+		maxElapsed = existing.MaxElapsed
+	}
+	trace := &provider.RetryTrace{
+		MaxElapsed: maxElapsed,
+		OnRetry: func(attempt int, delay time.Duration, reason string) {
+			if attempt == 1 {
+				a.sendEvent(OutputEvent{Type: OutputRetrying, Text: fmt.Sprintf("connection lost: %s — reconnecting…", reason)})
+			}
+		},
+		OnRecovered: func() {
+			a.sendEvent(OutputEvent{Type: OutputRetrying, Text: "reconnected — resuming"})
+		},
+	}
+	return a.provider.Stream(provider.WithRetryTrace(ctx, trace), req)
+}
+
 func (a *Agent) runTurn(ctx context.Context) error {
 	emptyAttempts := 0
 	continuations := 0
@@ -667,8 +706,15 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		}
 
 		// CALL
-		ch, err := a.provider.Stream(ctx, req)
+		ch, err := a.streamWithRetryNotice(ctx, req)
 		if err != nil {
+			if ctx.Err() != nil {
+				// Cancelled (e.g. user Ctrl+C) while connecting or mid-backoff
+				// retry — same silent shape as every other ctx-cancellation exit
+				// in this loop, not a user-facing error.
+				a.sendEvent(OutputEvent{Type: OutputDone})
+				return err
+			}
 			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Provider error: %v", err)})
 			a.sendEvent(OutputEvent{Type: OutputDone})
 			return fmt.Errorf("stream: %w", err)

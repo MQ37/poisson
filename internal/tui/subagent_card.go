@@ -48,7 +48,12 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 		dur = formatDuration(elapsed)
 	}
 
-	if b.meta.SubagentTurns > 0 {
+	// While reconnecting, the turn/context numbers are stale and a status tag
+	// takes their place instead (below) — showing both would crowd the one
+	// line and the numbers add nothing while the child isn't making progress.
+	reconnecting := b.meta.SubagentStatus != ""
+
+	if b.meta.SubagentTurns > 0 && !reconnecting {
 		unit := "turn"
 		if b.meta.SubagentTurns != 1 {
 			unit = "turns"
@@ -62,7 +67,7 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 	}
 
 	// Context usage, formatted exactly like the main header's N / window.
-	if b.meta.SubagentContextWindow > 0 {
+	if b.meta.SubagentContextWindow > 0 && !reconnecting {
 		ctxText := formatNum(b.meta.SubagentContextTokens) + " / " + formatNum(b.meta.SubagentContextWindow)
 		if dur != "" {
 			dur += "  " + ctxText
@@ -86,6 +91,13 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 		expediteTag = "⏩ wrapping up"
 	}
 
+	// While the child is retrying a network failure, show that instead of
+	// (or alongside, once resolved and cleared) the ordinary tags.
+	reconnectTag := ""
+	if !b.meta.ToolDone && reconnecting {
+		reconnectTag = "⟳ " + truncatePlain(b.meta.SubagentStatus, 40)
+	}
+
 	// left (plain) = "⁘ name  3.2s"; styled separately below.
 	leftPlain := glyph + " " + name
 	if dur != "" {
@@ -98,6 +110,10 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 	if expediteTag != "" {
 		leftPlain += "  " + expediteTag
 		styledLeft += "  " + fgYellow + expediteTag + reset
+	}
+	if reconnectTag != "" {
+		leftPlain += "  " + reconnectTag
+		styledLeft += "  " + fgYellow + reconnectTag + reset
 	}
 
 	gap := 2
@@ -205,7 +221,12 @@ func (s *scrollback) finalizeOrphanSubagents() {
 // from the child, keyed by the outer tool_call ID (matches
 // appendSubagentCard/completeSubagentCard). A no-op if no running widget
 // matches — the update may race a fast-finishing subagent's completion.
-func (s *scrollback) updateSubagentProgress(providerCallID string, turns, contextTokens, contextWindow int) {
+// updateSubagentProgress records a live turn-count + context-usage update, or
+// (when status != "") a network-retry status to show in place of that
+// turn/context line — see agent.OutputRetrying and BlockMeta.SubagentStatus.
+// A non-retry update (status == "") always clears any prior status: a real
+// progress report means the child is actively working again.
+func (s *scrollback) updateSubagentProgress(providerCallID string, turns, contextTokens, contextWindow int, status string) {
 	for i := len(s.blocks) - 1; i >= 0; i-- {
 		b := &s.blocks[i]
 		if b.kind != blockSubagent || b.meta.ProviderCallID != providerCallID {
@@ -214,6 +235,7 @@ func (s *scrollback) updateSubagentProgress(providerCallID string, turns, contex
 		b.meta.SubagentTurns = turns
 		b.meta.SubagentContextTokens = contextTokens
 		b.meta.SubagentContextWindow = contextWindow
+		b.meta.SubagentStatus = status
 		b.invalidateLayout()
 		return
 	}

@@ -45,8 +45,11 @@ type SubagentTool struct {
 
 	// progressFn reports a live turn-count + context-usage update for the
 	// running widget, correlated via the tool_call ID attached to Execute's
-	// context.
-	progressFn func(toolCallID string, turns, contextTokens, contextWindow int)
+	// context. status is normally "" (ordinary progress); when the child is
+	// mid-network-retry it carries a short human-readable status ("connection
+	// lost: ... — reconnecting…" / "reconnected — resuming") for the widget
+	// to show in place of the turn/context line.
+	progressFn func(toolCallID string, turns, contextTokens, contextWindow int, status string)
 }
 
 // NewSubagentTool creates a subagent tool.
@@ -93,7 +96,7 @@ func (t *SubagentTool) SetRuntime(providerFn, modelFn, effortFn func() string) {
 
 // SetProgressFn supplies the live turn-count + context-usage progress
 // callback (called from Execute's goroutine as the child reports each new turn).
-func (t *SubagentTool) SetProgressFn(fn func(toolCallID string, turns, contextTokens, contextWindow int)) {
+func (t *SubagentTool) SetProgressFn(fn func(toolCallID string, turns, contextTokens, contextWindow int, status string)) {
 	t.progressFn = fn
 }
 
@@ -182,9 +185,9 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	var success bool
 	var childErr string
 	toolCallID, hasToolCallID := ToolCallIDFromContext(ctx)
-	reportProgress := func() {
+	reportProgress := func(status string) {
 		if hasToolCallID && t.progressFn != nil {
-			t.progressFn(toolCallID, turns, contextTokens, contextWindow)
+			t.progressFn(toolCallID, turns, contextTokens, contextWindow, status)
 		}
 	}
 
@@ -234,8 +237,18 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 				if ev.Turns > 0 {
 					turns = ev.Turns
 					contextTokens, contextWindow = ev.ContextTokens, ev.ContextWindow
-					reportProgress()
+					// A real progress update means the child is actively working
+					// again, so this also clears any "reconnecting" status the
+					// widget was showing.
+					reportProgress("")
 				}
+
+			case "retrying":
+				// Relayed from the child's own network-retry notice (see
+				// agent.OutputRetrying) so the widget can show "reconnecting"
+				// instead of freezing on stale turn/context numbers with no
+				// explanation while the child's connection recovers.
+				reportProgress(ev.Text)
 
 			case "tool_result":
 
@@ -257,7 +270,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 				if ev.Turns > 0 {
 					turns = ev.Turns
 					contextTokens, contextWindow = ev.ContextTokens, ev.ContextWindow
-					reportProgress() // final count, before the card flips to done
+					reportProgress("") // final count, before the card flips to done
 				}
 				if ev.Error != "" {
 					childErr = ev.Error

@@ -3,12 +3,62 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"poisson/internal/auth"
 	"poisson/internal/config"
 )
+
+// flakyThenOKServer fails the first failFor requests with the given status
+// (or, if status == 0, by hijacking and closing the connection to simulate a
+// network-level failure) then serves a normal SSE response.
+func flakyThenOKServer(t *testing.T, failFor int, failStatus int, sseResponse string) *httptest.Server {
+	t.Helper()
+	var calls int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt64(&calls, 1)
+		if int(n) <= failFor {
+			if failStatus == 0 {
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					t.Fatal("ResponseWriter does not support hijacking")
+				}
+				conn, _, err := hj.Hijack()
+				if err != nil {
+					t.Fatalf("hijack: %v", err)
+				}
+				conn.Close() // abrupt close: simulates a network-level failure
+				return
+			}
+			w.WriteHeader(failStatus)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		io.Copy(w, strings.NewReader(sseResponse))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// shrinkAnthropicRetryTiming makes the retry backoff schedule fast for tests
+// and restores it after — the same pattern as the package-level retry tests.
+func shrinkAnthropicRetryTiming(t *testing.T) {
+	t.Helper()
+	oldBase, oldCap, oldAttempt := retryBackoffBase, retryBackoffCap, retryAttemptTimeout
+	retryBackoffBase = time.Millisecond
+	retryBackoffCap = 5 * time.Millisecond
+	retryAttemptTimeout = 2 * time.Second
+	t.Cleanup(func() {
+		retryBackoffBase, retryBackoffCap, retryAttemptTimeout = oldBase, oldCap, oldAttempt
+	})
+}
 
 // --- Prompt-cache tests (no real API calls) ---
 
@@ -756,5 +806,152 @@ func TestAnthropicUnsignedThinkingDegradesToText(t *testing.T) {
 	b := ar.Messages[0].Content[0]
 	if b.Type != "text" || b.Text != "partial reasoning" {
 		t.Fatalf("unsigned thinking should degrade to text, got %+v", b)
+	}
+}
+
+// --- Network-resilience tests (retry with exponential backoff) ---
+
+const anthropicMinimalSSE = "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+func TestAnthropicStreamRetriesNetworkFailureThenSucceeds(t *testing.T) {
+	shrinkAnthropicRetryTiming(t)
+	srv := flakyThenOKServer(t, 2, 0, anthropicMinimalSSE) // 2 connection-level failures, then OK
+
+	cfg := &config.Config{Stealth: config.DefaultStealthConfig()}
+	authStore := auth.AuthStore{"anthropic": {Type: "api_key", Key: "test-key"}}
+	p := NewAnthropicProvider(authStore, cfg)
+	p.baseURL = srv.URL
+
+	var retries []int
+	trace := &RetryTrace{OnRetry: func(attempt int, delay time.Duration, reason string) {
+		retries = append(retries, attempt)
+	}}
+	ctx := WithRetryTrace(context.Background(), trace)
+
+	ch, err := p.Stream(ctx, &Request{
+		Model:    "claude-opus-4-8",
+		Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range ch {
+		// drain — a minimal message_stop-only SSE body produces no events
+		// worth asserting on beyond "the channel closes cleanly".
+	}
+	if len(retries) != 2 || retries[0] != 1 || retries[1] != 2 {
+		t.Errorf("retries = %v, want [1 2]", retries)
+	}
+}
+
+func TestAnthropicStreamRetries503ThenSucceeds(t *testing.T) {
+	shrinkAnthropicRetryTiming(t)
+	srv := flakyThenOKServer(t, 2, 503, anthropicMinimalSSE)
+
+	cfg := &config.Config{Stealth: config.DefaultStealthConfig()}
+	authStore := auth.AuthStore{"anthropic": {Type: "api_key", Key: "test-key"}}
+	p := NewAnthropicProvider(authStore, cfg)
+	p.baseURL = srv.URL
+
+	ch, err := p.Stream(context.Background(), &Request{
+		Model:    "claude-opus-4-8",
+		Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range ch {
+	}
+}
+
+func TestAnthropicStreamRetries529ThenSucceeds(t *testing.T) {
+	// 529 (overloaded_error) is Anthropic-specific — not in the generic
+	// default retryable-status set, confirmed retried here via
+	// AnthropicRetryableStatus.
+	shrinkAnthropicRetryTiming(t)
+	srv := flakyThenOKServer(t, 1, 529, anthropicMinimalSSE)
+
+	cfg := &config.Config{Stealth: config.DefaultStealthConfig()}
+	authStore := auth.AuthStore{"anthropic": {Type: "api_key", Key: "test-key"}}
+	p := NewAnthropicProvider(authStore, cfg)
+	p.baseURL = srv.URL
+
+	ch, err := p.Stream(context.Background(), &Request{
+		Model:    "claude-opus-4-8",
+		Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range ch {
+	}
+}
+
+func TestAnthropicStreamDoesNotRetry400(t *testing.T) {
+	shrinkAnthropicRetryTiming(t)
+	var calls int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&calls, 1)
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":"bad request"}`))
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{Stealth: config.DefaultStealthConfig()}
+	authStore := auth.AuthStore{"anthropic": {Type: "api_key", Key: "test-key"}}
+	p := NewAnthropicProvider(authStore, cfg)
+	p.baseURL = srv.URL
+
+	_, err := p.Stream(context.Background(), &Request{
+		Model:    "claude-opus-4-8",
+		Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
+	})
+	if err == nil {
+		t.Fatal("expected an error for a 400 response")
+	}
+	if n := atomic.LoadInt64(&calls); n != 1 {
+		t.Errorf("calls = %d, want 1 (400 must not be retried)", n)
+	}
+}
+
+func TestAnthropicStreamCancelledDuringRetryReturnsSilently(t *testing.T) {
+	oldBase, oldCap, oldAttempt := retryBackoffBase, retryBackoffCap, retryAttemptTimeout
+	retryBackoffBase = 2 * time.Second
+	retryBackoffCap = 2 * time.Second
+	retryAttemptTimeout = 5 * time.Second
+	defer func() { retryBackoffBase, retryBackoffCap, retryAttemptTimeout = oldBase, oldCap, oldAttempt }()
+
+	// Always fails — the test proves cancellation during backoff aborts
+	// promptly with ctx.Err(), not some wrapped/decorated error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(503)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{Stealth: config.DefaultStealthConfig()}
+	authStore := auth.AuthStore{"anthropic": {Type: "api_key", Key: "test-key"}}
+	p := NewAnthropicProvider(authStore, cfg)
+	p.baseURL = srv.URL
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.Stream(ctx, &Request{
+			Model:    "claude-opus-4-8",
+			Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
+		})
+		done <- err
+	}()
+
+	time.Sleep(30 * time.Millisecond) // let the first attempt fail and enter backoff
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an error (context cancelled) when cancelled during retry backoff")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stream did not return promptly after cancellation during backoff")
 	}
 }

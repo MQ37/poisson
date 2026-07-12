@@ -86,19 +86,26 @@ func (p *OpenAIProvider) streamWithRetry(ctx context.Context, req *Request, retr
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("Authorization", "Bearer "+entry.Access)
-	httpReq.Header.Set("chatgpt-account-id", accountID)
-	httpReq.Header.Set("OpenAI-Beta", "responses=experimental")
-	httpReq.Header.Set("originator", "poisson")
-	httpReq.Header.Set("User-Agent", fmt.Sprintf("poisson (%s %s)", runtime.GOOS, runtime.GOARCH))
-
-	resp, err := p.client.Do(httpReq)
+	// DoWithRetry retries connection failures and transient server errors
+	// (429/5xx) with exponential backoff, indefinitely, before this function
+	// returns — the 401 refresh-and-retry-once logic below only ever sees the
+	// final response DoWithRetry settles on. A fresh request is built on
+	// every attempt so a body already consumed by a failed attempt is never
+	// resent short or empty.
+	resp, err := DoWithRetry(ctx, DefaultRetryableStatus, func(attemptCtx context.Context) (*http.Response, error) {
+		httpReq, err := http.NewRequestWithContext(attemptCtx, "POST", p.endpoint, bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set("Authorization", "Bearer "+entry.Access)
+		httpReq.Header.Set("chatgpt-account-id", accountID)
+		httpReq.Header.Set("OpenAI-Beta", "responses=experimental")
+		httpReq.Header.Set("originator", "poisson")
+		httpReq.Header.Set("User-Agent", fmt.Sprintf("poisson (%s %s)", runtime.GOOS, runtime.GOARCH))
+		return p.client.Do(httpReq)
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -76,16 +76,23 @@ func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry i
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST",
-		"https://api.x.ai/v1/chat/completions", bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	httpReq.Header.Set("Authorization", "Bearer "+entry.Access)
-
-	resp, err := p.client.Do(httpReq)
+	// DoWithRetry retries connection failures and transient server errors
+	// (429/5xx) with exponential backoff, indefinitely, before this function
+	// returns — the 401 refresh-and-retry-once logic below only ever sees the
+	// final response DoWithRetry settles on. A fresh request is built on
+	// every attempt so a body already consumed by a failed attempt is never
+	// resent short or empty.
+	resp, err := DoWithRetry(ctx, DefaultRetryableStatus, func(attemptCtx context.Context) (*http.Response, error) {
+		httpReq, err := http.NewRequestWithContext(attemptCtx, "POST",
+			"https://api.x.ai/v1/chat/completions", bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("Accept", "text/event-stream")
+		httpReq.Header.Set("Authorization", "Bearer "+entry.Access)
+		return p.client.Do(httpReq)
+	})
 	if err != nil {
 		return nil, err
 	}

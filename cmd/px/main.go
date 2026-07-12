@@ -501,6 +501,12 @@ func cmdLogout(args []string) {
 // It reads a task from args, runs the agent, and writes JSON events to
 // stdout. Bash approval requests are written to stdout and the response is
 // read from stdin.
+// subagentNetworkRetryBudget bounds how long a subagent keeps retrying a
+// network failure (see provider.RetryTrace.MaxElapsed) before giving up and
+// reporting an error — unlike the interactive main session, which retries
+// indefinitely since a human is watching and can Ctrl+C.
+const subagentNetworkRetryBudget = 3 * time.Minute
+
 func runChildMode() {
 	// Parse args: --json --no-skills --session <id> [-- task]
 	var sessionID, task string
@@ -669,6 +675,12 @@ func runChildMode() {
 					"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput,
 					"turns": a.RunTurns(), "contextTokens": ctxUsed, "contextWindow": ctxWindow,
 				})
+			case agent.OutputRetrying:
+				// Relayed so the parent's subagent widget can show "reconnecting"
+				// in place of its turn/context line instead of freezing on stale
+				// numbers with no explanation while this child's own network
+				// retry (see provider.DoWithRetry) is in progress.
+				writeChildEvent(map[string]interface{}{"type": "retrying", "text": ev.Text})
 			case agent.OutputToolResult:
 				payload := map[string]interface{}{
 					"type":   "tool_result",
@@ -683,8 +695,19 @@ func runChildMode() {
 		}
 	}()
 
+	// Subagents run unattended (no per-instance human able to Ctrl+C just
+	// this one call), so unlike the interactive main session — which retries
+	// network failures indefinitely, relying on the user's own Ctrl+C as the
+	// give-up switch — a subagent needs its own bounded retry budget. Past
+	// subagentNetworkRetryBudget of continuous retrying it gives up and
+	// reports a clear error back to the model, rather than an unattended
+	// child silently retrying forever against a network that's simply never
+	// coming back.
+	retryTrace := &provider.RetryTrace{MaxElapsed: subagentNetworkRetryBudget}
+	ctx := provider.WithRetryTrace(context.Background(), retryTrace)
+
 	success := true
-	if err := a.Prompt(task); err != nil {
+	if err := a.PromptWithContext(ctx, task); err != nil {
 		writeChildEvent(map[string]interface{}{"type": "error", "error": err.Error()})
 		success = false
 	}

@@ -87,15 +87,25 @@ func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, r
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST",
-		p.baseURL+"/v1/messages", bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, err
-	}
 	adaptive := anthropicReq.Thinking != nil && anthropicReq.Thinking.Type == "adaptive"
-	p.setHeaders(httpReq, isOAuth, adaptive)
 
-	resp, err := p.client.Do(httpReq)
+	// DoWithRetry retries connection failures and transient server errors
+	// (429/5xx, plus Anthropic's 529 "overloaded_error") with exponential
+	// backoff, indefinitely, before this function ever returns — the 401
+	// refresh-and-retry-once logic right below is unaffected, since it only
+	// ever sees the final response DoWithRetry settles on. A fresh request is
+	// built on every attempt (reqBody is only marshaled once above, and
+	// bytes.NewReader over it is safe to create repeatedly) so a body already
+	// consumed by a failed attempt is never resent short or empty.
+	resp, err := DoWithRetry(ctx, AnthropicRetryableStatus, func(attemptCtx context.Context) (*http.Response, error) {
+		httpReq, err := http.NewRequestWithContext(attemptCtx, "POST",
+			p.baseURL+"/v1/messages", bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, err
+		}
+		p.setHeaders(httpReq, isOAuth, adaptive)
+		return p.client.Do(httpReq)
+	})
 	if err != nil {
 		return nil, err
 	}

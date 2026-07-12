@@ -9,7 +9,7 @@ func TestUpdateSubagentTurnsLiveWhileRunning(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendSubagentCard(1, "call-1", "explore", "check the flow", "glm-5.2:cloud")
 
-	s.updateSubagentProgress("call-1", 3, 0, 0)
+	s.updateSubagentProgress("call-1", 3, 0, 0, "")
 
 	if s.blocks[0].meta.SubagentTurns != 3 {
 		t.Fatalf("SubagentTurns = %d, want 3", s.blocks[0].meta.SubagentTurns)
@@ -27,7 +27,7 @@ func TestUpdateSubagentTurnsSurvivesCompletion(t *testing.T) {
 
 	// Final progress update (Execute reports it right before returning,
 	// strictly before the outer tool_result flips the card to done).
-	s.updateSubagentProgress("call-1", 5, 0, 0)
+	s.updateSubagentProgress("call-1", 5, 0, 0, "")
 	s.completeSubagentCard("call-1", "", 1200)
 
 	rows := layoutSubagentCard(&s.blocks[0], 80)
@@ -43,7 +43,7 @@ func TestUpdateSubagentTurnsSurvivesCompletion(t *testing.T) {
 func TestUpdateSubagentTurnsSingularUnit(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendSubagentCard(1, "call-1", "explore", "task", "model")
-	s.updateSubagentProgress("call-1", 1, 0, 0)
+	s.updateSubagentProgress("call-1", 1, 0, 0, "")
 
 	rows := layoutSubagentCard(&s.blocks[0], 80)
 	plain := stripANSI(rows[0].Text)
@@ -60,7 +60,7 @@ func TestUpdateSubagentProgressShowsContextUsage(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendSubagentCard(1, "call-1", "explore", "check the flow", "glm-5.2:cloud")
 
-	s.updateSubagentProgress("call-1", 4, 12345, 200000)
+	s.updateSubagentProgress("call-1", 4, 12345, 200000, "")
 
 	rows := layoutSubagentCard(&s.blocks[0], 120)
 	plain := stripANSI(rows[0].Text)
@@ -93,7 +93,7 @@ func TestUpdateSubagentProgressHidesContextUsageUntilReported(t *testing.T) {
 func TestUpdateSubagentTurnsNoMatchIsNoop(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendSubagentCard(1, "call-1", "explore", "task", "model")
-	s.updateSubagentProgress("call-does-not-exist", 9, 0, 0)
+	s.updateSubagentProgress("call-does-not-exist", 9, 0, 0, "")
 
 	if s.blocks[0].meta.SubagentTurns != 0 {
 		t.Errorf("expected no change for a non-matching call id, got %d", s.blocks[0].meta.SubagentTurns)
