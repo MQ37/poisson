@@ -92,7 +92,8 @@ func (t *TUI) paint(snap dirtySnapshot) {
 	defer t.mu.Unlock()
 
 	t.syncHeaderFromAgentLocked()
-	if t.status.Branch == "" {
+	if !t.branchChecked {
+		t.branchChecked = true
 		t.status.Branch = gitBranch(t.status.Cwd)
 	}
 	t.status.SpinnerFrame = t.renderFrame

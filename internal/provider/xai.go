@@ -126,7 +126,13 @@ func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry i
 		ConvertUsage: func(u *openaiSSEUsage, _ int) *Usage {
 			return convertXAIUsage(u)
 		},
-		ErrPrefix: "xAI",
+		// Same as ollama.go's identical pump call: without these, a malformed
+		// chunk is silently skipped instead of surfaced, and a connection that
+		// closes cleanly without ever sending a "[DONE]" line closes the
+		// channel with no terminal event at all instead of an EventDone.
+		FailOnParseError: true,
+		EnsureDoneOnEOF:  true,
+		ErrPrefix:        "xAI",
 	})
 	return ch, nil
 }

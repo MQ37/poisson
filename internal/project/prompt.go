@@ -3,6 +3,7 @@ package project
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -110,9 +111,17 @@ func loadFromDir(dir string) *ContextFile {
 		if err != nil {
 			continue
 		}
+		// io.ReadFull loops internally until the buffer is full or the file
+		// ends — a single Read() call is allowed to return short even with more
+		// data available (the io.Reader contract, not just a local-disk
+		// quirk), which would otherwise silently truncate the file's content
+		// with no truncation marker at all.
 		data := make([]byte, MaxContextFileSize+1)
-		n, _ := f.Read(data) // one read caps memory; regular files fill in one call
+		n, err := io.ReadFull(f, data)
 		_ = f.Close()
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			continue // genuine read error — skip rather than serve partial content
+		}
 		if n == 0 {
 			continue
 		}

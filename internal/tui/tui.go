@@ -64,6 +64,12 @@ type TUI struct {
 	activeTools   int
 	nextToolID    int64
 	lastInputRows int
+	// branchChecked marks that paint() already ran gitBranch once for this
+	// TUI's (fixed, immutable-for-the-process) cwd, whether or not it found
+	// one — without it, a non-git cwd (or a detached-HEAD repo, where
+	// gitBranch also returns "") would re-exec `git rev-parse` every single
+	// paint call (up to ~30/s while thinking/tools are active).
+	branchChecked bool
 	// layoutJustChanged is set by prepareLayout when it just detected an input
 	// height change (and queued a full repaint for the NEXT tick) — paint
 	// reads and clears it to upgrade its OWN current call to a full repaint

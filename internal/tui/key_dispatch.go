@@ -285,7 +285,7 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 			t.markInputDirty()
 			return false, nil
 		case 22: // Ctrl+V — attach an image from the clipboard
-			t.grabClipboardImageLocked()
+			t.grabClipboardImageAsync()
 			return false, nil
 		}
 	}

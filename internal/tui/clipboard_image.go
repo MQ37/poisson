@@ -80,13 +80,42 @@ func pickImageType(list string) string {
 }
 
 // grabClipboardImageLocked reads the clipboard (via the injectable grabImage),
-// stages any image found, and gives feedback. Caller holds t.mu.
+// stages any image found, and gives feedback. Caller holds t.mu. Runs the
+// clipboard read synchronously — used directly by tests for deterministic
+// behavior. Ctrl+V goes through grabClipboardImageAsync instead (see below),
+// which does the same work without blocking the caller's lock.
 func (t *TUI) grabClipboardImageLocked() {
 	grab := t.grabImage
 	if grab == nil {
 		grab = grabClipboardImage
 	}
 	data, err := grab()
+	t.stageClipboardResultLocked(data, err)
+}
+
+// grabClipboardImageAsync reads the clipboard off t.mu, in a goroutine, then
+// re-takes the lock only to stage the result. grabClipboardImageLocked used
+// to run synchronously inside feedKey, which holds t.mu for its entire call
+// — since a clipboard read shells out to wl-paste/xclip (up to a 2s
+// timeout), every Ctrl+V froze rendering (paint() also takes t.mu) and all
+// other input for up to 2 seconds.
+func (t *TUI) grabClipboardImageAsync() {
+	grab := t.grabImage
+	if grab == nil {
+		grab = grabClipboardImage
+	}
+	t.setEphemeralHintLocked("reading clipboard\u2026", 5*time.Second)
+	go func() {
+		data, err := grab()
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		t.stageClipboardResultLocked(data, err)
+	}()
+}
+
+// stageClipboardResultLocked attaches a successfully read clipboard image (or
+// reports why it couldn't) and marks the screen dirty. Caller holds t.mu.
+func (t *TUI) stageClipboardResultLocked(data []byte, err error) {
 	if err != nil {
 		t.setEphemeralHintLocked("clipboard image failed: "+err.Error(), 3*time.Second)
 		return

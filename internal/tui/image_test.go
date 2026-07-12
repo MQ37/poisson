@@ -104,6 +104,46 @@ func TestCtrlVAttachesClipboardImage(t *testing.T) {
 	}
 }
 
+// TestCtrlVAsyncDoesNotBlockLock verifies feedKey's Ctrl+V dispatch (the real
+// key-press path, unlike the direct grabClipboardImageLocked calls above)
+// returns immediately instead of blocking on the clipboard read — regression
+// test for the render-freeze bug where grabClipboardImageLocked used to run
+// synchronously while feedKey held t.mu for its whole call.
+func TestCtrlVAsyncDoesNotBlockLock(t *testing.T) {
+	env := newTUIIntegEnv(t, nil)
+	t.Setenv("TMPDIR", env.dir)
+	release := make(chan struct{})
+	env.tui.grabImage = func() ([]byte, error) {
+		<-release // never returns until the test says so
+		return testPNGBytes(t, 800, 600), nil
+	}
+	defer close(release)
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = env.tui.feedKey(Key{Kind: KeyCtrl, Byte: 22})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("feedKey(Ctrl+V) blocked on the clipboard read instead of returning immediately")
+	}
+
+	// The render lock must still be free while the clipboard read is stuck.
+	acquired := make(chan struct{})
+	go func() {
+		env.tui.mu.Lock()
+		env.tui.mu.Unlock()
+		close(acquired)
+	}()
+	select {
+	case <-acquired:
+	case <-time.After(2 * time.Second):
+		t.Fatal("t.mu still held while clipboard read is in flight — Ctrl+V froze rendering")
+	}
+}
+
 func TestCtrlVNoImageInClipboard(t *testing.T) {
 	env := newTUIIntegEnv(t, nil)
 	env.tui.grabImage = func() ([]byte, error) { return nil, nil }
