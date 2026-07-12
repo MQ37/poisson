@@ -19,6 +19,10 @@ func TestLookupBuiltIn(t *testing.T) {
 	if ok {
 		t.Fatal("expected no pricing for unknown")
 	}
+	r, ok = Lookup(nil, "openai", "gpt-5.5")
+	if !ok || r.InputPerMTok != 5.0 || r.OutputPerMTok != 30.0 || r.CacheReadPerMTok != 0.5 {
+		t.Fatalf("gpt-5.5 = %+v ok=%v", r, ok)
+	}
 }
 
 func TestLookupConfigOverride(t *testing.T) {

@@ -25,6 +25,14 @@ var builtIn = map[string]map[string]Rates{
 	"xai": {
 		"grok-build": {1.0, 2.0, 0, 0},
 	},
+	"openai": {
+		// input, output, cacheRead (0.1x), cacheWrite (0 — OpenAI's prompt
+		// cache is automatic with no separate write charge). Short-context
+		// (<=272K input tokens) standard API rate; poisson talks to the Codex
+		// subscription endpoint, so — like anthropic/xai above — this is
+		// informational shadow pricing, not a real bill.
+		"gpt-5.5": {5.0, 30.0, 0.5, 0},
+	},
 	"ollama": {
 		"*": {0, 0, 0, 0},
 	},
