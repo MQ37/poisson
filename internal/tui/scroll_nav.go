@@ -19,4 +19,3 @@ func parseMouseWheel(data []byte) (delta int, ok bool) {
 	}
 	return mouseWheelDelta(events[0].Button)
 }
-

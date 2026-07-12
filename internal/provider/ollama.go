@@ -101,7 +101,6 @@ type ollamaTagDetails struct {
 	ContextLength int `json:"context_length"`
 }
 
-
 func mapOllamaReasoningEffort(effort string) string {
 	switch effort {
 	case "low", "medium", "high", "max":

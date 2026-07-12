@@ -13,9 +13,9 @@ import (
 
 // openaiSSEUsage is the usage object on OpenAI-compatible streaming chunks.
 type openaiSSEUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int `json:"prompt_tokens"`
+	CompletionTokens        int `json:"completion_tokens"`
+	TotalTokens             int `json:"total_tokens"`
 	CompletionTokensDetails struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
 	} `json:"completion_tokens_details"`
@@ -87,11 +87,11 @@ func pumpOpenAIChatCompletionsSSE(ctx context.Context, body io.ReadCloser, ch ch
 
 		var chunk struct {
 			Choices []struct {
-			Delta struct {
-				Content          string `json:"content"`
-				ReasoningContent string `json:"reasoning_content"` // ollama / DeepSeek-style
-				Reasoning        string `json:"reasoning"`        // xAI / alternate
-				ToolCalls []struct {
+				Delta struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"` // ollama / DeepSeek-style
+					Reasoning        string `json:"reasoning"`         // xAI / alternate
+					ToolCalls        []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Type     string `json:"type"`

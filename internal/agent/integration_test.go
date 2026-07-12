@@ -23,9 +23,9 @@ type barrierTool struct {
 	run  func(ctx context.Context) (tools.ToolResult, error)
 }
 
-func (b barrierTool) Name() string                { return b.name }
-func (b barrierTool) Description() string          { return b.name }
-func (b barrierTool) Schema() json.RawMessage      { return json.RawMessage(`{"type":"object"}`) }
+func (b barrierTool) Name() string            { return b.name }
+func (b barrierTool) Description() string     { return b.name }
+func (b barrierTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
 func (b barrierTool) Execute(ctx context.Context, _ json.RawMessage) (tools.ToolResult, error) {
 	return b.run(ctx)
 }
@@ -142,14 +142,14 @@ func TestInteg_ParallelToolsRunConcurrently(t *testing.T) {
 
 // integEnv bundles the common test setup: store, agent, provider, output chan.
 type integEnv struct {
-	t       *testing.T
-	dir     string
-	store   *store.Store
-	prov    *provider.FakeProvider
-	agent   *Agent
-	sid     string
-	output  chan OutputEvent
-	reg     *tools.Registry
+	t      *testing.T
+	dir    string
+	store  *store.Store
+	prov   *provider.FakeProvider
+	agent  *Agent
+	sid    string
+	output chan OutputEvent
+	reg    *tools.Registry
 }
 
 // newIntegEnv creates a full agent environment under /tmp with a FakeProvider.
@@ -847,8 +847,8 @@ func TestInteg_ToolErrorHandling(t *testing.T) {
 		t.Error("tool_result block missing")
 	}
 	var blocks []struct {
-		Type      string `json:"type"`
-		ToolIsError bool `json:"tool_is_error"`
+		Type        string `json:"type"`
+		ToolIsError bool   `json:"tool_is_error"`
 	}
 	_ = json.Unmarshal([]byte(msgs[2].Content), &blocks)
 	var foundError bool

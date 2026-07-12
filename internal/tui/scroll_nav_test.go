@@ -49,4 +49,3 @@ func TestDecoderKittyPageUpScrollDelta(t *testing.T) {
 		t.Fatalf("delta=%d ok=%v", delta, ok)
 	}
 }
-

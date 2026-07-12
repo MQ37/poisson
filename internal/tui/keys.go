@@ -55,7 +55,7 @@ const (
 // Key is one normalized keyboard event after kitty/CSI decoding.
 type Key struct {
 	Kind KeyKind
-	Meta bool   // Alt/Meta modifier (word-wise motion, M-backspace)
+	Meta bool // Alt/Meta modifier (word-wise motion, M-backspace)
 	Rune rune
 	Text string // bracketed paste payload
 	Byte byte   // C0 control for KeyCtrl

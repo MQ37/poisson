@@ -423,7 +423,7 @@ func TestIsUntrustedExecCommand(t *testing.T) {
 		{"npm run build", false},
 		{"pnpm install", false},
 		{"yarn add react", false},
-		{"pipx install ruff", false}, // install, not run
+		{"pipx install ruff", false},  // install, not run
 		{"pnpm exec eslint .", false}, // exec runs local binary
 		{"git status", false},
 		{"ls -la", false},

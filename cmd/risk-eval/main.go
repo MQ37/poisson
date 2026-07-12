@@ -46,39 +46,39 @@ type caseFile struct {
 }
 
 type caseRun struct {
-	ID        string `json:"id"`
-	Category  string `json:"category"`
-	Tags      []string `json:"tags"`
-	Command   string `json:"command"`
-	Description string `json:"description"`
-	Workdir   string `json:"workdir"`
-	Expect    string `json:"expect"`
-	MustNot   string `json:"must_not"`
-	Got       string `json:"got"`
-	Source    string `json:"source"`
-	RawLLM    string `json:"raw_llm,omitempty"`
-	LLMRuns   []agent.BashRiskLLMRun `json:"llm_runs,omitempty"`
-	Pass      bool   `json:"pass"`
-	Critical  bool   `json:"critical,omitempty"`
-	Attempt   int    `json:"attempt"`
-	LatencyMS int64  `json:"latency_ms"`
-	Notes     string `json:"notes,omitempty"`
+	ID          string                 `json:"id"`
+	Category    string                 `json:"category"`
+	Tags        []string               `json:"tags"`
+	Command     string                 `json:"command"`
+	Description string                 `json:"description"`
+	Workdir     string                 `json:"workdir"`
+	Expect      string                 `json:"expect"`
+	MustNot     string                 `json:"must_not"`
+	Got         string                 `json:"got"`
+	Source      string                 `json:"source"`
+	RawLLM      string                 `json:"raw_llm,omitempty"`
+	LLMRuns     []agent.BashRiskLLMRun `json:"llm_runs,omitempty"`
+	Pass        bool                   `json:"pass"`
+	Critical    bool                   `json:"critical,omitempty"`
+	Attempt     int                    `json:"attempt"`
+	LatencyMS   int64                  `json:"latency_ms"`
+	Notes       string                 `json:"notes,omitempty"`
 }
 
 type report struct {
-	GeneratedAt string `json:"generated_at"`
-	Provider    string `json:"provider"`
-	Model       string `json:"model"`
-	Mode        string `json:"mode"`
+	GeneratedAt string    `json:"generated_at"`
+	Provider    string    `json:"provider"`
+	Model       string    `json:"model"`
+	Mode        string    `json:"mode"`
 	Runs        []caseRun `json:"runs"`
-	Summary     summary `json:"summary"`
+	Summary     summary   `json:"summary"`
 }
 
 type summary struct {
-	Total      int            `json:"total"`
-	Passed     int            `json:"passed"`
-	Failed     int            `json:"failed"`
-	Critical   int            `json:"critical"`
+	Total      int                   `json:"total"`
+	Passed     int                   `json:"passed"`
+	Failed     int                   `json:"failed"`
+	Critical   int                   `json:"critical"`
 	ByCategory map[string]catSummary `json:"by_category"`
 }
 
@@ -193,7 +193,7 @@ func main() {
 		Provider:    provName,
 		Model:       model,
 		Mode:        string(mode),
-		Summary: summary{ByCategory: map[string]catSummary{}},
+		Summary:     summary{ByCategory: map[string]catSummary{}},
 	}
 
 	fmt.Printf("bash-risk eval — %s/%s — mode=%s — %d case(s)\n", provName, model, mode, len(selected))

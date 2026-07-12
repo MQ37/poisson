@@ -182,7 +182,6 @@ type xaiToolDef struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 
-
 // buildRequest converts a Poisson Request to the xAI OpenAI-compatible format.
 // Every message MUST have a content field (even if empty) or xAI returns 422.
 func (p *XAIProvider) buildRequest(req *Request) xaiRequest {

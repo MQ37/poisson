@@ -11,11 +11,11 @@ const (
 
 // completion is the candidate list shown above the input box.
 type completion struct {
-	kind       completionKind
-	prefix     string // the partial token the user typed (with leading / or @)
-	cands      []string
-	idx        int  // -1 = no selection; otherwise 0..len-1
-	truncated  bool // true when file matches were capped at fuzzyResultCap
+	kind      completionKind
+	prefix    string // the partial token the user typed (with leading / or @)
+	cands     []string
+	idx       int  // -1 = no selection; otherwise 0..len-1
+	truncated bool // true when file matches were capped at fuzzyResultCap
 }
 
 // empty reports whether the completion has nothing to show.
@@ -54,7 +54,6 @@ var slashCommands = []string{
 func matchSlash(partial string) []string {
 	return matchSlashFuzzy(partial)
 }
-
 
 // commonPrefix returns the longest common prefix of all strings, or "" if
 // the slice is empty.

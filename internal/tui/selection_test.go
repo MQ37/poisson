@@ -41,9 +41,9 @@ func TestMouseDragCreatesSelectionNotClick(t *testing.T) {
 
 	// Press then move then release: should NOT toggle expand, should leave a
 	// finalized selection instead.
-	tui.handleMouseInput([]byte("\x1b[<0;3;2M"))    // press row2 col3
-	tui.handleMouseInput([]byte("\x1b[<32;6;2M"))   // drag motion to col6 (btn0|32)
-	tui.handleMouseInput([]byte("\x1b[<0;6;2m"))    // release
+	tui.handleMouseInput([]byte("\x1b[<0;3;2M"))  // press row2 col3
+	tui.handleMouseInput([]byte("\x1b[<32;6;2M")) // drag motion to col6 (btn0|32)
+	tui.handleMouseInput([]byte("\x1b[<0;6;2m"))  // release
 	if tui.scroll.blocks[0].meta.Collapsed != true {
 		t.Fatal("drag must not toggle thinking collapse")
 	}
@@ -158,8 +158,8 @@ func TestDragSurvivesSplitRead(t *testing.T) {
 	tui := newSelectionTestTUI()
 	tui.scroll.appendRaw(styleAssistant, "hello world")
 
-	full := "\x1b[<0;3;2M"        // press row2 col3
-	motion := "\x1b[<32;8;2M"     // drag motion to col8
+	full := "\x1b[<0;3;2M"    // press row2 col3
+	motion := "\x1b[<32;8;2M" // drag motion to col8
 	if !tui.handleMouseInput([]byte(full)) {
 		t.Fatal("press should be handled")
 	}

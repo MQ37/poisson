@@ -386,6 +386,6 @@ var langKeywords = map[string][]string{
 		"if", "then", "else", "elif", "fi", "for", "do", "done", "while",
 		"case", "esac", "function", "export", "local", "return", "echo",
 	},
-	"yaml": {"true", "false", "null"},
+	"yaml":     {"true", "false", "null"},
 	"markdown": {},
 }

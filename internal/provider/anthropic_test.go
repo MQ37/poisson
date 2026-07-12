@@ -65,7 +65,7 @@ func shrinkAnthropicRetryTiming(t *testing.T) {
 func TestAnthropicPromptCacheBreakpoints(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "oauth", Access: "t"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 	req := &Request{
-		Model: "claude-x",
+		Model:  "claude-x",
 		System: []SystemBlock{{Text: "sys A"}, {Text: "sys B"}},
 		Tools: []ToolDef{
 			{Name: "read", Description: "r", Schema: json.RawMessage(`{"type":"object"}`)},

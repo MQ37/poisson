@@ -138,4 +138,3 @@ func sanitizeSystemText(text string, cfg config.StealthConfig) string {
 
 	return strings.TrimSpace(result)
 }
-

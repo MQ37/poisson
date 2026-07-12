@@ -27,14 +27,14 @@ import (
 // =============================================================================
 
 type tuiIntegEnv struct {
-	t       *testing.T
-	dir     string
-	sid     string
-	store   *store.Store
-	prov    *provider.FakeProvider
-	agent   *agent.Agent
-	tui     *TUI
-	reg     *tools.Registry
+	t     *testing.T
+	dir   string
+	sid   string
+	store *store.Store
+	prov  *provider.FakeProvider
+	agent *agent.Agent
+	tui   *TUI
+	reg   *tools.Registry
 }
 
 // newTUIIntegEnv creates an Agent + TUI pair sharing the same output channel.

@@ -81,9 +81,9 @@ func TestContextInjectionOnFileWork(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, filepath.Join(root, "AGENTS.md"), "ROOT-RULES")           // cwd -> system prompt, never injected
-	writeFile(t, filepath.Join(sub, "AGENTS.md"), "PKG-RULES-UNIQUE")      // should be injected
-	writeFile(t, filepath.Join(sub, "x.go"), "package pkg")                // the file we read
+	writeFile(t, filepath.Join(root, "AGENTS.md"), "ROOT-RULES")      // cwd -> system prompt, never injected
+	writeFile(t, filepath.Join(sub, "AGENTS.md"), "PKG-RULES-UNIQUE") // should be injected
+	writeFile(t, filepath.Join(sub, "x.go"), "package pkg")           // the file we read
 	writeFile(t, filepath.Join(sub, "y.go"), "package pkg")
 
 	st, err := store.Open(filepath.Join(root, "t.db"))

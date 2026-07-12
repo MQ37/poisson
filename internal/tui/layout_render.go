@@ -241,5 +241,3 @@ func (t *TUI) writeRaw(s string) {
 		_, _ = t.writer.Write([]byte(s))
 	}
 }
-
-

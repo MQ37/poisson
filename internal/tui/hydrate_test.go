@@ -19,7 +19,6 @@ func TestHydrateScrollbackFromSession(t *testing.T) {
 	}
 	t.Cleanup(func() { st.Close() })
 
-
 	sid := "hydrate-test"
 	st.CreateSession(&store.Session{ID: sid, Cwd: ".", Provider: "fake", Model: "m"})
 	st.AppendMessage(&store.Message{

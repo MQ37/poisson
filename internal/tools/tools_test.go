@@ -25,10 +25,12 @@ func mustJSON(t *testing.T, v interface{}) json.RawMessage {
 // stubTool is a minimal Tool for registry ordering tests.
 type stubTool struct{ name string }
 
-func (s stubTool) Name() string                                    { return s.name }
-func (s stubTool) Description() string                             { return s.name + " desc" }
-func (s stubTool) Schema() json.RawMessage                         { return json.RawMessage(`{"type":"object"}`) }
-func (s stubTool) Execute(context.Context, json.RawMessage) (ToolResult, error) { return ToolResult{}, nil }
+func (s stubTool) Name() string            { return s.name }
+func (s stubTool) Description() string     { return s.name + " desc" }
+func (s stubTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (s stubTool) Execute(context.Context, json.RawMessage) (ToolResult, error) {
+	return ToolResult{}, nil
+}
 
 // TestDefinitionsStableSortedOrder guards the prompt-cache fix: Definitions()
 // must return a byte-stable, sorted order. Ranging the tools map is randomized,

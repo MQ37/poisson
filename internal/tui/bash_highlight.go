@@ -6,7 +6,7 @@ import (
 	"poisson/internal/guard"
 )
 
-func approvalBarPrefix() string  { return fgRed + "█ " + reset }
+func approvalBarPrefix() string { return fgRed + "█ " + reset }
 func bashPromptPrefix() string  { return fgYellow + bold + "$ " + reset }
 func bashSafeStyle() string     { return fgYellow + bold }
 func bashDangerStyle() string   { return fgRed + bold }

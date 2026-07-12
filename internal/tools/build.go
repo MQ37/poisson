@@ -16,10 +16,10 @@ type ApprovalFn func(ctx context.Context, command, description, workdir string) 
 
 // BuildOptions configures which tools to register.
 type BuildOptions struct {
-	Cwd         string
-	Store       *store.Store
-	Sandbox     bool
-	ApprovalFn  ApprovalFn
+	Cwd        string
+	Store      *store.Store
+	Sandbox    bool
+	ApprovalFn ApprovalFn
 	// FileApprovalFn gates read/write/edit against sensitive paths (.env*,
 	// SSH/cloud credentials, ~/.poisson secrets, ...). Unlike ApprovalFn it is
 	// asked directly — no LLM risk classification — since "does this path

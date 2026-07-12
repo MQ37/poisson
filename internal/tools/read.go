@@ -53,8 +53,8 @@ const (
 	maxLines      = 2000
 	maxBytes      = 50 * 1024
 	maxImageBytes = 5 * 1024 * 1024
-	readLineSize  = 64 * 1024        // initial per-line scan buffer
-	maxLineSize   = 8 * 1024 * 1024  // max single line before scanning gives up
+	readLineSize  = 64 * 1024       // initial per-line scan buffer
+	maxLineSize   = 8 * 1024 * 1024 // max single line before scanning gives up
 )
 
 func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
