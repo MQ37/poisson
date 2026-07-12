@@ -202,7 +202,13 @@ func runPrint(opts printOpts) {
 		}
 		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
-	reg := tools.BuildRegistry(tools.BuildOptions{Cwd: cwd, Store: st, ApprovalFn: approvalFn})
+	// Sensitive files (.env*, SSH/cloud credentials, ~/.poisson secrets, ...)
+	// are deterministically flagged by guard.SensitivePathReason, so this asks
+	// the human directly — no LLM risk classification needed.
+	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
+		return humanApproval(action, reason, workdir, agent.BashRiskHigh)
+	}
+	reg := tools.BuildRegistry(tools.BuildOptions{Cwd: cwd, Store: st, ApprovalFn: approvalFn, FileApprovalFn: fileApprovalFn})
 
 	outputChan := make(chan agent.OutputEvent, 256)
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
@@ -295,6 +301,12 @@ func runREPL(noSkills bool) {
 		}
 		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
+	// Sensitive files (.env*, SSH/cloud credentials, ~/.poisson secrets, ...)
+	// are deterministically flagged by guard.SensitivePathReason, so this asks
+	// the human directly — no LLM risk classification needed.
+	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
+		return humanApproval(action, reason, workdir, agent.BashRiskHigh)
+	}
 
 	subApprovalFn := func(command, description, workdir, agentName, risk string) (bool, string) {
 		_ = agentName // overlay uses command context; name available for future UI
@@ -302,10 +314,11 @@ func runREPL(noSkills bool) {
 	}
 
 	reg := tools.BuildRegistry(tools.BuildOptions{
-		Cwd:         cwd,
-		Store:       st,
-		ApprovalFn:  approvalFn,
-		SubApproval: subApprovalFn,
+		Cwd:            cwd,
+		Store:          st,
+		ApprovalFn:     approvalFn,
+		FileApprovalFn: fileApprovalFn,
+		SubApproval:    subApprovalFn,
 	})
 
 	// Set up agent.
@@ -628,16 +641,23 @@ func runChildMode() {
 		}
 		return humanChildApproval(command, description, workdir, agent.BashRiskUnknown)
 	}
+	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
+		if sandbox {
+			return true, ""
+		}
+		return humanChildApproval(action, reason, workdir, agent.BashRiskHigh)
+	}
 
 	// Child:true grants every tool except subagent, so a subagent gets the full
 	// tool set (read/write/edit/bash/search/ls/glob/exa_search/recall) but cannot
 	// spawn further subagents — recursion is bounded to one level.
 	reg := tools.BuildRegistry(tools.BuildOptions{
-		Cwd:        cwd,
-		Store:      st,
-		Sandbox:    sandbox,
-		ApprovalFn: approvalFn,
-		Child:      true,
+		Cwd:            cwd,
+		Store:          st,
+		Sandbox:        sandbox,
+		ApprovalFn:     approvalFn,
+		FileApprovalFn: fileApprovalFn,
+		Child:          true,
 	})
 
 	// Run agent with a nil outputChan (we write events ourselves).

@@ -7,14 +7,20 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"poisson/internal/guard"
 )
 
 // EditTool edits a file using exact text replacement.
 type EditTool struct {
-	cwd string
+	cwd        string
+	sandbox    bool
+	approvalFn ApprovalFn
 }
 
-func NewEditTool(cwd string) *EditTool { return &EditTool{cwd: cwd} }
+func NewEditTool(cwd string, sandbox bool, approvalFn ApprovalFn) *EditTool {
+	return &EditTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
+}
 
 func (t *EditTool) Name() string { return "edit" }
 
@@ -66,6 +72,15 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	}
 
 	path := resolvePath(t.cwd, in.Path)
+
+	if !t.sandbox {
+		if reason := guard.SensitivePathReason(path); reason != "" {
+			allowed, denyReason := t.approvalFn(ctx, "edit "+path, reason, t.cwd)
+			if !allowed {
+				return ToolResult{Error: sensitivePathDenyMsg(reason, denyReason)}, nil
+			}
+		}
+	}
 
 	info, err := os.Stat(path)
 	if err != nil {

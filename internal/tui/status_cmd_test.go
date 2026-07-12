@@ -39,7 +39,7 @@ func TestCmdStatus(t *testing.T) {
 	}
 	prov := provider.NewFakeProvider("ollama", []provider.Model{{ID: cfg.Ollama.Model, ContextWindow: 8192}})
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewReadTool(dir))
+	reg.Register(tools.NewReadTool(dir, true, nil))
 	reg.Register(tools.NewBashTool(dir, true, func(context.Context, string, string, string) (bool, string) { return true, "" }))
 	a := agent.NewAgent(s, prov, reg, cfg, sid, make(chan agent.OutputEvent, 64), func(context.Context, string, string, string) (bool, string) { return false, "" })
 	a.SetModel(cfg.Ollama.Model)

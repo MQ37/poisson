@@ -10,14 +10,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"poisson/internal/guard"
 )
 
 // ReadTool reads the contents of a file.
 type ReadTool struct {
-	cwd string
+	cwd        string
+	sandbox    bool
+	approvalFn ApprovalFn
 }
 
-func NewReadTool(cwd string) *ReadTool { return &ReadTool{cwd: cwd} }
+func NewReadTool(cwd string, sandbox bool, approvalFn ApprovalFn) *ReadTool {
+	return &ReadTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
+}
 
 func (t *ReadTool) Name() string { return "read" }
 
@@ -61,6 +67,15 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	}
 
 	path := resolvePath(t.cwd, in.Path)
+
+	if !t.sandbox {
+		if reason := guard.SensitivePathReason(path); reason != "" {
+			allowed, denyReason := t.approvalFn(ctx, "read "+path, reason, t.cwd)
+			if !allowed {
+				return ToolResult{Error: sensitivePathDenyMsg(reason, denyReason)}, nil
+			}
+		}
+	}
 
 	if isImagePath(path) {
 		return t.readImage(path)

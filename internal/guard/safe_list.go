@@ -198,6 +198,7 @@ var sensitiveDirPatterns = []string{
 	"/etc/sudoers",
 	"/.docker/",
 	"/.kube/",
+	"/.poisson/", // px's own config, OAuth tokens (auth.json), and session DB
 }
 
 // sshPrivKeyRe matches SSH private key filenames.

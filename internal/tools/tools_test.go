@@ -56,8 +56,8 @@ func TestDefinitionsStableSortedOrder(t *testing.T) {
 
 func TestWriteThenRead(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
-	r := NewReadTool(dir)
+	w := NewWriteTool(dir, true, nil)
+	r := NewReadTool(dir, true, nil)
 
 	path := "hello.txt"
 	content := "line1\nline2\nline3\n"
@@ -94,7 +94,7 @@ func TestWriteThenRead(t *testing.T) {
 
 func TestRead_LongSingleLine(t *testing.T) {
 	dir := testutil.TempDir(t)
-	r := NewReadTool(dir)
+	r := NewReadTool(dir, true, nil)
 	// A single line larger than the initial scan buffer (64KB) but under the
 	// giving-up cap — e.g. a minified bundle. Must not hard-fail.
 	line := strings.Repeat("x", 200*1024)
@@ -134,7 +134,7 @@ func TestRead_ImageBase64(t *testing.T) {
 	if err := os.WriteFile(path, png, 0644); err != nil {
 		t.Fatal(err)
 	}
-	r := NewReadTool(dir)
+	r := NewReadTool(dir, true, nil)
 	res, err := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "pixel.png"}))
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -149,7 +149,7 @@ func TestRead_ImageBase64(t *testing.T) {
 
 func TestWrite_CreatesParentDirs(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
+	w := NewWriteTool(dir, true, nil)
 
 	res, _ := w.Execute(context.Background(), mustJSON(t, map[string]string{
 		"path":    "sub/dir/deep/file.txt",
@@ -170,7 +170,7 @@ func TestWrite_PreservesExistingMode(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old"), 0o755); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	w := NewWriteTool(dir)
+	w := NewWriteTool(dir, true, nil)
 	res, _ := w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "script.sh", "content": "new"}))
 	if res.Error != "" {
 		t.Fatalf("write error: %s", res.Error)
@@ -186,8 +186,8 @@ func TestWrite_PreservesExistingMode(t *testing.T) {
 
 func TestRead_OffsetLimit(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
-	r := NewReadTool(dir)
+	w := NewWriteTool(dir, true, nil)
+	r := NewReadTool(dir, true, nil)
 
 	// Write a 10-line file.
 	var content strings.Builder
@@ -251,7 +251,7 @@ func TestRead_TruncationCountsLinesCorrectly(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	r := NewReadTool(dir)
+	r := NewReadTool(dir, true, nil)
 	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "exact.txt"}))
 	if res.Error != "" {
 		t.Fatalf("read error: %s", res.Error)
@@ -266,8 +266,8 @@ func TestRead_TruncationCountsLinesCorrectly(t *testing.T) {
 
 func TestEdit(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
-	e := NewEditTool(dir)
+	w := NewWriteTool(dir, true, nil)
+	e := NewEditTool(dir, true, nil)
 
 	content := "alpha\nbeta\ngamma\n"
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": content}))
@@ -294,8 +294,8 @@ func TestEdit(t *testing.T) {
 
 func TestEdit_NonUniqueFails(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
-	e := NewEditTool(dir)
+	w := NewWriteTool(dir, true, nil)
+	e := NewEditTool(dir, true, nil)
 
 	content := "foo\nfoo\n"
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": content}))
@@ -316,8 +316,8 @@ func TestEdit_NonUniqueFails(t *testing.T) {
 
 func TestEdit_MissingFails(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
-	e := NewEditTool(dir)
+	w := NewWriteTool(dir, true, nil)
+	e := NewEditTool(dir, true, nil)
 
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "foo\n"}))
 
@@ -341,7 +341,7 @@ func TestEdit_MultipleEditsUseOriginalFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("alpha\nbeta\ngamma\n"), 0o755); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	e := NewEditTool(dir)
+	e := NewEditTool(dir, true, nil)
 
 	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"path": "f.txt",
@@ -368,8 +368,8 @@ func TestEdit_MultipleEditsUseOriginalFile(t *testing.T) {
 
 func TestEdit_OverlappingEditsFail(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
-	e := NewEditTool(dir)
+	w := NewWriteTool(dir, true, nil)
+	e := NewEditTool(dir, true, nil)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "abcdef\n"}))
 
 	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -386,7 +386,7 @@ func TestEdit_OverlappingEditsFail(t *testing.T) {
 
 func TestSearch(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
+	w := NewWriteTool(dir, true, nil)
 	s := NewSearchTool(dir)
 
 	// Create files with known content.
@@ -419,7 +419,7 @@ func TestSearch(t *testing.T) {
 // them rather than treating the whole string as a single (missing) path.
 func TestSearch_MultipleSpaceSeparatedPaths(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
+	w := NewWriteTool(dir, true, nil)
 	s := NewSearchTool(dir)
 
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "one/a.go", "content": "// TODO one\n"}))
@@ -443,7 +443,7 @@ func TestSearch_MultipleSpaceSeparatedPaths(t *testing.T) {
 
 func TestSearch_MaxResultsIsGlobal(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
+	w := NewWriteTool(dir, true, nil)
 	s := NewSearchTool(dir)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "a.txt", "content": "hit\nhit\nhit\n"}))
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "b.txt", "content": "hit\nhit\nhit\n"}))
@@ -476,7 +476,7 @@ func TestSearch_InvalidRegexReturnsError(t *testing.T) {
 
 func TestSearch_NoMatches(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
+	w := NewWriteTool(dir, true, nil)
 	s := NewSearchTool(dir)
 
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "hello world\n"}))
@@ -524,7 +524,7 @@ func TestSearch_ScannerErrorReported(t *testing.T) {
 
 func TestLs(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
+	w := NewWriteTool(dir, true, nil)
 	ls := NewLsTool(dir)
 
 	// Create some files and a dir.
@@ -556,7 +556,7 @@ func TestLs(t *testing.T) {
 // into hidden subdirectories, when all=false.
 func TestLsRecursiveSkipsNestedHidden(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
+	w := NewWriteTool(dir, true, nil)
 	ls := NewLsTool(dir)
 
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "foo/keep.txt", "content": "ok"}))
@@ -586,7 +586,7 @@ func TestLsRecursiveSkipsNestedHidden(t *testing.T) {
 
 func TestGlob(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
+	w := NewWriteTool(dir, true, nil)
 	g := NewGlobTool(dir)
 
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "a.go", "content": "x"}))
@@ -610,7 +610,7 @@ func TestGlob(t *testing.T) {
 
 func TestGlob_Doublestar(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir)
+	w := NewWriteTool(dir, true, nil)
 	g := NewGlobTool(dir)
 
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "a.go", "content": "x"}))
@@ -860,7 +860,7 @@ func TestBashTool_Sandbox(t *testing.T) {
 
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	r := NewRegistry()
-	w := NewWriteTool(testutil.TempDir(t))
+	w := NewWriteTool(testutil.TempDir(t), true, nil)
 	r.Register(w)
 
 	got, ok := r.Get("write")
@@ -878,8 +878,8 @@ func TestRegistry_RegisterAndGet(t *testing.T) {
 
 func TestRegistry_Definitions(t *testing.T) {
 	r := NewRegistry()
-	r.Register(NewReadTool(""))
-	r.Register(NewWriteTool(""))
+	r.Register(NewReadTool("", true, nil))
+	r.Register(NewWriteTool("", true, nil))
 
 	defs := r.Definitions()
 	if len(defs) != 2 {
@@ -965,7 +965,7 @@ func TestReadTool_TrimsLongLine(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "huge.txt"), []byte(strings.Repeat("x", maxBytes+100)), 0o644); err != nil {
 		t.Fatalf("write huge file: %v", err)
 	}
-	res, err := NewReadTool(dir).Execute(context.Background(), mustJSON(t, map[string]interface{}{"path": "huge.txt"}))
+	res, err := NewReadTool(dir, true, nil).Execute(context.Background(), mustJSON(t, map[string]interface{}{"path": "huge.txt"}))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}

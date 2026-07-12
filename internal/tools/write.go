@@ -5,14 +5,20 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"poisson/internal/guard"
 )
 
 // WriteTool writes content to a file, creating parent directories.
 type WriteTool struct {
-	cwd string
+	cwd        string
+	sandbox    bool
+	approvalFn ApprovalFn
 }
 
-func NewWriteTool(cwd string) *WriteTool { return &WriteTool{cwd: cwd} }
+func NewWriteTool(cwd string, sandbox bool, approvalFn ApprovalFn) *WriteTool {
+	return &WriteTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
+}
 
 func (t *WriteTool) Name() string { return "write" }
 
@@ -46,6 +52,15 @@ func (t *WriteTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 	}
 
 	path := resolvePath(t.cwd, in.Path)
+
+	if !t.sandbox {
+		if reason := guard.SensitivePathReason(path); reason != "" {
+			allowed, denyReason := t.approvalFn(ctx, "write "+path, reason, t.cwd)
+			if !allowed {
+				return ToolResult{Error: sensitivePathDenyMsg(reason, denyReason)}, nil
+			}
+		}
+	}
 
 	// Create parent directories.
 	dir := filepath.Dir(path)

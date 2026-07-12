@@ -127,6 +127,14 @@ func tokenize(seg string) []string {
 			}
 			continue
 		}
+		// Unquoted backslash: bash drops the backslash and passes the next
+		// byte through literally (e.g. `\-i` execs as `-i`). Without this, a
+		// single backslash defeats every flag-based detector below.
+		if c == '\\' && i+1 < n {
+			cur.WriteByte(seg[i+1])
+			i += 2
+			continue
+		}
 		cur.WriteByte(c)
 		i++
 	}

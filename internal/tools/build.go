@@ -6,11 +6,12 @@ import (
 	"poisson/internal/store"
 )
 
-// ApprovalFn is called before executing dangerous bash commands. ctx is the
-// tool's turn context so a cancelled turn also cancels the risk classification.
-// reason is an optional human-supplied explanation when denied (empty when
-// allowed, or when the human left it blank) — surfaced to the model so it
-// understands *why* a command was rejected, not just that it was.
+// ApprovalFn is called before executing a dangerous bash command or touching
+// a sensitive file path (read/write/edit). ctx is the tool's turn context so
+// a cancelled turn also cancels the risk classification. reason is an
+// optional human-supplied explanation when denied (empty when allowed, or
+// when the human left it blank) — surfaced to the model so it understands
+// *why* a command was rejected, not just that it was.
 type ApprovalFn func(ctx context.Context, command, description, workdir string) (allowed bool, reason string)
 
 // BuildOptions configures which tools to register.
@@ -19,7 +20,13 @@ type BuildOptions struct {
 	Store       *store.Store
 	Sandbox     bool
 	ApprovalFn  ApprovalFn
-	SubApproval SubagentApproval
+	// FileApprovalFn gates read/write/edit against sensitive paths (.env*,
+	// SSH/cloud credentials, ~/.poisson secrets, ...). Unlike ApprovalFn it is
+	// asked directly — no LLM risk classification — since "does this path
+	// match a secrets pattern" is already deterministic. Defaults to
+	// deny-all, matching ApprovalFn's fail-closed default.
+	FileApprovalFn ApprovalFn
+	SubApproval    SubagentApproval
 	// Child omits the subagent tool so a subagent cannot spawn further
 	// subagents (recursion is bounded to one level). Every other tool remains
 	// available to children.
@@ -36,11 +43,15 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	if approval == nil {
 		approval = func(context.Context, string, string, string) (bool, string) { return false, "" }
 	}
+	fileApproval := opts.FileApprovalFn
+	if fileApproval == nil {
+		fileApproval = func(context.Context, string, string, string) (bool, string) { return false, "" }
+	}
 
 	reg.Register(NewBashTool(opts.Cwd, opts.Sandbox, approval))
-	reg.Register(NewReadTool(opts.Cwd))
-	reg.Register(NewWriteTool(opts.Cwd))
-	reg.Register(NewEditTool(opts.Cwd))
+	reg.Register(NewReadTool(opts.Cwd, opts.Sandbox, fileApproval))
+	reg.Register(NewWriteTool(opts.Cwd, opts.Sandbox, fileApproval))
+	reg.Register(NewEditTool(opts.Cwd, opts.Sandbox, fileApproval))
 	reg.Register(NewSearchTool(opts.Cwd))
 	reg.Register(NewLsTool(opts.Cwd))
 	reg.Register(NewGlobTool(opts.Cwd))

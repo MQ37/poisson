@@ -157,3 +157,15 @@ func resolvePath(cwd, p string) string {
 	return filepath.Join(cwd, p)
 }
 
+// sensitivePathDenyMsg builds the error a file tool returns when access to a
+// sensitive path is blocked or denied approval. reason is the guard's
+// sensitivity classification; denyReason is the optional human-supplied
+// explanation from the approval prompt.
+func sensitivePathDenyMsg(reason, denyReason string) string {
+	msg := "blocked: " + reason
+	if denyReason = strings.TrimSpace(denyReason); denyReason != "" {
+		msg += " - reason: " + denyReason
+	}
+	return msg
+}
+

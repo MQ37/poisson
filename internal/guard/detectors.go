@@ -48,6 +48,13 @@ func hasCommandSubstitution(raw string) bool {
 		if c == '$' && i+1 < n && raw[i+1] == '(' {
 			return true
 		}
+		// Process substitution: <(cmd) / >(cmd) both hand a live command's
+		// stdout/stdin to the outer command via /dev/fd, same trust boundary
+		// as $(...) or backticks. >( is already caught by the redirect check
+		// (hasRedirectToFile), but <( is not caught anywhere else.
+		if c == '<' && i+1 < n && raw[i+1] == '(' {
+			return true
+		}
 		i++
 	}
 	return false
@@ -199,6 +206,32 @@ func touchesSensitivePath(tokens []string) bool {
 	return false
 }
 
+// SensitivePathReason reports why a file path is a secret/credential file
+// that should never be read or written without explicit human approval, or
+// "" if it isn't one. path should already be resolved (absolute, or at
+// least joined with the caller's cwd) — it reuses the same basename/
+// directory-pattern tables the bash guard checks tokens against, so file
+// tools (read/write/edit) and the bash guard agree on what counts as
+// sensitive.
+func SensitivePathReason(path string) string {
+	base := filepath.Base(path)
+	switch {
+	case sensitiveExactBasenames[base]:
+		return "sensitive file: " + base
+	case sshPrivKeyRe.MatchString(base):
+		return "SSH private key: " + base
+	case base == ".env" || strings.HasPrefix(base, ".env."):
+		return "environment secrets file: " + base
+	}
+	slashed := filepath.ToSlash(path)
+	for _, pat := range sensitiveDirPatterns {
+		if strings.Contains(slashed, pat) {
+			return "sensitive path: " + pat
+		}
+	}
+	return ""
+}
+
 // ---------------------------------------------------------------------------
 // Per-command danger detectors
 // ---------------------------------------------------------------------------
@@ -295,21 +328,27 @@ func gitHasOutputFlag(tokens []string) bool {
 // rgHasDangerousFlag detects dangerous ripgrep flags: --files-without-match
 // combined with --delete? rg doesn't delete. Treat -z/--null as potentially
 // dangerous for piping to xargs; treat --files as safe. The main concern is
-// rg piped to xargs rm. We flag --null-data and unusual flags.
+// rg piped to xargs rm. We flag --null-data, unusual flags, and --pre/
+// --pre-glob (runs an arbitrary preprocessor command per searched file —
+// RCE via a SAFE-listed tool).
 func rgHasDangerousFlag(tokens []string) bool {
 	for _, t := range tokens {
 		switch t {
 		case "-z", "--null-data", "--null":
 			return true
 		}
+		if matchesFlag(t, "", "--pre") || matchesFlag(t, "", "--pre-glob") {
+			return true
+		}
 	}
 	return false
 }
 
-// sedHasDangerousFlag detects sed flags that modify files in place: -i.
+// sedHasDangerousFlag detects sed flags that modify files in place: -i /
+// --in-place (including any unambiguous GNU-style abbreviation, e.g. --i).
 func sedHasDangerousFlag(tokens []string) bool {
 	for _, t := range tokens {
-		if t == "-i" || strings.HasPrefix(t, "-i") {
+		if matchesFlag(t, "-i", "--in-place") {
 			return true
 		}
 	}
@@ -353,20 +392,21 @@ func isAlpha(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
-// treeHasDangerousFlag detects tree flags that write to file: -o.
+// treeHasDangerousFlag detects tree flags that write to file: -o / --output-file.
 func treeHasDangerousFlag(tokens []string) bool {
 	for _, t := range tokens {
-		if t == "-o" || strings.HasPrefix(t, "--output-file") {
+		if matchesFlag(t, "-o", "--output-file") {
 			return true
 		}
 	}
 	return false
 }
 
-// yqHasDangerousFlag detects yq flags: -i (in-place), --inplace.
+// yqHasDangerousFlag detects yq flags: -i / --inplace / --in-place
+// (including abbreviations).
 func yqHasDangerousFlag(tokens []string) bool {
 	for _, t := range tokens {
-		if t == "-i" || t == "--inplace" || t == "--in-place" {
+		if matchesFlag(t, "-i", "--inplace") || matchesFlag(t, "", "--in-place") {
 			return true
 		}
 	}
@@ -381,6 +421,27 @@ func tailHasFollowFlag(tokens []string) bool {
 		}
 	}
 	return false
+}
+
+// matchesFlag reports whether token is, or is an unambiguous GNU-style
+// abbreviation of, a dangerous flag. short (e.g. "-i") matches exactly or as
+// a bundled-value prefix (e.g. "-i.bak"); long (e.g. "--in-place") matches
+// exactly or via any "--"-prefixed abbreviation getopt_long would accept
+// ("--in", "--i", ...), including a trailing "=value" form. This closes the
+// gap where e.g. `sed --i file` (a valid abbreviation of `sed --in-place`)
+// slipped past a detector that only checked for the literal "-i" spelling.
+func matchesFlag(token, short, long string) bool {
+	if short != "" && strings.HasPrefix(token, short) {
+		return true
+	}
+	if long == "" || !strings.HasPrefix(token, "--") || len(token) < 3 {
+		return false
+	}
+	name := token
+	if eq := strings.IndexByte(token, '='); eq >= 0 {
+		name = token[:eq]
+	}
+	return strings.HasPrefix(long, name)
 }
 
 // normalizeToken trims whitespace, lowercases the command name, and strips a

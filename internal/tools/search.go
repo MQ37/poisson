@@ -82,13 +82,20 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 		paths = []string{t.cwd}
 	}
 
-	args := append([]string{"--json", "--max-count", strconv.Itoa(maxResults), in.Pattern}, paths...)
+	// "--" ends option parsing before pattern/paths, and "--glob=" ties the
+	// glob value to its flag with no separate token — otherwise a pattern,
+	// path, or glob value starting with "-" (e.g. "--pre=/tmp/x.sh") would be
+	// parsed as an rg flag instead of a literal, letting the model run
+	// arbitrary commands via rg's --pre preprocessor.
+	args := []string{"--json", "--max-count", strconv.Itoa(maxResults)}
 	if in.IgnoreCase {
-		args = append([]string{"-i"}, args...)
+		args = append(args, "-i")
 	}
 	if in.Glob != "" {
-		args = append([]string{"--glob", in.Glob}, args...)
+		args = append(args, "--glob="+in.Glob)
 	}
+	args = append(args, "--", in.Pattern)
+	args = append(args, paths...)
 
 	cmd := exec.CommandContext(ctx, "rg", args...)
 	if t.cwd != "" {

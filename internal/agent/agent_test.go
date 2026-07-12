@@ -56,7 +56,7 @@ func newTestConfig() *config.Config {
 
 func newTestRegistry(cwd string) *tools.Registry {
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewReadTool(cwd))
+	reg.Register(tools.NewReadTool(cwd, true, nil))
 	reg.Register(tools.NewLsTool(cwd))
 	reg.Register(tools.NewBashTool(cwd, true, nil)) // sandbox=true
 	return reg
