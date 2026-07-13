@@ -21,7 +21,7 @@ func NewSearchTool(cwd string) *SearchTool { return &SearchTool{cwd: cwd} }
 func (t *SearchTool) Name() string { return "search" }
 
 func (t *SearchTool) Description() string {
-	return "Search file contents using ripgrep. Returns matching lines with file paths and line numbers."
+	return "Search file contents using ripgrep. Returns matching lines with file paths and line numbers. Prefer this over bash `grep`/`rg` when searching text is the whole command — skips bash's risk-classification step entirely."
 }
 
 func (t *SearchTool) Schema() json.RawMessage {

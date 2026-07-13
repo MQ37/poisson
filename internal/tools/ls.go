@@ -21,7 +21,7 @@ func NewLsTool(cwd string) *LsTool { return &LsTool{cwd: cwd} }
 func (t *LsTool) Name() string { return "ls" }
 
 func (t *LsTool) Description() string {
-	return "List directory contents with file types and sizes."
+	return "List directory contents with file types and sizes. Prefer this over bash `ls` when listing the directory is the whole command — skips bash's risk-classification step entirely."
 }
 
 func (t *LsTool) Schema() json.RawMessage {
