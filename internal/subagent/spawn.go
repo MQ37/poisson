@@ -55,11 +55,31 @@ type ChildEvent struct {
 	Error         string          `json:"error,omitempty"`
 }
 
-// Spawn starts a child Poisson process in JSON output mode.
-func Spawn(input SpawnInput) (*ChildProcess, error) {
-	// The child is flagged via POISSON_SUBAGENT_CHILD below; runChildMode then
-	// builds the registry with Child:true, which grants every tool except
-	// subagent (so subagents cannot spawn subagents).
+// lookupExecutable resolves the binary Spawn execs as the child. A package
+// var (not a hardcoded os.Executable() call) so tests can point it at a
+// small fake "child" script instead of the real px binary — exercising
+// Spawn's actual exec/pipe/env machinery end-to-end with zero real LLM
+// calls, instead of only ever running against the live binary (which
+// spawn_test.go previously did for nothing but Reap()).
+var lookupExecutable = os.Executable
+
+// SetLookupExecutableForTest overrides the binary Spawn execs as the child,
+// returning a restore func. Test-only: lets other packages' tests (e.g.
+// internal/tools's SubagentTool.Execute tests) run Spawn end-to-end against
+// a small fake "child" script instead of the real px binary, with zero real
+// LLM calls.
+func SetLookupExecutableForTest(path string) (restore func()) {
+	old := lookupExecutable
+	lookupExecutable = func() (string, error) { return path, nil }
+	return func() { lookupExecutable = old }
+}
+
+// buildSpawnArgs returns the child process's argv (excluding argv[0]) for
+// input. Pulled out of Spawn as a pure function so the argument-construction
+// logic — exactly the kind of propagation bug already found once this
+// session ("subagent silently falls back to hardcoded model") — is directly
+// unit-testable without spawning any process at all.
+func buildSpawnArgs(input SpawnInput) []string {
 	args := []string{
 		"--json",
 		"--no-skills",
@@ -68,15 +88,15 @@ func Spawn(input SpawnInput) (*ChildProcess, error) {
 	if input.Task != "" {
 		args = append(args, "--", input.Task)
 	}
+	return args
+}
 
-	bin, err := os.Executable()
-	if err != nil {
-		bin = "px"
-	}
-	cmd := exec.Command(bin, args...)
-	cmd.Dir = input.Cwd
-
-	// Environment: inherit parent env so PATH/HOME/etc. are available.
+// buildSpawnEnv returns the full environment for the child process: the
+// current process's environment (so PATH/HOME/etc. are available) plus
+// input.ExtraEnv, plus the POISSON_SUBAGENT_* variables runChildMode reads
+// to learn its provider/model/effort/name/db/sandbox settings. Pulled out of
+// Spawn as a pure function for the same reason as buildSpawnArgs.
+func buildSpawnEnv(input SpawnInput) []string {
 	env := append(os.Environ(), input.ExtraEnv...)
 	env = append(env, "POISSON_SUBAGENT_CHILD=1")
 	if input.Provider != "" {
@@ -97,7 +117,23 @@ func Spawn(input SpawnInput) (*ChildProcess, error) {
 	if input.Sandbox {
 		env = append(env, "POISSON_SANDBOX=1")
 	}
-	cmd.Env = env
+	return env
+}
+
+// Spawn starts a child Poisson process in JSON output mode.
+func Spawn(input SpawnInput) (*ChildProcess, error) {
+	// The child is flagged via POISSON_SUBAGENT_CHILD below; runChildMode then
+	// builds the registry with Child:true, which grants every tool except
+	// subagent (so subagents cannot spawn subagents).
+	args := buildSpawnArgs(input)
+
+	bin, err := lookupExecutable()
+	if err != nil {
+		bin = "px"
+	}
+	cmd := exec.Command(bin, args...)
+	cmd.Dir = input.Cwd
+	cmd.Env = buildSpawnEnv(input)
 
 	// Run the child in its own process group so Reap() can kill the whole tree
 	// (the child plus any bash grandchildren it spawned) on Ctrl+C — otherwise
