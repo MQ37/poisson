@@ -182,6 +182,83 @@ func TestCompactRecordsSummaryTokensNotZero(t *testing.T) {
 	}
 }
 
+// TestSecondCompactionIncorporatesPreviousSummary covers a normal, common
+// occurrence in any long session — a SECOND /compact after the first already
+// left a compaction summary — which no existing test ever exercised: every
+// other compaction test seeds a session with no prior summary, so the
+// "incorporate the previous summary, don't blindly preserve everything"
+// instruction-building branch in compact() was completely untested. It's
+// exactly the class of gap that produced two real bugs earlier this session
+// (the request-shape and the token-count bugs), just in a different branch.
+func TestSecondCompactionIncorporatesPreviousSummary(t *testing.T) {
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	seedMessages(t, s, sid, []string{"user", "assistant"})
+
+	firstSummary := "## Big Picture\nfirst summary content"
+	secondSummary := "## Big Picture\nsecond summary content"
+	fp := newFakeProvider()
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse(firstSummary, nil),
+		provider.FakeTextResponse(secondSummary, nil),
+	})
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("first Compact: %v", err)
+	}
+	sess, err := s.GetSession(sid)
+	if err != nil || sess == nil || sess.CompactionSummary == nil || *sess.CompactionSummary != firstSummary {
+		t.Fatalf("after first compact, session summary = %+v, want %q", sess, firstSummary)
+	}
+
+	// Simulate continued conversation after the first compaction.
+	seedMessages(t, s, sid, []string{"user", "assistant"})
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("second Compact: %v", err)
+	}
+
+	reqs := fp.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("Stream calls = %d, want 2", len(reqs))
+	}
+	found := false
+	for _, m := range reqs[1].Messages {
+		for _, c := range m.Content {
+			if strings.Contains(c.Text, firstSummary) {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("second compaction's request never included the previous summary in its instruction")
+	}
+
+	// The summary must be REPLACED, not accumulated/duplicated across compactions.
+	sess2, err := s.GetSession(sid)
+	if err != nil || sess2 == nil || sess2.CompactionSummary == nil {
+		t.Fatalf("GetSession after second compact: %v, %+v", err, sess2)
+	}
+	if strings.Contains(*sess2.CompactionSummary, "first summary content") {
+		t.Errorf("second compaction's summary should replace the first, not contain it: %q", *sess2.CompactionSummary)
+	}
+	if !strings.Contains(*sess2.CompactionSummary, "second summary content") {
+		t.Errorf("summary after second compact = %q, want the new summary", *sess2.CompactionSummary)
+	}
+
+	// The second compaction's "before" figure must include the FIRST summary's
+	// tokens, not just the newly-seeded messages' — the fix for the "0 tokens"
+	// bug touched this same estimatedTokens computation.
+	comp, err := s.GetLastCompaction(sid)
+	if err != nil || comp == nil {
+		t.Fatalf("GetLastCompaction: %v, %+v", err, comp)
+	}
+	if comp.TokensBefore < a.EstimateTokens(firstSummary) {
+		t.Errorf("second compaction's TokensBefore = %d, should be at least the first summary's own token cost (%d)", comp.TokensBefore, a.EstimateTokens(firstSummary))
+	}
+}
+
 // TestCompactAutoKeepsActiveTail verifies auto-compaction never empties the
 // active set: it summarizes everything before the current turn and keeps that
 // turn (starting with a user message) active, so the run loop's next request is
