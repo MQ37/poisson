@@ -2,6 +2,8 @@ package tui
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -17,6 +19,8 @@ type msgBlock struct {
 	Thinking    string          `json:"thinking,omitempty"`
 	Redacted    bool            `json:"redacted,omitempty"`
 	FileRef     string          `json:"file_ref,omitempty"`
+	MediaType   string          `json:"media_type,omitempty"`
+	ImagePath   string          `json:"image_path,omitempty"`
 }
 
 func parseMessageBlocks(content string) []msgBlock {
@@ -94,7 +98,12 @@ func (t *TUI) hydrateScrollbackLocked() {
 			// would lose it.
 			var parts []string
 			var fileRefs []msgBlock
+			var images []msgBlock
 			for _, b := range blocks {
+				if b.Type == "image" && b.ImagePath != "" {
+					images = append(images, b)
+					continue
+				}
 				if b.Type != "text" || b.Text == "" {
 					continue
 				}
@@ -108,6 +117,8 @@ func (t *TUI) hydrateScrollbackLocked() {
 				}
 				parts = append(parts, b.Text)
 			}
+			// Order matches the live submit path (agent_io.go): text bubble, then
+			// file-ref cards, then image cards.
 			if len(parts) > 0 {
 				t.scroll.append(StyledLine{Style: styleUser, Text: strings.Join(parts, "")})
 			}
@@ -115,6 +126,17 @@ func (t *TUI) hydrateScrollbackLocked() {
 				id := nextToolID
 				nextToolID++
 				t.scroll.appendFileRefCard(id, b.FileRef, stripFence(b.Text))
+			}
+			for _, b := range images {
+				// The staged file lives in /tmp and may or may not still exist by
+				// resume time — stat is best-effort for size, name always shows.
+				size := 0
+				if fi, err := os.Stat(b.ImagePath); err == nil {
+					size = int(fi.Size())
+				}
+				id := nextToolID
+				nextToolID++
+				t.scroll.appendImageRefCard(id, filepath.Base(b.ImagePath), b.MediaType, size)
 			}
 		case "assistant":
 			for _, b := range blocks {

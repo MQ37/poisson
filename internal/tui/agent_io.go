@@ -50,12 +50,14 @@ func (t *TUI) submit(text string) error {
 	t.histIdx = -1
 	t.draftSaved = ""
 	t.scroll.scrollToBottom()
-	display := text
-	if strings.TrimSpace(display) == "" {
-		display = "🖼 (image)"
+	// cleaned (not the raw text) so a typed @image.png token never shows twice
+	// — once as raw text, once via the card below. If the message was image(s)
+	// only, there's nothing left to show as a bubble; the card(s) carry it.
+	if strings.TrimSpace(cleaned) != "" {
+		t.scroll.append(StyledLine{Style: styleUser, Text: cleaned})
 	}
-	t.scroll.append(StyledLine{Style: styleUser, Text: display})
 	t.appendFileRefCardsLocked(segments)
+	t.appendImageRefCardsLocked()
 	t.editor.setText("")
 	images := t.takeAttachmentsForSend()
 	t.startTurn(segments, images...)

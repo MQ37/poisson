@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/png"
@@ -11,7 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"poisson/internal/agent"
+	"poisson/internal/config"
 	"poisson/internal/provider"
+	"poisson/internal/store"
+	"poisson/internal/testutil"
+	"poisson/internal/tools"
 )
 
 func testPNGBytes(t *testing.T, w, h int) []byte {
@@ -233,6 +239,110 @@ func TestSubmitSendsImageToProvider(t *testing.T) {
 			t.Errorf("attachments not cleared after submit: %d", len(env.tui.pendingAttachments))
 		}
 	})
+}
+
+// TestSubmitAppendsImageRefCard is the live-send side of the reported bug:
+// pasting an image (Ctrl+V) and submitting text together used to leave the
+// image completely invisible in scrollback — the user bubble showed only the
+// typed text, with zero indication an image was attached (the "🖼 (image)"
+// placeholder only ever covered the text-empty case, and even then showed no
+// name or size). Now every staged attachment gets its own collapsible card.
+func TestSubmitAppendsImageRefCard(t *testing.T) {
+	makeVision(t)
+	env := newTUIIntegEnv(t, [][]provider.StreamEvent{provider.FakeTextResponse("nice", nil)})
+	t.Setenv("TMPDIR", env.dir)
+	env.tui.grabImage = func() ([]byte, error) { return testPNGBytes(t, 300, 200), nil }
+
+	lockRun(env.tui, func() {
+		env.tui.grabClipboardImageLocked()
+		if err := env.tui.submit("what is this"); err != nil {
+			t.Fatalf("submit: %v", err)
+		}
+	})
+	waitFor(t, func() bool {
+		env.tui.mu.Lock()
+		defer env.tui.mu.Unlock()
+		return !env.tui.status.Thinking
+	})
+
+	var userText string
+	var cardInput string
+	var sawCard bool
+	env.tui.mu.Lock()
+	for _, b := range env.tui.scroll.blocks {
+		if b.kind == blockUser {
+			userText = b.raw
+		}
+		if b.kind == blockToolCall && b.meta.ToolName == "@image" {
+			sawCard = true
+			cardInput = string(b.meta.ToolInput)
+		}
+	}
+	env.tui.mu.Unlock()
+
+	if userText != "what is this" {
+		t.Errorf("user bubble = %q, want the typed text preserved", userText)
+	}
+	if !sawCard {
+		t.Fatal("expected a collapsible @image card in scrollback — the pasted image was invisible")
+	}
+	if !strings.Contains(cardInput, "clipboard") {
+		t.Errorf("card input = %q, want the attachment name", cardInput)
+	}
+}
+
+// TestImageRoundTripLiveToResume is the full loop: an image sent through
+// PromptSegmentsWithContext must hydrate back into the same collapsible
+// @image card on resume, not silently vanish (images had no hydrate handling
+// at all — the msgBlock parser dropped any non-text, non-empty block).
+func TestImageRoundTripLiveToResume(t *testing.T) {
+	dir := testutil.TempDir(t)
+	imgPath := writeTestImage(t, dir, "shot.png", 64, 64)
+
+	st, err := store.Open(dir + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	sid := "image-resume-test"
+	st.CreateSession(&store.Session{ID: sid, Cwd: ".", Provider: "fake", Model: "m"})
+	prov := provider.NewFakeProvider("fake", nil)
+	prov.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("a screenshot", &provider.Usage{InputTokens: 10, OutputTokens: 5}),
+	})
+	a := agent.NewAgent(st, prov, tools.NewRegistry(), config.DefaultConfig(), sid, nil, nil)
+
+	if err := a.PromptSegmentsWithContext(context.Background(), []agent.TextSegment{{Text: "what is this"}},
+		agent.ImageAttachment{Path: imgPath, MediaType: "image/png"}); err != nil {
+		t.Fatal(err)
+	}
+
+	tui := newTUI(a, sid, nil)
+	tui.mu.Lock()
+	tui.resetSessionViewLocked()
+	tui.mu.Unlock()
+
+	var userText string
+	var cardInput string
+	var sawCard bool
+	for _, b := range tui.scroll.blocks {
+		if b.kind == blockUser {
+			userText = b.raw
+		}
+		if b.kind == blockToolCall && b.meta.ToolName == "@image" {
+			sawCard = true
+			cardInput = string(b.meta.ToolInput)
+		}
+	}
+	if userText != "what is this" {
+		t.Errorf("resumed user bubble = %q, want the typed text preserved", userText)
+	}
+	if !sawCard {
+		t.Fatal("expected a collapsible @image card on resume — the image vanished")
+	}
+	if !strings.Contains(cardInput, "shot.png") {
+		t.Errorf("card input = %q, want the image's basename", cardInput)
+	}
 }
 
 func decodeConfig(t *testing.T, path string) image.Config {

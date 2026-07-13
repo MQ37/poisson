@@ -240,6 +240,25 @@ func (s *scrollback) appendFileRefCard(id int64, path, content string) {
 	s.trim()
 }
 
+// appendImageRefCard adds a collapsible card for an image attachment — the
+// same tool-card look as appendFileRefCard, so a pasted or @-referenced image
+// is never silently absent from the conversation history. It's synthetic (no
+// matching tool_use/tool_result), resolved the instant it's created. Used
+// both live (right after the user's message, attachments.go) and on resume
+// (hydrate.go, reconstructed from the image content block).
+func (s *scrollback) appendImageRefCard(id int64, name, mediaType string, size int) {
+	b := s.newBlock(blockToolCall, "")
+	b.meta = BlockMeta{
+		ToolName:  "@image",
+		ToolInput: toolInputJSON("@image", map[string]any{"name": name, "media_type": mediaType, "size": size}),
+		ToolDone:  true,
+		StartedAt: time.Now(),
+	}
+	s.blocks = append(s.blocks, b)
+	s.totalAdded++
+	s.trim()
+}
+
 // completeToolCall attaches a result to the matching open tool card.
 // When providerCallID is set, pair by id so parallel results can arrive out of order.
 // Otherwise fall back to oldest open card (FIFO).

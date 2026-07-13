@@ -81,6 +81,20 @@ func (t *TUI) attachImageRefs(input string) (string, error) {
 	return cleaned, firstErr
 }
 
+// appendImageRefCardsLocked appends a collapsible card for every staged image
+// attachment, right after the user's message bubble — mirrors
+// appendFileRefCardsLocked (agent_io.go) so a pasted or @-referenced image is
+// never silently absent from the conversation history. Must run before
+// takeAttachmentsForSend clears pendingAttachments. Live and resume
+// (hydrate.go) both render through the same scrollback card. Caller holds t.mu.
+func (t *TUI) appendImageRefCardsLocked() {
+	for _, a := range t.pendingAttachments {
+		id := t.nextToolID
+		t.nextToolID++
+		t.scroll.appendImageRefCard(id, a.Name, a.MediaType, a.Size)
+	}
+}
+
 // takeAttachmentsForSend clears the staged attachments and returns them as agent
 // image attachments. If the current model has no vision support it warns and
 // drops them. Caller holds t.mu.

@@ -90,6 +90,17 @@ func toolInputPreview(toolName string, input []byte) string {
 		if json.Unmarshal(input, &in) == nil && in.URL != "" {
 			return previewText(in.URL, 100)
 		}
+	case "@image":
+		var in struct {
+			Name string `json:"name"`
+			Size int    `json:"size"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Name != "" {
+			if in.Size > 0 {
+				return fmt.Sprintf("%s · %s", previewText(in.Name, 80), humanBytes(in.Size))
+			}
+			return previewText(in.Name, 80)
+		}
 	}
 	return previewText(strings.TrimSpace(string(input)), 80)
 }
