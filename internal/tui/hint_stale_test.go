@@ -33,7 +33,7 @@ func TestFooterHintNotStaleAfterTurnCompletes(t *testing.T) {
 	e := newTUIIntegEnv(t, [][]provider.StreamEvent{
 		provider.FakeTextResponse("done", nil),
 	})
-	v := newVterm(e.tui.rows)
+	v := newVterm(e.tui.rows, e.tui.cols)
 	buf := e.tui.writer.(*bytes.Buffer)
 
 	tick := func() {

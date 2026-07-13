@@ -54,7 +54,7 @@ func runInputStress(t *testing.T, configure func(tui *TUI)) int {
 	if configure != nil {
 		configure(tui)
 	}
-	v := newVterm(tui.rows)
+	v := newVterm(tui.rows, tui.cols)
 
 	tui.dirty.markFull()
 	tui.paint(tui.dirty.consume())

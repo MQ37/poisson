@@ -126,7 +126,7 @@ func TestDuplicateSeparatorAfterCancelThenType(t *testing.T) {
 	time.Sleep(150 * time.Millisecond) // let the sleep-based tool actually finish
 	stop()
 
-	v := newVterm(e.tui.rows)
+	v := newVterm(e.tui.rows, e.tui.cols)
 	max := 0
 	for _, chunk := range rec.snapshot() {
 		v.apply(chunk)

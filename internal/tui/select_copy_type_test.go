@@ -5,21 +5,32 @@ import (
 	"testing"
 )
 
-// TestDuplicateSeparatorAfterSelectCopyThenType reproduces a live user report:
-// select text in the conversation (mouse drag), press Ctrl+Y to copy, then
-// start typing — the input separator duplicates several times, stacking up
-// on screen. Uses the same vterm tick-by-tick replay as
-// TestDuplicateSeparatorOnInputShrink, so any leftover un-redrawn row shows
-// up exactly as it would on a real terminal.
+// TestDuplicateSeparatorAfterSelectCopyThenType reproduces a live user
+// report, root-caused via a real captured session replayed through pyte (a
+// real VT100/xterm emulator): renderHintLine() was the only line in
+// paintInputRegion never truncated to the terminal width. Its base text
+// alone (160 runes) fits comfortably on this test's 185-column terminal —
+// matching the user's own real terminal size — but the ephemeral "Copied N
+// lines to clipboard" hint Ctrl+Y prepends pushes the combined string past
+// 185, so a real terminal auto-wraps it and, with no scroll region
+// configured, scrolls the WHOLE SCREEN up by one — corrupting every other
+// absolute-row-addressed write already on screen. Repeated once per
+// keystroke for as long as the ephemeral hint is still showing (2s TTL),
+// which is exactly why it looked like the separator kept duplicating.
+//
+// Uses the same vterm tick-by-tick replay as TestDuplicateSeparatorOnInput-
+// Shrink; vterm now auto-wraps and scrolls exactly like a real terminal (an
+// earlier, naive version of it — which never wrapped — was blind to this
+// entire bug class).
 func TestDuplicateSeparatorAfterSelectCopyThenType(t *testing.T) {
 	tui := newTUI(nil, "s-test", nil)
-	tui.rows = 24
-	tui.cols = 80
+	tui.rows = 47
+	tui.cols = 185
 	buf := &bytes.Buffer{}
 	tui.writer = buf
 	tui.recomputeLayout()
 	tui.scroll.append(StyledLine{Style: styleAssistant, Text: "hello world this is selectable text"})
-	v := newVterm(tui.rows)
+	v := newVterm(tui.rows, tui.cols)
 
 	tick := func() {
 		tui.paint(tui.dirty.consume())

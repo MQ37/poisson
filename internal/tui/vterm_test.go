@@ -1,6 +1,9 @@
 package tui
 
-import "regexp"
+import (
+	"regexp"
+	"unicode/utf8"
+)
 
 // vterm is a minimal terminal emulator: it only understands the escape
 // sequences this renderer actually emits (cup, clearLine, colors it ignores),
@@ -9,12 +12,56 @@ import "regexp"
 // []byte, not string — string(someByte) converts the byte as a Unicode code
 // point, not a raw byte, which mangles multi-byte UTF-8 runes like the dash
 // separator glyph.
+//
+// Crucially, it auto-wraps at width columns and scrolls when a wrapped line
+// runs past the last row — exactly like a real terminal, and exactly the
+// behavior a naive CSI-only parser (an earlier version of this type) missed
+// entirely. That gap let a real bug (an untruncated hint-line write that
+// could exceed the terminal width) go undetected by every test using this
+// harness: written text just piled up past the intended column with no
+// visible consequence in a no-wrap model, when in a real terminal it wraps
+// and scrolls the whole screen, corrupting every absolute-row-addressed
+// write already on screen. Confirmed against a real captured session replayed
+// through pyte (a real VT100/xterm emulator) before fixing.
 type vterm struct {
-	rows [][]byte
+	rows  [][]byte
+	width int
+	col   int // 0-based column of the next rune to write, for wrap tracking
 }
 
-func newVterm(height int) *vterm {
-	return &vterm{rows: make([][]byte, height+1)} // 1-based
+func newVterm(height int, width int) *vterm {
+	return &vterm{rows: make([][]byte, height+1), width: width} // 1-based
+}
+
+// scroll shifts every row up by one, discarding row 1 and clearing the new
+// last row — what a real terminal does when a line wraps past the bottom.
+func (v *vterm) scroll() {
+	for r := 1; r < len(v.rows)-1; r++ {
+		v.rows[r] = v.rows[r+1]
+	}
+	if len(v.rows) > 1 {
+		v.rows[len(v.rows)-1] = nil
+	}
+}
+
+// writeRune appends one rune to row (wrapping/scrolling as needed) and
+// advances v.col. Assumes single-width runes, true for everything this
+// renderer emits (box-drawing/dash glyphs, ASCII, plain prose).
+func (v *vterm) writeRune(row *int, r rune) {
+	if v.width > 0 && v.col >= v.width {
+		v.col = 0
+		*row++
+		if *row >= len(v.rows) {
+			v.scroll()
+			*row = len(v.rows) - 1
+		}
+	}
+	var buf [4]byte
+	n := utf8.EncodeRune(buf[:], r)
+	if *row >= 1 && *row < len(v.rows) {
+		v.rows[*row] = append(v.rows[*row], buf[:n]...)
+	}
+	v.col++
 }
 
 var vtermCupRe = regexp.MustCompile(`\x1b\[(\d+);(\d+)H`)
@@ -29,7 +76,12 @@ func (v *vterm) apply(raw string) {
 			for _, c := range raw[i+loc[2] : i+loc[3]] {
 				r = r*10 + int(c-'0')
 			}
+			col := 0
+			for _, c := range raw[i+loc[4] : i+loc[5]] {
+				col = col*10 + int(c-'0')
+			}
 			row = r
+			v.col = col - 1
 			i += loc[1]
 			continue
 		}
@@ -87,10 +139,9 @@ func (v *vterm) apply(raw string) {
 			i = j
 			continue
 		}
-		if row >= 1 && row < len(v.rows) {
-			v.rows[row] = append(v.rows[row], raw[i])
-		}
-		i++
+		r, size := utf8.DecodeRuneInString(raw[i:])
+		v.writeRune(&row, r)
+		i += size
 	}
 }
 

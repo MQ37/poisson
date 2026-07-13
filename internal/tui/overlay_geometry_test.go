@@ -34,7 +34,7 @@ func newGeometryTestTUI(t *testing.T, sid string) (*TUI, *vterm, func()) {
 	buf := &bytes.Buffer{}
 	tui.writer = buf
 	tui.recomputeLayout()
-	v := newVterm(tui.rows)
+	v := newVterm(tui.rows, tui.cols)
 
 	tick := func() {
 		// paint locks t.mu internally — must not also be held by the caller,

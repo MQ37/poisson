@@ -252,7 +252,18 @@ func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 
 	b.WriteString(cup(lay.hintRow, 1))
 	b.WriteString(clearLine())
-	b.WriteString(t.renderHintLine())
+	// Unlike every other row in this region, the hint line was never
+	// truncated to the terminal width. Its base text alone fits, but a long
+	// ephemeral hint prepended to it (e.g. "Copied N lines to clipboard" from
+	// Ctrl+Y) can push the combined string past t.cols on a narrower
+	// terminal. With no scroll region configured, a real terminal auto-wraps
+	// an overlong line at the last row and scrolls the whole screen up by
+	// one — corrupting every other absolute-row-addressed write already on
+	// screen. Confirmed via a real terminal emulator (pyte) replaying a
+	// captured session: the separator row duplicated once per keystroke
+	// while the ephemeral hint was still showing, each one an extra
+	// terminal-driven scroll from this exact overflow.
+	b.WriteString(truncateToWidth(t.renderHintLine(), lay.wrapWidth))
 
 	for r := lay.hintRow + 1; r <= t.rows; r++ {
 		b.WriteString(cup(r, 1))
