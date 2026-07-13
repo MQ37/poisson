@@ -17,6 +17,12 @@ type btwOverlay struct {
 	errMsg     string
 	scroll     int
 	cancel     context.CancelFunc
+	// status is a short "tool(arg)" description of the read-only tool call
+	// currently in flight (see Agent.StreamQuickAnswer's onToolStatus), shown
+	// next to the spinner instead of a bare "thinking…"/"…". Cleared the
+	// moment real answer text starts arriving, so it never shows a stale tool
+	// name once the model has moved on to producing its final answer.
+	status string
 }
 
 func newBTWOverlay(question string) *btwOverlay {
@@ -36,6 +42,13 @@ func (o *btwOverlay) appendText(chunk string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	o.answer += chunk
+	o.status = ""
+}
+
+func (o *btwOverlay) setStatus(text string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.status = text
 }
 
 func (o *btwOverlay) finish(err error) {
@@ -48,10 +61,10 @@ func (o *btwOverlay) finish(err error) {
 	}
 }
 
-func (o *btwOverlay) snapshot() (question, answer, errMsg string, processing bool, scroll int) {
+func (o *btwOverlay) snapshot() (question, answer, errMsg string, processing bool, scroll int, status string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.question, o.answer, o.errMsg, o.processing, o.scroll
+	return o.question, o.answer, o.errMsg, o.processing, o.scroll, o.status
 }
 
 func (o *btwOverlay) render(scrollRows, cols int) (int, []string) {
@@ -59,7 +72,7 @@ func (o *btwOverlay) render(scrollRows, cols int) (int, []string) {
 }
 
 func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string) {
-	question, answer, errMsg, processing, scroll := o.snapshot()
+	question, answer, errMsg, processing, scroll, status := o.snapshot()
 	panelRows := scrollRows
 	if panelRows < 4 {
 		panelRows = 4
@@ -96,13 +109,21 @@ func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string
 			full = append(full, mk("  "+fgRed+bold+ln+reset))
 		}
 	case answer == "" && processing:
-		full = append(full, mk("  "+dim+spinnerChar(frame)+" thinking…"+reset))
+		label := "thinking…"
+		if status != "" {
+			label = status
+		}
+		full = append(full, mk("  "+dim+spinnerChar(frame)+" "+label+reset))
 	default:
 		for _, ln := range wrapPlain(answer, wrapW) {
 			full = append(full, mk("  "+ln))
 		}
 		if processing {
-			full = append(full, mk("  "+dim+spinnerChar(frame)+" …"+reset))
+			label := "…"
+			if status != "" {
+				label = status
+			}
+			full = append(full, mk("  "+dim+spinnerChar(frame)+" "+label+reset))
 		}
 	}
 

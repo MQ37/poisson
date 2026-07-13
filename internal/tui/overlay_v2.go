@@ -18,7 +18,13 @@ func (t *TUI) openBTW(question string) {
 }
 
 func (t *TUI) runBTW(ctx context.Context, o *btwOverlay, question string) {
-	textCh, errCh, err := t.agent.StreamQuickAnswer(ctx, question)
+	onStatus := func(text string) {
+		o.setStatus(text)
+		t.mu.Lock()
+		t.dirty.markFull()
+		t.mu.Unlock()
+	}
+	textCh, errCh, err := t.agent.StreamQuickAnswer(ctx, question, onStatus)
 	if err != nil {
 		t.mu.Lock()
 		o.finish(err)

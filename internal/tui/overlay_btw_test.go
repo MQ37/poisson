@@ -1,8 +1,12 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"poisson/internal/provider"
 )
 
 func TestBTWOverlayFillsScrollRegionFullWidth(t *testing.T) {
@@ -55,6 +59,69 @@ func TestBTWOverlayEscCancel(t *testing.T) {
 	}
 }
 
+// TestBTWOverlaySetStatusShowsInsteadOfThinking confirms a live tool-call
+// status (e.g. "read(main.go)") replaces the bare "thinking…" label while
+// no answer text has arrived yet, and is cleared the moment real text
+// starts streaming so it never shows a stale tool name once the model has
+// moved on.
+// TestTUIInteg_BTWRunsReadOnlyToolAndRendersAnswer drives /btw end-to-end
+// through the real TUI + Agent: the model calls the allowed "read" tool to
+// ground its answer in real file content, and the final answer (not just
+// the raw scrollback buffer) renders on screen through the real paint
+// pipeline. This is the layer quickanswer_test.go (agent-only) doesn't
+// exercise: whether a /btw tool round-trip actually reaches the overlay UI.
+func TestTUIInteg_BTWRunsReadOnlyToolAndRendersAnswer(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	if err := os.WriteFile(filepath.Join(e.dir, "note.txt"), []byte("the secret number is 42"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, second := provider.FakeToolCallResponse("read", map[string]string{"path": "note.txt"}, "the secret number is 42")
+	e.prov.SetResponses([][]provider.StreamEvent{first, second})
+
+	e.tui.mu.Lock()
+	if err := e.tui.handleSlash("/btw what's the secret number?"); err != nil {
+		e.tui.mu.Unlock()
+		t.Fatalf("handleSlash: %v", err)
+	}
+	e.tui.mu.Unlock()
+
+	waitFor(t, func() bool {
+		e.tui.mu.Lock()
+		defer e.tui.mu.Unlock()
+		bo, ok := e.tui.activeOverlay.(*btwOverlay)
+		return ok && func() bool {
+			_, _, _, processing, _, _ := bo.snapshot()
+			return !processing
+		}()
+	})
+
+	screen := e.render()
+	if !strings.Contains(screen, "the secret number is 42") {
+		t.Errorf("rendered screen missing the tool-grounded answer, got:\n%s", screen)
+	}
+}
+
+func TestBTWOverlaySetStatusShowsInsteadOfThinking(t *testing.T) {
+	o := newBTWOverlay("q")
+	_, lines := o.render(24, 80)
+	if !strings.Contains(stripANSI(lines[3]), "thinking…") {
+		t.Fatalf("expected default 'thinking…' label, got %q", stripANSI(lines[3]))
+	}
+
+	o.setStatus("read(main.go)")
+	_, lines = o.render(24, 80)
+	if !strings.Contains(stripANSI(lines[3]), "read(main.go)") {
+		t.Fatalf("expected status label, got %q", stripANSI(lines[3]))
+	}
+
+	o.appendText("here's the answer")
+	_, lines = o.render(24, 80)
+	joined := stripANSI(strings.Join(lines, "\n"))
+	if strings.Contains(joined, "read(main.go)") {
+		t.Fatalf("stale tool status should be cleared once text arrives, got:\n%s", joined)
+	}
+}
+
 func TestBTWOverlayScroll(t *testing.T) {
 	o := newBTWOverlay("q")
 	var lines []string
@@ -66,11 +133,11 @@ func TestBTWOverlayScroll(t *testing.T) {
 	// Render once so the overlay knows its scroll bounds.
 	o.render(12, 80)
 	o.feedKey(keyArrowDown())
-	if _, _, _, _, scroll := o.snapshot(); scroll == 0 {
+	if _, _, _, _, scroll, _ := o.snapshot(); scroll == 0 {
 		t.Fatal("expected scroll down to increase offset")
 	}
 	o.feedKey(keyArrowUp())
-	if _, _, _, _, scroll := o.snapshot(); scroll != 0 {
+	if _, _, _, _, scroll, _ := o.snapshot(); scroll != 0 {
 		t.Fatalf("scroll = %d after up, want 0", scroll)
 	}
 }

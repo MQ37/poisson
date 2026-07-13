@@ -76,7 +76,7 @@ func (t *TUI) Run() error {
 					// The /btw panel spins while it streams its answer, even when the
 					// main agent is idle.
 					if bo, ok := t.activeOverlay.(*btwOverlay); ok {
-						_, _, _, processing, _ := bo.snapshot()
+						_, _, _, processing, _, _ := bo.snapshot()
 						animate = processing
 					}
 				}
