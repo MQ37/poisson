@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="poisson — a coding agent that lives in your terminal" width="760">
+  <img src="assets/logo.jpg" alt="poisson — a coding agent that lives in your terminal" width="600">
+</p>
+
+<p align="center">
+  <i>Embrace the entropy, probabilities favor the bold.</i>
 </p>
 
 <p align="center">
