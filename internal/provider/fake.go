@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // FakeProvider is a test-double that implements the Provider interface
@@ -19,6 +20,31 @@ type FakeProvider struct {
 	lastRequest *Request
 	// requests captures every Request passed to Stream, in call order.
 	requests []*Request
+	// retryScript, if set, is invoked against the ctx's RetryTrace (exactly as
+	// a real provider's DoWithRetry would) before Stream returns its next
+	// configured response — lets integration tests drive a full agent/TUI
+	// turn through a simulated retry-then-recover without any real network
+	// call or provider-specific retry logic.
+	retryScript    []RetryScriptStep
+	retryRecovered bool
+}
+
+// RetryScriptStep is one simulated OnRetry callback fired by FakeProvider's
+// configured retry script (see SetRetryScript).
+type RetryScriptStep struct {
+	Attempt int
+	Delay   time.Duration
+	Reason  string
+}
+
+// SetRetryScript configures FakeProvider's next Stream call to fire steps (in
+// order) against the ctx's RetryTrace, then OnRecovered if recovered is true,
+// before returning the normal configured response — simulating a real
+// provider's DoWithRetry retrying and recovering, with no real network
+// involved. A no-op if the caller never attached a RetryTrace to ctx.
+func (p *FakeProvider) SetRetryScript(steps []RetryScriptStep, recovered bool) {
+	p.retryScript = steps
+	p.retryRecovered = recovered
 }
 
 // NewFakeProvider creates a FakeProvider with the given id and model list.
@@ -55,6 +81,23 @@ func (p *FakeProvider) Stream(ctx context.Context, req *Request) (<-chan StreamE
 	p.callCount++
 	p.lastRequest = req
 	p.requests = append(p.requests, req)
+
+	if len(p.retryScript) > 0 || p.retryRecovered {
+		if trace := RetryTraceFromContext(ctx); trace != nil {
+			for _, step := range p.retryScript {
+				if trace.OnRetry != nil {
+					trace.OnRetry(step.Attempt, step.Delay, step.Reason)
+				}
+			}
+			if p.retryRecovered && trace.OnRecovered != nil {
+				trace.OnRecovered()
+			}
+		}
+		// One-shot: only the Stream call right after SetRetryScript simulates a
+		// retry, matching a real provider where recovery ends the episode.
+		p.retryScript = nil
+		p.retryRecovered = false
+	}
 
 	var events []StreamEvent
 	if p.callCount <= len(p.responses) {
