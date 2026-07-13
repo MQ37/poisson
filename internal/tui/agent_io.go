@@ -108,12 +108,18 @@ func (t *TUI) startTurn(segments []agent.TextSegment, images ...agent.ImageAttac
 			}
 			t.mu.Lock()
 			t.status.Thinking = false
-			t.dirty.markStatus()
-			// The footer hint line (Enter:send vs Enter:queue message) is painted
-			// inside the input region, not the status region — markStatus() alone
-			// leaves it showing the stale "busy" hint until some unrelated
-			// keypress happens to dirty the input region too.
-			t.dirty.markInput()
+			// A full repaint, not just markStatus()+markInput(): the footer hint
+			// line (Enter:send vs Enter:queue message) lives in the input region,
+			// not the status region, so markStatus() alone left it stale until an
+			// unrelated keypress happened to dirty input too (a real, confirmed
+			// bug). This same instant can also cancel a queue drain, append a
+			// "cancelled" scrollback line, and change layout — several
+			// simultaneous state changes converging on the one moment the render
+			// loop and a fast-typing user are both racing to redraw; a full
+			// repaint here is the one dirty-marking choice that can't leave any
+			// of them half-stale for a frame, at the cost of one extra full paint
+			// per turn (never once per frame).
+			t.dirty.markFull()
 			// Send anything queued during this turn as one combined follow-up.
 			t.drainQueueLocked()
 			t.mu.Unlock()
@@ -134,8 +140,10 @@ func (t *TUI) enqueueLocked(text string) {
 	if strings.HasPrefix(trimmed, "/") {
 		// /btw is a side question meant to run *alongside* a live turn (its own
 		// one-shot request, no shared session/turn state), so dispatch it now.
-		// Every other command mutates turn/session state, so keep blocking those.
-		if fields := strings.Fields(trimmed); len(fields) > 0 && fields[0] == "/btw" {
+		// /name only writes the session's title (store metadata, not turn/message
+		// state), so it's equally safe to run immediately. Every other command
+		// mutates turn/session state, so keep blocking those.
+		if fields := strings.Fields(trimmed); len(fields) > 0 && (fields[0] == "/btw" || fields[0] == "/name") {
 			t.editor.setText("")
 			t.history = append(t.history, text)
 			t.histIdx = -1

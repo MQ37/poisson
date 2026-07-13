@@ -260,3 +260,33 @@ func TestQueue_BTWDispatchesWhileBusy(t *testing.T) {
 		t.Error("/btw should open the btw overlay immediately while busy")
 	}
 }
+
+// TestQueue_NameDispatchesWhileBusy: /name only writes the session's title
+// (store metadata, not turn/message state) and must run immediately during a
+// live turn instead of being blocked like other slash commands — the same
+// reasoning that already exempts /btw. Regression test: /name used to fall
+// through to the generic "can't queue a / command while busy" rejection,
+// silently discarding the title change instead of applying it.
+func TestQueue_NameDispatchesWhileBusy(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.tui.mu.Lock()
+	e.tui.status.Thinking = true
+	e.tui.enqueueLocked("/name my great session")
+	queued := len(e.tui.queued)
+	hint := e.tui.status.Hint
+	e.tui.mu.Unlock()
+
+	if queued != 0 {
+		t.Errorf("/name should not be queued, got %d queued", queued)
+	}
+	if strings.Contains(hint, "can't queue") {
+		t.Errorf("/name should not hit the busy-rejection hint, got %q", hint)
+	}
+	sess, err := e.store.GetSession(e.sid)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.Title == nil || *sess.Title != "my great session" {
+		t.Errorf("session title = %v, want %q — /name should apply immediately while busy", sess.Title, "my great session")
+	}
+}
