@@ -108,18 +108,19 @@ func (t *TUI) startTurn(segments []agent.TextSegment, images ...agent.ImageAttac
 			}
 			t.mu.Lock()
 			t.status.Thinking = false
-			// A full repaint, not just markStatus()+markInput(): the footer hint
-			// line (Enter:send vs Enter:queue message) lives in the input region,
-			// not the status region, so markStatus() alone left it stale until an
-			// unrelated keypress happened to dirty input too (a real, confirmed
-			// bug). This same instant can also cancel a queue drain, append a
-			// "cancelled" scrollback line, and change layout — several
-			// simultaneous state changes converging on the one moment the render
-			// loop and a fast-typing user are both racing to redraw; a full
-			// repaint here is the one dirty-marking choice that can't leave any
-			// of them half-stale for a frame, at the cost of one extra full paint
-			// per turn (never once per frame).
-			t.dirty.markFull()
+			t.dirty.markStatus()
+			// The footer hint line (Enter:send vs Enter:queue message) is painted
+			// inside the input region, not the status region — markStatus() alone
+			// leaves it showing the stale "busy" hint until some unrelated
+			// keypress happens to dirty the input region too (confirmed bug, fixed
+			// here). Deliberately NOT markFull(): a full repaint sends a much
+			// bigger single burst of escape sequences, and terminals (kitty has a
+			// documented history of this exact bug class: dropped/duplicated
+			// output when an app in raw mode sends large chunks of cursor-move +
+			// print sequences in one write, e.g. kovidgoyal/kitty#6306) can
+			// mis-render large bursts. Keep this repaint as small as the bug fix
+			// actually requires.
+			t.dirty.markInput()
 			// Send anything queued during this turn as one combined follow-up.
 			t.drainQueueLocked()
 			t.mu.Unlock()
