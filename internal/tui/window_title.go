@@ -10,7 +10,12 @@ const windowTitleIDLen = 8
 // session id>" so an unnamed session is still distinguishable from other
 // poisson windows/tabs. Never a bare "px" with nothing to distinguish it,
 // since sessionID is always non-empty once an agent is attached.
-func windowTitleFor(title, sessionID string) string {
+//
+// pendingApproval prefixes "O " (outstanding) so a bash command waiting on
+// the user's y/n shows up in a tab bar/window list even when that terminal
+// tab isn't currently focused — otherwise an approval prompt sitting behind
+// another window is easy to miss entirely.
+func windowTitleFor(title, sessionID string, pendingApproval bool) string {
 	label := title
 	if label == "" {
 		label = sessionID
@@ -18,10 +23,14 @@ func windowTitleFor(title, sessionID string) string {
 			label = label[:windowTitleIDLen]
 		}
 	}
-	if label == "" {
-		return "px"
+	base := "px"
+	if label != "" {
+		base = "px - " + label
 	}
-	return "px - " + label
+	if pendingApproval {
+		return "O " + base
+	}
+	return base
 }
 
 // formatWindowTitle returns the OSC 0 escape sequence that sets both the
@@ -36,7 +45,7 @@ func formatWindowTitle(title string) string {
 // tick. Caller must hold t.mu and have already called syncHeaderFromAgentLocked
 // (or otherwise populated t.status.Title/SessionID) for this frame.
 func (t *TUI) updateWindowTitleLocked() {
-	want := windowTitleFor(t.status.Title, t.status.SessionID)
+	want := windowTitleFor(t.status.Title, t.status.SessionID, t.approving.Load())
 	if want == t.lastWindowTitle {
 		return
 	}

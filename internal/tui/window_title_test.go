@@ -8,16 +8,20 @@ import (
 
 func TestWindowTitleFor(t *testing.T) {
 	cases := []struct {
-		title, id, want string
+		title, id string
+		pending   bool
+		want      string
 	}{
-		{"my great session", "s-a3f9c1d2", "px - my great session"},
-		{"", "s-a3f9c1d2", "px - s-a3f9c1"}, // truncated to windowTitleIDLen
-		{"", "s-ab", "px - s-ab"},           // shorter than the cap: used whole
-		{"", "", "px"},
+		{"my great session", "s-a3f9c1d2", false, "px - my great session"},
+		{"", "s-a3f9c1d2", false, "px - s-a3f9c1"}, // truncated to windowTitleIDLen
+		{"", "s-ab", false, "px - s-ab"},           // shorter than the cap: used whole
+		{"", "", false, "px"},
+		{"my great session", "s-a3f9c1d2", true, "O px - my great session"},
+		{"", "", true, "O px"},
 	}
 	for _, c := range cases {
-		if got := windowTitleFor(c.title, c.id); got != c.want {
-			t.Errorf("windowTitleFor(%q, %q) = %q, want %q", c.title, c.id, got, c.want)
+		if got := windowTitleFor(c.title, c.id, c.pending); got != c.want {
+			t.Errorf("windowTitleFor(%q, %q, %v) = %q, want %q", c.title, c.id, c.pending, got, c.want)
 		}
 	}
 }
@@ -98,5 +102,38 @@ func TestTUIInteg_WindowTitleReflectsSessionNameAndID(t *testing.T) {
 	raw = rawPaint()
 	if !strings.Contains(raw, "px - my great session") {
 		t.Errorf("window title should reflect the new session name, got:\n%q", raw)
+	}
+}
+
+// TestTUIInteg_WindowTitleShowsOWhileApprovalPending verifies the window
+// title gets an "O " prefix while a bash approval is outstanding, so the
+// user notices a stalled turn from a tab bar/window list even when that
+// terminal isn't focused, and drops the prefix again once resolved.
+func TestTUIInteg_WindowTitleShowsOWhileApprovalPending(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	rawPaint := func() string {
+		e.tui.dirty.markFull()
+		e.tui.paint(e.tui.dirty.consume())
+		buf := e.tui.writer.(*bytes.Buffer)
+		s := buf.String()
+		buf.Reset()
+		return s
+	}
+
+	raw := rawPaint()
+	if strings.Contains(raw, "O px") {
+		t.Errorf("window title should not show O before any approval is pending, got:\n%q", raw)
+	}
+
+	e.tui.approving.Store(true)
+	raw = rawPaint()
+	if !strings.Contains(raw, "\x1b]0;O px") {
+		t.Errorf("window title should be prefixed with O while approval is pending, got:\n%q", raw)
+	}
+
+	e.tui.approving.Store(false)
+	raw = rawPaint()
+	if strings.Contains(raw, "O px") {
+		t.Errorf("window title should drop the O prefix once approval resolves, got:\n%q", raw)
 	}
 }
