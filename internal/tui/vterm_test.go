@@ -40,6 +40,32 @@ func (v *vterm) apply(raw string) {
 			i += 4
 			continue
 		}
+		// An OSC sequence (ESC ']', e.g. the OSC 52 clipboard write) is
+		// terminated by BEL (\a) or ST (ESC '\\'), NEVER by a CSI-style final
+		// byte in 0x40-0x7e — treating it like a CSI sequence (below) would
+		// scan right past its own terminator into whatever comes next
+		// (typically the following paint's real cup()+text bytes), silently
+		// swallowing real screen content until some unrelated byte happened
+		// to land in the CSI final-byte range. A real terminal recognizes OSC
+		// framing explicitly, so the emulator must too, or it misrepresents
+		// what a real terminal would show after any code path that writes an
+		// OSC sequence outside the normal paint() buffer (e.g. copySelectionLocked's
+		// direct t.writeRaw(formatOsc52(...))).
+		if raw[i] == 0x1b && i+1 < len(raw) && raw[i+1] == ']' {
+			j := i + 2
+			for j < len(raw) && raw[j] != 0x07 && !(raw[j] == 0x1b && j+1 < len(raw) && raw[j+1] == '\\') {
+				j++
+			}
+			if j < len(raw) {
+				if raw[j] == 0x07 {
+					j++
+				} else {
+					j += 2
+				}
+			}
+			i = j
+			continue
+		}
 		// Any other CSI escape sequence (SGR color codes, hide cursor, etc.)
 		// is styling only in this renderer, never affecting which row/col is
 		// being written, so it's safe to drop for this plain-text emulation.
