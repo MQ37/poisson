@@ -109,6 +109,11 @@ func (t *TUI) startTurn(segments []agent.TextSegment, images ...agent.ImageAttac
 			t.mu.Lock()
 			t.status.Thinking = false
 			t.dirty.markStatus()
+			// The footer hint line (Enter:send vs Enter:queue message) is painted
+			// inside the input region, not the status region — markStatus() alone
+			// leaves it showing the stale "busy" hint until some unrelated
+			// keypress happens to dirty the input region too.
+			t.dirty.markInput()
 			// Send anything queued during this turn as one combined follow-up.
 			t.drainQueueLocked()
 			t.mu.Unlock()
