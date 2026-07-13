@@ -156,6 +156,34 @@ func (s *Store) GetMessages(sessionID string) ([]Message, error) {
 	return out, rows.Err()
 }
 
+// GetAllMessages returns every non-deleted message for a session, active AND
+// compacted, ordered by seq ascending. Compaction only sets compacted = 1 —
+// it never deletes rows — so the full conversation is always still here.
+// Unlike GetMessages (what the agent actually sends the model), this is for
+// display: resuming a session should be able to show the complete history,
+// not just what's left after the most recent compaction.
+func (s *Store) GetAllMessages(sessionID string) ([]Message, error) {
+	rows, err := s.db.Query(
+		`SELECT id, session_id, seq, role, content, deleted_at, compacted,
+		        api_call_id, created_at
+		 FROM messages
+		 WHERE session_id = ? AND deleted_at IS NULL
+		 ORDER BY seq ASC`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get all messages: %w", err)
+	}
+	defer rows.Close()
+	var out []Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *m)
+	}
+	return out, rows.Err()
+}
+
 // scanMessage scans a message row from either *sql.Row or *sql.Rows.
 func scanMessage(sc scanner) (*Message, error) {
 	var m Message

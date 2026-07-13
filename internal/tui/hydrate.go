@@ -42,20 +42,45 @@ func parseHydratedToolResult(b msgBlock) (content, errMsg string) {
 }
 
 // hydrateScrollbackLocked replays store messages into scrollback. Caller holds t.mu.
+//
+// Loads the FULL history (GetAllMessages), not just what survived the most
+// recent /compact (GetMessages, compacted = 0 only) — compaction never
+// deletes a message, it only flags it, so the detail is always still in the
+// store. Resuming a compacted session used to show a single opaque
+// placeholder line and nothing else; now the real conversation renders in
+// full, with a boundary marker (plus the actual summary text) at the exact
+// point where the model's active context now starts. What the agent sends
+// the model is unaffected — buildRequest still calls GetMessages.
 func (t *TUI) hydrateScrollbackLocked() {
 	if t.agent == nil {
 		return
 	}
-	msgs, err := t.agent.Store().GetMessages(t.sessionID)
+	msgs, err := t.agent.Store().GetAllMessages(t.sessionID)
 	if err != nil || len(msgs) == 0 {
 		return
 	}
-	if sess, err := t.agent.Store().GetSession(t.sessionID); err == nil && sess != nil &&
-		sess.CompactionSummary != nil && *sess.CompactionSummary != "" {
-		t.scroll.appendRaw(styleSystem, "  [earlier context compacted — summary in system prompt]")
+	var summary string
+	if sess, err := t.agent.Store().GetSession(t.sessionID); err == nil && sess != nil && sess.CompactionSummary != nil {
+		summary = *sess.CompactionSummary
+	}
+	bannerShown := false
+	showCompactionBanner := func() {
+		t.scroll.appendRaw(styleSystem, "  ── compacted here — messages above are history only; the model now starts from this summary ──")
+		for _, ln := range wrapPlain(summary, 100) {
+			t.scroll.appendRaw(styleSystem, "  "+dim+ln+reset)
+		}
+		bannerShown = true
 	}
 	var nextToolID int64 = 1
-	for _, m := range msgs {
+	for i, m := range msgs {
+		// The boundary sits right before the first still-active message —
+		// everything at or before it was marked compacted by the most recent
+		// /compact. If every message in the session is compacted (just ran
+		// /compact with nothing sent since), the fallback after the loop
+		// covers it instead.
+		if summary != "" && !bannerShown && !m.Compacted && (i == 0 || msgs[i-1].Compacted) {
+			showCompactionBanner()
+		}
 		blocks := parseMessageBlocks(m.Content)
 		switch m.Role {
 		case "user":
@@ -136,6 +161,12 @@ func (t *TUI) hydrateScrollbackLocked() {
 				}
 			}
 		}
+	}
+	if summary != "" && !bannerShown {
+		// Every message in the session is compacted (e.g. /compact just ran
+		// with nothing sent since) — show the boundary and summary at the end
+		// instead of never at all.
+		showCompactionBanner()
 	}
 	t.scroll.finalizeOrphanToolCalls()
 	t.scroll.finalizeOrphanSubagents()
