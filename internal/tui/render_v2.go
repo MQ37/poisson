@@ -92,6 +92,7 @@ func (t *TUI) paint(snap dirtySnapshot) {
 	defer t.mu.Unlock()
 
 	t.syncHeaderFromAgentLocked()
+	t.updateWindowTitleLocked()
 	if !t.branchChecked {
 		t.branchChecked = true
 		t.status.Branch = gitBranch(t.status.Cwd)

@@ -70,6 +70,10 @@ type TUI struct {
 	// gitBranch also returns "") would re-exec `git rev-parse` every single
 	// paint call (up to ~30/s while thinking/tools are active).
 	branchChecked bool
+	// lastWindowTitle caches the last OSC 0 title actually written, so paint
+	// (up to ~30/s while animating) only re-emits the escape sequence when the
+	// title (session name or id) actually changed.
+	lastWindowTitle string
 	// layoutJustChanged is set by prepareLayout when it just detected an input
 	// height change (and queued a full repaint for the NEXT tick) — paint
 	// reads and clears it to upgrade its OWN current call to a full repaint
