@@ -684,35 +684,7 @@ func runChildMode() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for ev := range outputChan {
-			switch ev.Type {
-			case agent.OutputText:
-				writeChildEvent(map[string]interface{}{"type": "text", "text": ev.Text})
-			case agent.OutputToolStart:
-				toolCount++
-				ctxUsed, ctxWindow := a.ContextTokens()
-				writeChildEvent(map[string]interface{}{
-					"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput,
-					"turns": a.RunTurns(), "contextTokens": ctxUsed, "contextWindow": ctxWindow,
-				})
-			case agent.OutputRetrying:
-				// Relayed so the parent's subagent widget can show "reconnecting"
-				// in place of its turn/context line instead of freezing on stale
-				// numbers with no explanation while this child's own network
-				// retry (see provider.DoWithRetry) is in progress.
-				writeChildEvent(map[string]interface{}{"type": "retrying", "text": ev.Text})
-			case agent.OutputToolResult:
-				payload := map[string]interface{}{
-					"type":   "tool_result",
-					"tool":   ev.ToolName,
-					"result": ev.ToolResultContent,
-				}
-				if ev.ToolError != "" {
-					payload["error"] = ev.ToolError
-				}
-				writeChildEvent(payload)
-			}
-		}
+		toolCount = forwardChildEvents(outputChan, a, writeChildEvent)
 	}()
 
 	// Subagents run unattended (no per-instance human able to Ctrl+C just
@@ -743,6 +715,48 @@ func runChildMode() {
 		"contextTokens": ctxUsed,
 		"contextWindow": ctxWindow,
 	})
+}
+
+// forwardChildEvents drains outputChan, translating each agent.OutputEvent
+// into a child JSON event via write (writeChildEvent in production; a plain
+// slice-appending fake in tests). Returns the number of OutputToolStart
+// events seen, for the final "done" event's toolCount. Extracted out of
+// runChildMode so this translation — the entire wire protocol every
+// subagent's parent depends on — is testable against a fake outputChan and a
+// real *agent.Agent built on a FakeProvider, with no real process, network,
+// or LLM call involved.
+func forwardChildEvents(outputChan <-chan agent.OutputEvent, a *agent.Agent, write func(map[string]interface{})) int {
+	toolCount := 0
+	for ev := range outputChan {
+		switch ev.Type {
+		case agent.OutputText:
+			write(map[string]interface{}{"type": "text", "text": ev.Text})
+		case agent.OutputToolStart:
+			toolCount++
+			ctxUsed, ctxWindow := a.ContextTokens()
+			write(map[string]interface{}{
+				"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput,
+				"turns": a.RunTurns(), "contextTokens": ctxUsed, "contextWindow": ctxWindow,
+			})
+		case agent.OutputRetrying:
+			// Relayed so the parent's subagent widget can show "reconnecting"
+			// in place of its turn/context line instead of freezing on stale
+			// numbers with no explanation while this child's own network
+			// retry (see provider.DoWithRetry) is in progress.
+			write(map[string]interface{}{"type": "retrying", "text": ev.Text})
+		case agent.OutputToolResult:
+			payload := map[string]interface{}{
+				"type":   "tool_result",
+				"tool":   ev.ToolName,
+				"result": ev.ToolResultContent,
+			}
+			if ev.ToolError != "" {
+				payload["error"] = ev.ToolError
+			}
+			write(payload)
+		}
+	}
+	return toolCount
 }
 
 var childEventMu sync.Mutex
