@@ -218,6 +218,16 @@ func (t *TUI) dismissOverlay() {
 // openCommandPalette shows fuzzy command launcher (Ctrl+P).
 func (t *TUI) openCommandPalette() {
 	t.setActiveOverlay(newPaletteOverlay(func(cmd string) error {
+		// /name with no argument just prints the current title (or "(unset)"),
+		// which is a nonsensical outcome for what's actually a rename action —
+		// prefill the input with the command instead of auto-running it, so the
+		// user types the title before submitting. Caller (handleKeyOverlay) already
+		// holds t.mu.
+		if cmd == "/name" {
+			t.editor.setText("/name ")
+			t.dirty.markFull()
+			return nil
+		}
 		err := t.handleSlash(cmd)
 		if errors.Is(err, errQuitSentinel) {
 			t.overlayQuit.Store(true)
