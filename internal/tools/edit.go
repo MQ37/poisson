@@ -25,7 +25,7 @@ func NewEditTool(cwd string, sandbox bool, approvalFn ApprovalFn) *EditTool {
 func (t *EditTool) Name() string { return "edit" }
 
 func (t *EditTool) Description() string {
-	return "Edit a file using exact text replacement. Each oldText must match a unique, non-overlapping region."
+	return "Edit a file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region. For a single edit you can also pass oldText/newText directly at the top level instead of wrapping it in edits: [{...}]."
 }
 
 func (t *EditTool) Schema() json.RawMessage {
@@ -35,6 +35,7 @@ func (t *EditTool) Schema() json.RawMessage {
     "path": { "type": "string" },
     "edits": {
       "type": "array",
+      "description": "Use this for 2+ edits in one call. For a single edit, oldText/newText below are simpler.",
       "items": {
         "type": "object",
         "properties": {
@@ -43,9 +44,11 @@ func (t *EditTool) Schema() json.RawMessage {
         },
         "required": ["oldText", "newText"]
       }
-    }
+    },
+    "oldText": { "type": "string", "description": "Shorthand for a single edit — use instead of edits: [{...}] when there's only one." },
+    "newText": { "type": "string" }
   },
-  "required": ["path", "edits"]
+  "required": ["path"]
 }`)
 }
 
@@ -54,24 +57,65 @@ type editItem struct {
 	NewText string `json:"newText"`
 }
 
-type editInput struct {
-	Path  string     `json:"path"`
-	Edits []editItem `json:"edits"`
+// rawEditInput mirrors the wire shape loosely: Edits is left raw so
+// parseEditInput can recognize shapes beyond a strict array-of-objects —
+// models calling this tool reliably reach for a flat top-level
+// oldText/newText when there's only one edit, and occasionally double-encode
+// the array as a JSON string. Both are handled below instead of just erroring.
+type rawEditInput struct {
+	Path    string          `json:"path"`
+	Edits   json.RawMessage `json:"edits"`
+	OldText string          `json:"oldText"`
+	NewText string          `json:"newText"`
+}
+
+// parseEditInput accepts three shapes for the edit list: the documented
+// edits: [{oldText, newText}, ...] array; a flat top-level oldText/newText
+// pair as shorthand for a single edit (no array wrapper needed); and, best
+// effort, an edits value that's itself a JSON-encoded string containing that
+// array (some models double-encode it). Confirmed against real tool-call
+// failures logged against this tool: a flat single-edit call used to
+// unmarshal with an empty Edits slice and fail with the unhelpful "no edits
+// provided", and a string-encoded edits value failed with a raw Go
+// json.Unmarshal type-mismatch error that gave the model nothing to correct.
+func parseEditInput(input json.RawMessage) (path string, edits []editItem, err error) {
+	var raw rawEditInput
+	if e := json.Unmarshal(input, &raw); e != nil {
+		return "", nil, fmt.Errorf("invalid input: %w", e)
+	}
+	path = raw.Path
+	if len(raw.Edits) == 0 || string(raw.Edits) == "null" {
+		if raw.OldText != "" {
+			return path, []editItem{{OldText: raw.OldText, NewText: raw.NewText}}, nil
+		}
+		return path, nil, nil
+	}
+	var items []editItem
+	if e := json.Unmarshal(raw.Edits, &items); e == nil {
+		return path, items, nil
+	}
+	var asString string
+	if e := json.Unmarshal(raw.Edits, &asString); e == nil {
+		if e2 := json.Unmarshal([]byte(asString), &items); e2 == nil {
+			return path, items, nil
+		}
+	}
+	return "", nil, fmt.Errorf("edits must be a JSON array of {oldText, newText} objects (e.g. edits: [{\"oldText\": \"...\", \"newText\": \"...\"}]), or oldText/newText directly for a single edit — not a JSON-encoded string")
 }
 
 func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
-	var in editInput
-	if err := json.Unmarshal(input, &in); err != nil {
-		return ToolResult{Error: "invalid input: " + err.Error()}, nil
+	rawPath, edits, err := parseEditInput(input)
+	if err != nil {
+		return ToolResult{Error: err.Error()}, nil
 	}
-	if in.Path == "" {
+	if rawPath == "" {
 		return ToolResult{Error: "path is required"}, nil
 	}
-	if len(in.Edits) == 0 {
-		return ToolResult{Error: "no edits provided"}, nil
+	if len(edits) == 0 {
+		return ToolResult{Error: "no edits provided — pass edits: [{oldText, newText}, ...], or oldText/newText directly for a single edit"}, nil
 	}
 
-	path := resolvePath(t.cwd, in.Path)
+	path := resolvePath(t.cwd, rawPath)
 
 	if !t.sandbox {
 		if reason := guard.SensitivePathReason(path); reason != "" {
@@ -98,8 +142,8 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		text  string
 		idx   int
 	}
-	repls := make([]replacement, 0, len(in.Edits))
-	for i, e := range in.Edits {
+	repls := make([]replacement, 0, len(edits))
+	for i, e := range edits {
 		if e.OldText == "" {
 			return ToolResult{Error: fmt.Sprintf("edit %d: oldText is empty", i)}, nil
 		}
@@ -133,5 +177,5 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		return ToolResult{Error: "cannot write file: " + err.Error()}, nil
 	}
 
-	return ToolResult{Content: fmt.Sprintf("edited %s (%d edit(s) applied)", path, len(in.Edits))}, nil
+	return ToolResult{Content: fmt.Sprintf("edited %s (%d edit(s) applied)", path, len(edits))}, nil
 }

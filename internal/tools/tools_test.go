@@ -368,6 +368,71 @@ func TestEdit_MultipleEditsUseOriginalFile(t *testing.T) {
 	}
 }
 
+// TestEdit_FlatSingleEditShorthand is the reported live failure: a model
+// calling edit with exactly one change reliably reaches for a flat
+// {path, oldText, newText} shape instead of wrapping it in edits: [{...}] —
+// confirmed from real tool-call failures logged in production ("no edits
+// provided" after a flat-shape call). This shape must just work instead of
+// erroring, since the model isn't going to reliably remember to wrap it.
+func TestEdit_FlatSingleEditShorthand(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	e := NewEditTool(dir, true, nil)
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "alpha\nbeta\ngamma\n"}))
+
+	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"path":    "f.txt",
+		"oldText": "beta",
+		"newText": "BETA",
+	}))
+	if res.Error != "" {
+		t.Fatalf("edit error: %s", res.Error)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "f.txt"))
+	if !strings.Contains(string(got), "BETA") {
+		t.Errorf("expected BETA in file, got %q", got)
+	}
+}
+
+// TestEdit_StringEncodedEditsRecovered covers the other real failure class:
+// edits sent as a JSON-encoded string (some models double-encode the array)
+// instead of a native array. When the string itself decodes to a valid
+// edits array, recover it instead of failing with a raw Go unmarshal error.
+func TestEdit_StringEncodedEditsRecovered(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	e := NewEditTool(dir, true, nil)
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "alpha\nbeta\ngamma\n"}))
+
+	raw := `{"path": "f.txt", "edits": "[{\"oldText\": \"beta\", \"newText\": \"BETA\"}]"}`
+	res, _ := e.Execute(context.Background(), json.RawMessage(raw))
+	if res.Error != "" {
+		t.Fatalf("edit error: %s", res.Error)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "f.txt"))
+	if !strings.Contains(string(got), "BETA") {
+		t.Errorf("expected BETA in file, got %q", got)
+	}
+}
+
+// TestEdit_GarbledEditsGetsActionableError is the case that can't be
+// recovered (the string itself isn't valid JSON, matching a real historical
+// failure) — the error must tell the model how to fix its call, not leak a
+// raw Go json.Unmarshal type-mismatch message.
+func TestEdit_GarbledEditsGetsActionableError(t *testing.T) {
+	dir := testutil.TempDir(t)
+	e := NewEditTool(dir, true, nil)
+
+	raw := `{"path": "f.txt", "edits": "[{\"oldText\">broken json"}`
+	res, _ := e.Execute(context.Background(), json.RawMessage(raw))
+	if res.Error == "" {
+		t.Fatal("expected an error for garbled edits")
+	}
+	if !strings.Contains(res.Error, "edits") || strings.Contains(res.Error, "cannot unmarshal") {
+		t.Errorf("expected an actionable edits-shape error, got %q", res.Error)
+	}
+}
+
 func TestEdit_OverlappingEditsFail(t *testing.T) {
 	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir, true, nil)
