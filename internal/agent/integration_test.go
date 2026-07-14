@@ -631,6 +631,102 @@ func TestInteg_CancelDuringToolKeepsResults(t *testing.T) {
 	}
 }
 
+// partialThenBlockProvider streams one text delta, then blocks until ctx is
+// cancelled — simulates the user cancelling mid-response (some content
+// already streamed), unlike blockingProvider above which never emits
+// anything before hanging.
+type partialThenBlockProvider struct {
+	started chan struct{}
+}
+
+func (p *partialThenBlockProvider) ID() string { return "fake" }
+func (p *partialThenBlockProvider) Models() ([]provider.Model, error) {
+	return []provider.Model{{ID: "m", ContextWindow: 8192}}, nil
+}
+func (p *partialThenBlockProvider) Stream(ctx context.Context, req *provider.Request) (<-chan provider.StreamEvent, error) {
+	ch := make(chan provider.StreamEvent, 4)
+	ch <- provider.StreamEvent{Type: provider.EventTextDelta, Text: "Here is a partial answer"}
+	go func() {
+		defer close(ch)
+		close(p.started)
+		<-ctx.Done()
+	}()
+	return ch, nil
+}
+
+// TestInteg_CancelMidTextPersistsPartialResponse is the reported live bug:
+// cancelling while the assistant's text is still streaming kept the partial
+// response visible in the current TUI's scrollback (it already streamed as
+// OutputText events) but never stored it, so a follow-up message never sent
+// it back to the model — the model would have no idea what it already said.
+func TestInteg_CancelMidTextPersistsPartialResponse(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(dir + "/test.db")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	sid := "itest-cancel-partial"
+	st.CreateSession(&store.Session{ID: sid, Cwd: dir, Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()})
+
+	prov := &partialThenBlockProvider{started: make(chan struct{})}
+	cfg := config.DefaultConfig()
+	cfg.Provider.Default = "fake"
+	output := make(chan OutputEvent, 256)
+	a := NewAgent(st, prov, tools.NewRegistry(), cfg, sid, output, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.PromptWithContext(ctx, "hello") }()
+
+	select {
+	case <-prov.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not stream")
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Send did not return after cancel")
+	}
+
+	msgs, _ := st.GetMessages(sid)
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages (user + partial assistant) after cancel, got %d", len(msgs))
+	}
+	if msgs[1].Role != "assistant" {
+		t.Fatalf("msg[1] role = %q, want assistant", msgs[1].Role)
+	}
+	if !hasBlock(msgs[1], "text") || !strings.Contains(msgs[1].Content, "Here is a partial answer") {
+		t.Errorf("partial assistant content missing, got %q", msgs[1].Content)
+	}
+
+	// The next turn must actually send that partial text back to the provider.
+	prov2 := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	prov2.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("continuing", nil)})
+	a2 := NewAgent(st, prov2, tools.NewRegistry(), cfg, sid, output, nil)
+	a2.SetModel("m")
+	if err := a2.PromptWithContext(context.Background(), "keep going"); err != nil {
+		t.Fatal(err)
+	}
+	req := prov2.LastRequest()
+	var sawPartial bool
+	for _, m := range req.Messages {
+		for _, b := range m.Content {
+			if b.Type == "text" && strings.Contains(b.Text, "Here is a partial answer") {
+				sawPartial = true
+			}
+		}
+	}
+	if !sawPartial {
+		t.Error("partial response from the cancelled turn was not sent to the provider on the next turn")
+	}
+}
+
 // TestInteg_EmptyResponseHandling verifies the agent handles a model that
 // returns zero content (no text, no thinking, no tool calls).
 func TestInteg_EmptyResponseHandling(t *testing.T) {

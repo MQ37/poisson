@@ -626,10 +626,11 @@ func (a *Agent) PromptSegmentsWithContext(ctx context.Context, segments []TextSe
 	a.runTurns.Store(0)
 	err = a.runTurn(ctx)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		// Keep the conversation visible — just stop generation. runTurn already
-		// returns before storing the final (incomplete) assistant message, so
-		// there are no orphaned tool_use blocks. Previous tool iterations (if
-		// any) have complete tool_use+result pairs.
+		// Keep the conversation visible — just stop generation. runTurn's
+		// persistPartialTurnOnCancel already saved whatever text/thinking (and
+		// any complete tool_use) had streamed before the cancel, matching what
+		// the user actually saw, so the next turn sees it too. Previous tool
+		// iterations (if any) already have complete tool_use+result pairs.
 	}
 	return err
 }
@@ -806,6 +807,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		cancel()
 
 		if err := ctx.Err(); err != nil {
+			a.persistPartialTurnOnCancel(textBuilder.String(), thinkingBuilder.String(), thinkingSig.String(), redactedThinking, toolCalls)
 			a.sendEvent(OutputEvent{Type: OutputDone})
 			return err
 		}
@@ -1208,6 +1210,59 @@ func buildAssistantBlocks(thinking, thinkingSig string, redacted []provider.Cont
 
 // updateToolCall updates a tool call in the list by matching ID. If the ID
 // is empty or no match is found, the last entry is updated as a fallback.
+// persistPartialTurnOnCancel saves whatever the model had already produced
+// before the user cancelled mid-stream (text, thinking, and any *complete*
+// tool_use blocks) as a real assistant message, instead of silently
+// discarding it. Without this, the partial response stayed visible in the
+// live scrollback (it already streamed as OutputText/OutputThinking events)
+// but vanished from what actually gets sent on the next request — what's
+// shown and what's in history must match.
+//
+// A tool_use whose input JSON never finished streaming (cancelled mid
+// argument, possible on providers that emit incremental tool-input deltas)
+// is dropped rather than persisted: writing incomplete/invalid JSON into a
+// tool_input column would break request serialization on every future turn.
+// Any tool_use that DID finish (valid, complete arguments) gets a synthetic
+// "cancelled by user" tool_result appended right after it — every tool_use
+// needs a matching tool_result on the next request or the provider rejects
+// the whole thing with a 400; the tool never actually ran, so this is an
+// honest record of that, not a fabricated result.
+func (a *Agent) persistPartialTurnOnCancel(text, thinkingText, thinkingSig string, redacted []provider.ContentBlock, toolCalls []provider.ToolCall) {
+	var complete []provider.ToolCall
+	for _, tc := range toolCalls {
+		if len(tc.Input) > 0 && json.Valid(tc.Input) {
+			complete = append(complete, tc)
+		}
+	}
+	assistantBlocks := buildAssistantBlocks(thinkingText, thinkingSig, redacted, text, complete)
+	if len(assistantBlocks) == 0 {
+		return
+	}
+	content, err := contentBlocksToJSON(assistantBlocks)
+	if err != nil {
+		log.Printf("warning: marshal cancelled turn: %v", err)
+		return
+	}
+	if err := a.store.AppendMessage(&store.Message{SessionID: a.sessionID, Role: "assistant", Content: content}); err != nil {
+		log.Printf("warning: append cancelled assistant message: %v", err)
+		return
+	}
+	for _, tc := range complete {
+		block := provider.ContentBlock{
+			Type: "tool_result", ToolCallID: tc.ID,
+			ToolIsError: true, ToolResult: "cancelled by user before this tool ran",
+		}
+		toolContent, err := contentBlocksToJSON([]provider.ContentBlock{block})
+		if err != nil {
+			log.Printf("warning: marshal cancelled tool result: %v", err)
+			continue
+		}
+		if err := a.store.AppendMessage(&store.Message{SessionID: a.sessionID, Role: "tool", Content: toolContent}); err != nil {
+			log.Printf("warning: append cancelled tool result: %v", err)
+		}
+	}
+}
+
 func (a *Agent) updateToolCall(toolCalls []provider.ToolCall, updated *provider.ToolCall) {
 	if updated == nil || len(toolCalls) == 0 {
 		return
