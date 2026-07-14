@@ -80,8 +80,9 @@ func runRealRenderAndEventLoops(e *tuiIntegEnv) (stop func()) {
 }
 
 // TestDuplicateSeparatorAfterCancelThenType is a regression test for a live
-// user report: pressing Ctrl+C to cancel a running turn, then immediately
-// typing, could leave the input separator duplicated on screen. Extensive
+// user report: pressing Esc to cancel a running turn (the cancel keybind
+// moved from Ctrl+C to Esc), then immediately typing, could leave the input
+// separator duplicated on screen. Extensive
 // attempts (plain text turns, real concurrent render+event-drain goroutines,
 // and cancelling mid-way through a genuinely slow tool call so the turn takes
 // real time to settle after Ctrl+C) never reproduced a >1 count here, but the
@@ -117,7 +118,7 @@ func TestDuplicateSeparatorAfterCancelThenType(t *testing.T) {
 	e.tui.mu.Unlock()
 
 	time.Sleep(15 * time.Millisecond) // let the tool call actually start running
-	e.tui.feedKey(Key{Kind: KeyCtrl, Byte: 3})
+	e.tui.feedKey(Key{Kind: KeyEscape})
 
 	for _, r := range "hello there this is a long enough message to wrap around" {
 		e.tui.feed([]byte(string(r)))

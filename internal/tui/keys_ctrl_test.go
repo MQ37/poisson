@@ -87,7 +87,12 @@ func TestFeedKeySearchTypeDoesNotDeadlock(t *testing.T) {
 	}
 }
 
-func TestFeedKeyCtrlCCancelsWhileRunningWithModalOpen(t *testing.T) {
+// TestFeedKeyEscDoesNotCancelWhileModalOpen: with a picker overlay open, Esc
+// closes the overlay first (its normal job everywhere else in the app) — it
+// does not reach through to cancel the running turn. That matches Esc's role
+// for every other overlay (search, btw, approval-deny): the nearest thing in
+// front always gets it first.
+func TestFeedKeyEscDoesNotCancelWhileModalOpen(t *testing.T) {
 	tui := newTestTUIHelper()
 	tui.status.Thinking = true
 	tui.setActiveOverlay(newPickerOverlay("test", []pickerItem{{id: "a", label: "a"}}, "", nil))
@@ -96,21 +101,48 @@ func TestFeedKeyCtrlCCancelsWhileRunningWithModalOpen(t *testing.T) {
 	tui.cancelRun = func() { cancelled <- struct{}{} }
 	tui.cancelMu.Unlock()
 
-	_, err := tui.feedKey(Key{Kind: KeyCtrl, Byte: 3})
+	_, err := tui.feedKey(Key{Kind: KeyEscape})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-cancelled:
+		t.Fatal("Esc with a modal open should close the modal, not cancel the agent")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if tui.activeOverlay != nil {
+		t.Fatal("overlay should be dismissed by Esc")
+	}
+}
+
+// TestFeedKeyEscCancelsWhileRunning is the reassigned keybind: Esc (not
+// Ctrl+C) stops an in-flight turn.
+func TestFeedKeyEscCancelsWhileRunning(t *testing.T) {
+	tui := newTestTUIHelper()
+	tui.status.Thinking = true
+	cancelled := make(chan struct{}, 1)
+	tui.cancelMu.Lock()
+	tui.cancelRun = func() { cancelled <- struct{}{} }
+	tui.cancelMu.Unlock()
+
+	_, err := tui.feedKey(Key{Kind: KeyEscape})
 	if err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case <-cancelled:
 	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Ctrl+C with modal open should cancel agent, not only dismiss overlay")
+		t.Fatal("Esc while running should cancel immediately")
 	}
-	if tui.activeOverlay == nil {
-		t.Fatal("overlay should stay open after cancel (not dismissed)")
+	if !tui.turnCancelled {
+		t.Fatal("expected turnCancelled flag")
 	}
 }
 
-func TestFeedKeyCtrlCCancelsWhileRunning(t *testing.T) {
+// TestFeedKeyCtrlCNoLongerCancelsWhileRunning locks in the other half of the
+// keybind swap: Ctrl+C while running must NOT cancel the turn any more (it
+// only clears typed input, or arms/confirms quit).
+func TestFeedKeyCtrlCNoLongerCancelsWhileRunning(t *testing.T) {
 	tui := newTestTUIHelper()
 	tui.status.Thinking = true
 	cancelled := make(chan struct{}, 1)
@@ -124,11 +156,11 @@ func TestFeedKeyCtrlCCancelsWhileRunning(t *testing.T) {
 	}
 	select {
 	case <-cancelled:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("Ctrl+C while running should cancel, not wait for double-tap")
+		t.Fatal("Ctrl+C should no longer cancel a running turn")
+	case <-time.After(50 * time.Millisecond):
 	}
-	if !tui.turnCancelled {
-		t.Fatal("expected turnCancelled flag")
+	if tui.turnCancelled {
+		t.Fatal("turnCancelled should not be set by Ctrl+C any more")
 	}
 }
 

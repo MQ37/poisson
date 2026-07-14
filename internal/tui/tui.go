@@ -129,7 +129,8 @@ type TUI struct {
 	searchHadConvFocus bool
 
 	// cancelRun/cancelCtx are set while an agent prompt is in flight. The input
-	// goroutine uses them to cancel a running request (and pending approval) on Ctrl+C.
+	// goroutine uses them to cancel a running request on Esc (or the approval
+	// panic-button's Ctrl+C, which always denies with an empty reason).
 	cancelCtx context.Context
 	cancelRun context.CancelFunc
 	cancelMu  sync.Mutex

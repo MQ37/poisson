@@ -83,11 +83,17 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 			t.setEphemeralHintLocked("Ctrl+C again to exit", 2*time.Second)
 			return false, nil
 		}
-		if t.running() && !t.approving.Load() {
-			t.cancelActiveRunLocked()
-			t.lastCtrlC = time.Now()
-			return false, nil
-		}
+	}
+
+	// Esc cancels a running turn — but only when nothing else already owns Esc:
+	// not while an approval prompt is up (Esc there means deny) and not while any
+	// other overlay is open (Esc closes that first, same as it always has). Once
+	// cancelled, the existing exitArmed/lastCtrlC double-tap-to-quit mechanism
+	// still confirms on Ctrl+C — only the cancel trigger moved, not the quit one.
+	if k.Kind == KeyEscape && t.running() && !t.approving.Load() && !t.hasKeyOverlay() {
+		t.cancelActiveRunLocked()
+		t.lastCtrlC = time.Now()
+		return false, nil
 	}
 
 	if t.blocksBackgroundInput() || t.hasKeyOverlay() {
