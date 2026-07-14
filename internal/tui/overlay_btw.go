@@ -115,8 +115,15 @@ func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string
 		}
 		full = append(full, mk("  "+dim+spinnerChar(frame)+" "+label+reset))
 	default:
-		for _, ln := range wrapPlain(answer, wrapW) {
-			full = append(full, mk("  "+ln))
+		// Same renderer the main conversation uses for assistant text — bold,
+		// inline code, and fenced code blocks all render identically here
+		// instead of /btw showing a plain word-wrapped dump of the same answer.
+		for _, ln := range layoutRichMarkdown(answer, wrapW, "") {
+			// A reset anywhere inside the line (every styled span ends with one)
+			// would otherwise drop back to the terminal's default background
+			// instead of the panel's — reapply it after every reset, not just
+			// the one at the end that mk() already covers.
+			full = append(full, mk("  "+strings.ReplaceAll(ln, reset, reset+bg)))
 		}
 		if processing {
 			label := "…"

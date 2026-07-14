@@ -26,6 +26,30 @@ func TestBTWOverlayFillsScrollRegionFullWidth(t *testing.T) {
 	}
 }
 
+// TestBTWOverlayUsesSameMarkdownRendererAsConversation confirms /btw's
+// answer body goes through layoutRichMarkdown — the same renderer the main
+// conversation uses for assistant text — instead of a plain word-wrap. Bold
+// text must carry its bold escape, and a fenced code block must render as a
+// bordered box (boxTop's ╭ corner), not a bare wrapped dump of the fence
+// markers as literal text.
+func TestBTWOverlayUsesSameMarkdownRendererAsConversation(t *testing.T) {
+	o := newBTWOverlay("q")
+	o.appendText("**bold answer**\n\n```go\nfunc f() {}\n```\n")
+	o.finish(nil)
+	_, lines := o.render(30, 80)
+	joined := strings.Join(lines, "\n")
+
+	if !strings.Contains(joined, bold) {
+		t.Errorf("expected bold escape in rendered output, got:\n%s", stripANSI(joined))
+	}
+	if !strings.Contains(stripANSI(joined), "╭") {
+		t.Errorf("expected a bordered code block (╭), got:\n%s", stripANSI(joined))
+	}
+	if strings.Contains(stripANSI(joined), "```") {
+		t.Errorf("fence markers should be consumed by the code-block renderer, not shown literally:\n%s", stripANSI(joined))
+	}
+}
+
 func TestBTWOverlayTitleAndFooter(t *testing.T) {
 	o := newBTWOverlay("hi")
 	o.finish(nil)
