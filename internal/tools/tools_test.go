@@ -508,6 +508,64 @@ func TestSearch_MultipleSpaceSeparatedPaths(t *testing.T) {
 	}
 }
 
+// TestSearch_AfterContextLines is the reported gap: the model reaching for
+// bash `grep -n pattern -A5 file` because search had no way to show lines
+// following a match. after (like grep -A) must return them, formatted the
+// same way grep itself does ("-" separator for context lines).
+func TestSearch_AfterContextLines(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	s := NewSearchTool(dir)
+	w.Execute(context.Background(), mustJSON(t, map[string]string{
+		"path":    "a.txt",
+		"content": "one\nMATCH\nthree\nfour\nfive\nsix\n",
+	}))
+
+	res, _ := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern": "MATCH",
+		"path":    ".",
+		"after":   2,
+	}))
+	if res.Error != "" {
+		t.Fatalf("search error: %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "a.txt:2: MATCH") {
+		t.Errorf("expected the match line, got %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "a.txt-3- three") || !strings.Contains(res.Content, "a.txt-4- four") {
+		t.Errorf("expected 2 lines of after-context (grep -A style), got %q", res.Content)
+	}
+	if strings.Contains(res.Content, "five") {
+		t.Errorf("context should stop after 2 lines, got %q", res.Content)
+	}
+}
+
+// TestSearch_BeforeContextLines covers the -B side (before) the same way.
+func TestSearch_BeforeContextLines(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	s := NewSearchTool(dir)
+	w.Execute(context.Background(), mustJSON(t, map[string]string{
+		"path":    "a.txt",
+		"content": "one\ntwo\nMATCH\nfour\n",
+	}))
+
+	res, _ := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern": "MATCH",
+		"path":    ".",
+		"before":  1,
+	}))
+	if res.Error != "" {
+		t.Fatalf("search error: %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "a.txt-2- two") {
+		t.Errorf("expected 1 line of before-context (grep -B style), got %q", res.Content)
+	}
+	if strings.Contains(res.Content, "one") {
+		t.Errorf("context should stop 1 line back, got %q", res.Content)
+	}
+}
+
 func TestSearch_MaxResultsIsGlobal(t *testing.T) {
 	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir, true, nil)

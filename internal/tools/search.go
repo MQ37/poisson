@@ -21,7 +21,7 @@ func NewSearchTool(cwd string) *SearchTool { return &SearchTool{cwd: cwd} }
 func (t *SearchTool) Name() string { return "search" }
 
 func (t *SearchTool) Description() string {
-	return "Search file contents using ripgrep. Returns matching lines with file paths and line numbers. Prefer this over bash `grep`/`rg` when searching text is the whole command — skips bash's risk-classification step entirely."
+	return "Search file contents using ripgrep. Returns matching lines with file paths and line numbers; before/after add surrounding context lines (like grep -B/-A). Prefer this over bash `grep`/`rg` when searching text is the whole command — skips bash's risk-classification step entirely."
 }
 
 func (t *SearchTool) Schema() json.RawMessage {
@@ -32,6 +32,8 @@ func (t *SearchTool) Schema() json.RawMessage {
     "path": { "type": "string", "description": "One or more files/directories to search, space-separated like ripgrep (e.g. 'internal cmd docs'). Default: cwd." },
     "glob": { "type": "string", "description": "File glob filter (e.g. '*.go')" },
     "ignore_case": { "type": "boolean" },
+    "before": { "type": "integer", "description": "Lines of context to show before each match (like grep -B)" },
+    "after": { "type": "integer", "description": "Lines of context to show after each match (like grep -A)" },
     "max_results": { "type": "integer", "default": 100 }
   },
   "required": ["pattern"]
@@ -43,6 +45,8 @@ type searchInput struct {
 	Path       string `json:"path"`
 	Glob       string `json:"glob"`
 	IgnoreCase bool   `json:"ignore_case"`
+	Before     int    `json:"before"`
+	After      int    `json:"after"`
 	MaxResults int    `json:"max_results"`
 }
 
@@ -91,6 +95,12 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 	if in.IgnoreCase {
 		args = append(args, "-i")
 	}
+	if in.Before > 0 {
+		args = append(args, "-B", strconv.Itoa(in.Before))
+	}
+	if in.After > 0 {
+		args = append(args, "-A", strconv.Itoa(in.After))
+	}
 	if in.Glob != "" {
 		args = append(args, "--glob="+in.Glob)
 	}
@@ -126,16 +136,29 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 		if err := json.Unmarshal(line, &m); err != nil {
 			continue
 		}
-		if m.Type != "match" {
+		// With -A/-B/-C set, rg's --json stream also carries "context" lines
+		// around each match and a "context_break" between non-adjacent groups.
+		// Mirror grep's own convention ("-" separator for context, "--" between
+		// groups) so the shape is one models already know how to read.
+		switch m.Type {
+		case "match":
+			filePath := m.Data.Path.Text
+			text := strings.TrimRight(m.Data.Lines.Text, "\n")
+			b.WriteString(fmt.Sprintf("%s:%d: %s\n", filePath, m.Data.LineNumber, text))
+			count++
+			if count >= maxResults {
+				truncated = true
+			}
+		case "context":
+			filePath := m.Data.Path.Text
+			text := strings.TrimRight(m.Data.Lines.Text, "\n")
+			b.WriteString(fmt.Sprintf("%s-%d- %s\n", filePath, m.Data.LineNumber, text))
+		case "context_break":
+			b.WriteString("--\n")
+		default:
 			continue
 		}
-		filePath := m.Data.Path.Text
-		// Make path relative to cwd if possible.
-		text := strings.TrimRight(m.Data.Lines.Text, "\n")
-		b.WriteString(fmt.Sprintf("%s:%d: %s\n", filePath, m.Data.LineNumber, text))
-		count++
-		if count >= maxResults {
-			truncated = true
+		if truncated {
 			break
 		}
 	}
