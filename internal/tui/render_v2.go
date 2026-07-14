@@ -98,6 +98,7 @@ func (t *TUI) paint(snap dirtySnapshot) {
 		t.status.Branch = gitBranch(t.status.Cwd)
 	}
 	t.status.SpinnerFrame = t.renderFrame
+	t.status.Compacting = t.compacting.Load()
 
 	lay := t.prepareLayout()
 	if t.layoutJustChanged {

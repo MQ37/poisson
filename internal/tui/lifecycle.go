@@ -71,7 +71,7 @@ func (t *TUI) Run() error {
 				return
 			case <-tick.C:
 				t.mu.Lock()
-				animate := needsSpinner(t.status.Thinking, t.activeTools)
+				animate := needsSpinner(t.status.Thinking, t.activeTools, t.compacting.Load())
 				if !animate {
 					// The /btw panel spins while it streams its answer, even when the
 					// main agent is idle.

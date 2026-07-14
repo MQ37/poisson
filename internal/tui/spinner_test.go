@@ -12,13 +12,16 @@ func TestSpinnerCharCycles(t *testing.T) {
 }
 
 func TestNeedsSpinner(t *testing.T) {
-	if needsSpinner(false, 0) {
+	if needsSpinner(false, 0, false) {
 		t.Fatal("idle should not need spinner")
 	}
-	if !needsSpinner(true, 0) {
+	if !needsSpinner(true, 0, false) {
 		t.Fatal("thinking should need spinner")
 	}
-	if !needsSpinner(false, 1) {
+	if !needsSpinner(false, 1, false) {
 		t.Fatal("active tools should need spinner")
+	}
+	if !needsSpinner(false, 0, true) {
+		t.Fatal("compacting should need spinner")
 	}
 }

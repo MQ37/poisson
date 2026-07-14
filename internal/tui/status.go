@@ -27,6 +27,7 @@ type StatusSnapshot struct {
 	ToolErrors    int
 	Turns         int
 	Thinking      bool
+	Compacting    bool
 	SpinnerFrame  int
 	WarnContext   bool
 	Hint          string
@@ -64,7 +65,7 @@ func (s StatusSnapshot) renderHeaderRight() string {
 	var b strings.Builder
 	// Show the context N / window whenever it's configured on, and always while
 	// the agent is working so the running status bar carries it.
-	if (s.ShowTokens || s.Thinking) && s.ContextWindow > 0 {
+	if (s.ShowTokens || s.Thinking || s.Compacting) && s.ContextWindow > 0 {
 		b.WriteString(fgCyan)
 		b.WriteString(formatNum(s.ContextTokens))
 		b.WriteString(reset)
@@ -74,9 +75,12 @@ func (s StatusSnapshot) renderHeaderRight() string {
 		b.WriteString(reset)
 		b.WriteString("  ")
 	}
-	if s.Thinking {
-		if s.Turns > 0 {
+	if s.Thinking || s.Compacting {
+		switch {
+		case s.Thinking && s.Turns > 0:
 			b.WriteString(dim + "turn " + reset + fgGreen + fmt.Sprintf("%d", s.Turns) + reset + "  ")
+		case s.Compacting:
+			b.WriteString(dim + "compacting" + reset + "  ")
 		}
 		b.WriteString(spinnerChar(s.SpinnerFrame))
 		b.WriteString(" ")

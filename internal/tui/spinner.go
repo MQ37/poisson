@@ -14,7 +14,9 @@ func spinnerChar(frame int) string {
 	return spinnerFrames[frame%len(spinnerFrames)]
 }
 
-// needsSpinner reports whether the render loop should keep ticking for animation.
-func needsSpinner(thinking bool, activeTools int) bool {
-	return thinking || activeTools > 0
+// needsSpinner reports whether the render loop should keep ticking for
+// animation — also true while compacting, so the header spinner animates
+// and the user has some sign of life during what can be a slow LLM call.
+func needsSpinner(thinking bool, activeTools int, compacting bool) bool {
+	return thinking || activeTools > 0 || compacting
 }
