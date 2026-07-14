@@ -80,13 +80,16 @@ func (s *Store) CreateSession(sess *Session) error {
 	return nil
 }
 
-// MessageCountsBySession returns the number of active (non-deleted,
-// non-compacted) messages per session id — one query, so the session picker
-// can show counts for every session without loading each conversation.
+// MessageCountsBySession returns the number of non-deleted messages per
+// session id — one query, so the session picker can show counts for every
+// session without loading each conversation. Includes compacted messages:
+// compaction only flags a message, it never deletes it, so a session that
+// was compacted as its last action (nothing sent since) still has a real
+// message count, not zero.
 func (s *Store) MessageCountsBySession() (map[string]int, error) {
 	rows, err := s.db.Query(
 		`SELECT session_id, COUNT(*) FROM messages
-		 WHERE deleted_at IS NULL AND compacted = 0 GROUP BY session_id`)
+		 WHERE deleted_at IS NULL GROUP BY session_id`)
 	if err != nil {
 		return nil, fmt.Errorf("count messages: %w", err)
 	}

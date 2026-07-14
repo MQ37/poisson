@@ -328,6 +328,33 @@ func TestApplyCompaction(t *testing.T) {
 	}
 }
 
+// TestMessageCountsBySessionIncludesCompacted is the reported bug: a session
+// that was fully compacted as its last action (every message flagged
+// compacted = 1, nothing sent since) used to disappear from the count
+// entirely — the session picker showed 0. Compaction never deletes a
+// message, so the count must include compacted ones too.
+func TestMessageCountsBySessionIncludesCompacted(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "fully-compacted")
+
+	for _, txt := range []string{"a", "b", "c"} {
+		if err := s.AppendMessage(&Message{SessionID: "fully-compacted", Role: "user", Content: textContent(txt)}); err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+	}
+	if err := s.ApplyCompaction("fully-compacted", 3, "summary"); err != nil {
+		t.Fatalf("ApplyCompaction: %v", err)
+	}
+
+	counts, err := s.MessageCountsBySession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["fully-compacted"] != 3 {
+		t.Fatalf("counts[fully-compacted] = %d, want 3 (compacted messages still count)", counts["fully-compacted"])
+	}
+}
+
 // ---------- FTS5 Search ----------
 
 func TestSearch(t *testing.T) {
