@@ -13,50 +13,68 @@ type mdSegment struct {
 	text string
 }
 
-// splitFenceSegments splits markdown on triple-backtick fences.
+// splitFenceSegments splits markdown on triple-backtick fences. A fence
+// delimiter must be alone on its line (only backticks, plus an optional info
+// string after the opener) — the real CommonMark rule. A prior version
+// scanned for a bare "```" anywhere in the raw text, which also matched one
+// appearing mid-line inside an inline single-backtick code span (e.g. a
+// sentence mentioning literal “ `grep -c '```js'` “ backticks): it would
+// treat that as a real fence open, swallow everything after it as a bogus
+// code block with a garbled multi-line "language" tag, and overflow the
+// code-block border past the terminal width. Anchoring to line-start makes
+// that misdetection impossible — an inline span is never a whole line.
 func splitFenceSegments(src string) []mdSegment {
 	src = strings.ReplaceAll(src, "\r\n", "\n")
-	if !strings.Contains(src, "```") {
-		return []mdSegment{{text: src}}
-	}
+	lines := strings.Split(src, "\n")
 	var out []mdSegment
-	rest := src
-	for {
-		i := strings.Index(rest, "```")
-		if i < 0 {
-			if rest != "" {
-				out = append(out, mdSegment{text: rest})
-			}
-			break
+	var prose []string
+	// flush emits the accumulated prose lines as one segment. beforeFence adds
+	// back the one "\n" that always separated the last prose line from the
+	// fence-open line in the source (lost by the split/rejoin below, since
+	// Join only inserts separators between elements) — the final flush at
+	// end-of-input has no such separator to restore.
+	flush := func(beforeFence bool) {
+		if len(prose) == 0 {
+			return
 		}
-		if i > 0 {
-			out = append(out, mdSegment{text: rest[:i]})
+		text := strings.Join(prose, "\n")
+		if beforeFence {
+			text += "\n"
 		}
-		rest = rest[i+3:]
-		lang := ""
-		if nl := strings.Index(rest, "\n"); nl >= 0 {
-			lang = strings.TrimSpace(rest[:nl])
-			rest = rest[nl+1:]
-		} else {
-			// Unclosed fence opener — treat remainder as plain text.
-			out = append(out, mdSegment{text: "```" + rest})
-			break
-		}
-		close := strings.Index(rest, "```")
-		if close < 0 {
-			out = append(out, mdSegment{code: true, lang: lang, text: strings.TrimSuffix(rest, "\n")})
-			break
-		}
-		code := rest[:close]
-		if strings.HasSuffix(code, "\n") {
-			code = code[:len(code)-1]
-		}
-		out = append(out, mdSegment{code: true, lang: lang, text: code})
-		rest = rest[close+3:]
-		if strings.HasPrefix(rest, "\n") {
-			rest = rest[1:]
-		}
+		out = append(out, mdSegment{text: text})
+		prose = nil
 	}
+	for i := 0; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if !strings.HasPrefix(trimmed, "```") {
+			prose = append(prose, lines[i])
+			continue
+		}
+		if i+1 >= len(lines) {
+			// Fence marker is the literal last line with nothing after it at
+			// all (not even a trailing newline) — too little to call it an
+			// open fence; leave it as plain text.
+			prose = append(prose, lines[i])
+			continue
+		}
+		lang := strings.TrimSpace(trimmed[3:])
+		flush(true)
+		var code []string
+		j := i + 1
+		for ; j < len(lines); j++ {
+			if strings.HasPrefix(strings.TrimSpace(lines[j]), "```") {
+				break
+			}
+			code = append(code, lines[j])
+		}
+		// Unclosed (j reached the end): the whole remainder becomes the code
+		// block's body, same as a properly closed one — matches how a
+		// still-streaming response with an in-progress fence has rendered
+		// since before this rewrite.
+		out = append(out, mdSegment{code: true, lang: lang, text: strings.Join(code, "\n")})
+		i = j
+	}
+	flush(false)
 	if len(out) == 0 {
 		return []mdSegment{{text: src}}
 	}
@@ -133,6 +151,10 @@ func boxTop(lang string, width int) string {
 	fill := width - visibleWidth("╭"+title+"╮")
 	if fill < 0 {
 		fill = 0
+		// lang alone already overflows width (e.g. a mis-parsed "language" tag
+		// that swallowed several lines of text) — truncate rather than emit an
+		// unbounded line that overflows the terminal and corrupts the screen.
+		title = truncateToWidth("─ "+lang+" ", width-2)
 	}
 	return fgGray + "╭" + title + strings.Repeat("─", fill) + "╮"
 }
