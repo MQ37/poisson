@@ -28,7 +28,7 @@ func NewReadTool(cwd string, sandbox bool, approvalFn ApprovalFn) *ReadTool {
 func (t *ReadTool) Name() string { return "read" }
 
 func (t *ReadTool) Description() string {
-	return "Read the contents of a file. Supports text files and images (jpg, png, gif, webp). offset/limit read a line range, like `sed -n 'START,ENDp'`. Output is truncated to 2000 lines or 50KB. Prefer this over bash `cat`/`head`/`tail`/`sed -n` when reading the file (or a line range) is the whole command — skips bash's risk-classification step entirely."
+	return "Read the contents of a file. Output is prefixed with line numbers (N: text). Supports text files and images (jpg, png, gif, webp). offset/limit read a line range, like `sed -n 'START,ENDp'`. Output is truncated to 2000 lines or 50KB. Prefer this over bash `cat`/`head`/`tail`/`sed -n`/`cat -n` when reading the file (or a line range) is the whole command — skips bash's risk-classification step entirely."
 }
 
 func (t *ReadTool) Schema() json.RawMessage {
@@ -103,7 +103,10 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		if offset > 0 && lineNum < offset {
 			continue
 		}
-		line := scanner.Text() + "\n"
+		// Numbered like search's own "path:N:" output — the model consistently
+		// wants line numbers to target a later edit (it adds grep's -n to nearly
+		// every search call), and plain read had no equivalent at all.
+		line := fmt.Sprintf("%d: %s\n", lineNum, scanner.Text())
 		if byteCount+len(line) > maxBytes {
 			remaining := maxBytes - byteCount
 			if remaining > 0 {

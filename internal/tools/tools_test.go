@@ -118,6 +118,27 @@ func TestRead_LongSingleLine(t *testing.T) {
 	}
 }
 
+// TestRead_LinesAreNumbered is the reported gap: models kept falling back to
+// bash `cat -n`/`grep -n` because plain read had no line numbers at all,
+// unlike search's own "path:N:" output. Numbers must reflect the real file
+// line, not a renumbered index starting at 1 (offset/limit is checked
+// separately in TestRead_OffsetLimit).
+func TestRead_LinesAreNumbered(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	r := NewReadTool(dir, true, nil)
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "alpha\nbeta\ngamma\n"}))
+
+	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt"}))
+	if res.Error != "" {
+		t.Fatalf("read error: %s", res.Error)
+	}
+	want := "1: alpha\n2: beta\n3: gamma\n"
+	if res.Content != want {
+		t.Fatalf("content = %q, want %q", res.Content, want)
+	}
+}
+
 func TestRead_ImageBase64(t *testing.T) {
 	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "pixel.png")
@@ -220,8 +241,8 @@ func TestRead_OffsetLimit(t *testing.T) {
 	if len(lines) != 3 {
 		t.Errorf("expected 3 lines, got %d: %q", len(lines), res.Content)
 	}
-	if lines[0] != "line5" {
-		t.Errorf("first line = %q, want line5", lines[0])
+	if lines[0] != "5: line5" {
+		t.Errorf("first line = %q, want %q (offset preserves the real file line number)", lines[0], "5: line5")
 	}
 }
 
