@@ -11,6 +11,10 @@ func TestLookupBuiltIn(t *testing.T) {
 	if !ok || r.InputPerMTok != 5.0 || r.OutputPerMTok != 25.0 {
 		t.Fatalf("opus = %+v ok=%v", r, ok)
 	}
+	r, ok = Lookup(nil, "anthropic", "claude-sonnet-5")
+	if !ok || r.InputPerMTok != 3.0 || r.OutputPerMTok != 15.0 || r.CacheReadPerMTok != 0.3 || r.CacheWritePerMTok != 6.0 {
+		t.Fatalf("sonnet-5 = %+v ok=%v", r, ok)
+	}
 	r, ok = Lookup(nil, "ollama", "qwen3-coder:30b")
 	if !ok || r.InputPerMTok != 0 {
 		t.Fatalf("ollama wildcard = %+v", r)

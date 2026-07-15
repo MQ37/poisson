@@ -21,6 +21,9 @@ var builtIn = map[string]map[string]Rates{
 		// input, output, cacheRead (0.1x), cacheWrite. Poisson uses the 1-hour
 		// cache pool, whose writes bill at 2x input ($10/MTok for Opus 4.8).
 		"claude-opus-4-8": {5.0, 25.0, 0.5, 10.0},
+		// claude-sonnet-5: same 1h-cache-pool convention as opus above
+		// (cacheRead 0.1x input, cacheWrite 2x input).
+		"claude-sonnet-5": {3.0, 15.0, 0.3, 6.0},
 	},
 	"xai": {
 		"grok-build": {1.0, 2.0, 0, 0},
