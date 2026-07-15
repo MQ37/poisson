@@ -99,3 +99,52 @@ func TestRenderHeaderNoAnthropicUsage(t *testing.T) {
 		t.Errorf("expected no usage segment for non-Anthropic provider, got %q", line)
 	}
 }
+
+// TestRenderHeaderShowsCodexUsage mirrors TestRenderHeaderShowsAnthropicUsage
+// for the OpenAI/Codex side (see internal/provider/openai_usage.go).
+func TestRenderHeaderShowsCodexUsage(t *testing.T) {
+	s := StatusSnapshot{
+		Cwd:   "/home/mq/workdir/poisson",
+		Model: "openai/gpt-5.5",
+		CodexUsage: &CodexUsageView{
+			UsedPercent:           37,
+			ResetCreditsAvailable: 2,
+		},
+	}
+	line := stripANSI(s.RenderHeader(120))
+	for _, want := range []string{"7d 37%", "2 resets"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("header %q missing %q", line, want)
+		}
+	}
+}
+
+// TestRenderHeaderCodexUsageSingularReset confirms the "N reset(s)" label
+// doesn't pluralize a lone remaining credit.
+func TestRenderHeaderCodexUsageSingularReset(t *testing.T) {
+	s := StatusSnapshot{
+		Cwd:        "/home/mq/workdir/poisson",
+		Model:      "openai/gpt-5.5",
+		CodexUsage: &CodexUsageView{UsedPercent: 10, ResetCreditsAvailable: 1},
+	}
+	line := stripANSI(s.RenderHeader(120))
+	if !strings.Contains(line, "1 reset") {
+		t.Errorf("header %q missing singular '1 reset'", line)
+	}
+	if strings.Contains(line, "1 resets") {
+		t.Errorf("header %q incorrectly pluralized a single reset credit", line)
+	}
+}
+
+// TestRenderHeaderNoCodexUsage confirms nothing renders for non-OpenAI
+// providers (CodexUsage left nil).
+func TestRenderHeaderNoCodexUsage(t *testing.T) {
+	s := StatusSnapshot{
+		Cwd:   "/home/mq/workdir/poisson",
+		Model: "ollama/glm-5.2:cloud",
+	}
+	line := stripANSI(s.RenderHeader(120))
+	if strings.Contains(line, "reset") {
+		t.Errorf("expected no Codex usage segment for non-OpenAI provider, got %q", line)
+	}
+}

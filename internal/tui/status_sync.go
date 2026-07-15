@@ -1,5 +1,36 @@
 package tui
 
+import "context"
+
+// refreshProviderUsageLimits fetches fresh usage-limit data for whichever
+// provider is currently active (both Refresh* calls are no-ops for the
+// "other" provider) and re-syncs the header. Called by the background
+// ticker in lifecycle.go on its own 5-minute schedule, and eagerly (via
+// triggerUsageRefreshLocked, in a fresh goroutine) right after a provider
+// switch — a freshly constructed provider's usage cache always starts
+// empty, so without this the header would show nothing until the next
+// scheduled tick, up to 5 minutes later.
+func (t *TUI) refreshProviderUsageLimits(ctx context.Context) {
+	if t.agent == nil {
+		return
+	}
+	t.agent.RefreshAnthropicUsageLimits(ctx)
+	t.agent.RefreshOpenAIUsageLimits(ctx)
+	t.mu.Lock()
+	t.syncHeaderFromAgentLocked()
+	t.mu.Unlock()
+	t.dirty.markStatus()
+}
+
+// triggerUsageRefreshLocked kicks off refreshProviderUsageLimits in the
+// background, without waiting for the ticker's own schedule. Caller must
+// hold t.mu (the network call itself runs outside the lock, in a new
+// goroutine); safe to call whether or not the provider actually changed — a
+// same-provider call is just a normal TTL-gated cache hit.
+func (t *TUI) triggerUsageRefreshLocked() {
+	go t.refreshProviderUsageLimits(context.Background())
+}
+
 // syncHeaderFromAgentLocked refreshes the compact header from agent + store.
 // Caller must hold t.mu.
 func (t *TUI) syncHeaderFromAgentLocked() {
@@ -37,6 +68,14 @@ func (t *TUI) syncHeaderFromAgentLocked() {
 			ExtraUsed:     u.ExtraUsed,
 			ExtraLimit:    u.ExtraLimit,
 			ExtraCurrency: u.ExtraCurrency,
+		}
+	}
+
+	t.status.CodexUsage = nil
+	if u := a.OpenAIUsageLimits(); u != nil {
+		t.status.CodexUsage = &CodexUsageView{
+			UsedPercent:           u.UsedPercent,
+			ResetCreditsAvailable: u.ResetCreditsAvailable,
 		}
 	}
 

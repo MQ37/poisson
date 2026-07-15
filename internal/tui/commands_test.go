@@ -471,3 +471,64 @@ func TestCmdEffortNoArg(t *testing.T) {
 		t.Errorf("expected current effort message, got %q", out)
 	}
 }
+
+// TestRefreshProviderUsageLimitsMarksHeaderDirty confirms
+// refreshProviderUsageLimits (the function both the lifecycle ticker and
+// triggerUsageRefreshLocked call) runs to completion and marks the header
+// dirty, even for a provider (the default FakeProvider) with no usage-limit
+// data at all — RefreshAnthropicUsageLimits/RefreshOpenAIUsageLimits must be
+// harmless no-ops rather than panicking or hanging.
+func TestRefreshProviderUsageLimitsMarksHeaderDirty(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+	tui.dirty = newDirtyTracker()
+
+	tui.refreshProviderUsageLimits(context.Background())
+
+	tui.mu.Lock()
+	snap := tui.dirty.consume()
+	tui.mu.Unlock()
+	if !snap.status {
+		t.Fatal("refreshProviderUsageLimits should have marked the header dirty")
+	}
+}
+
+// TestProviderSwitchTriggersEagerUsageRefresh is the reported bug: switching
+// providers via /model or /providers (both go through cmdModel ->
+// refreshHostHeader) left the usage segment blank until the next scheduled
+// 5-minute ticker fire, because a freshly constructed provider's usage
+// cache always starts empty and nothing eagerly refetched it. Confirms
+// refreshHostHeader now kicks off that refetch immediately (async, so this
+// polls with a bound instead of asserting synchronously).
+func TestProviderSwitchTriggersEagerUsageRefresh(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	configureAuth(t, "xai")
+	tui := newTUIWithAgent(a, sessionID)
+	tui.dirty = newDirtyTracker()
+
+	cmdModel(cmdHost(tui), []string{"xai/grok-build"})
+
+	// refreshHostHeader's own markFull() call already marks status dirty
+	// synchronously, before triggerUsageRefreshLocked's goroutine ever runs —
+	// consume (and discard) that first so a false positive from markFull
+	// can't masquerade as the eager refresh actually having happened. The
+	// signal under test is a *second*, later markStatus() call, which only
+	// refreshProviderUsageLimits's own goroutine can produce.
+	tui.mu.Lock()
+	tui.dirty.consume()
+	tui.mu.Unlock()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		tui.mu.Lock()
+		snap := tui.dirty.consume()
+		tui.mu.Unlock()
+		if snap.status {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("switching provider never triggered an eager usage-limit refresh")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

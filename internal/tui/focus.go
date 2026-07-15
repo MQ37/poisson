@@ -220,6 +220,9 @@ func (t *TUI) resetSessionViewLocked() {
 	t.hydrateScrollbackLocked()
 	t.syncHeaderFromAgentLocked()
 	t.dirty.markFull()
+	// /resume can switch to a session on a different provider — same reasoning
+	// as refreshHostHeader in commands.go.
+	t.triggerUsageRefreshLocked()
 }
 
 func (t *TUI) setEphemeralHintLocked(msg string, d time.Duration) {

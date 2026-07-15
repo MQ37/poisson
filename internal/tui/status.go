@@ -38,6 +38,18 @@ type StatusSnapshot struct {
 	// AnthropicUsage is nil when the active provider isn't Anthropic, or when
 	// nothing has been fetched yet.
 	AnthropicUsage *AnthropicUsageView
+
+	// OpenAI/Codex-only weekly usage (see internal/provider/openai_usage.go).
+	// Nil when the active provider isn't OpenAI, or nothing fetched yet.
+	CodexUsage *CodexUsageView
+}
+
+// CodexUsageView is the header's own copy of provider.CodexUsage — plain
+// fields, not a provider.* type, for the same import-avoidance reason as
+// AnthropicUsageView above.
+type CodexUsageView struct {
+	UsedPercent           float64
+	ResetCreditsAvailable int
 }
 
 // AnthropicUsageView is the header's own copy of provider.AnthropicUsageLimits
@@ -132,6 +144,20 @@ func (s StatusSnapshot) renderHeaderRight() string {
 			b.WriteString(fmt.Sprintf("%.2f/%.2f %s", u.ExtraUsed, u.ExtraLimit, u.ExtraCurrency))
 			b.WriteString(reset)
 		}
+		b.WriteString("  ")
+	}
+	if u := s.CodexUsage; u != nil {
+		suffix := "s"
+		if u.ResetCreditsAvailable == 1 {
+			suffix = ""
+		}
+		b.WriteString(fgGray)
+		b.WriteString(fmt.Sprintf("7d %.0f%%", u.UsedPercent))
+		b.WriteString(reset)
+		b.WriteString(dim + " · " + reset)
+		b.WriteString(fgGray)
+		b.WriteString(fmt.Sprintf("%d reset%s", u.ResetCreditsAvailable, suffix))
+		b.WriteString(reset)
 		b.WriteString("  ")
 	}
 	if s.WarnContext {

@@ -384,6 +384,41 @@ func (a *Agent) RefreshAnthropicUsageLimits(ctx context.Context) {
 	_, _ = ap.UsageLimits(ctx)
 }
 
+// OpenAIUsageLimits returns the last cached Codex usage snapshot, or nil if
+// the current provider isn't OpenAI or nothing has been fetched yet. Never
+// makes a network call — safe to call from a render/status-sync path.
+func (a *Agent) OpenAIUsageLimits() *provider.CodexUsage {
+	op, ok := a.provider.(*provider.OpenAIProvider)
+	if !ok {
+		return nil
+	}
+	return op.CachedUsageLimits()
+}
+
+// RefreshOpenAIUsageLimits fetches fresh Codex usage data, a no-op unless
+// the current provider is OpenAI. Same TTL/error-swallowing reasoning as
+// RefreshAnthropicUsageLimits above.
+func (a *Agent) RefreshOpenAIUsageLimits(ctx context.Context) {
+	op, ok := a.provider.(*provider.OpenAIProvider)
+	if !ok {
+		return
+	}
+	_, _ = op.UsageLimits(ctx)
+}
+
+// ResetOpenAIUsage spends one of the account's free Codex "reset this usage
+// window early" credits. Unlike the Refresh* methods above, this is a
+// direct user-triggered action (the /openai-reset-usage command) — its
+// error IS surfaced, not swallowed, since there's a human waiting to know
+// whether it worked.
+func (a *Agent) ResetOpenAIUsage(ctx context.Context) (*provider.CodexResetResult, error) {
+	op, ok := a.provider.(*provider.OpenAIProvider)
+	if !ok {
+		return nil, fmt.Errorf("resetting usage is only available with the OpenAI/Codex provider")
+	}
+	return op.ResetUsage(ctx)
+}
+
 // Config returns the current config.
 func (a *Agent) Config() *config.Config { return a.config }
 

@@ -34,11 +34,15 @@ type OpenAIProvider struct {
 	config   *config.Config
 	client   *http.Client
 	endpoint string // Codex Responses URL; overridable in tests
+
+	webBaseURL string // chatgpt.com web/session backend (usage, reset credits); overridable in tests
+	usageMu    sync.Mutex
+	usageCache *CodexUsage // see openai_usage.go
 }
 
 // NewOpenAIProvider creates an OpenAI provider with the given auth and config.
 func NewOpenAIProvider(a auth.AuthStore, cfg *config.Config) *OpenAIProvider {
-	return &OpenAIProvider{auth: a, config: cfg, client: &http.Client{}, endpoint: codexResponsesURL}
+	return &OpenAIProvider{auth: a, config: cfg, client: &http.Client{}, endpoint: codexResponsesURL, webBaseURL: codexWebBaseURL}
 }
 
 // ID returns "openai".

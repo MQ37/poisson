@@ -44,6 +44,7 @@ func renderHelp() string {
   /effort [l]  Effort picker (or set level incl. max)
   /reload      Reload config and skills
   /cost        Show session cost
+  /openai-reset-usage  Spend a free Codex reset credit to reset usage now
   /status      Session info + loaded context files & skills
   /btw <q>     Side question in floating box`, "\n"))
 	b.WriteString("\n\n")

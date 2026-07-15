@@ -102,17 +102,7 @@ func (t *TUI) Run() error {
 	usageCtx, cancelUsage := context.WithCancel(context.Background())
 	go func() {
 		defer cancelUsage()
-		refresh := func() {
-			if t.agent == nil {
-				return
-			}
-			t.agent.RefreshAnthropicUsageLimits(usageCtx)
-			t.mu.Lock()
-			t.syncHeaderFromAgentLocked()
-			t.mu.Unlock()
-			t.dirty.markStatus()
-		}
-		refresh()
+		t.refreshProviderUsageLimits(usageCtx)
 		tick := time.NewTicker(5 * time.Minute)
 		defer tick.Stop()
 		for {
@@ -120,7 +110,7 @@ func (t *TUI) Run() error {
 			case <-stop:
 				return
 			case <-tick.C:
-				refresh()
+				t.refreshProviderUsageLimits(usageCtx)
 			}
 		}
 	}()

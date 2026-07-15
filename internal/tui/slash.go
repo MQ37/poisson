@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -143,6 +145,28 @@ func (t *TUI) handleSlash(cmd string) error {
 		return cmdReload(h)
 	case "/cost":
 		cmdCost(h)
+		return nil
+	case "/openai-reset-usage":
+		if t.sessionBusyLocked() {
+			t.scroll.appendRaw(styleSystem, "cannot reset usage while agent is running or compacting")
+			t.markScrollDirty()
+			return nil
+		}
+		t.scroll.appendRaw(styleSystem, "  resetting Codex usage window...")
+		t.markScrollDirty()
+		go func() {
+			result, err := t.agent.ResetOpenAIUsage(context.Background())
+			t.mu.Lock()
+			defer t.mu.Unlock()
+			if err != nil {
+				t.scroll.appendRaw(styleError, "reset usage failed: "+err.Error())
+			} else {
+				t.scroll.appendRaw(styleSystem, fmt.Sprintf("usage window reset (%d window(s) reset, %d reset credit(s) remaining)", result.WindowsReset, result.CreditsRemaining))
+				t.syncHeaderFromAgentLocked()
+				t.dirty.markStatus()
+			}
+			t.markScrollDirty()
+		}()
 		return nil
 	case "/status":
 		cmdStatus(h)

@@ -56,6 +56,13 @@ git clone <this-repo> poisson && cd poisson
   auto-compaction that summarizes old turns when context fills up.
 - **Exact cost & tokens** — per-API-call token counts and USD cost, live in the
   status bar and via `/cost`.
+- **Live usage-limit tracking** — Anthropic OAuth sessions show 5-hour and
+  7-day (weekly) rolling usage % plus any pay-as-you-go balance right in the
+  header; OpenAI/Codex sessions show weekly usage % and how many free
+  "reset this window early" credits your account has (spend one with
+  `/openai-reset-usage`). Refreshed at most every 5 minutes, straight from
+  each provider's own usage endpoint — no scraping, no guessing from token
+  counts.
 - **Image input** — paste an image with **Ctrl+V** or attach `@screenshot.png`.
   Images are downscaled to 1024px and sent to vision-capable models. ([details](docs/images.md))
 - **Multi-provider** — Anthropic (subscription OAuth), OpenAI (ChatGPT
@@ -201,7 +208,8 @@ own native copy action and never forward it to the app.
 
 Slash commands: `/help` `/status` `/model` `/effort` `/providers` `/sessions`
 `/resume` `/search` `/new` `/clear` `/name` `/compact` `/cost` `/reload`
-`/btw` `/quit`. Type `@` to fuzzy-attach a file (or `@image.png` for an image).
+`/btw` `/openai-reset-usage` `/quit`. Type `@` to fuzzy-attach a file (or
+`@image.png` for an image).
 
 ---
 

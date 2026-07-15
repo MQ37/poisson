@@ -163,6 +163,10 @@ func refreshHostHeader(h commandHost) {
 	if th, ok := h.(tuiCmdHost); ok {
 		th.t.syncHeaderFromAgentLocked()
 		th.t.dirty.markFull()
+		// A freshly switched-in provider's usage cache always starts empty
+		// (see triggerUsageRefreshLocked) — fetch it now instead of leaving
+		// the header blank until the next scheduled 5-minute tick.
+		th.t.triggerUsageRefreshLocked()
 	}
 }
 
