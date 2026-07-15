@@ -87,7 +87,9 @@ func (t *TUI) handleOneMouseEvent(ev MouseEvent) {
 		}
 		w := t.contentWidth()
 		if t.scroll.focusedToolExpanded(w) {
-			if t.scroll.scrollFocusedTool(w, delta) {
+			// Wheel-up shows earlier lines (opposite of scrollFocusedTool's own
+			// delta convention, same fix as the approval overlay above).
+			if t.scroll.scrollFocusedTool(w, -delta) {
 				t.markScrollDirty()
 			}
 			t.mu.Unlock()

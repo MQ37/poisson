@@ -123,3 +123,36 @@ func TestHandleMouseClickIgnoresHeader(t *testing.T) {
 		t.Fatal("header click should be ignored")
 	}
 }
+
+// TestFocusedToolMouseWheelScrollDirection reproduces a reported bug: wheel
+// scroll inside an expanded tool card (read/skill/etc.) moved the opposite
+// way from the main conversation and the approval overlay (see
+// TestApprovalMouseWheelScrollDirection above) — wheel up must reveal
+// earlier lines, wheel down later ones, everywhere wheel scroll works.
+func TestFocusedToolMouseWheelScrollDirection(t *testing.T) {
+	tui := newTUI(nil, "s1", nil)
+	tui.cols = 40
+	long := strings.Repeat("line\n", 100)
+	tui.scroll.appendToolCall(1, "", "read", toolInputJSON("read", map[string]string{"path": "f"}))
+	tui.scroll.completeToolCall("", `{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", 10)
+	tui.scroll.blocks[0].meta.Expanded = true
+	tui.scroll.focusedToolID = tui.scroll.blocks[0].id
+	tui.scroll.blocks[0].meta.ToolScroll = 10
+
+	// Wheel up (btn 64) → earlier lines → lower ToolScroll (same convention
+	// as the approval overlay and the main scrollback).
+	if !tui.handleMouseInput([]byte("\x1b[<64;10;5M")) {
+		t.Fatal("wheel up should be consumed")
+	}
+	if got := tui.scroll.blocks[0].meta.ToolScroll; got != 7 {
+		t.Fatalf("wheel up: ToolScroll = %d, want 7", got)
+	}
+
+	// Wheel down (btn 65) → later lines → higher ToolScroll.
+	if !tui.handleMouseInput([]byte("\x1b[<65;10;5M")) {
+		t.Fatal("wheel down should be consumed")
+	}
+	if got := tui.scroll.blocks[0].meta.ToolScroll; got != 10 {
+		t.Fatalf("wheel down: ToolScroll = %d, want 10", got)
+	}
+}
