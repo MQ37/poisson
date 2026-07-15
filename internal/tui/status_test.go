@@ -42,3 +42,60 @@ func TestRenderHeaderSpinsWhileCompacting(t *testing.T) {
 		t.Fatalf("expected a 'compacting' label, got %q", line)
 	}
 }
+
+// TestRenderHeaderShowsAnthropicUsage confirms the 5h/7-day/extra-usage
+// segment renders when populated (Anthropic OAuth only — see
+// internal/provider/anthropic_usage.go).
+func TestRenderHeaderShowsAnthropicUsage(t *testing.T) {
+	s := StatusSnapshot{
+		Cwd:   "/home/mq/workdir/poisson",
+		Model: "anthropic/claude-opus-4-8",
+		AnthropicUsage: &AnthropicUsageView{
+			FiveHourPct:   31,
+			SevenDayPct:   29,
+			ExtraEnabled:  true,
+			ExtraUsed:     4.66,
+			ExtraLimit:    200,
+			ExtraCurrency: "EUR",
+		},
+	}
+	line := stripANSI(s.RenderHeader(120))
+	for _, want := range []string{"5h 31%", "7d 29%", "4.66/200.00 EUR"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("header %q missing %q", line, want)
+		}
+	}
+}
+
+// TestRenderHeaderHidesExtraUsageWhenDisabled confirms the extra-usage part
+// is skipped when the account doesn't have it enabled, while 5h/7d still show.
+func TestRenderHeaderHidesExtraUsageWhenDisabled(t *testing.T) {
+	s := StatusSnapshot{
+		Cwd:   "/home/mq/workdir/poisson",
+		Model: "anthropic/claude-opus-4-8",
+		AnthropicUsage: &AnthropicUsageView{
+			FiveHourPct: 31,
+			SevenDayPct: 29,
+		},
+	}
+	line := stripANSI(s.RenderHeader(120))
+	if strings.Contains(line, "EUR") || strings.Contains(line, "4.66") {
+		t.Errorf("expected no extra-usage segment, got %q", line)
+	}
+	if !strings.Contains(line, "5h 31%") || !strings.Contains(line, "7d 29%") {
+		t.Errorf("header %q missing 5h/7d", line)
+	}
+}
+
+// TestRenderHeaderNoAnthropicUsage confirms nothing at all renders for
+// non-Anthropic providers (AnthropicUsage left nil).
+func TestRenderHeaderNoAnthropicUsage(t *testing.T) {
+	s := StatusSnapshot{
+		Cwd:   "/home/mq/workdir/poisson",
+		Model: "ollama/glm-5.2:cloud",
+	}
+	line := stripANSI(s.RenderHeader(120))
+	if strings.Contains(line, "5h") || strings.Contains(line, "7d") {
+		t.Errorf("expected no usage segment for non-Anthropic provider, got %q", line)
+	}
+}

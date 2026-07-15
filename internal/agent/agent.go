@@ -358,6 +358,32 @@ func (a *Agent) ReloadConfigDependentTools() {
 // Provider returns the current provider.
 func (a *Agent) Provider() provider.Provider { return a.provider }
 
+// AnthropicUsageLimits returns the last cached Anthropic 5h/7-day usage
+// snapshot, or nil if the current provider isn't Anthropic or nothing has
+// been fetched yet. Never makes a network call — safe to call from a
+// render/status-sync path.
+func (a *Agent) AnthropicUsageLimits() *provider.AnthropicUsageLimits {
+	ap, ok := a.provider.(*provider.AnthropicProvider)
+	if !ok {
+		return nil
+	}
+	return ap.CachedUsageLimits()
+}
+
+// RefreshAnthropicUsageLimits fetches fresh usage data, a no-op unless the
+// current provider is Anthropic. The provider's own UsageLimits enforces a
+// 5-minute TTL internally, so calling this often (e.g. from a ticker) is
+// harmless — most calls just return the cache without a network round trip.
+// Errors are swallowed by design: this drives a background status-bar
+// refresh, not a user-facing operation with something to report failure to.
+func (a *Agent) RefreshAnthropicUsageLimits(ctx context.Context) {
+	ap, ok := a.provider.(*provider.AnthropicProvider)
+	if !ok {
+		return
+	}
+	_, _ = ap.UsageLimits(ctx)
+}
+
 // Config returns the current config.
 func (a *Agent) Config() *config.Config { return a.config }
 

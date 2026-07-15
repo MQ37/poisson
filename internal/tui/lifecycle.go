@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -89,6 +90,37 @@ func (t *TUI) Run() error {
 				if snap.any() {
 					t.paint(snap)
 				}
+			}
+		}
+	}()
+
+	// Background Anthropic usage-limit refresh: a no-op for every other
+	// provider (RefreshAnthropicUsageLimits checks internally). Ticks at the
+	// same cadence as the provider's own 5-minute cache TTL (anthropic_usage.go)
+	// — an eager fetch would just return the cache anyway, so there is no
+	// reason to poll more often than the value can actually change.
+	usageCtx, cancelUsage := context.WithCancel(context.Background())
+	go func() {
+		defer cancelUsage()
+		refresh := func() {
+			if t.agent == nil {
+				return
+			}
+			t.agent.RefreshAnthropicUsageLimits(usageCtx)
+			t.mu.Lock()
+			t.syncHeaderFromAgentLocked()
+			t.mu.Unlock()
+			t.dirty.markStatus()
+		}
+		refresh()
+		tick := time.NewTicker(5 * time.Minute)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tick.C:
+				refresh()
 			}
 		}
 	}()

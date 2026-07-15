@@ -33,6 +33,23 @@ type StatusSnapshot struct {
 	Hint          string
 	ShowTokens    bool
 	ShowCost      bool
+
+	// Anthropic-only 5h/7-day usage (see internal/provider/anthropic_usage.go).
+	// AnthropicUsage is nil when the active provider isn't Anthropic, or when
+	// nothing has been fetched yet.
+	AnthropicUsage *AnthropicUsageView
+}
+
+// AnthropicUsageView is the header's own copy of provider.AnthropicUsageLimits
+// — kept as plain fields (not a provider.* type) so this package doesn't need
+// to import internal/provider just to render a status line.
+type AnthropicUsageView struct {
+	FiveHourPct   float64
+	SevenDayPct   float64
+	ExtraEnabled  bool
+	ExtraUsed     float64
+	ExtraLimit    float64
+	ExtraCurrency string
 }
 
 // RenderHeader returns a single Grok-style top strip: cwd left, tokens/model right.
@@ -99,6 +116,22 @@ func (s StatusSnapshot) renderHeaderRight() string {
 		b.WriteString(fgYellow)
 		b.WriteString(fmt.Sprintf("$%.4f", s.Cost))
 		b.WriteString(reset)
+		b.WriteString("  ")
+	}
+	if u := s.AnthropicUsage; u != nil {
+		b.WriteString(fgGray)
+		b.WriteString(fmt.Sprintf("5h %.0f%%", u.FiveHourPct))
+		b.WriteString(reset)
+		b.WriteString(dim + " · " + reset)
+		b.WriteString(fgGray)
+		b.WriteString(fmt.Sprintf("7d %.0f%%", u.SevenDayPct))
+		b.WriteString(reset)
+		if u.ExtraEnabled {
+			b.WriteString(dim + " · " + reset)
+			b.WriteString(fgGray)
+			b.WriteString(fmt.Sprintf("%.2f/%.2f %s", u.ExtraUsed, u.ExtraLimit, u.ExtraCurrency))
+			b.WriteString(reset)
+		}
 		b.WriteString("  ")
 	}
 	if s.WarnContext {

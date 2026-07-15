@@ -28,6 +28,18 @@ func (t *TUI) syncHeaderFromAgentLocked() {
 		t.status.CallCount = tb.CallCount
 	}
 
+	t.status.AnthropicUsage = nil
+	if u := a.AnthropicUsageLimits(); u != nil {
+		t.status.AnthropicUsage = &AnthropicUsageView{
+			FiveHourPct:   u.FiveHour.UtilizationPct,
+			SevenDayPct:   u.SevenDay.UtilizationPct,
+			ExtraEnabled:  u.ExtraUsageEnabled,
+			ExtraUsed:     u.ExtraUsed,
+			ExtraLimit:    u.ExtraLimit,
+			ExtraCurrency: u.ExtraCurrency,
+		}
+	}
+
 	t.status.SessionID = a.SessionID()
 	t.status.Title = ""
 	if sess, err := a.Store().GetSession(a.SessionID()); err == nil {

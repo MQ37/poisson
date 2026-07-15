@@ -26,6 +26,9 @@ type AnthropicProvider struct {
 	authMu  sync.Mutex
 	config  *config.Config
 	client  *http.Client
+
+	usageMu    sync.Mutex
+	usageCache *AnthropicUsageLimits // see anthropic_usage.go
 }
 
 // NewAnthropicProvider creates an Anthropic provider with the given auth
