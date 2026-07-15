@@ -337,16 +337,22 @@ func (a *Agent) ReloadSkills() (int, error) {
 	return len(sk), nil
 }
 
-// ReloadConfigDependentTools updates tools gated on runtime config (e.g. fetch).
+// ReloadConfigDependentTools updates tools gated on runtime config (e.g.
+// fetch's Ollama-vs-direct mode). fetch is always registered now — it used
+// to be Ollama-only (unregistered entirely on every other provider), which
+// meant Anthropic/OpenAI/xAI sessions never had a working fetch tool at all.
+// Ollama's own web_fetch API is used when it's the active provider and
+// reachable (its own extraction, already good); every other case falls back
+// to FetchTool's direct HTTP fetch + built-in HTML→Markdown conversion.
 func (a *Agent) ReloadConfigDependentTools() {
 	if a.tools == nil || a.config == nil {
 		return
 	}
+	ollamaBaseURL := ""
 	if a.providerID() == "ollama" && tools.IsOllamaReachable(a.config) {
-		a.tools.Register(tools.NewFetchTool(a.config.Ollama.BaseURL))
-	} else {
-		a.tools.Unregister("fetch")
+		ollamaBaseURL = tools.OllamaBaseURL(a.config)
 	}
+	a.tools.Register(tools.NewFetchTool(ollamaBaseURL))
 }
 
 // Provider returns the current provider.
