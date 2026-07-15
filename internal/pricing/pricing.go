@@ -32,6 +32,12 @@ var builtIn = map[string]map[string]Rates{
 		// subscription endpoint, so — like anthropic/xai above — this is
 		// informational shadow pricing, not a real bill.
 		"gpt-5.5": {5.0, 30.0, 0.5, 0},
+		// GPT-5.6 family: cacheRead is the same 0.1x-of-input discount gpt-5.5
+		// gets; cacheWrite stays 0 for the same reason (automatic, no separate
+		// write charge).
+		"gpt-5.6-sol":   {5.0, 30.0, 0.5, 0},
+		"gpt-5.6-terra": {2.5, 15.0, 0.25, 0},
+		"gpt-5.6-luna":  {1.0, 6.0, 0.1, 0},
 	},
 	"ollama": {
 		"*": {0, 0, 0, 0},

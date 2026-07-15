@@ -23,6 +23,16 @@ func TestLookupBuiltIn(t *testing.T) {
 	if !ok || r.InputPerMTok != 5.0 || r.OutputPerMTok != 30.0 || r.CacheReadPerMTok != 0.5 {
 		t.Fatalf("gpt-5.5 = %+v ok=%v", r, ok)
 	}
+	for id, want := range map[string]Rates{
+		"gpt-5.6-sol":   {5.0, 30.0, 0.5, 0},
+		"gpt-5.6-terra": {2.5, 15.0, 0.25, 0},
+		"gpt-5.6-luna":  {1.0, 6.0, 0.1, 0},
+	} {
+		r, ok := Lookup(nil, "openai", id)
+		if !ok || r != want {
+			t.Fatalf("%s = %+v ok=%v, want %+v", id, r, ok, want)
+		}
+	}
 }
 
 func TestLookupConfigOverride(t *testing.T) {

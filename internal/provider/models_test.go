@@ -33,6 +33,36 @@ func TestCuratedModels(t *testing.T) {
 	}
 }
 
+func TestCuratedModelsIncludesGPT56Family(t *testing.T) {
+	got := CuratedModels("openai")
+	byID := map[string]int{}
+	for _, m := range got {
+		byID[m.ID] = m.ContextWindow
+	}
+	for _, id := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		if byID[id] != 1050000 {
+			t.Errorf("CuratedModels(openai)[%s] ctx=%d, want 1050000 (all: %v)", id, byID[id], byID)
+		}
+		s, ok := GetModelSettings("openai", id)
+		if !ok {
+			t.Fatalf("GetModelSettings(openai, %s) not found", id)
+		}
+		wantLevels := []string{"none", "low", "medium", "high", "xhigh", "max"}
+		if !s.SupportsEffort || len(s.EffortLevels) != len(wantLevels) {
+			t.Errorf("%s EffortLevels = %v, want %v", id, s.EffortLevels, wantLevels)
+		}
+		for i, lvl := range wantLevels {
+			if i >= len(s.EffortLevels) || s.EffortLevels[i] != lvl {
+				t.Errorf("%s EffortLevels = %v, want %v", id, s.EffortLevels, wantLevels)
+				break
+			}
+		}
+		if !s.Vision {
+			t.Errorf("%s should be vision-capable", id)
+		}
+	}
+}
+
 func TestMergedModelSettingsNoOverride(t *testing.T) {
 	cfg := config.DefaultConfig()
 	s, ok := MergedModelSettings(cfg, "anthropic", "claude-opus-4-8")

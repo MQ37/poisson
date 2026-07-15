@@ -107,6 +107,9 @@ Then just:
 |---|---|---|---|
 | `anthropic` | `claude-opus-4-8` | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
 | `openai` | `gpt-5.5` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
+| `openai` | `gpt-5.6-sol` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
+| `openai` | `gpt-5.6-terra` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
+| `openai` | `gpt-5.6-luna` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `xai` | `grok-build` | OAuth (SuperGrok) | ✅ |
 | `ollama` | `glm-5.2:cloud` *(default)* | local daemon / Ollama cloud | ❌ |
 | `ollama` | `minimax-m3:cloud` | local daemon / Ollama cloud | ✅ |

@@ -45,6 +45,27 @@ var KnownModels = map[string]ModelSettings{
 		EffortLevels:   []string{"low", "medium", "high", "xhigh"},
 		Vision:         true,
 	},
+	// GPT-5.6 family — frontier (Sol), balanced (Terra), and cost-optimized
+	// (Luna) tiers, all sharing the same 1.05M context window and full
+	// "none"-through-"max" effort range (unlike gpt-5.5's narrower list).
+	"openai/gpt-5.6-sol": {
+		ContextWindow:  1050000,
+		SupportsEffort: true,
+		EffortLevels:   []string{"none", "low", "medium", "high", "xhigh", "max"},
+		Vision:         true,
+	},
+	"openai/gpt-5.6-terra": {
+		ContextWindow:  1050000,
+		SupportsEffort: true,
+		EffortLevels:   []string{"none", "low", "medium", "high", "xhigh", "max"},
+		Vision:         true,
+	},
+	"openai/gpt-5.6-luna": {
+		ContextWindow:  1050000,
+		SupportsEffort: true,
+		EffortLevels:   []string{"none", "low", "medium", "high", "xhigh", "max"},
+		Vision:         true,
+	},
 	// xAI — only grok-build
 	"xai/grok-build": {
 		ContextWindow:  256000,
