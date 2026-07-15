@@ -242,3 +242,54 @@ func TestToggleToolExpandDiffCard(t *testing.T) {
 		t.Error("expanded card should show the full diff including the added side")
 	}
 }
+
+// TestEditDiffLinesFlatShape reproduces a reported regression: after
+// internal/tools/edit.go's Execute started accepting a flat top-level
+// {path, oldText, newText} shape (d3b6ffd), this package's own independent
+// re-parse of the same input JSON (for the colored diff card) was never
+// updated to match — it only ever recognized edits: [{...}]. A tool card
+// using the flat shape rendered as an empty diff ("0 edits").
+func TestEditDiffLinesFlatShape(t *testing.T) {
+	input := toolInputJSON("edit", map[string]any{
+		"path":    "main.go",
+		"oldText": "a\nb",
+		"newText": "c",
+	})
+	lines := editDiffLines(input)
+	want := []diffLine{
+		{sign: '-', text: "a"},
+		{sign: '-', text: "b"},
+		{sign: '+', text: "c"},
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("lines = %+v, want %+v", lines, want)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Errorf("line %d = %+v, want %+v", i, lines[i], want[i])
+		}
+	}
+}
+
+// TestEditDiffLinesStringEncodedEdits mirrors the tool's own recovery for a
+// double-encoded edits array (edits sent as a JSON string instead of an
+// array) — the diff card must recover it the same way Execute does.
+func TestEditDiffLinesStringEncodedEdits(t *testing.T) {
+	input := toolInputJSON("edit", map[string]any{
+		"path":  "main.go",
+		"edits": `[{"oldText":"a","newText":"b"}]`,
+	})
+	lines := editDiffLines(input)
+	want := []diffLine{
+		{sign: '-', text: "a"},
+		{sign: '+', text: "b"},
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("lines = %+v, want %+v", lines, want)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Errorf("line %d = %+v, want %+v", i, lines[i], want[i])
+		}
+	}
+}

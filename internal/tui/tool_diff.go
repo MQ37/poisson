@@ -52,18 +52,43 @@ func writeDiffLines(input []byte) []diffLine {
 	return out
 }
 
+// editDiffLines re-parses the same input JSON already sent to the model, so
+// it must recognize every shape internal/tools/edit.go's parseEditInput
+// accepts: the documented edits: [{oldText, newText}, ...] array, the flat
+// top-level {oldText, newText} shorthand for a single edit, and edits sent
+// as a JSON-encoded string (some models double-encode the array). Duplicated
+// here rather than imported from internal/tools to keep this package's own
+// display-only reparse self-contained, matching writeDiffLines just below.
 func editDiffLines(input []byte) []diffLine {
-	var in struct {
-		Edits []struct {
-			OldText string `json:"oldText"`
-			NewText string `json:"newText"`
-		} `json:"edits"`
+	type edit struct {
+		OldText string `json:"oldText"`
+		NewText string `json:"newText"`
 	}
-	if json.Unmarshal(input, &in) != nil || len(in.Edits) == 0 {
+	var in struct {
+		Edits   json.RawMessage `json:"edits"`
+		OldText string          `json:"oldText"`
+		NewText string          `json:"newText"`
+	}
+	if json.Unmarshal(input, &in) != nil {
+		return nil
+	}
+	var edits []edit
+	switch {
+	case len(in.Edits) > 0 && string(in.Edits) != "null":
+		if json.Unmarshal(in.Edits, &edits) != nil {
+			var asString string
+			if json.Unmarshal(in.Edits, &asString) == nil {
+				json.Unmarshal([]byte(asString), &edits)
+			}
+		}
+	case in.OldText != "":
+		edits = []edit{{OldText: in.OldText, NewText: in.NewText}}
+	}
+	if len(edits) == 0 {
 		return nil
 	}
 	var out []diffLine
-	for i, e := range in.Edits {
+	for i, e := range edits {
 		if i > 0 {
 			out = append(out, diffLine{sign: ' ', text: ""})
 		}
