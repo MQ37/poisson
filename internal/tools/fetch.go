@@ -33,7 +33,7 @@ func NewFetchTool(ollamaBaseURL string) *FetchTool {
 func (t *FetchTool) Name() string { return "fetch" }
 
 func (t *FetchTool) Description() string {
-	return "Fetch and extract text content from a web page URL using the local Ollama instance's web_fetch API."
+	return "Fetch a URL and extract its readable text content (docs, articles, specs). Prefer this over bash `curl`/`wget` when you just need a page's content — skips bash's risk-classification step entirely. Not for HTTP API testing: no custom methods, headers, or status-code inspection — use bash for that."
 }
 
 func (t *FetchTool) Schema() json.RawMessage {
