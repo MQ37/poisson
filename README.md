@@ -44,8 +44,10 @@ git clone <this-repo> poisson && cd poisson
   colored diffs for `edit`/`write` — a command palette (Ctrl+P), mouse scroll,
   and a status bar with live context % and exact cost.
 - **Real tools** — `bash`, `read`, `write`, `edit`, `ls`, `glob`, `search`,
-  `exa_search`, `fetch` (Ollama), `recall` (full-text search across past
-  sessions), plus **subagents** (parallel child agents) and **skills**.
+  `exa_search`, `fetch` (works on every provider — Ollama's own web_fetch API
+  when available, otherwise a built-in HTML→Markdown converter), `recall`
+  (full-text search across past sessions), plus **subagents** (parallel child
+  agents) and **skills**.
 - **Bash safety guard** — every shell command is risk-classified; anything
   dangerous pops an approval prompt (you decide, it never auto-allows installs,
   destructive, or `npx`/`dlx` commands).
@@ -186,7 +188,8 @@ Bottom-bar keys (input focus):
 
 ```
 Enter send · Ctrl+V image · Ctrl+F find · Ctrl+P palette
-Ctrl+L effort · Ctrl+T fold thinking · Ctrl+E expand tool · Ctrl+C cancel/clear
+Ctrl+L effort · Ctrl+T fold thinking · Ctrl+E expand tool
+Esc cancel running turn · Ctrl+C clear input (twice to exit)
 ```
 
 Click-drag over the conversation selects text — no Shift key needed — and
@@ -243,7 +246,7 @@ codebase one person can hold in their head.
 - **Local-first & private** — your data lives in `~/.poisson/poisson.db`. No
   telemetry, no analytics, no phone-home.
 - **Suckless-ish** — simplicity over features, delete-before-add, readable code.
-- **Tested without the network** — the suite (500+ tests) mocks every provider;
+- **Tested without the network** — the suite (750+ tests) mocks every provider;
   it never makes a real API call, and runs clean under `-race`.
 
 ---
