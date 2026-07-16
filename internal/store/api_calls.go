@@ -21,6 +21,7 @@ type APICall struct {
 	CacheReadTokens    int
 	CacheWriteTokens   int
 	Cost               float64
+	Purpose            string
 	IsCompaction       bool
 	CreatedAt          int64
 }
@@ -61,6 +62,13 @@ func (s *Store) RecordAPICall(call *APICall) error {
 	if call.CreatedAt == 0 {
 		call.CreatedAt = time.Now().Unix()
 	}
+	if call.Purpose == "" {
+		if call.IsCompaction {
+			call.Purpose = "compaction"
+		} else {
+			call.Purpose = "main"
+		}
+	}
 	inputKnown := 1
 	if call.InputTokensUnknown {
 		inputKnown = 0
@@ -72,12 +80,12 @@ func (s *Store) RecordAPICall(call *APICall) error {
 	_, err := s.db.Exec(
 		`INSERT INTO api_calls
 		 (id, session_id, seq, provider, model, input_tokens, input_tokens_known, output_tokens,
-		  cache_read_tokens, cache_write_tokens, cost, is_compaction, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		  cache_read_tokens, cache_write_tokens, cost, purpose, is_compaction, created_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		call.ID, call.SessionID, call.Seq, call.Provider, call.Model,
 		call.InputTokens, inputKnown, call.OutputTokens,
 		call.CacheReadTokens, call.CacheWriteTokens,
-		call.Cost, isCompaction, call.CreatedAt)
+		call.Cost, call.Purpose, isCompaction, call.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("record api call: %w", err)
 	}
@@ -90,7 +98,7 @@ func (s *Store) RecordAPICall(call *APICall) error {
 func (s *Store) GetLastAPICall(sessionID string) (*APICall, error) {
 	row := s.db.QueryRow(
 		`SELECT id, session_id, seq, provider, model, input_tokens, input_tokens_known, output_tokens,
-		        cache_read_tokens, cache_write_tokens, cost, is_compaction, created_at
+		        cache_read_tokens, cache_write_tokens, cost, purpose, is_compaction, created_at
 		 FROM api_calls WHERE session_id = ? AND is_compaction = 0
 		 ORDER BY created_at DESC, seq DESC LIMIT 1`, sessionID)
 	var c APICall
@@ -99,7 +107,7 @@ func (s *Store) GetLastAPICall(sessionID string) (*APICall, error) {
 		&c.ID, &c.SessionID, &c.Seq, &c.Provider, &c.Model,
 		&c.InputTokens, &inputKnown, &c.OutputTokens,
 		&c.CacheReadTokens, &c.CacheWriteTokens,
-		&c.Cost, &isCompaction, &c.CreatedAt)
+		&c.Cost, &c.Purpose, &isCompaction, &c.CreatedAt)
 	c.InputTokensUnknown = inputKnown == 0
 	c.IsCompaction = isCompaction != 0
 	if err != nil {

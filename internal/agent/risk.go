@@ -418,6 +418,9 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 		case provider.EventError:
 			return BashRiskUnknown, strings.TrimSpace(text.String() + thinking.String())
 		case provider.EventDone:
+			if ev.Usage != nil {
+				_ = a.recordAuxiliaryAPICall("risk", ev.Usage)
+			}
 		}
 	}
 	raw := strings.TrimSpace(text.String())

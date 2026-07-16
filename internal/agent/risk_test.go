@@ -114,6 +114,13 @@ func TestAssessBashRisk(t *testing.T) {
 	if fp.CallCount() != bashRiskLLMRuns {
 		t.Fatalf("CallCount = %d, want %d", fp.CallCount(), bashRiskLLMRuns)
 	}
+	var purpose string
+	if err := s.DB().QueryRow(`SELECT purpose FROM api_calls WHERE session_id = ?`, sid).Scan(&purpose); err != nil {
+		t.Fatalf("stored risk call: %v", err)
+	}
+	if purpose != "risk" {
+		t.Fatalf("purpose = %q, want risk", purpose)
+	}
 	req := fp.LastRequest()
 	if req == nil {
 		t.Fatal("no risk request captured")

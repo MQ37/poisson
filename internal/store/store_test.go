@@ -657,8 +657,8 @@ func TestAPICalls(t *testing.T) {
 		t.Fatalf("record provider call: %v", err)
 	}
 	last, err = s.GetLastAPICall("provenance")
-	if err != nil || last.Provider != "openai" || last.Model != "shared-name" {
-		t.Fatalf("provider/model round trip = %+v, err=%v", last, err)
+	if err != nil || last.Provider != "openai" || last.Model != "shared-name" || last.Purpose != "main" {
+		t.Fatalf("provider/model/purpose round trip = %+v, err=%v", last, err)
 	}
 
 	// GetLastAPICall on empty session.

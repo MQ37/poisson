@@ -1357,23 +1357,20 @@ func (a *Agent) computeCost(providerID, model string, input, output, cacheRead, 
 // recordAPICall records a row in the api_calls table with exact usage and
 // computed cost, and returns the generated ID.
 func (a *Agent) recordAPICall(usage *provider.Usage) (string, error) {
-	return a.recordAPICallFlags(usage, false, "")
+	return a.recordAPICallFor(usage, "main", a.providerID(), a.currentModel())
 }
 
 func (a *Agent) recordCompactionAPICall(providerID, model string, usage *provider.Usage) error {
-	_, err := a.recordAPICallFor(usage, true, providerID, model)
+	_, err := a.recordAPICallFor(usage, "compaction", providerID, model)
 	return err
 }
 
-func (a *Agent) recordAPICallFlags(usage *provider.Usage, isCompaction bool, modelOverride string) (string, error) {
-	model := modelOverride
-	if model == "" {
-		model = a.currentModel()
-	}
-	return a.recordAPICallFor(usage, isCompaction, a.providerID(), model)
+func (a *Agent) recordAuxiliaryAPICall(purpose string, usage *provider.Usage) error {
+	_, err := a.recordAPICallFor(usage, purpose, a.providerID(), a.currentModel())
+	return err
 }
 
-func (a *Agent) recordAPICallFor(usage *provider.Usage, isCompaction bool, providerID, model string) (string, error) {
+func (a *Agent) recordAPICallFor(usage *provider.Usage, purpose, providerID, model string) (string, error) {
 	cacheRead, cacheWrite := usage.CacheReadTokens, usage.CacheWriteTokens
 
 	cost := a.computeCost(providerID, model,
@@ -1392,7 +1389,8 @@ func (a *Agent) recordAPICallFor(usage *provider.Usage, isCompaction bool, provi
 		CacheReadTokens:    cacheRead,
 		CacheWriteTokens:   cacheWrite,
 		Cost:               cost,
-		IsCompaction:       isCompaction,
+		Purpose:            purpose,
+		IsCompaction:       purpose == "compaction",
 	}
 	if err := a.store.RecordAPICall(call); err != nil {
 		return "", err

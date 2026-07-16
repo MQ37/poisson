@@ -50,6 +50,13 @@ func TestStreamQuickAnswer(t *testing.T) {
 	if got != "hello world" {
 		t.Fatalf("answer = %q, want %q", got, "hello world")
 	}
+	var purpose string
+	if err := s.DB().QueryRow(`SELECT purpose FROM api_calls WHERE session_id = ?`, sid).Scan(&purpose); err != nil {
+		t.Fatalf("stored /btw call: %v", err)
+	}
+	if purpose != "btw" {
+		t.Fatalf("purpose = %q, want btw", purpose)
+	}
 	req := fp.LastRequest()
 	if req == nil || len(req.Messages) != 1 {
 		t.Fatalf("expected single user message, got %+v", req)

@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS api_calls (
     cache_read_tokens   INTEGER DEFAULT 0,
     cache_write_tokens  INTEGER DEFAULT 0,
     cost                REAL NOT NULL,
+    purpose             TEXT NOT NULL DEFAULT 'main',
     is_compaction       INTEGER NOT NULL DEFAULT 0,
     created_at          INTEGER NOT NULL
 );
@@ -153,6 +154,11 @@ func ensureAPICallsColumns(db *sql.DB) error {
 	if !seen["input_tokens_known"] {
 		if _, err := db.Exec(`ALTER TABLE api_calls ADD COLUMN input_tokens_known INTEGER NOT NULL DEFAULT 1`); err != nil {
 			return fmt.Errorf("migrate api_calls.input_tokens_known: %w", err)
+		}
+	}
+	if !seen["purpose"] {
+		if _, err := db.Exec(`ALTER TABLE api_calls ADD COLUMN purpose TEXT NOT NULL DEFAULT 'main'`); err != nil {
+			return fmt.Errorf("migrate api_calls.purpose: %w", err)
 		}
 	}
 	if !seen["is_compaction"] {

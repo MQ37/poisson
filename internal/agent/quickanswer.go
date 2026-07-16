@@ -116,6 +116,7 @@ func (a *Agent) runQuickAnswerLoop(ctx context.Context, req *provider.Request, t
 		var thinkingBuilder, thinkingSig strings.Builder
 		var redactedThinking []provider.ContentBlock
 		var toolCalls []provider.ToolCall
+		var usage *provider.Usage
 		var streamErr error
 
 		for ev := range ch {
@@ -144,6 +145,12 @@ func (a *Agent) runQuickAnswerLoop(ctx context.Context, req *provider.Request, t
 			case provider.EventError:
 				streamErr = ev.Error
 			case provider.EventDone:
+				usage = ev.Usage
+			}
+		}
+		if usage != nil {
+			if err := a.recordAuxiliaryAPICall("btw", usage); err != nil {
+				return fmt.Errorf("record /btw API call: %w", err)
 			}
 		}
 		if streamErr != nil {
