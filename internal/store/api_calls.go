@@ -92,14 +92,14 @@ func (s *Store) RecordAPICall(call *APICall) error {
 	return nil
 }
 
-// GetLastAPICall returns the most recent non-compaction api_calls row for a
-// session (by created_at desc), or ErrNotFound. Compaction summarization rows
-// are excluded — they must not drive context % or auto-compact triggers.
+// GetLastAPICall returns the most recent main-conversation API call for a
+// session (by created_at desc), or ErrNotFound. Compaction and isolated
+// auxiliary calls must not drive context percentage or auto-compaction.
 func (s *Store) GetLastAPICall(sessionID string) (*APICall, error) {
 	row := s.db.QueryRow(
 		`SELECT id, session_id, seq, provider, model, input_tokens, input_tokens_known, output_tokens,
 		        cache_read_tokens, cache_write_tokens, cost, purpose, is_compaction, created_at
-		 FROM api_calls WHERE session_id = ? AND is_compaction = 0
+		 FROM api_calls WHERE session_id = ? AND purpose = 'main'
 		 ORDER BY created_at DESC, seq DESC LIMIT 1`, sessionID)
 	var c APICall
 	var inputKnown, isCompaction int

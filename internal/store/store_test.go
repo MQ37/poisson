@@ -542,7 +542,7 @@ func TestSearchFiltersCompacted(t *testing.T) {
 
 // ---------- API calls ----------
 
-func TestGetLastAPICallSkipsCompaction(t *testing.T) {
+func TestGetLastAPICallSkipsAuxiliaryCalls(t *testing.T) {
 	s := newTestStore(t)
 	mustCreateSession(t, s, "ctx")
 
@@ -557,12 +557,17 @@ func TestGetLastAPICallSkipsCompaction(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("compaction call: %v", err)
 	}
+	if err := s.RecordAPICall(&APICall{
+		SessionID: "ctx", Seq: 3, Model: "m", InputTokens: 8000, OutputTokens: 1, Purpose: "btw",
+	}); err != nil {
+		t.Fatalf("btw call: %v", err)
+	}
 	last, err := s.GetLastAPICall("ctx")
 	if err != nil {
 		t.Fatalf("GetLastAPICall: %v", err)
 	}
 	if last.InputTokens != 100 {
-		t.Fatalf("last input = %d, want 100 (compaction row skipped)", last.InputTokens)
+		t.Fatalf("last input = %d, want 100 (auxiliary rows skipped)", last.InputTokens)
 	}
 }
 
