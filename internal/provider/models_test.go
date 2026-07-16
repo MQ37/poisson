@@ -40,8 +40,8 @@ func TestCuratedModelsIncludesGPT56Family(t *testing.T) {
 		byID[m.ID] = m.ContextWindow
 	}
 	for _, id := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
-		if byID[id] != 1050000 {
-			t.Errorf("CuratedModels(openai)[%s] ctx=%d, want 1050000 (all: %v)", id, byID[id], byID)
+		if byID[id] != 272000 {
+			t.Errorf("CuratedModels(openai)[%s] ctx=%d, want 272000 (all: %v)", id, byID[id], byID)
 		}
 		s, ok := GetModelSettings("openai", id)
 		if !ok {

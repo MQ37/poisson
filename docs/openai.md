@@ -66,7 +66,8 @@ usage/done.
 `medium`). Registered in `internal/provider/models.go`.
 
 `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` — frontier / balanced /
-cost-optimized tiers of the same family, 1.05M context, vision, full
+cost-optimized tiers of the same family, 272K context (confirmed live via
+`GET /backend-api/codex/models`, see `cc-sniff/`), vision, full
 `none | low | medium | high | xhigh | max` effort range. Same registration
 file; pricing in `internal/pricing/pricing.go`.
 

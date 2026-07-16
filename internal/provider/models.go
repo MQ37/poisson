@@ -46,22 +46,25 @@ var KnownModels = map[string]ModelSettings{
 		Vision:         true,
 	},
 	// GPT-5.6 family — frontier (Sol), balanced (Terra), and cost-optimized
-	// (Luna) tiers, all sharing the same 1.05M context window and full
-	// "none"-through-"max" effort range (unlike gpt-5.5's narrower list).
+	// (Luna) tiers, full "none"-through-"max" effort range (unlike gpt-5.5's
+	// narrower list). ContextWindow is 272,000 per GET /backend-api/codex/models
+	// (Codex's own catalog endpoint), captured live via cc-sniff — not the 1.05M
+	// this registry originally shipped with, which was never confirmed against
+	// a real response and overshot the subscription's actual cap.
 	"openai/gpt-5.6-sol": {
-		ContextWindow:  1050000,
+		ContextWindow:  272000,
 		SupportsEffort: true,
 		EffortLevels:   []string{"none", "low", "medium", "high", "xhigh", "max"},
 		Vision:         true,
 	},
 	"openai/gpt-5.6-terra": {
-		ContextWindow:  1050000,
+		ContextWindow:  272000,
 		SupportsEffort: true,
 		EffortLevels:   []string{"none", "low", "medium", "high", "xhigh", "max"},
 		Vision:         true,
 	},
 	"openai/gpt-5.6-luna": {
-		ContextWindow:  1050000,
+		ContextWindow:  272000,
 		SupportsEffort: true,
 		EffortLevels:   []string{"none", "low", "medium", "high", "xhigh", "max"},
 		Vision:         true,
