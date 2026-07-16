@@ -649,6 +649,18 @@ func TestAPICalls(t *testing.T) {
 		t.Fatalf("last input = %d, want 2000", last.InputTokens)
 	}
 
+	// Provider provenance survives the round trip so equal model names from
+	// different providers cannot be mistaken for the same tokenizer/pricing.
+	mustCreateSession(t, s, "provenance")
+	providerCall := APICall{SessionID: "provenance", Seq: 1, Provider: "openai", Model: "shared-name", InputTokens: 1}
+	if err := s.RecordAPICall(&providerCall); err != nil {
+		t.Fatalf("record provider call: %v", err)
+	}
+	last, err = s.GetLastAPICall("provenance")
+	if err != nil || last.Provider != "openai" || last.Model != "shared-name" {
+		t.Fatalf("provider/model round trip = %+v, err=%v", last, err)
+	}
+
 	// GetLastAPICall on empty session.
 	mustCreateSession(t, s, "empty")
 	if _, err := s.GetLastAPICall("empty"); err != ErrNotFound {

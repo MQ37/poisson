@@ -40,6 +40,16 @@ func (a *Agent) estimateActiveContextTokens() int {
 	if err != nil || last.InputTokensUnknown {
 		return fullEstimate
 	}
+	// Token counts are tokenizer-specific. Once provider or model changes, the
+	// previous call no longer gives a trustworthy exact anchor for this request.
+	if last.Provider != "" && (last.Provider != a.providerID() || last.Model != a.currentModel()) {
+		return fullEstimate
+	}
+	// Legacy rows lack provider provenance; model mismatch is still enough to
+	// invalidate their anchor after a model switch.
+	if last.Provider == "" && last.Model != a.currentModel() {
+		return fullEstimate
+	}
 	// A compaction after this call means its usage reflects the pre-compaction
 	// (larger) prompt, not the active context.
 	if sess != nil && sess.CompactedSeq > 0 && last.Seq <= sess.CompactedSeq {

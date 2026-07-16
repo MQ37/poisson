@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS api_calls (
     id                  TEXT PRIMARY KEY,
     session_id          TEXT NOT NULL REFERENCES sessions(id),
     seq                 INTEGER NOT NULL,
+    provider            TEXT NOT NULL DEFAULT '',
     model               TEXT NOT NULL,
     input_tokens        INTEGER NOT NULL,
     input_tokens_known  INTEGER NOT NULL DEFAULT 1,
@@ -143,6 +144,11 @@ func ensureAPICallsColumns(db *sql.DB) error {
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read api_calls schema: %w", err)
+	}
+	if !seen["provider"] {
+		if _, err := db.Exec(`ALTER TABLE api_calls ADD COLUMN provider TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("migrate api_calls.provider: %w", err)
+		}
 	}
 	if !seen["input_tokens_known"] {
 		if _, err := db.Exec(`ALTER TABLE api_calls ADD COLUMN input_tokens_known INTEGER NOT NULL DEFAULT 1`); err != nil {

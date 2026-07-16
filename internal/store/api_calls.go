@@ -13,6 +13,7 @@ type APICall struct {
 	ID                 string
 	SessionID          string
 	Seq                int
+	Provider           string
 	Model              string
 	InputTokens        int
 	InputTokensUnknown bool
@@ -70,10 +71,10 @@ func (s *Store) RecordAPICall(call *APICall) error {
 	}
 	_, err := s.db.Exec(
 		`INSERT INTO api_calls
-		 (id, session_id, seq, model, input_tokens, input_tokens_known, output_tokens,
+		 (id, session_id, seq, provider, model, input_tokens, input_tokens_known, output_tokens,
 		  cache_read_tokens, cache_write_tokens, cost, is_compaction, created_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-		call.ID, call.SessionID, call.Seq, call.Model,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		call.ID, call.SessionID, call.Seq, call.Provider, call.Model,
 		call.InputTokens, inputKnown, call.OutputTokens,
 		call.CacheReadTokens, call.CacheWriteTokens,
 		call.Cost, isCompaction, call.CreatedAt)
@@ -88,14 +89,14 @@ func (s *Store) RecordAPICall(call *APICall) error {
 // are excluded — they must not drive context % or auto-compact triggers.
 func (s *Store) GetLastAPICall(sessionID string) (*APICall, error) {
 	row := s.db.QueryRow(
-		`SELECT id, session_id, seq, model, input_tokens, input_tokens_known, output_tokens,
+		`SELECT id, session_id, seq, provider, model, input_tokens, input_tokens_known, output_tokens,
 		        cache_read_tokens, cache_write_tokens, cost, is_compaction, created_at
 		 FROM api_calls WHERE session_id = ? AND is_compaction = 0
 		 ORDER BY created_at DESC, seq DESC LIMIT 1`, sessionID)
 	var c APICall
 	var inputKnown, isCompaction int
 	err := row.Scan(
-		&c.ID, &c.SessionID, &c.Seq, &c.Model,
+		&c.ID, &c.SessionID, &c.Seq, &c.Provider, &c.Model,
 		&c.InputTokens, &inputKnown, &c.OutputTokens,
 		&c.CacheReadTokens, &c.CacheWriteTokens,
 		&c.Cost, &isCompaction, &c.CreatedAt)

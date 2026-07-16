@@ -777,6 +777,19 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			a.sendEvent(OutputEvent{Type: OutputDone})
 			return err
 		}
+
+		// Compact before building every request. A model switch can reduce the
+		// context window below the active conversation size; waiting until after
+		// a tool round would send one already-oversized request first.
+		if _, err := a.store.GetLastAPICall(a.sessionID); err == nil && a.shouldCompact() {
+			if err := a.compact(ctx, true, true); err != nil {
+				if !errors.Is(err, ErrNothingToCompact) {
+					log.Printf("warning: auto-compaction failed: %v", err)
+				}
+				a.compactBackoffUntil = time.Now().Add(90 * time.Second)
+			}
+		}
+
 		a.runTurns.Add(1)
 		// BUILD
 		req, err := a.buildRequest()
@@ -1054,15 +1067,6 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			a.sendEvent(OutputEvent{Type: OutputDone})
 			return err
-		}
-
-		if a.shouldCompact() {
-			if err := a.compact(ctx, true, true); err != nil {
-				if !errors.Is(err, ErrNothingToCompact) {
-					log.Printf("warning: auto-compaction failed: %v", err)
-				}
-				a.compactBackoffUntil = time.Now().Add(90 * time.Second)
-			}
 		}
 
 		// Loop: re-stream with updated context (tool results now in store).
@@ -1378,6 +1382,7 @@ func (a *Agent) recordAPICallFlags(usage *provider.Usage, isCompaction bool, mod
 	call := &store.APICall{
 		SessionID:          a.sessionID,
 		Seq:                seq,
+		Provider:           providerID,
 		Model:              model,
 		InputTokens:        usage.InputTokens,
 		InputTokensUnknown: usage.InputTokensUnknown,

@@ -335,6 +335,47 @@ func TestSubagentSessionAutoCompacts(t *testing.T) {
 	}
 }
 
+func TestPromptCompactsBeforeFirstRequestAfterSmallerWindowSwitch(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "large-model")
+	if err := s.AppendMessage(&store.Message{
+		SessionID: sessionID, Role: "user", Content: strings.Repeat("old context ", 4000),
+	}); err != nil {
+		t.Fatalf("seed history: %v", err)
+	}
+	if err := s.RecordAPICall(&store.APICall{
+		SessionID: sessionID, Seq: 1, Provider: "fake", Model: "large-model", InputTokens: 12000,
+	}); err != nil {
+		t.Fatalf("record old call: %v", err)
+	}
+
+	cfg := newTestConfig()
+	cfg.Compaction.Threshold = 0.50
+	prov := provider.NewFakeProvider("fake", []provider.Model{{ID: "small-model", ContextWindow: 8192}})
+	prov.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("summary", nil),
+		provider.FakeTextResponse("implemented", nil),
+	})
+	a := NewAgent(s, prov, nil, cfg, sessionID, nil, nil)
+	if err := a.SetModel("small-model"); err != nil {
+		t.Fatalf("switch model: %v", err)
+	}
+
+	if err := a.Prompt("implement the plan"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	requests := prov.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want compaction then main request", len(requests))
+	}
+	if len(requests[0].System) != 1 || requests[0].System[0].Text != compactionSystemPrompt {
+		t.Fatalf("first request was not compaction: %+v", requests[0])
+	}
+	if requests[1].Model != "small-model" {
+		t.Fatalf("main request model = %q, want small-model", requests[1].Model)
+	}
+}
+
 func TestShouldCompactAtThreshold(t *testing.T) {
 	s := newTestStore(t)
 	sessionID := newTestSession(t, s, "test-model")
@@ -409,6 +450,39 @@ func TestContextTokensPrefersLargerAndDropsStale(t *testing.T) {
 	}
 	if used, _ := agent.ContextTokens(); used != 3000 {
 		t.Fatalf("context after fresh call = %d, want 3000", used)
+	}
+}
+
+func TestContextTokensDropsAnchorAfterModelSwitch(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "old-model")
+	a := NewAgent(s, newFakeProvider(), nil, newTestConfig(), sessionID, nil, nil)
+
+	if err := s.RecordAPICall(&store.APICall{
+		SessionID: sessionID, Seq: 1, Provider: "fake", Model: "old-model", InputTokens: 7000,
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if err := a.SetModel("test-model"); err != nil {
+		t.Fatalf("switch model: %v", err)
+	}
+	if used, _ := a.ContextTokens(); used >= 7000 {
+		t.Fatalf("context after model switch = %d, still anchored to old tokenizer", used)
+	}
+}
+
+func TestContextTokensDropsAnchorAfterProviderSwitch(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "shared-model")
+	a := NewAgent(s, provider.NewFakeProvider("new-provider", []provider.Model{{ID: "shared-model", ContextWindow: 8192}}), nil, newTestConfig(), sessionID, nil, nil)
+
+	if err := s.RecordAPICall(&store.APICall{
+		SessionID: sessionID, Seq: 1, Provider: "old-provider", Model: "shared-model", InputTokens: 7000,
+	}); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	if used, _ := a.ContextTokens(); used >= 7000 {
+		t.Fatalf("context after provider switch = %d, still anchored to old tokenizer", used)
 	}
 }
 
