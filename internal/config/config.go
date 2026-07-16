@@ -48,7 +48,7 @@ type OllamaConfig struct {
 type CompactionConfig struct {
 	Threshold     float64 // fraction of context window (0.0–1.0)
 	ReserveTokens int     // absolute headroom; compact at min(threshold*window, window-reserve)
-	Model         string  // summarization model (empty = session model)
+	Model         string  // summarization target: model or provider/model (empty = session model)
 }
 
 // StealthConfig holds Anthropic Claude Code stealth constants.
@@ -206,7 +206,7 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 
 [compaction]
 # threshold = 0.85               # fraction of context window (0.0–1.0)
-# model = ""                     # model for summarization (default: session model)
+# model = ""                     # model or provider/model for summarization (default: session model)
 
 [stealth]
 # Anthropic Claude Code stealth constants.

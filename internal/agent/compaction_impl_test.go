@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"poisson/internal/config"
 	"poisson/internal/provider"
 	"poisson/internal/store"
 )
@@ -55,6 +56,44 @@ func TestAdjustCompactionCount_NoOrphanTools(t *testing.T) {
 // message in the kept tail after a budget-limited manual /compact. The summary
 // is a separate system block, so Messages must begin with a user turn or the
 // provider (Anthropic) rejects the next request.
+func TestCompactionRuntimeParsesCrossProviderTarget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	cfg := newTestConfig()
+	cfg.Compaction.Model = "ollama/summarizer"
+	a := NewAgent(s, provider.NewFakeProvider("fake", nil), nil, cfg, sid, nil, nil)
+
+	p, model, err := a.compactionRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ID() != "ollama" || model != "summarizer" {
+		t.Fatalf("runtime = %s/%s, want ollama/summarizer", p.ID(), model)
+	}
+}
+
+func TestCompactionAPICallStoresTargetProvider(t *testing.T) {
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	cfg := newTestConfig()
+	cfg.Pricing = map[string]map[string]config.Pricing{
+		"ollama": {"summarizer": {InputPerMTok: 1, OutputPerMTok: 2}},
+	}
+	a := NewAgent(s, provider.NewFakeProvider("fake", nil), nil, cfg, sid, nil, nil)
+
+	if err := a.recordCompactionAPICall("ollama", "summarizer", &provider.Usage{InputTokens: 10, OutputTokens: 5}); err != nil {
+		t.Fatal(err)
+	}
+	var providerID, model string
+	if err := s.DB().QueryRow(`SELECT provider, model FROM api_calls WHERE session_id = ?`, sid).Scan(&providerID, &model); err != nil {
+		t.Fatal(err)
+	}
+	if providerID != "ollama" || model != "summarizer" {
+		t.Fatalf("stored = %s/%s, want ollama/summarizer", providerID, model)
+	}
+}
+
 func TestCompactManualKeepsUserFirst(t *testing.T) {
 	s := newTestStore(t)
 	sid := newTestSession(t, s, "test-model")

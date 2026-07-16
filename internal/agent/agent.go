@@ -1360,8 +1360,8 @@ func (a *Agent) recordAPICall(usage *provider.Usage) (string, error) {
 	return a.recordAPICallFlags(usage, false, "")
 }
 
-func (a *Agent) recordCompactionAPICall(model string, usage *provider.Usage) error {
-	_, err := a.recordAPICallFlags(usage, true, model)
+func (a *Agent) recordCompactionAPICall(providerID, model string, usage *provider.Usage) error {
+	_, err := a.recordAPICallFor(usage, true, providerID, model)
 	return err
 }
 
@@ -1370,8 +1370,10 @@ func (a *Agent) recordAPICallFlags(usage *provider.Usage, isCompaction bool, mod
 	if model == "" {
 		model = a.currentModel()
 	}
-	providerID := a.providerID()
+	return a.recordAPICallFor(usage, isCompaction, a.providerID(), model)
+}
 
+func (a *Agent) recordAPICallFor(usage *provider.Usage, isCompaction bool, providerID, model string) (string, error) {
 	cacheRead, cacheWrite := usage.CacheReadTokens, usage.CacheWriteTokens
 
 	cost := a.computeCost(providerID, model,

@@ -166,7 +166,7 @@ override. The knobs:
 [compaction]
 # threshold = 0.85                   # compact when context passes this fraction
 # reserve_tokens = 16384             # ...or this much headroom is left, whichever is hit first
-# model = ""                         # summarizer model (default: session model)
+# model = ""                         # summarizer model or provider/model (default: session model)
 
 [tui]
 # theme = "dark"                     # dark | light

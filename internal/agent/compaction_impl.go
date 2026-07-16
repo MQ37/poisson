@@ -46,6 +46,33 @@ func (a *Agent) Compact() error {
 	return a.compact(context.Background(), false, false)
 }
 
+func (a *Agent) compactionRuntime() (provider.Provider, string, error) {
+	target := ""
+	if a.config != nil {
+		target = strings.TrimSpace(a.config.Compaction.Model)
+	}
+	if target == "" {
+		return a.provider, a.currentModel(), nil
+	}
+
+	providerID, model, qualified := strings.Cut(target, "/")
+	if !qualified {
+		return a.provider, target, nil
+	}
+	providerID, model = strings.TrimSpace(providerID), strings.TrimSpace(model)
+	if providerID == "" || model == "" {
+		return nil, "", fmt.Errorf("invalid compaction model %q; use provider/model", target)
+	}
+	if providerID == a.providerID() {
+		return a.provider, model, nil
+	}
+	p := provider.NewProviderFromDisk(providerID, a.config)
+	if p == nil {
+		return nil, "", fmt.Errorf("unknown compaction provider %q", providerID)
+	}
+	return p, model, nil
+}
+
 // compact performs compaction of the conversation. When notifyUI is true it
 // emits compacting/compacted events for the TUI run loop. When keepActiveTail
 // is true (auto-compaction during a turn, where the loop re-streams straight
@@ -131,9 +158,9 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		}},
 	})
 
-	compactionModel := a.currentModel()
-	if a.config != nil && a.config.Compaction.Model != "" {
-		compactionModel = a.config.Compaction.Model
+	compactionProvider, compactionModel, err := a.compactionRuntime()
+	if err != nil {
+		return err
 	}
 
 	req := &provider.Request{
@@ -146,7 +173,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 	streamCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	ch, err := a.provider.Stream(streamCtx, req)
+	ch, err := compactionProvider.Stream(streamCtx, req)
 	if err != nil {
 		return fmt.Errorf("compaction stream: %w", err)
 	}
@@ -188,7 +215,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 
 	// 7. Record api_call for summarization (exact tokens + cost).
 	if usage != nil {
-		_ = a.recordCompactionAPICall(compactionModel, usage)
+		_ = a.recordCompactionAPICall(compactionProvider.ID(), compactionModel, usage)
 	}
 
 	// 8. Record compaction row (audit). The "after" figure must include the
@@ -199,7 +226,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 	remainingTokens := a.estimateMessagesTokens()
 	compCost := 0.0
 	if usage != nil {
-		compCost = a.computeCost(a.providerID(), compactionModel,
+		compCost = a.computeCost(compactionProvider.ID(), compactionModel,
 			usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
 	}
 	if err := a.store.RecordCompaction(&store.Compaction{
