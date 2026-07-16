@@ -101,8 +101,8 @@ func TestLoadDefaults(t *testing.T) {
 	if p.CacheReadPerMTok != 0.5 {
 		t.Errorf("CacheReadPerMTok = %v, want 0.5", p.CacheReadPerMTok)
 	}
-	if p.CacheWritePerMTok != 3.0 {
-		t.Errorf("CacheWritePerMTok = %v, want 3.0", p.CacheWritePerMTok)
+	if p.CacheWritePerMTok != 10.0 {
+		t.Errorf("CacheWritePerMTok = %v, want 10.0", p.CacheWritePerMTok)
 	}
 }
 
@@ -361,8 +361,8 @@ output = 99.0
 	if p.CacheReadPerMTok != 0.5 {
 		t.Errorf("CacheRead = %v, want 0.5 (default)", p.CacheReadPerMTok)
 	}
-	if p.CacheWritePerMTok != 3.0 {
-		t.Errorf("CacheWrite = %v, want 3.0 (default)", p.CacheWritePerMTok)
+	if p.CacheWritePerMTok != 10.0 {
+		t.Errorf("CacheWrite = %v, want 10.0 (default)", p.CacheWritePerMTok)
 	}
 }
 

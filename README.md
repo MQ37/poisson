@@ -177,6 +177,8 @@ override. The knobs:
 # [pricing.anthropic.claude-opus-4-8]
 # input = 5.0
 # output = 25.0
+# cache_read = 0.5
+# cache_write = 10.0
 
 # Model metadata: context window, effort levels, vision, adaptive thinking.
 # Teaches Poisson about a model it doesn't ship a built-in entry for (still

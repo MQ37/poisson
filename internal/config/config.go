@@ -158,7 +158,7 @@ func defaultConfig() *Config {
 					InputPerMTok:      5.0,
 					OutputPerMTok:     25.0,
 					CacheReadPerMTok:  0.5,
-					CacheWritePerMTok: 3.0,
+					CacheWritePerMTok: 10.0,
 				},
 			},
 			"xai": {
@@ -227,7 +227,7 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # input = 5.0
 # output = 25.0
 # cache_read = 0.5
-# cache_write = 3.0
+# cache_write = 10.0
 # [pricing.xai.grok-build]
 # input = 1.0
 # output = 2.0

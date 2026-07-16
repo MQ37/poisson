@@ -56,6 +56,10 @@ func TestComputeCost(t *testing.T) {
 	if cost != 30.0 {
 		t.Fatalf("cost = %v, want 30", cost)
 	}
+	cost = ComputeCost(cfg, "anthropic", "claude-opus-4-8", 0, 0, 0, 1_000_000)
+	if cost != 10.0 {
+		t.Fatalf("opus cache-write cost = %v, want 10", cost)
+	}
 	cost = ComputeCost(cfg, "xai", "grok-build", 1_000_000, 1_000_000, 0, 0)
 	if cost != 3.0 {
 		t.Fatalf("grok cost = %v", cost)
