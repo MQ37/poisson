@@ -102,8 +102,14 @@ type ContentBlock struct {
 	// Image blocks (Type == "image"). MediaType is e.g. "image/png"; ImagePath
 	// points at the (downscaled) file on disk. Providers read + encode it when
 	// building a request — the bytes are never stored in the block itself.
+	// ImageName is the original filename the user attached/pasted — display
+	// metadata only, like FileRef above; providers never read it. ImagePath is
+	// always a random /tmp basename (imaging.Process/ProcessFile write via
+	// os.CreateTemp), so without ImageName a resumed session can only show
+	// that temp name instead of what the user actually typed or pasted.
 	MediaType string
 	ImagePath string
+	ImageName string
 
 	// Anthropic extended-thinking fields (Type == "thinking"). Thinking holds
 	// the reasoning text; ThinkingSignature is the opaque signature that must

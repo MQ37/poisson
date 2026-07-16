@@ -139,9 +139,9 @@ func (a *Agent) runQuickAnswerLoop(ctx context.Context, req *provider.Request, t
 					toolCalls = append(toolCalls, *ev.ToolCall)
 				}
 			case provider.EventToolUseDelta:
-				a.updateToolCall(toolCalls, ev.ToolCall)
+				a.updateToolCall(toolCalls, ev.ToolCall, false)
 			case provider.EventToolUseStop:
-				a.updateToolCall(toolCalls, ev.ToolCall)
+				a.updateToolCall(toolCalls, ev.ToolCall, true)
 			case provider.EventError:
 				streamErr = ev.Error
 			case provider.EventDone:

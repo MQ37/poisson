@@ -607,10 +607,14 @@ func (a *Agent) EnsureSession() error {
 }
 
 // ImageAttachment is an already-processed image (downscaled, on disk) to send
-// with a user message.
+// with a user message. Name is the original filename (e.g. "screenshot.png",
+// or "clipboard" for a paste) — display metadata carried through to
+// provider.ContentBlock.ImageName so it survives a session resume; Path is
+// always a random /tmp basename, never the name the user actually typed.
 type ImageAttachment struct {
 	Path      string
 	MediaType string
+	Name      string
 }
 
 // TextSegment is one piece of a user message's text: either something the
@@ -660,7 +664,7 @@ func (a *Agent) PromptSegmentsWithContext(ctx context.Context, segments []TextSe
 		if mt == "" {
 			mt = "image/png"
 		}
-		blocks = append(blocks, provider.ContentBlock{Type: "image", MediaType: mt, ImagePath: im.Path})
+		blocks = append(blocks, provider.ContentBlock{Type: "image", MediaType: mt, ImagePath: im.Path, ImageName: im.Name})
 	}
 	textBlocks := 0
 	for _, seg := range segments {
@@ -861,10 +865,10 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				}
 
 			case provider.EventToolUseDelta:
-				a.updateToolCall(toolCalls, ev.ToolCall)
+				a.updateToolCall(toolCalls, ev.ToolCall, false)
 
 			case provider.EventToolUseStop:
-				a.updateToolCall(toolCalls, ev.ToolCall)
+				a.updateToolCall(toolCalls, ev.ToolCall, true)
 
 			case provider.EventDone:
 				usage = ev.Usage
@@ -1181,6 +1185,7 @@ type contentBlockJSON struct {
 	Redacted          bool            `json:"redacted,omitempty"`
 	MediaType         string          `json:"media_type,omitempty"`
 	ImagePath         string          `json:"image_path,omitempty"`
+	ImageName         string          `json:"image_name,omitempty"`
 	FileRef           string          `json:"file_ref,omitempty"`
 }
 
@@ -1205,6 +1210,7 @@ func contentBlocksToJSON(blocks []provider.ContentBlock) (string, error) {
 			Redacted:          b.Redacted,
 			MediaType:         b.MediaType,
 			ImagePath:         b.ImagePath,
+			ImageName:         b.ImageName,
 			FileRef:           b.FileRef,
 		}
 	}
@@ -1241,6 +1247,7 @@ func messageToProvider(msg store.Message) (provider.Message, error) {
 			Redacted:          b.Redacted,
 			MediaType:         b.MediaType,
 			ImagePath:         b.ImagePath,
+			ImageName:         b.ImageName,
 			FileRef:           b.FileRef,
 		}
 	}
@@ -1265,6 +1272,11 @@ func buildAssistantBlocks(thinking, thinkingSig string, redacted []provider.Cont
 		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: text})
 	}
 	for _, tc := range toolCalls {
+		// Backstop: updateToolCall already normalizes empty Input to "{}" at
+		// EventToolUseStop (the primary fix), so this should be a no-op by
+		// the time we get here — kept because a corrupt/empty tool_input
+		// written to the store breaks request serialization on every future
+		// turn, and that cost is worth one cheap extra check at the boundary.
 		input := tc.Input
 		if len(input) == 0 {
 			input = json.RawMessage("{}")
@@ -1334,9 +1346,25 @@ func (a *Agent) persistPartialTurnOnCancel(text, thinkingText, thinkingSig strin
 	}
 }
 
-func (a *Agent) updateToolCall(toolCalls []provider.ToolCall, updated *provider.ToolCall) {
+// updateToolCall updates a tool call in the list by matching ID. If the ID
+// is empty or no match is found, the last entry is updated as a fallback.
+// final marks the EventToolUseStop update — provider.go documents ToolCall
+// there as "final Input", but a tool with an all-optional schema can
+// legitimately finish with zero argument bytes (some providers never stream
+// an arguments delta at all for it). Every tool's Execute does
+// json.Unmarshal(input, &in) first, and Unmarshal rejects a zero-length
+// RawMessage outright ("unexpected end of JSON input") — so a valid no-args
+// call would fail live even though it's semantically identical to "{}".
+// Normalizing only on the final update (not every delta) leaves a call that
+// never reaches EventToolUseStop — genuinely cancelled mid-argument —
+// untouched, so persistPartialTurnOnCancel's len>0/json.Valid check below
+// still correctly drops it as incomplete rather than complete-but-empty.
+func (a *Agent) updateToolCall(toolCalls []provider.ToolCall, updated *provider.ToolCall, final bool) {
 	if updated == nil || len(toolCalls) == 0 {
 		return
+	}
+	if final && len(updated.Input) == 0 {
+		updated.Input = json.RawMessage("{}")
 	}
 	if updated.ID != "" {
 		for i := range toolCalls {

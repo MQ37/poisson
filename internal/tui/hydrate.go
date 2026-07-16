@@ -21,6 +21,7 @@ type msgBlock struct {
 	FileRef     string          `json:"file_ref,omitempty"`
 	MediaType   string          `json:"media_type,omitempty"`
 	ImagePath   string          `json:"image_path,omitempty"`
+	ImageName   string          `json:"image_name,omitempty"`
 }
 
 func parseMessageBlocks(content string) []msgBlock {
@@ -134,9 +135,16 @@ func (t *TUI) hydrateScrollbackLocked() {
 				if fi, err := os.Stat(b.ImagePath); err == nil {
 					size = int(fi.Size())
 				}
+				// ImageName is the original filename the user attached/pasted;
+				// only missing on rows persisted before it was added, where
+				// ImagePath's random /tmp basename is the best that's left.
+				name := b.ImageName
+				if name == "" {
+					name = filepath.Base(b.ImagePath)
+				}
 				id := nextToolID
 				nextToolID++
-				t.scroll.appendImageRefCard(id, filepath.Base(b.ImagePath), b.MediaType, size)
+				t.scroll.appendImageRefCard(id, name, b.MediaType, size)
 			}
 		case "assistant":
 			for _, b := range blocks {

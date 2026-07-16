@@ -345,6 +345,60 @@ func TestImageRoundTripLiveToResume(t *testing.T) {
 	}
 }
 
+// TestImageOriginalNameSurvivesResume covers the case
+// TestImageRoundTripLiveToResume can't: there, the on-disk file's basename
+// happens to equal the "original" name, so a hydrate path that derives the
+// display name via filepath.Base(ImagePath) would pass by coincidence. Here
+// the on-disk path is a temp-style random basename (as imaging.Process
+// actually writes), distinct from the name the user attached with — only
+// threading ImageAttachment.Name through ContentBlock.ImageName and
+// persisting it survives resume with the right name.
+func TestImageOriginalNameSurvivesResume(t *testing.T) {
+	dir := testutil.TempDir(t)
+	imgPath := writeTestImage(t, dir, "poisson-img-3f8a91cb.png", 64, 64)
+
+	st, err := store.Open(dir + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	sid := "image-name-resume-test"
+	st.CreateSession(&store.Session{ID: sid, Cwd: ".", Provider: "fake", Model: "m"})
+	prov := provider.NewFakeProvider("fake", nil)
+	prov.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("a screenshot", &provider.Usage{InputTokens: 10, OutputTokens: 5}),
+	})
+	a := agent.NewAgent(st, prov, tools.NewRegistry(), config.DefaultConfig(), sid, nil, nil)
+
+	if err := a.PromptSegmentsWithContext(context.Background(), []agent.TextSegment{{Text: "what is this"}},
+		agent.ImageAttachment{Path: imgPath, MediaType: "image/png", Name: "vacation-photo.png"}); err != nil {
+		t.Fatal(err)
+	}
+
+	tui := newTUI(a, sid, nil)
+	tui.mu.Lock()
+	tui.resetSessionViewLocked()
+	tui.mu.Unlock()
+
+	var cardInput string
+	var sawCard bool
+	for _, b := range tui.scroll.blocks {
+		if b.kind == blockToolCall && b.meta.ToolName == "@image" {
+			sawCard = true
+			cardInput = string(b.meta.ToolInput)
+		}
+	}
+	if !sawCard {
+		t.Fatal("expected a collapsible @image card on resume")
+	}
+	if !strings.Contains(cardInput, "vacation-photo.png") {
+		t.Errorf("card input = %q, want the original attachment name %q, not the temp file's basename", cardInput, "vacation-photo.png")
+	}
+	if strings.Contains(cardInput, "poisson-img-3f8a91cb.png") {
+		t.Errorf("card input = %q, leaked the on-disk temp basename instead of the original name", cardInput)
+	}
+}
+
 func decodeConfig(t *testing.T, path string) image.Config {
 	t.Helper()
 	f, err := os.Open(path)

@@ -112,7 +112,7 @@ func (t *TUI) takeAttachmentsForSend() []agent.ImageAttachment {
 	}
 	out := make([]agent.ImageAttachment, len(atts))
 	for i, a := range atts {
-		out[i] = agent.ImageAttachment{Path: a.Path, MediaType: a.MediaType}
+		out[i] = agent.ImageAttachment{Path: a.Path, MediaType: a.MediaType, Name: a.Name}
 	}
 	return out
 }
