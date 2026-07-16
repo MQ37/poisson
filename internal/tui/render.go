@@ -65,11 +65,12 @@ func toolInputPreview(toolName string, input []byte) string {
 		}
 	case "edit":
 		var in struct {
-			Path  string `json:"path"`
-			Edits []any  `json:"edits"`
+			Path    string          `json:"path"`
+			Edits   json.RawMessage `json:"edits"`
+			OldText string          `json:"oldText"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Path != "" {
-			n := len(in.Edits)
+			n := editCountFromInput(in.Edits, in.OldText)
 			unit := "edit"
 			if n != 1 {
 				unit = "edits"
@@ -103,6 +104,32 @@ func toolInputPreview(toolName string, input []byte) string {
 		}
 	}
 	return previewText(strings.TrimSpace(string(input)), 80)
+}
+
+// editCountFromInput counts edits across every shape parseEditInput
+// (internal/tools/edit.go) accepts: the edits: [...] array, that array
+// double-encoded as a JSON string, or the flat {oldText, newText} shorthand
+// for a single edit. Mirrors editDiffLines' shape handling in tool_diff.go —
+// otherwise the flat shorthand shows as "(0 edits)" in the card header even
+// though the diff body below renders a real change.
+func editCountFromInput(edits json.RawMessage, oldText string) int {
+	if len(edits) > 0 && string(edits) != "null" {
+		var arr []any
+		if json.Unmarshal(edits, &arr) == nil {
+			return len(arr)
+		}
+		var asString string
+		if json.Unmarshal(edits, &asString) == nil {
+			if json.Unmarshal([]byte(asString), &arr) == nil {
+				return len(arr)
+			}
+		}
+		return 0
+	}
+	if oldText != "" {
+		return 1
+	}
+	return 0
 }
 
 func toolResultPreview(toolName, content string) string {
