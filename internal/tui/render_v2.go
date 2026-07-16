@@ -649,6 +649,7 @@ func (t *TUI) markSpinnerTick() {
 	rows := t.offsetConvDirtyRows(t.toolSpinnerRows(lay))
 	runningSub := t.scroll.hasRunningSubagent()
 	thinking := t.status.Thinking
+	compacting := t.compacting.Load()
 	t.mu.Unlock()
 	// While a subagent runs, repaint the whole scroll region so the pinned
 	// running-agent lines (spinner + live timer) update each tick.
@@ -662,7 +663,7 @@ func (t *TUI) markSpinnerTick() {
 	}
 	// Always refresh the status bar so the header spinner next to the model
 	// keeps spinning even while tool/subagent cards are animating.
-	if thinking {
+	if thinking || compacting {
 		t.dirty.markStatus()
 	}
 }

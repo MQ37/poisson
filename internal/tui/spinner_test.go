@@ -25,3 +25,17 @@ func TestNeedsSpinner(t *testing.T) {
 		t.Fatal("compacting should need spinner")
 	}
 }
+
+func TestCompactionSpinnerTickMarksHeaderDirty(t *testing.T) {
+	tui := newTUI(nil, "session", nil)
+	tui.rows = 24
+	tui.cols = 80
+	tui.compacting.Store(true)
+	tui.dirty.consume()
+
+	tui.markSpinnerTick()
+
+	if snap := tui.dirty.consume(); !snap.status {
+		t.Fatal("compaction spinner tick should mark header dirty")
+	}
+}
