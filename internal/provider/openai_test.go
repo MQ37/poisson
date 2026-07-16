@@ -181,6 +181,76 @@ func TestPumpResponsesSSE(t *testing.T) {
 	}
 }
 
+func TestPumpResponsesSSEErrorsAlwaysHaveDetails(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+		want string
+	}{
+		{
+			name: "nested error",
+			data: `data: {"type":"error","error":{"type":"invalid_request_error","message":"context window exceeded"}}` + "\n\n",
+			want: "OpenAI error invalid_request_error: context window exceeded",
+		},
+		{
+			name: "top-level error",
+			data: `data: {"type":"error","code":"rate_limit_exceeded","message":"try later"}` + "\n\n",
+			want: "OpenAI error rate_limit_exceeded: try later",
+		},
+		{
+			name: "failed response",
+			data: `data: {"type":"response.failed","response":{"error":{"code":"server_error","message":"request failed"}}}` + "\n\n",
+			want: "OpenAI error server_error: request failed",
+		},
+		{
+			name: "empty error",
+			data: `data: {"type":"error"}` + "\n\n",
+			want: "OpenAI request failed: provider returned no details",
+		},
+		{
+			name: "unexpected EOF",
+			data: "",
+			want: "OpenAI stream ended before completion",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ch := make(chan StreamEvent, 1)
+			go pumpOpenAIResponsesSSE(context.Background(), io.NopCloser(strings.NewReader(tt.data)), ch)
+			events := drain(ch)
+			if len(events) != 1 || events[0].Type != EventError || events[0].Error == nil {
+				t.Fatalf("events = %+v, want one EventError", events)
+			}
+			if got := events[0].Error.Error(); got != tt.want {
+				t.Fatalf("error = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOpenAIStreamEmptyErrorBodyUsesHTTPStatus(t *testing.T) {
+	token := fakeJWT(t, "acc_99")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	p := &OpenAIProvider{
+		auth:     auth.AuthStore{"openai": {Type: "oauth", Access: token, Expires: 1 << 62}},
+		client:   server.Client(),
+		endpoint: server.URL,
+	}
+	_, err := p.Stream(context.Background(), &Request{Model: "gpt-5.5"})
+	if err == nil {
+		t.Fatal("Stream succeeded, want HTTP error")
+	}
+	want := "OpenAI API error (status 400): Bad Request"
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err, want)
+	}
+}
+
 func TestOpenAIStreamEndToEnd(t *testing.T) {
 	token := fakeJWT(t, "acc_99")
 	var gotAuth, gotAccount, gotOriginator, gotModel string

@@ -132,9 +132,19 @@ func (p *OpenAIProvider) streamWithRetry(ctx context.Context, req *Request, retr
 	}
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 		resp.Body.Close()
-		return nil, fmt.Errorf("OpenAI API error (status %d): %s", resp.StatusCode, string(body))
+		detail := strings.TrimSpace(string(body))
+		if detail == "" {
+			detail = http.StatusText(resp.StatusCode)
+		}
+		if detail == "" && readErr != nil {
+			detail = readErr.Error()
+		}
+		if detail == "" {
+			detail = "provider returned no details"
+		}
+		return nil, fmt.Errorf("OpenAI API error (status %d): %s", resp.StatusCode, detail)
 	}
 
 	ch := make(chan StreamEvent, 64)

@@ -80,13 +80,11 @@ func pumpOpenAIResponsesSSE(ctx context.Context, body io.ReadCloser, ch chan<- S
 			} `json:"item"`
 			Response struct {
 				Usage *openaiRespUsage `json:"usage"`
-				Error *struct {
-					Code    string `json:"code"`
-					Message string `json:"message"`
-				} `json:"error"`
+				Error *openaiRespError `json:"error"`
 			} `json:"response"`
-			Code    string `json:"code"`
-			Message string `json:"message"`
+			Error   *openaiRespError `json:"error"`
+			Code    string           `json:"code"`
+			Message string           `json:"message"`
 		}
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			continue
@@ -138,21 +136,52 @@ func pumpOpenAIResponsesSSE(ctx context.Context, body io.ReadCloser, ch chan<- S
 			send(StreamEvent{Type: EventDone, Usage: convertOpenAIRespUsage(ev.Response.Usage)})
 			return
 		case "response.failed":
-			msg := "OpenAI response failed"
-			if e := ev.Response.Error; e != nil {
-				msg = fmt.Sprintf("OpenAI error %s: %s", e.Code, e.Message)
-			}
-			send(StreamEvent{Type: EventError, Error: fmt.Errorf("%s", msg)})
+			send(StreamEvent{Type: EventError, Error: formatOpenAIStreamError(ev.Response.Error, "OpenAI response failed")})
 			return
 		case "error":
-			send(StreamEvent{Type: EventError, Error: fmt.Errorf("OpenAI error %s: %s", ev.Code, ev.Message)})
+			detail := ev.Error
+			if detail == nil {
+				detail = &openaiRespError{Code: ev.Code, Message: ev.Message}
+			}
+			send(StreamEvent{Type: EventError, Error: formatOpenAIStreamError(detail, "OpenAI request failed")})
 			return
 		}
 	}
 
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
 		send(StreamEvent{Type: EventError, Error: fmt.Errorf("openai: read stream: %w", err)})
+		return
 	}
+	if ctx.Err() == nil {
+		send(StreamEvent{Type: EventError, Error: fmt.Errorf("OpenAI stream ended before completion")})
+	}
+}
+
+type openaiRespError struct {
+	Type    string `json:"type"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func formatOpenAIStreamError(detail *openaiRespError, fallback string) error {
+	if detail == nil {
+		return fmt.Errorf("%s: provider returned no details", fallback)
+	}
+	code := strings.TrimSpace(detail.Code)
+	if code == "" {
+		code = strings.TrimSpace(detail.Type)
+	}
+	message := strings.TrimSpace(detail.Message)
+	if code != "" && message != "" {
+		return fmt.Errorf("OpenAI error %s: %s", code, message)
+	}
+	if message != "" {
+		return fmt.Errorf("OpenAI error: %s", message)
+	}
+	if code != "" {
+		return fmt.Errorf("OpenAI error: %s", code)
+	}
+	return fmt.Errorf("%s: provider returned no details", fallback)
 }
 
 // openaiRespUsage is the usage object on the response.completed event.
