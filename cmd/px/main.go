@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -121,6 +122,35 @@ func readStdin() string {
 	return string(data)
 }
 
+func resolvePrintRuntime(modelArg string, sess *store.Session, cfg *config.Config) (string, string, error) {
+	if modelArg == "" && sess != nil {
+		if sess.Provider == "" || sess.Model == "" {
+			return "", "", fmt.Errorf("session %s has no provider/model", sess.ID)
+		}
+		return sess.Provider, sess.Model, nil
+	}
+
+	provName := cfg.Provider.Default
+	model := ""
+	if modelArg != "" {
+		if p, m, ok := strings.Cut(modelArg, "/"); ok {
+			provName, model = strings.TrimSpace(p), strings.TrimSpace(m)
+			if provName == "" || model == "" {
+				return "", "", fmt.Errorf("invalid model %q; use provider/model", modelArg)
+			}
+		} else {
+			provName = strings.TrimSpace(modelArg)
+		}
+	}
+	if model == "" {
+		model = provider.DefaultModel(provName, cfg)
+	}
+	if provName == "" || model == "" {
+		return "", "", fmt.Errorf("no model configured for provider %q", provName)
+	}
+	return provName, model, nil
+}
+
 // runPrint runs a single prompt headlessly: it streams the assistant's text to
 // stdout and tool activity to stderr, then exits. Read-only tools auto-run;
 // risky bash is denied unless --yolo. Used for scripting and pipelines.
@@ -139,54 +169,43 @@ func runPrint(opts printOpts) {
 
 	authStore, _ := auth.Load()
 
-	// Resolve provider/model from --model "provider/model" (or bare "provider"),
-	// falling back to the config default.
-	provName := cfg.Provider.Default
-	var model string
-	if opts.model != "" {
-		if p, m, ok := strings.Cut(opts.model, "/"); ok {
-			provName, model = p, m
-		} else {
-			provName = opts.model // bare provider → its default model
-		}
-	}
-	var prov provider.Provider
-	switch provName {
-	case "anthropic":
-		prov = provider.NewAnthropicProvider(authStore, cfg)
-		if model == "" {
-			model = cfg.Anthropic.Model
-		}
-	case "openai":
-		prov = provider.NewOpenAIProvider(authStore, cfg)
-		if model == "" {
-			model = cfg.OpenAI.Model
-		}
-	case "xai":
-		prov = provider.NewXAIProvider(authStore, cfg)
-		if model == "" {
-			model = cfg.XAI.Model
-		}
-	case "ollama":
-		if model == "" {
-			model = cfg.Ollama.Model
-		}
-		prov = provider.NewOllamaProvider(cfg.Ollama.BaseURL, model)
-	default:
-		fmt.Fprintf(os.Stderr, "px -p: unknown provider %q (use anthropic/<model>, openai/<model>, xai/<model>, ollama/<model>)\n", provName)
-		os.Exit(2)
-	}
-
 	cwd, _ := os.Getwd()
 	sessionID := opts.sessionID
 	if sessionID == "" {
 		sessionID = store.NewSessionID()
 	}
-	if _, err := st.GetSession(sessionID); err != nil {
+	var sess *store.Session
+	if existing, err := st.GetSession(sessionID); err == nil {
+		sess = existing
+	} else if !errors.Is(err, store.ErrNotFound) {
+		fmt.Fprintf(os.Stderr, "error reading session: %v\n", err)
+		os.Exit(1)
+	}
+
+	provName, model, err := resolvePrintRuntime(opts.model, sess, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "px -p: %v\n", err)
+		os.Exit(2)
+	}
+	prov := provider.NewProvider(provName, authStore, cfg)
+	if prov == nil {
+		fmt.Fprintf(os.Stderr, "px -p: unknown provider %q (use anthropic/<model>, openai/<model>, xai/<model>, ollama/<model>)\n", provName)
+		os.Exit(2)
+	}
+
+	if sess == nil {
 		if err := st.CreateSession(&store.Session{
 			ID: sessionID, Cwd: cwd, Provider: provName, Model: model, CreatedAt: time.Now().Unix(),
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "error creating session: %v\n", err)
+			os.Exit(1)
+		}
+	} else if sess.Provider != provName || sess.Model != model {
+		// Persist the pair in one UPDATE. Writing provider and model separately can
+		// leave an impossible combination if the second write fails.
+		sess.Provider, sess.Model = provName, model
+		if err := st.UpdateSession(sess); err != nil {
+			fmt.Fprintf(os.Stderr, "error updating session model: %v\n", err)
 			os.Exit(1)
 		}
 	}
@@ -213,7 +232,10 @@ func runPrint(opts printOpts) {
 	outputChan := make(chan agent.OutputEvent, 256)
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
 	agentRef = a
-	a.SetModel(model)
+	if err := a.SetModel(model); err != nil {
+		fmt.Fprintf(os.Stderr, "error updating session model: %v\n", err)
+		os.Exit(1)
+	}
 	var skillList []skills.Skill
 	if !opts.noSkills {
 		skillList, _ = skills.Discover()
