@@ -85,6 +85,32 @@ func TestWideTableFitsTerminal(t *testing.T) {
 	}
 }
 
+// TestNarrowTableWrapsLongCellInsteadOfTruncating is the regression case for
+// the "table trims text instead of wrapping" bug: a long cell value in a
+// narrow terminal must still appear in full somewhere in the rendered
+// output (across wrapped physical lines), never cut with a trailing "…".
+func TestNarrowTableWrapsLongCellInsteadOfTruncating(t *testing.T) {
+	raw := `| Path | Description |
+|---|---|
+| poisson/ | .cache/ .git/ .gitignore PLAN.md README.md assets/ build.sh cmd/ docs/ evals/ go.mod go.sum internal/ px test.sh |`
+	lines := layoutRichMarkdown(raw, 40, "")
+	combined := ""
+	for _, ln := range lines {
+		if visibleWidth(ln) > 40 {
+			t.Fatalf("row too wide (%d): %q", visibleWidth(ln), stripANSI(ln))
+		}
+		combined += stripANSI(ln) + "\n"
+	}
+	for _, want := range []string{"go.mod", "internal/", "test.sh"} {
+		if !stringsContains(combined, want) {
+			t.Fatalf("cell content %q lost to truncation, got:\n%s", want, combined)
+		}
+	}
+	if stringsContains(combined, "…") {
+		t.Fatalf("cell was truncated with an ellipsis instead of wrapped:\n%s", combined)
+	}
+}
+
 func TestTableBorderRowsMatchDataWidth(t *testing.T) {
 	raw := `| ID | Name | Age | City | Score | Active |
 |---|---|---|---|---|---|

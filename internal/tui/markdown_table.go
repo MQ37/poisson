@@ -105,7 +105,7 @@ func renderMarkdownTable(lines []string, width int, basePrefix string) []string 
 			out = append(out, prefix+tableBorder(widths, "╭", "┬", "╮", "─")+reset)
 			prefix = ""
 		}
-		out = append(out, tableDataRow(widths, row, i == 0))
+		out = append(out, tableDataRows(widths, row, i == 0)...)
 		if i == 0 {
 			out = append(out, tableBorder(widths, "├", "┼", "┤", "─"))
 		}
@@ -173,9 +173,16 @@ func tableBorder(widths []int, left, mid, right, fill string) string {
 	return b.String()
 }
 
-func tableDataRow(widths []int, cells []string, header bool) string {
-	var b strings.Builder
-	b.WriteString(fgGray + "│" + reset)
+// tableDataRows renders one logical table row as one or more physical output
+// lines: each cell wraps at its column width (word-wrap, ANSI-aware — same
+// wrapANSI used for prose and code blocks) instead of being cut off. The row
+// grows to the tallest wrapped cell; shorter cells pad with blank lines. This
+// is the only thing standing between a long cell value and truncateToWidth
+// silently dropping it — see the directory-listing / long-description table
+// bug this fixes.
+func tableDataRows(widths []int, cells []string, header bool) []string {
+	cellLines := make([][]string, len(widths))
+	height := 1
 	for c, w := range widths {
 		cell := cells[c]
 		var styled string
@@ -184,22 +191,41 @@ func tableDataRow(widths []int, cells []string, header bool) string {
 		} else {
 			styled = renderInline(cell)
 		}
-		plain := stripANSI(styled)
-		pad := w - utf8.RuneCountInString(plain)
-		if pad < 0 {
-			styled = truncateToWidth(styled, w)
-			pad = w - visibleWidth(styled)
+		lines := wrapANSI(styled, w)
+		if len(lines) == 0 {
+			lines = []string{""}
 		}
-		if pad < 0 {
-			pad = 0
+		cellLines[c] = lines
+		if len(lines) > height {
+			height = len(lines)
 		}
-		b.WriteString(" ")
-		b.WriteString(styled)
-		b.WriteString(strings.Repeat(" ", pad))
-		b.WriteString(" ")
-		b.WriteString(fgGray + "│" + reset)
 	}
-	return b.String()
+	out := make([]string, height)
+	for r := 0; r < height; r++ {
+		var b strings.Builder
+		b.WriteString(fgGray + "│" + reset)
+		for c, w := range widths {
+			var content string
+			if r < len(cellLines[c]) {
+				content = cellLines[c][r]
+			}
+			pad := w - visibleWidth(content)
+			if pad < 0 {
+				content = truncateToWidth(content, w)
+				pad = w - visibleWidth(content)
+			}
+			if pad < 0 {
+				pad = 0
+			}
+			b.WriteString(" ")
+			b.WriteString(content)
+			b.WriteString(strings.Repeat(" ", pad))
+			b.WriteString(" ")
+			b.WriteString(fgGray + "│" + reset)
+		}
+		out[r] = b.String()
+	}
+	return out
 }
 
 func maxIntIndex(xs []int) int {
