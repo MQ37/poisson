@@ -790,6 +790,33 @@ func TestAnthropicOmitsThinkingWhenDisabled(t *testing.T) {
 	}
 }
 
+// TestAnthropicThinkingOnlyMessageGetsPlaceholderWhenDisabled guards against a
+// regression where an assistant turn consisting solely of a thinking block
+// (e.g. the model was cancelled mid-thought before producing any text or
+// tool call) sent through a request with thinking disabled (as compaction's
+// summarization call always does) left that message's Content nil. Content
+// has no `omitempty`, so it marshalled as `"content":null` and Anthropic
+// rejected the whole request with an opaque "messages.N.content: Input
+// should be a valid array" 400 instead of a usable error.
+func TestAnthropicThinkingOnlyMessageGetsPlaceholderWhenDisabled(t *testing.T) {
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+	req := &Request{
+		Model: "claude-opus-4-8", // no effort → thinking disabled
+		Messages: []Message{
+			{Role: "assistant", Content: []ContentBlock{
+				{Type: "thinking", Thinking: "reason", ThinkingSignature: "SIG"},
+			}},
+		},
+	}
+	ar := p.buildAnthropicRequest(req, false)
+	if ar.Messages[0].Content == nil {
+		t.Fatal("Content must never be nil (marshals as null, Anthropic rejects it)")
+	}
+	if len(ar.Messages[0].Content) == 0 {
+		t.Fatal("Content must never be empty (Anthropic requires at least one block)")
+	}
+}
+
 func TestAnthropicUnsignedThinkingDegradesToText(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 	req := &Request{

@@ -327,6 +327,16 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 				}
 				i = j
 			}
+			// blocks is nil if every grouped tool message's content failed the
+			// tool_result filter above. Content has no `omitempty`, so a nil
+			// slice marshals as `"content":null`, which Anthropic rejects
+			// ("messages.N.content: Input should be a valid array") — and an
+			// empty (non-nil) array is rejected too, since Anthropic requires
+			// at least one content block per message. Fall back to a
+			// placeholder so the turn stays real.
+			if len(blocks) == 0 {
+				blocks = []anthropicContentBlock{{Type: "text", Text: "[no tool output]"}}
+			}
 			ar.Messages = append(ar.Messages, anthropicMessage{Role: "user", Content: blocks})
 			continue
 		}
@@ -381,6 +391,16 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 					Type: "tool_result", ToolUseID: cb.ToolCallID, Content: resultContent,
 				})
 			}
+		}
+		// am.Content can end up empty when every block was filtered — most
+		// commonly a message that was ONLY a thinking block, replayed into a
+		// request where thinking is disabled (e.g. compaction's summarization
+		// call). nil marshals as `"content":null`, not `[]`, which the API
+		// rejects with an opaque "Input should be a valid array" 400 instead of
+		// a clear empty-content error. Fall back to a placeholder so the turn
+		// stays present (preserving role alternation) and the array is real.
+		if len(am.Content) == 0 {
+			am.Content = []anthropicContentBlock{{Type: "text", Text: "[empty turn]"}}
 		}
 		ar.Messages = append(ar.Messages, am)
 	}
