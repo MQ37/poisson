@@ -27,7 +27,7 @@ func NewSkillTool(sk []skills.Skill) *SkillTool {
 func (t *SkillTool) Name() string { return "skill" }
 
 func (t *SkillTool) Description() string {
-	return "Load and invoke a skill by name. The skill's instructions are returned as context for you to follow."
+	return "Load and invoke a skill by name. The skill's instructions are returned as context for you to follow. Prefer this over `read`/`bash cat` for any SKILL.md under ~/.poisson/skills/ — it's the canonical invocation path and keeps skill usage consistent."
 }
 
 func (t *SkillTool) Schema() json.RawMessage {

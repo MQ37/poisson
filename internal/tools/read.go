@@ -28,7 +28,7 @@ func NewReadTool(cwd string, sandbox bool, approvalFn ApprovalFn) *ReadTool {
 func (t *ReadTool) Name() string { return "read" }
 
 func (t *ReadTool) Description() string {
-	return "Read the contents of a file. Output is prefixed with line numbers (N: text). Supports text files and images (jpg, png, gif, webp). offset/limit read a line range, like `sed -n 'START,ENDp'`. Output is truncated to 2000 lines or 50KB. Prefer this over bash `cat`/`head`/`tail`/`sed -n`/`cat -n` when reading the file (or a line range) is the whole command — skips bash's risk-classification step entirely."
+	return "Read the contents of a file. Output is prefixed with line numbers (N: text). Supports text files and images (jpg, png, gif, webp). offset/limit read a line range, like `sed -n 'START,ENDp'`. Output is truncated to 2000 lines or 50KB. Prefer this over bash `cat`/`head`/`tail`/`sed -n`/`cat -n` when reading the file (or a line range) is the whole command — skips bash's risk-classification step entirely. For a SKILL.md under ~/.poisson/skills/, use the `skill` tool instead — don't read it directly."
 }
 
 func (t *ReadTool) Schema() json.RawMessage {
