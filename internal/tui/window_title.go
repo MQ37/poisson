@@ -14,8 +14,15 @@ const windowTitleIDLen = 8
 // pendingApproval prefixes "O " (outstanding) so a bash command waiting on
 // the user's y/n shows up in a tab bar/window list even when that terminal
 // tab isn't currently focused — otherwise an approval prompt sitting behind
-// another window is easy to miss entirely.
-func windowTitleFor(title, sessionID string, pendingApproval bool) string {
+// another window is easy to miss entirely. It takes priority over processing
+// since an approval is the more actionable state (the agent is blocked on
+// the user, not just busy).
+//
+// processing prefixes "~ " whenever the agent is actively working — a
+// prompt in flight, a tool/subagent running, or a context compaction — so a
+// backgrounded tab still signals "still going" vs "idle, safe to ignore" at
+// a glance.
+func windowTitleFor(title, sessionID string, pendingApproval, processing bool) string {
 	label := title
 	if label == "" {
 		label = sessionID
@@ -27,10 +34,14 @@ func windowTitleFor(title, sessionID string, pendingApproval bool) string {
 	if label != "" {
 		base = "px - " + label
 	}
-	if pendingApproval {
+	switch {
+	case pendingApproval:
 		return "O " + base
+	case processing:
+		return "~ " + base
+	default:
+		return base
 	}
-	return base
 }
 
 // formatWindowTitle returns the OSC 0 escape sequence that sets both the
@@ -45,7 +56,8 @@ func formatWindowTitle(title string) string {
 // tick. Caller must hold t.mu and have already called syncHeaderFromAgentLocked
 // (or otherwise populated t.status.Title/SessionID) for this frame.
 func (t *TUI) updateWindowTitleLocked() {
-	want := windowTitleFor(t.status.Title, t.status.SessionID, t.approving.Load())
+	processing := needsSpinner(t.status.Thinking, t.activeTools, t.compacting.Load())
+	want := windowTitleFor(t.status.Title, t.status.SessionID, t.approving.Load(), processing)
 	if want == t.lastWindowTitle {
 		return
 	}
