@@ -41,9 +41,6 @@ func readAtFile(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if info.Size() > maxAtFileBytes {
-		return nil, fmt.Errorf("file too large (%d bytes, max %d)", info.Size(), maxAtFileBytes)
-	}
 
 	data := make([]byte, info.Size())
 	if _, err := io.ReadFull(f, data); err != nil {
@@ -157,6 +154,19 @@ func expandAtFilesSegments(input string) ([]agent.TextSegment, error) {
 				Text:    fmt.Sprintf("%s\n%s (directory):\n%s\n%s", fence, path, listing, fence),
 				FileRef: path,
 			})
+			continue
+		}
+		if info.Size() > maxAtFileBytes {
+			// Don't dump an oversized file into the message (blows the context
+			// window) and don't error the send either — tell the model the file
+			// exists and how big it is, and let it read the file itself: a tool
+			// call with offset/limit for arbitrary text, or a format-aware parse
+			// (e.g. streaming/incremental JSON) for structured data.
+			note := fmt.Sprintf(
+				"%s is %d bytes, too large to inline (max %d). Read it yourself in chunks (e.g. offset/limit) or parse it smartly for its format (e.g. stream/parse JSON) instead of loading it whole.",
+				path, info.Size(), maxAtFileBytes,
+			)
+			segs = append(segs, agent.TextSegment{Text: note, FileRef: path})
 			continue
 		}
 		data, err := readAtFile(path)

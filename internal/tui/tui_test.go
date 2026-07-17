@@ -95,9 +95,25 @@ func TestExpandAtFilesTooLarge(t *testing.T) {
 	if err := os.WriteFile(path, make([]byte, maxAtFileBytes+1), 0644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := expandAtFilesSegments("@" + path)
-	if err == nil {
-		t.Fatal("expected error for oversized file")
+	segs, err := expandAtFilesSegments("@" + path)
+	if err != nil {
+		t.Fatalf("oversized file must not error the send: %v", err)
+	}
+	got := segmentsText(segs)
+	if strings.Contains(got, strings.Repeat("\x00", 100)) {
+		t.Error("oversized file content must not be inlined")
+	}
+	if !strings.Contains(got, "too large to inline") {
+		t.Errorf("expected a too-large note, got: %q", got)
+	}
+	var foundRef string
+	for _, s := range segs {
+		if s.FileRef != "" {
+			foundRef = s.FileRef
+		}
+	}
+	if foundRef != path {
+		t.Errorf("expected a segment with FileRef %q, got segments: %+v", path, segs)
 	}
 }
 
