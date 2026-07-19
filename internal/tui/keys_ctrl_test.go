@@ -69,6 +69,63 @@ func TestFeedKeyCtrlSOpensSessionPicker(t *testing.T) {
 	}
 }
 
+// TestFeedKeyCtrlNFiltersNamedSessionsInPicker locks in that Ctrl+N reaches
+// the session picker overlay through the real dispatch path (feedKey), not
+// just the overlay's own feedKey in isolation — and that it doesn't leak
+// through to the global Ctrl+N history-navigation binding while the picker
+// is open.
+func TestFeedKeyCtrlNFiltersNamedSessionsInPicker(t *testing.T) {
+	st, a, sessionID := newTestStoreAndAgent(t)
+	if err := st.SetSessionTitle(sessionID, "named one"); err != nil {
+		t.Fatal(err)
+	}
+	unnamed := store.NewSessionID()
+	st.CreateSession(&store.Session{
+		ID: unnamed, Cwd: "/tmp", Provider: "ollama", Model: "test",
+		CreatedAt: 1, UpdatedAt: 1,
+	})
+	tui := newTUIWithAgent(a, sessionID)
+	if _, err := tui.feedKey(Key{Kind: KeyCtrl, Byte: 19}); err != nil { // Ctrl+S
+		t.Fatal(err)
+	}
+	ov, ok := tui.activeOverlay.(*filterableListOverlay)
+	if !ok {
+		t.Fatalf("expected session picker overlay, got %T", tui.activeOverlay)
+	}
+	if len(ov.filtered()) != 2 {
+		t.Fatalf("expected both sessions before filtering, got %v", ov.filtered())
+	}
+
+	if _, err := tui.feedKey(Key{Kind: KeyCtrl, Byte: 14}); err != nil { // Ctrl+N
+		t.Fatal(err)
+	}
+	vis := ov.filtered()
+	if len(vis) != 1 || vis[0].id != sessionID {
+		t.Fatalf("filtered = %v, want only the named session", vis)
+	}
+	if tui.activeOverlay != ov {
+		t.Fatal("Ctrl+N must not close the session picker")
+	}
+}
+
+// TestFeedKeyCtrlNStillNavigatesHistoryWithoutOverlay locks in the other half
+// of the Ctrl+N gate: with no overlay open, byte 14 must still fall through
+// to the pre-existing history-forward binding, unaffected by the session
+// picker's namedOnly toggle.
+func TestFeedKeyCtrlNStillNavigatesHistoryWithoutOverlay(t *testing.T) {
+	tui := newTestTUIHelper()
+	tui.history = []string{"first", "second"}
+	tui.histIdx = 0
+	tui.editor.setText("first")
+
+	if _, err := tui.feedKey(Key{Kind: KeyCtrl, Byte: 14}); err != nil {
+		t.Fatal(err)
+	}
+	if tui.histIdx != 1 {
+		t.Fatalf("histIdx = %d, want 1 (Ctrl+N should navigate history forward)", tui.histIdx)
+	}
+}
+
 func TestFeedKeySearchTypeDoesNotDeadlock(t *testing.T) {
 	tui := newTestTUIHelper()
 	tui.mu.Lock()

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"poisson/internal/provider"
+	"poisson/internal/store"
 	"poisson/internal/testutil"
 )
 
@@ -114,6 +115,74 @@ func TestPaletteOverlayFilter(t *testing.T) {
 		t.Fatalf("filtered = %v", vis)
 	}
 }
+func TestSessionPickerItemsMarksNamed(t *testing.T) {
+	st, a, sessionID := newTestStoreAndAgent(t)
+	named := store.NewSessionID()
+	title := "my project"
+	st.CreateSession(&store.Session{
+		ID: named, Cwd: "/tmp", Provider: "ollama", Model: "test",
+		Title: &title, CreatedAt: 1, UpdatedAt: 1,
+	})
+	unnamed := store.NewSessionID()
+	st.CreateSession(&store.Session{
+		ID: unnamed, Cwd: "/tmp", Provider: "ollama", Model: "test",
+		CreatedAt: 1, UpdatedAt: 1,
+	})
+	items, err := pickerSessionItems(cmdHost(newTUIWithAgent(a, sessionID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, it := range items {
+		got[it.id] = it.named
+	}
+	if !got[named] {
+		t.Errorf("session with title should be named: %v", items)
+	}
+	if got[unnamed] {
+		t.Errorf("session without title should not be named: %v", items)
+	}
+}
+
+func TestFilterableListNamedOnlyToggle(t *testing.T) {
+	ov := newFilterableListOverlay("Sessions", []filterableListItem{
+		{id: "s1", label: "one", named: true},
+		{id: "s2", label: "two"},
+	}, "", func(string) bool { return true }, boxListMaxInner)
+	ov.namedFilterEnabled = true
+
+	if len(ov.filtered()) != 2 {
+		t.Fatalf("expected both rows before toggling, got %v", ov.filtered())
+	}
+
+	ov.feedKey(Key{Kind: KeyCtrl, Byte: 14})
+	if !ov.namedOnly {
+		t.Fatal("Ctrl+N should enable namedOnly")
+	}
+	vis := ov.filtered()
+	if len(vis) != 1 || vis[0].id != "s1" {
+		t.Fatalf("filtered = %v, want only s1", vis)
+	}
+
+	ov.feedKey(Key{Kind: KeyCtrl, Byte: 14})
+	if ov.namedOnly {
+		t.Fatal("second Ctrl+N should disable namedOnly")
+	}
+	if len(ov.filtered()) != 2 {
+		t.Fatalf("expected both rows after re-toggling, got %v", ov.filtered())
+	}
+}
+
+func TestFilterableListNamedOnlyIgnoredWhenDisabled(t *testing.T) {
+	ov := newFilterableListOverlay("Test", []filterableListItem{
+		{id: "a", label: "alpha"},
+	}, "", nil, boxListMaxInner)
+	handled, _, _ := ov.feedKey(Key{Kind: KeyCtrl, Byte: 14})
+	if handled {
+		t.Fatal("Ctrl+N must not be consumed when namedFilterEnabled is false")
+	}
+}
+
 func TestSessionPickerDeleteConfirmFlow(t *testing.T) {
 	var deleted string
 	newOverlay := func() *filterableListOverlay {

@@ -19,6 +19,9 @@ type pickerItem struct {
 	id    string
 	label string
 	hint  string
+	// named marks a row with an explicit, human-given title (session picker
+	// only) — gates the Ctrl+N named-only filter.
+	named bool
 }
 
 type pickerOverlay = filterableListOverlay
@@ -26,7 +29,7 @@ type pickerOverlay = filterableListOverlay
 func newPickerOverlay(title string, items []pickerItem, current string, onPick func(string) error) *pickerOverlay {
 	list := make([]filterableListItem, len(items))
 	for i, it := range items {
-		list[i] = filterableListItem{id: it.id, label: it.label, hint: it.hint}
+		list[i] = filterableListItem{id: it.id, label: it.label, hint: it.hint, named: it.named}
 	}
 	pick := func(id string) bool {
 		if id == "" {
@@ -136,8 +139,9 @@ func pickerSessionItems(h commandHost) ([]pickerItem, error) {
 		}
 		msgCount := counts[sess.ID]
 		date := time.Unix(sess.CreatedAt, 0).Format("2006-01-02")
+		named := sess.Title != nil && strings.TrimSpace(*sess.Title) != ""
 		label := sess.ID
-		if sess.Title != nil && strings.TrimSpace(*sess.Title) != "" {
+		if named {
 			label = *sess.Title
 		} else if len(label) > 12 {
 			label = label[:12] + "…"
@@ -150,6 +154,7 @@ func pickerSessionItems(h commandHost) ([]pickerItem, error) {
 			id:    sess.ID,
 			label: label,
 			hint:  hint,
+			named: named,
 		})
 	}
 	if curID != "" && !curFound {

@@ -5,6 +5,9 @@ type filterableListItem struct {
 	id    string
 	label string
 	hint  string
+	// named marks a row with an explicit, human-given title (session picker
+	// only) — gates the Ctrl+N named-only filter.
+	named bool
 }
 
 // filterableListOverlay is a boxed, filterable list with keyboard and mouse
@@ -26,6 +29,11 @@ type filterableListOverlay struct {
 	onDelete        func(id string) error
 	pendingDeleteID string
 	note            string
+
+	// namedFilterEnabled, when set (session picker only), enables Ctrl+N to
+	// toggle namedOnly: hide rows without an explicit title.
+	namedFilterEnabled bool
+	namedOnly          bool
 
 	// footerHint overrides the default keybinding footer (empty = default).
 	footerHint string
@@ -90,11 +98,21 @@ func newFilterableListOverlay(title string, items []filterableListItem, currentI
 }
 
 func (p *filterableListOverlay) filtered() []filterableListItem {
+	items := p.items
+	if p.namedOnly {
+		var named []filterableListItem
+		for _, it := range items {
+			if it.named {
+				named = append(named, it)
+			}
+		}
+		items = named
+	}
 	if p.filter == "" {
-		return p.items
+		return items
 	}
 	var out []filterableListItem
-	for _, it := range p.items {
+	for _, it := range items {
 		if fuzzyScore(p.filter, it.label) >= 0 || fuzzyScore(p.filter, it.hint) >= 0 {
 			out = append(out, it)
 		}
@@ -199,6 +217,23 @@ func (p *filterableListOverlay) feedKey(k Key) (handled bool, done bool, cancel 
 			}
 			p.removeItem(id)
 			p.note = "deleted"
+		}
+		return true, false, false
+	}
+
+	// Ctrl+N toggles named-only filtering (session picker only; namedFilterEnabled gates it).
+	if p.namedFilterEnabled && k.Kind == KeyCtrl && k.Byte == 14 {
+		p.namedOnly = !p.namedOnly
+		if p.namedOnly {
+			p.note = "named only"
+		} else {
+			p.note = "all sessions"
+		}
+		if vis := p.filtered(); p.idx >= len(vis) {
+			p.idx = len(vis) - 1
+		}
+		if p.idx < 0 {
+			p.idx = 0
 		}
 		return true, false, false
 	}
