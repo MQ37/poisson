@@ -82,7 +82,7 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, fetchErrMaxBytes))
-		return ToolResult{Error: fmt.Sprintf("fetch failed (status %d): %s", resp.StatusCode, string(raw))}, nil
+		return ToolResult{Error: fmt.Sprintf("fetch failed (status %d): %s", resp.StatusCode, sanitizeHTTPErrorBody(raw))}, nil
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, fetchMaxBytes))
@@ -114,7 +114,7 @@ func (t *FetchTool) fetchDirect(ctx context.Context, url string) (ToolResult, er
 
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, fetchErrMaxBytes))
-		return ToolResult{Error: fmt.Sprintf("fetch failed (status %d): %s", resp.StatusCode, string(raw))}, nil
+		return ToolResult{Error: fmt.Sprintf("fetch failed (status %d): %s", resp.StatusCode, sanitizeHTTPErrorBody(raw))}, nil
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, fetchMaxBytes))

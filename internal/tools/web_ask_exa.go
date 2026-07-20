@@ -91,7 +91,7 @@ func doExaSearch(ctx context.Context, query, token string, num int, searchType s
 
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, exaErrMaxBytes))
-		return "", &exaHTTPError{StatusCode: resp.StatusCode, Body: string(raw)}
+		return "", &exaHTTPError{StatusCode: resp.StatusCode, Body: sanitizeHTTPErrorBody(raw)}
 	}
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, exaMaxBytes))
@@ -135,7 +135,7 @@ func issueExaToken(ctx context.Context) (string, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, exaErrMaxBytes))
-		return "", fmt.Errorf("token issue HTTP %d: %s", resp.StatusCode, string(raw))
+		return "", fmt.Errorf("token issue HTTP %d: %s", resp.StatusCode, sanitizeHTTPErrorBody(raw))
 	}
 
 	var tokenResp struct {

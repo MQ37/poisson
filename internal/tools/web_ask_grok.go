@@ -97,7 +97,7 @@ func doGrokSearch(ctx context.Context, query string, num int, accessToken string
 
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, grokErrMaxBytes))
-		return "", resp.StatusCode, fmt.Errorf("xAI Responses API HTTP %d: %s", resp.StatusCode, string(raw))
+		return "", resp.StatusCode, fmt.Errorf("xAI Responses API HTTP %d: %s", resp.StatusCode, sanitizeHTTPErrorBody(raw))
 	}
 
 	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, grokMaxBytes))
