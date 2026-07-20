@@ -27,14 +27,14 @@ func NewSkillTool(sk []skills.Skill) *SkillTool {
 func (t *SkillTool) Name() string { return "skill" }
 
 func (t *SkillTool) Description() string {
-	return "Load and invoke a skill by name. The skill's instructions are returned as context for you to follow. Prefer this over `read`/`bash cat` for any SKILL.md under ~/.poisson/skills/ — it's the canonical invocation path and keeps skill usage consistent."
+	return "Load and invoke a skill by name. The skill's instructions are returned as context for you to follow. Prefer this over `read`/`bash cat` for any SKILL.md — it's the canonical invocation path and keeps skill usage consistent. Skills come from two sources: built into the binary, or a directory under ~/.poisson/skills/ (which overrides a builtin of the same name)."
 }
 
 func (t *SkillTool) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"name": {"type": "string", "description": "Skill name (directory under ~/.poisson/skills/)"},
+			"name": {"type": "string", "description": "Skill name (builtin, or a directory under ~/.poisson/skills/)"},
 			"args": {"type": "string", "description": "Optional arguments to pass to the skill"}
 		},
 		"required": ["name"]

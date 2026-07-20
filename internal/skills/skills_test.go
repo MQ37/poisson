@@ -67,7 +67,7 @@ func TestParseSkillQuotedValues(t *testing.T) {
 func TestDiscover(t *testing.T) {
 	tmpHome := testutil.TempHome(t)
 
-	// Create a skill.
+	// Create a user skill alongside the builtin set.
 	skillDir := filepath.Join(tmpHome, ".poisson", "skills", "test-skill")
 	os.MkdirAll(skillDir, 0o700)
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: \"Test skill\"\n---\nDo the thing."), 0o600)
@@ -76,17 +76,24 @@ func TestDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(skills) != 1 {
-		t.Fatalf("expected 1 skill, got %d", len(skills))
+	want := len(builtinSkills()) + 1
+	if len(skills) != want {
+		t.Fatalf("expected %d skills (builtin + test-skill), got %d", want, len(skills))
 	}
-	if skills[0].Name != "test-skill" {
-		t.Errorf("name = %q, want test-skill", skills[0].Name)
+	var found *Skill
+	for i := range skills {
+		if skills[i].Name == "test-skill" {
+			found = &skills[i]
+		}
 	}
-	if skills[0].Description != "Test skill" {
-		t.Errorf("description = %q", skills[0].Description)
+	if found == nil {
+		t.Fatalf("test-skill not found in %+v", skills)
 	}
-	if skills[0].Body != "Do the thing." {
-		t.Errorf("body = %q", skills[0].Body)
+	if found.Description != "Test skill" {
+		t.Errorf("description = %q", found.Description)
+	}
+	if found.Body != "Do the thing." {
+		t.Errorf("body = %q", found.Body)
 	}
 }
 
@@ -97,8 +104,61 @@ func TestDiscoverEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Discover: %v", err)
 	}
-	if len(skills) != 0 {
-		t.Errorf("expected 0 skills, got %d", len(skills))
+	if len(skills) != len(builtinSkills()) {
+		t.Errorf("expected only builtin skills, got %d", len(skills))
+	}
+}
+
+func TestDiscoverUserOverridesBuiltin(t *testing.T) {
+	tmpHome := testutil.TempHome(t)
+
+	skillDir := filepath.Join(tmpHome, ".poisson", "skills", "code-quality")
+	os.MkdirAll(skillDir, 0o700)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: \"Custom override\"\n---\nCustom body."), 0o600)
+
+	skills, err := Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(skills) != len(builtinSkills()) {
+		t.Errorf("override should replace, not add: got %d skills", len(skills))
+	}
+	var found *Skill
+	for i := range skills {
+		if skills[i].Name == "code-quality" {
+			found = &skills[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("code-quality not found")
+	}
+	if found.Description != "Custom override" {
+		t.Errorf("description = %q, want user override to win", found.Description)
+	}
+}
+
+func TestBuiltinSkillsPresent(t *testing.T) {
+	testutil.TempHome(t)
+
+	want := []string{
+		"check-work", "code-quality", "code-review", "council",
+		"create-issue", "create-pr", "review-pr", "stacked-diff-review",
+	}
+	skills, err := Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	names := make(map[string]bool, len(skills))
+	for _, s := range skills {
+		names[s.Name] = true
+		if s.Body == "" {
+			t.Errorf("skill %q has empty body", s.Name)
+		}
+	}
+	for _, name := range want {
+		if !names[name] {
+			t.Errorf("builtin skill %q not discovered", name)
+		}
 	}
 }
 

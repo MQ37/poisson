@@ -1,11 +1,21 @@
-// Package skills discovers and loads SKILL.md files from ~/.poisson/skills/.
+// Package skills discovers and loads SKILL.md files: a fixed set baked into
+// the binary (internal/skills/builtin/), plus any user skills found under
+// ~/.poisson/skills/. A user skill directory whose name matches a builtin
+// skill overrides it, letting users customize a built-in without patching
+// the binary.
 package skills
 
 import (
+	"embed"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
+
+//go:embed builtin
+var builtinFS embed.FS
 
 // Skill represents a discovered skill.
 type Skill struct {
@@ -15,22 +25,24 @@ type Skill struct {
 	Body         string // frontmatter stripped
 }
 
-// Discover scans ~/.poisson/skills/*/SKILL.md and returns all skills.
+// Discover returns all builtin skills plus any found under
+// ~/.poisson/skills/*/SKILL.md, sorted by name. A user skill overrides a
+// builtin skill of the same name.
 func Discover() ([]Skill, error) {
+	m := make(map[string]Skill)
+	for _, s := range builtinSkills() {
+		m[s.Name] = s
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
 	skillsDir := filepath.Join(home, ".poisson", "skills")
 	entries, err := os.ReadDir(skillsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-
-	var skills []Skill
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -42,9 +54,37 @@ func Discover() ([]Skill, error) {
 		}
 		s := parseSkill(string(data))
 		s.Name = entry.Name()
+		m[s.Name] = s
+	}
+
+	skills := make([]Skill, 0, len(m))
+	for _, s := range m {
 		skills = append(skills, s)
 	}
+	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
 	return skills, nil
+}
+
+// builtinSkills parses every builtin/<name>/SKILL.md embedded in the binary.
+func builtinSkills() []Skill {
+	entries, err := fs.ReadDir(builtinFS, "builtin")
+	if err != nil {
+		return nil
+	}
+	var skills []Skill
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		data, err := builtinFS.ReadFile("builtin/" + entry.Name() + "/SKILL.md")
+		if err != nil {
+			continue
+		}
+		s := parseSkill(string(data))
+		s.Name = entry.Name()
+		skills = append(skills, s)
+	}
+	return skills
 }
 
 // parseSkill parses frontmatter and body from a SKILL.md file.
