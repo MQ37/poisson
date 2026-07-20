@@ -167,7 +167,9 @@ Everything lives in **`~/.poisson/`** (created on first run, mode `0700`):
 | `~/.poisson/poisson.db` | SQLite: sessions, messages, tool/API calls, FTS index |
 
 `config.toml` is written for you with every option commented out — uncomment to
-override. The knobs:
+override. The knobs (each `[<provider>].model` sets that provider's default
+model — the one used when it's the active provider, or when you switch to it
+via `/providers` without naming a model):
 
 ```toml
 # Default model as "<provider>/<model>" — sets the provider and its model in one
@@ -189,7 +191,7 @@ override. The knobs:
 # model = "gpt-5.5"                 # via ChatGPT Codex subscription (px login openai)
 
 [xai]
-# model = "grok-build"
+# model = "grok-build"          # via SuperGrok subscription (px login xai)
 
 [ollama]
 # base_url = "http://localhost:11434"
