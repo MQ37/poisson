@@ -224,6 +224,37 @@ override. The knobs:
 # adaptive_thinking = true
 ```
 
+### Adding a custom / unlisted model
+
+Any `model = "<provider>/<model-name>"` works right away, even if poisson has
+no built-in entry for it — you just get a generic fallback context window and
+no effort levels/vision/adaptive-thinking. Two optional `config.toml` blocks
+fill that in:
+
+```toml
+# 1. Teach poisson the model's real capabilities (shows up in /model, and
+#    gates which reasoning-effort levels the picker offers).
+[models.ollama."glm-5.2:cloud"]
+context_window = 200000
+effort_levels = ["low", "medium", "high"]
+vision = true
+
+# 2. Teach it what the model costs, so /cost and the status bar aren't
+#    silently $0. Ollama already defaults every model to $0 (built-in
+#    wildcard, since most are local); Anthropic/OpenAI/xAI have no such
+#    wildcard, so an unlisted model on those three shows $0 cost until you
+#    add its rates here.
+[pricing.ollama."glm-5.2:cloud"]
+input = 0.5
+output = 2.0
+```
+
+Both blocks key on the exact model name (quoted, since it usually contains
+`.`/`:`), under `[models.<provider>."<model>"]` / `[pricing.<provider>."<model>"]`.
+Pricing (only) also matches by prefix if the key ends in `*` — e.g.
+`[pricing.ollama."*"]` is the built-in fallback that prices every unlisted
+Ollama model at $0; model metadata overrides always need the exact name.
+
 ---
 
 ## ⌨️ Keys & commands
