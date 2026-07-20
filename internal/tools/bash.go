@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"poisson/internal/guard"
+	"github.com/mq37/poisson/internal/guard"
 )
 
 // BashTool executes bash commands, gated by the LLM risk classifier via approvalFn.

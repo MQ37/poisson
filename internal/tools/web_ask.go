@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"poisson/internal/auth"
+	"github.com/mq37/poisson/internal/auth"
 )
 
 // WebAskTool asks the web a question and returns an AI-synthesized answer

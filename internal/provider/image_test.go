@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 // writeTestPNG writes a tiny PNG and returns its path.

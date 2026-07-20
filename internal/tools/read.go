@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"poisson/internal/guard"
+	"github.com/mq37/poisson/internal/guard"
 )
 
 // ReadTool reads the contents of a file.

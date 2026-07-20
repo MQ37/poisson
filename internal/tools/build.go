@@ -3,8 +3,8 @@ package tools
 import (
 	"context"
 
-	"poisson/internal/auth"
-	"poisson/internal/store"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/store"
 )
 
 // ApprovalFn is called before executing a dangerous bash command or touching

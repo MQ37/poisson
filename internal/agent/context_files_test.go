@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/config"
-	"poisson/internal/project"
-	"poisson/internal/provider"
-	"poisson/internal/store"
-	"poisson/internal/testutil"
-	"poisson/internal/tools"
+	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/project"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 func writeFile(t *testing.T, path, content string) {

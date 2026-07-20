@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/agent"
+	"github.com/mq37/poisson/internal/agent"
 )
 
 func TestPickerOverlayArrowKeys(t *testing.T) {

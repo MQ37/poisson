@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/config"
 )
 
 const (

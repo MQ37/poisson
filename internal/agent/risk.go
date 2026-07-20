@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"poisson/internal/config"
-	"poisson/internal/guard"
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/guard"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 const (

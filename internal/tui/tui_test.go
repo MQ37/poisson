@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 // --- @file expansion tests ---------------------------------------------

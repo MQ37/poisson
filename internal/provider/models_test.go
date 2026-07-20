@@ -3,7 +3,7 @@ package provider
 import (
 	"testing"
 
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/config"
 )
 
 func TestCuratedModels(t *testing.T) {

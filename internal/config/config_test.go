@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 // writeTempConfig writes content to a temp config.toml inside a temp HOME,

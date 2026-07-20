@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/provider"
-	"poisson/internal/store"
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 // TestPromptWithImageAttachment verifies an image attachment becomes an image

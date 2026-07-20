@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"poisson/internal/provider"
-	"poisson/internal/store"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
 )
 
 // ContextPercent returns the context window usage as a percentage.

@@ -12,14 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"poisson/internal/agent"
-	"poisson/internal/auth"
-	"poisson/internal/config"
-	"poisson/internal/provider"
-	"poisson/internal/skills"
-	"poisson/internal/store"
-	"poisson/internal/tools"
-	"poisson/internal/tui"
+	"github.com/mq37/poisson/internal/agent"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/skills"
+	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/tools"
+	"github.com/mq37/poisson/internal/tui"
 )
 
 const version = "v0.1.0"

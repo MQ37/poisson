@@ -3,7 +3,7 @@ package agent
 import (
 	"testing"
 
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 // The status-bar context counter must include the system prompt and tool

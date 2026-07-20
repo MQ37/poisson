@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/agent"
+	"github.com/mq37/poisson/internal/agent"
 )
 
 // Regression suite for: scrolling up in the conversation while the agent is

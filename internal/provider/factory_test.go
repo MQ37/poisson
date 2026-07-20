@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/auth"
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
 )
 
 func TestResolveDefaultProvider_AnthropicFallback(t *testing.T) {

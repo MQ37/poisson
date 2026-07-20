@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 // TestTUIInteg_RetryNoticeThenFinalTextRenders exercises the full network-

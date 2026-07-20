@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"poisson/internal/config"
-	"poisson/internal/store"
+	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/store"
 )
 
 func TestResolvePrintRuntimeRestoresExistingSession(t *testing.T) {

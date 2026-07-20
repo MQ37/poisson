@@ -23,8 +23,8 @@ import (
 	"fmt"
 	"log"
 
-	"poisson/internal/store"
-	"poisson/internal/tools"
+	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 // pruneMinBytes is the minimum size of a `read` tool_result worth pruning —

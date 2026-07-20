@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 // retryScriptProvider is a minimal provider.Provider used only to test

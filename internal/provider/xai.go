@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	"poisson/internal/auth"
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
 )
 
 // XAIProvider implements the Provider interface for xAI's Grok API

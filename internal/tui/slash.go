@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"poisson/internal/agent"
+	"github.com/mq37/poisson/internal/agent"
 )
 
 func (t *TUI) handleSlash(cmd string) error {

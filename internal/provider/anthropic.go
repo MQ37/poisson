@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	"poisson/internal/auth"
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
 )
 
 // AnthropicProvider implements the Provider interface for Anthropic's

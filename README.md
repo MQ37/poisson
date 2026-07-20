@@ -29,10 +29,9 @@ images, search past sessions full-text, compact context, and approve risky
 shell commands from a popup.
 
 ```bash
-git clone <this-repo> poisson && cd poisson
-./build.sh          # -> ./px  (needs Go 1.25+)
-./px login ollama   # or: ./px login anthropic | openai | xai
-./px                # launch the TUI
+go install github.com/mq37/poisson/cmd/px@latest   # needs Go 1.25+; installs to $(go env GOPATH)/bin
+px login anthropic                                  # or: px login openai | xai — skip for Ollama, no auth needed
+px                                                   # launch the TUI
 ```
 
 ---
@@ -107,25 +106,29 @@ restarting.
 Requires **Go 1.25+**. Everything else is vendored by the module graph.
 
 ```bash
-./build.sh            # compiles CGO_ENABLED=0 -> ./px
+go install github.com/mq37/poisson/cmd/px@latest   # -> $(go env GOPATH)/bin/px
 ```
+
+Make sure `$(go env GOPATH)/bin` is on your `PATH`. Building from a local
+clone instead (e.g. to hack on it) still works: `./build.sh` (compiles
+`CGO_ENABLED=0` -> `./px`).
 
 Authenticate a provider (stored in `~/.poisson/auth.json`, mode `0600`):
 
 ```bash
-./px login anthropic  # Claude Pro/Max — browser OAuth (subscription billing)
-./px login openai     # ChatGPT Plus/Pro — browser OAuth (Codex subscription)
-./px login xai        # SuperGrok — browser OAuth
-./px login ollama     # local Ollama at http://localhost:11434 (no auth needed)
+px login anthropic  # Claude Pro/Max — browser OAuth (subscription billing)
+px login openai     # ChatGPT Plus/Pro — browser OAuth (Codex subscription)
+px login xai        # SuperGrok — browser OAuth
+px login ollama     # local Ollama at http://localhost:11434 (no auth needed)
 ```
 
 Then just:
 
 ```bash
-./px                  # interactive TUI
-./px sessions         # list past sessions
-./px cost             # total spend
-./px version
+px                  # interactive TUI
+px sessions         # list past sessions
+px cost             # total spend
+px version
 ```
 
 ---
@@ -293,4 +296,4 @@ codebase one person can hold in their head.
 
 ---
 
-<p align="center"><sub>poisson · run <code>./px</code> · <code>/help</code> for the tour</sub></p>
+<p align="center"><sub>poisson · run <code>px</code> · <code>/help</code> for the tour</sub></p>

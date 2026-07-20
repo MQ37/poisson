@@ -5,7 +5,7 @@ package pricing
 import (
 	"strings"
 
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/config"
 )
 
 // Rates holds per-1M-token USD rates.

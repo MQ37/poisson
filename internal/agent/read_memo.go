@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"poisson/internal/tools"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 // readMemo is what tryMemoizedRead compares a new call against.

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 func TestLoadEmpty(t *testing.T) {

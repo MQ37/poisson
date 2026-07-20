@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"testing"
 
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 func newTestStore(t *testing.T) *Store {

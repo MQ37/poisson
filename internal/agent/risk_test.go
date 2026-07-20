@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/provider"
-	"poisson/internal/store"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
 )
 
 // TestAssessBashRiskUsesIsolatedContext guards that the bash-risk classifier

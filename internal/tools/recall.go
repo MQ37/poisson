@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"poisson/internal/store"
+	"github.com/mq37/poisson/internal/store"
 )
 
 // RecallTool lets the agent search previous conversations via FTS5.

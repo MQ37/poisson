@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 func TestWrapRiskGatedApprovalAutoLow(t *testing.T) {

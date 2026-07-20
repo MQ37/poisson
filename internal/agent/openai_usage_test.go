@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"poisson/internal/auth"
-	"poisson/internal/config"
-	"poisson/internal/provider"
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 // TestOpenAIUsageLimits_NonOpenAIProviderIsNoop mirrors

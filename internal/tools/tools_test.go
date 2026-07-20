@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 func mustJSON(t *testing.T, v interface{}) json.RawMessage {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 // drainBuffered reads whatever's already sitting in ch's buffer without

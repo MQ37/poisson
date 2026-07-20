@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/config"
 )
 
 // applyStealth transforms the request to look like a genuine Claude Code

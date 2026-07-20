@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"poisson/internal/provider"
-	"poisson/internal/tools"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 const quickAnswerSystem = `You answer brief side questions while the user continues a main coding session. ` +

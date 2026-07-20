@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"poisson/internal/provider"
-	"poisson/internal/store"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
 )
 
 // ErrNothingToCompact is returned when /compact has no messages to summarize.

@@ -1,6 +1,6 @@
 package tools
 
-import "poisson/internal/provider"
+import "github.com/mq37/poisson/internal/provider"
 
 // Re-export provider types so the tools package uses the canonical
 // definitions from the provider package. This avoids duplicate type

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 func TestLoadProjectContextFiles(t *testing.T) {

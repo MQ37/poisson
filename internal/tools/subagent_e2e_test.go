@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/subagent"
+	"github.com/mq37/poisson/internal/subagent"
 )
 
 // TestSubagentToolRelaysRetryingStatusEndToEnd exercises the full retry-status

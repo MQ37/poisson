@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mq37/poisson/internal/agent"
 	"golang.org/x/term"
-	"poisson/internal/agent"
 )
 
 // contentWidth is the safe scrollback line width. Writing exactly cols runes at

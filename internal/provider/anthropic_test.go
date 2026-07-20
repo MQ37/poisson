@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/auth"
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
 )
 
 // flakyThenOKServer fails the first failFor requests with the given status

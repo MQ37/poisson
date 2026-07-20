@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"poisson/internal/auth"
+	"github.com/mq37/poisson/internal/auth"
 )
 
 // codexWebBaseURL is chatgpt.com's web/session backend — hosts the "wham"

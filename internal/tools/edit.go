@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"poisson/internal/guard"
+	"github.com/mq37/poisson/internal/guard"
 )
 
 // EditTool edits a file using exact text replacement.

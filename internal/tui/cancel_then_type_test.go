@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 // chunkRecorder records each Write call as a separate chunk in the exact

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"poisson/internal/guard"
+	"github.com/mq37/poisson/internal/guard"
 )
 
 // WriteTool writes content to a file, creating parent directories.

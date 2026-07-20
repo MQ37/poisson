@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"poisson/internal/agent"
-	"poisson/internal/auth"
-	"poisson/internal/config"
-	"poisson/internal/provider"
-	"poisson/internal/store"
-	"poisson/internal/tools"
+	"github.com/mq37/poisson/internal/agent"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 type caseDefaults struct {

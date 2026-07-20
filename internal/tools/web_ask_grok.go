@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"time"
 
-	"poisson/internal/auth"
+	"github.com/mq37/poisson/internal/auth"
 )
 
 const (

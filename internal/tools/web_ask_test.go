@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"poisson/internal/auth"
+	"github.com/mq37/poisson/internal/auth"
 )
 
 func TestHasXAIAuth(t *testing.T) {

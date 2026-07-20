@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 func TestBTWOverlayFillsScrollRegionFullWidth(t *testing.T) {

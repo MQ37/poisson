@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/agent"
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/agent"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 // waitUntilLocked polls cond (which acquires t.mu itself) until true or timeout.

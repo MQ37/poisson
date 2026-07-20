@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"poisson/internal/skills"
+	"github.com/mq37/poisson/internal/skills"
 )
 
 // SkillTool implements the skill tool — loads a SKILL.md by name and

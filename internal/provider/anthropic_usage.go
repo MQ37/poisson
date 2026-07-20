@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"poisson/internal/auth"
+	"github.com/mq37/poisson/internal/auth"
 )
 
 // usageTTL bounds how often UsageLimits actually hits the network — Claude

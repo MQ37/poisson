@@ -4,12 +4,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"poisson/internal/agent"
-	"poisson/internal/config"
-	"poisson/internal/provider"
-	"poisson/internal/store"
-	"poisson/internal/testutil"
-	"poisson/internal/tools"
+	"github.com/mq37/poisson/internal/agent"
+	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 // TestForwardChildEvents_* cover the child-mode wire protocol every

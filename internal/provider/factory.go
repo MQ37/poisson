@@ -1,8 +1,8 @@
 package provider
 
 import (
-	"poisson/internal/auth"
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
 )
 
 // ResolveDefaultProvider picks the provider name from config, applying

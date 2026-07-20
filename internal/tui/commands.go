@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"poisson/internal/agent"
-	"poisson/internal/config"
-	"poisson/internal/provider"
-	"poisson/internal/store"
+	"github.com/mq37/poisson/internal/agent"
+	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
 )
 
 // commandHost is the small interface the slash commands use. The TUI wraps

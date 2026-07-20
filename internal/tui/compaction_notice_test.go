@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/agent"
+	"github.com/mq37/poisson/internal/agent"
 )
 
 func TestAppendCompactionNoticeKeepsScrollback(t *testing.T) {

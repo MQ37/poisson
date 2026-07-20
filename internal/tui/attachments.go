@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"poisson/internal/agent"
-	"poisson/internal/imaging"
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/agent"
+	"github.com/mq37/poisson/internal/imaging"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 // attachment is an image staged for the next user message (already downscaled

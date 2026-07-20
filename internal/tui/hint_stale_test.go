@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/provider"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 // TestFooterHintNotStaleAfterTurnCompletes reproduces a real user-reported

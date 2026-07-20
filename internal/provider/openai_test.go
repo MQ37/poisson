@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/auth"
+	"github.com/mq37/poisson/internal/auth"
 )
 
 // fakeJWT builds an unsigned JWT whose auth claim carries the given account id.

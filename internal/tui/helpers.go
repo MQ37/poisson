@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"poisson/internal/agent"
+	"github.com/mq37/poisson/internal/agent"
 )
 
 const maxAtFileBytes = 512 << 10 // 512 KiB

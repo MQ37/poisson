@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/auth"
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
 )
 
 // realUsageResponseShape is a real MITM-captured response body from

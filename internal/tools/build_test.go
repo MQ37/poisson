@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"poisson/internal/store"
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 func toolNames(reg *Registry) []string {

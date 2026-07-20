@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"poisson/internal/auth"
-	"poisson/internal/provider"
-	"poisson/internal/store"
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
 )
 
 // effortPickerLevels are the effort options shown in the picker UI.

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 // makeImage builds a w×h PNG (or JPEG) with a simple gradient so decoders have

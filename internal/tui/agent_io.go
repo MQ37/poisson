@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"poisson/internal/agent"
+	"github.com/mq37/poisson/internal/agent"
 )
 
 func (t *TUI) submit(text string) error {

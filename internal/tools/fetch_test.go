@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/config"
 )
 
 // TestFetch_DirectModeConvertsHTMLToMarkdown is the reported gap: fetch used

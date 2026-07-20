@@ -3,7 +3,7 @@ package pricing
 import (
 	"testing"
 
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/config"
 )
 
 func TestLookupBuiltIn(t *testing.T) {

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/config"
-	"poisson/internal/provider"
-	"poisson/internal/store"
+	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
 )
 
 // seedMessages appends messages with the given roles to a session.

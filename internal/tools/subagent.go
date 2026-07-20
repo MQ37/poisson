@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"poisson/internal/store"
-	"poisson/internal/subagent"
+	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/subagent"
 )
 
 // removeDBFiles deletes a SQLite database and its WAL/SHM sidecars.

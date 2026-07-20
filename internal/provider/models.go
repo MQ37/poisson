@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"poisson/internal/config"
+	"github.com/mq37/poisson/internal/config"
 )
 
 // ModelSettings holds per-model configuration that providers use to build

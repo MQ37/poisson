@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"poisson/internal/provider"
-	"poisson/internal/testutil"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 // TestPendingInputFoldedIntoToolResult verifies a message queued while a tool

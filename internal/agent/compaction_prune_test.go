@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"poisson/internal/provider"
-	"poisson/internal/store"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/store"
 )
 
 // --- helpers -----------------------------------------------------------

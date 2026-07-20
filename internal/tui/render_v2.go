@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"poisson/internal/agent"
+	"github.com/mq37/poisson/internal/agent"
 )
 
 const toolWorkingMarker = " working..."

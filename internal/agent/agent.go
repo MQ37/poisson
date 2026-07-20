@@ -16,13 +16,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"poisson/internal/config"
-	"poisson/internal/pricing"
-	"poisson/internal/project"
-	"poisson/internal/provider"
-	"poisson/internal/skills"
-	"poisson/internal/store"
-	"poisson/internal/tools"
+	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/pricing"
+	"github.com/mq37/poisson/internal/project"
+	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/skills"
+	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 // Output event type constants used by the TUI package.

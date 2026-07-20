@@ -1,4 +1,4 @@
-module poisson
+module github.com/mq37/poisson
 
 go 1.25.6
 

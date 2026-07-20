@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"poisson/internal/guard"
+	"github.com/mq37/poisson/internal/guard"
 )
 
 func approvalBarPrefix() string { return fgRed + "█ " + reset }
