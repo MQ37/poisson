@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 
+	"poisson/internal/auth"
 	"poisson/internal/store"
 )
 
@@ -16,8 +17,13 @@ type ApprovalFn func(ctx context.Context, command, description, workdir string) 
 
 // BuildOptions configures which tools to register.
 type BuildOptions struct {
-	Cwd        string
-	Store      *store.Store
+	Cwd   string
+	Store *store.Store
+	// Auth is shared by reference with the active chat provider (loaded once
+	// in main.go) so WebAskTool's grok backend and XAIProvider refresh/save
+	// the same "xai" entry instead of racing two independent copies of
+	// ~/.poisson/auth.json. May be nil (web_ask then always uses exa).
+	Auth       auth.AuthStore
 	Sandbox    bool
 	ApprovalFn ApprovalFn
 	// FileApprovalFn gates read/write/edit against sensitive paths (.env*,
@@ -55,7 +61,8 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	reg.Register(NewSearchTool(opts.Cwd))
 	reg.Register(NewLsTool(opts.Cwd))
 	reg.Register(NewGlobTool(opts.Cwd))
-	reg.Register(NewExaSearchTool())
+	reg.Register(NewWebSearchTool())
+	reg.Register(NewWebAskTool(opts.Auth))
 	if opts.Store != nil {
 		reg.Register(NewRecallTool(opts.Store))
 	}

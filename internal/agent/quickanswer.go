@@ -17,7 +17,7 @@ const quickAnswerSystem = `You answer brief side questions while the user contin
 // (never the system prompt) so the cached system+tools+messages prefix stays
 // byte-identical to the main agent's request and hits the cache.
 const btwQuestionPrefix = "[Side question from the user — answer directly and concisely using the conversation above for context. " +
-	"You may use read-only tools (read, ls, glob, search, exa_search, fetch, recall) if it helps answer accurately, " +
+	"You may use read-only tools (read, ls, glob, search, web_search, web_ask, fetch, recall) if it helps answer accurately, " +
 	"but do not call any other tool.]\n\n"
 
 // btwAllowedTools are the only tools /btw's side-question loop will actually
@@ -36,7 +36,8 @@ var btwAllowedTools = map[string]bool{
 	"ls":         true,
 	"glob":       true,
 	"search":     true,
-	"exa_search": true,
+	"web_search": true,
+	"web_ask":    true,
 	"fetch":      true,
 	"recall":     true,
 }

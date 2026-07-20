@@ -44,10 +44,12 @@ git clone <this-repo> poisson && cd poisson
   colored diffs for `edit`/`write` — a command palette (Ctrl+P), mouse scroll,
   and a status bar with live context % and exact cost.
 - **Real tools** — `bash`, `read`, `write`, `edit`, `ls`, `glob`, `search`,
-  `exa_search`, `fetch` (works on every provider — Ollama's own web_fetch API
-  when available, otherwise a built-in HTML→Markdown converter), `recall`
-  (full-text search across past sessions), plus **subagents** (parallel child
-  agents) and **skills**.
+  `web_search` (plain DuckDuckGo link list, no account), `web_ask`
+  (AI-synthesized answer — xAI Grok via OAuth when logged in, exa.ai keyless
+  fallback otherwise), `fetch` (works on every provider — Ollama's own
+  web_fetch API when available, otherwise a built-in HTML→Markdown
+  converter), `recall` (full-text search across past sessions), plus
+  **subagents** (parallel child agents) and **skills**.
 - **Bash safety guard** — every shell command is risk-classified; anything
   dangerous pops an approval prompt (you decide, it never auto-allows installs,
   destructive, or `npx`/`dlx` commands).

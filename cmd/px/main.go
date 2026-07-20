@@ -227,7 +227,7 @@ func runPrint(opts printOpts) {
 	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
 		return humanApproval(action, reason, workdir, agent.BashRiskHigh)
 	}
-	reg := tools.BuildRegistry(tools.BuildOptions{Cwd: cwd, Store: st, ApprovalFn: approvalFn, FileApprovalFn: fileApprovalFn})
+	reg := tools.BuildRegistry(tools.BuildOptions{Cwd: cwd, Store: st, Auth: authStore, ApprovalFn: approvalFn, FileApprovalFn: fileApprovalFn})
 
 	outputChan := make(chan agent.OutputEvent, 256)
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
@@ -338,6 +338,7 @@ func runREPL(noSkills bool) {
 	reg := tools.BuildRegistry(tools.BuildOptions{
 		Cwd:            cwd,
 		Store:          st,
+		Auth:           authStore,
 		ApprovalFn:     approvalFn,
 		FileApprovalFn: fileApprovalFn,
 		SubApproval:    subApprovalFn,
@@ -671,11 +672,12 @@ func runChildMode() {
 	}
 
 	// Child:true grants every tool except subagent, so a subagent gets the full
-	// tool set (read/write/edit/bash/search/ls/glob/exa_search/recall) but cannot
-	// spawn further subagents — recursion is bounded to one level.
+	// tool set (read/write/edit/bash/search/ls/glob/web_search/web_ask/recall)
+	// but cannot spawn further subagents — recursion is bounded to one level.
 	reg := tools.BuildRegistry(tools.BuildOptions{
 		Cwd:            cwd,
 		Store:          st,
+		Auth:           authStore,
 		Sandbox:        sandbox,
 		ApprovalFn:     approvalFn,
 		FileApprovalFn: fileApprovalFn,

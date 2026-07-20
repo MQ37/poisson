@@ -1314,3 +1314,78 @@ poisson> fetch https://example.com           # fetch works (with Ollama)
 poisson> exa_search "test query"             # exa search works
 poisson> /quit                               # clean exit
 ```
+---
+
+## Phase 19: web_ask / web_search split (post-Phase 16 rename)
+
+**Goal:** exa_search renamed to web_ask (AI-synthesized answer) with a
+provider=grok|exa switch; new web_search tool added (plain DDG link list,
+no AI, no auth).
+
+**Why:** DuckDuckGo's AI chat endpoint (duck.ai/duckchat) was investigated
+as a free/keyless alternative — confirmed unfixably hardened (JS-VM
+anti-bot challenge; even a real GPU-backed headless Chromium running DDG's
+own unmodified page JS got 418'd). DDG's *plain* web search
+(`html.duckduckgo.com/html/`), however, tested live and works with zero
+anti-bot friction — same scrape target `ddgs`/`duckduckgo_search` has used
+for years. That became `web_search`. Separately, px already had xAI OAuth
+wired up as a full chat provider (`XAIProvider`, device-code flow) — reusing
+that same token for Grok's server-side `web_search` tool (the same trick
+the standalone `grok-search` CLI uses via its own PKCE login) needed no new
+auth work at all, so it became `web_ask`'s default backend.
+
+### Files
+- `internal/tools/web_ask.go` — dispatcher (Name/Description/Schema/Execute,
+  picks grok vs exa)
+- `internal/tools/web_ask_exa.go` — exa.ai backend (renamed from
+  `exa_search.go`; `ExaSearchTool` methods extracted into `execExaSearch`)
+- `internal/tools/web_ask_grok.go` — new xAI Responses API backend
+  (`tools:[{type:"web_search"}]`), reusing `auth.AuthStore`'s `"xai"` entry
+  and `auth.RefreshXAIToken` — same credentials `XAIProvider` uses, no new
+  login command
+- `internal/tools/web_search.go` — new: GET `html.duckduckgo.com/html/`,
+  regex-extract `result__a`/`result__snippet` blocks, decode the
+  `uddg=` redirect param to the real URL
+
+### Provider selection
+- Default: `grok` if `~/.poisson/auth.json` has an xAI OAuth entry, else
+  `exa`
+- Explicit `provider=grok` failure surfaces as a real error (don't mask an
+  intentional choice)
+- Auto-selected `grok` failing falls back to `exa` rather than hard-failing
+  (a transient xAI outage or logged-out session shouldn't break the tool)
+
+### Wiring
+- `BuildOptions` gained an `Auth auth.AuthStore` field — `main.go`'s three
+  `BuildRegistry` call sites now thread their already-loaded `authStore`
+  through instead of a second independent `auth.Load()`, so `web_ask`'s
+  grok backend and `XAIProvider` refresh/save the same map instance (avoids
+  two independent copies racing to overwrite `~/.poisson/auth.json` after a
+  token refresh)
+
+### Ripple renames
+- `quickanswer.go` (`/btw` allowed tools), `subagent.go` description,
+  `build_test.go` registry membership tests — `exa_search` → `web_ask`,
+  `web_search`
+- `~/.poisson/skills/web-search/SKILL.md` simplified: since `web_search`/
+  `web_ask` are now built-in tools (not shell-out CLIs), the skill's job
+  shrinks to nudging the agent toward `web_search` for a quick link list,
+  `web_ask` for a synthesized answer, and **spawning a subagent** for deep
+  multi-step research instead of hand-rolling a fetch-and-summarize
+  pipeline in the main conversation
+
+### Follow-up fix: shared xAI auth lock
+
+A verification pass caught that `web_ask_grok.go`'s own `grokAuthMu` and
+`XAIProvider.authMu` were two *separate* mutex instances guarding the same
+shared `"xai"` `AuthStore` map entry — mutual exclusion wasn't actually
+established between a chat request's token refresh and a `web_ask` grok
+call's token refresh (Go map writes are unsynchronized/fatal under real
+concurrent access, not just logically racy). Fixed by moving the
+refresh+save logic into two package-level helpers in `internal/auth`
+(`EnsureXAIFresh` — proactive, mirrors the old pre-request expiry check;
+`ForceRefreshXAI` — reactive, mirrors the old post-401 refresh), both
+guarded by one `auth`-package-level mutex. `XAIProvider.streamWithRetry` and
+`web_ask_grok.go`'s `execGrokSearch` now both call these instead of each
+keeping its own copy of the lock+refresh+save logic — single source of
+truth, no more races.

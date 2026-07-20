@@ -21,7 +21,7 @@ func TestBuildRegistry_Parent(t *testing.T) {
 	dir := testutil.TempDir(t)
 	reg := BuildRegistry(BuildOptions{Cwd: dir})
 	names := toolNames(reg)
-	want := []string{"bash", "edit", "exa_search", "glob", "ls", "read", "search", "write"}
+	want := []string{"bash", "edit", "web_ask", "web_search", "glob", "ls", "read", "search", "write"}
 	for _, w := range want {
 		if _, ok := reg.Get(w); !ok {
 			t.Errorf("parent registry missing %q; have %v", w, names)
@@ -52,7 +52,7 @@ func TestBuildRegistry_ParentWithStore(t *testing.T) {
 }
 
 // TestBuildRegistry_Child asserts a child gets every tool except subagent,
-// including exa_search and recall (when a store is supplied).
+// including web_ask, web_search, and recall (when a store is supplied).
 func TestBuildRegistry_Child(t *testing.T) {
 	dir := testutil.TempDir(t)
 	st, err := store.Open(filepath.Join(dir, "child.db"))
@@ -66,7 +66,7 @@ func TestBuildRegistry_Child(t *testing.T) {
 		Child:       true,
 		SubApproval: func(string, string, string, string, string) (bool, string) { return true, "" },
 	})
-	for _, w := range []string{"read", "write", "edit", "bash", "search", "ls", "glob", "exa_search", "recall"} {
+	for _, w := range []string{"read", "write", "edit", "bash", "search", "ls", "glob", "web_ask", "web_search", "recall"} {
 		if _, ok := reg.Get(w); !ok {
 			t.Errorf("child registry missing %q; have %v", w, toolNames(reg))
 		}

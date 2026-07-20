@@ -21,76 +21,37 @@ const (
 	exaErrMaxBytes = 4 << 10 // 4 KiB: cap error bodies
 )
 
-// ExaSearchTool searches the web via exa.ai's free landing-page API.
-type ExaSearchTool struct{}
-
-func NewExaSearchTool() *ExaSearchTool { return &ExaSearchTool{} }
-
-func (t *ExaSearchTool) Name() string { return "exa_search" }
-
-func (t *ExaSearchTool) Description() string {
-	return "Search the web via exa.ai. Returns results with titles, URLs, and excerpts. Also returns an AI-generated summary of the results."
-}
-
-func (t *ExaSearchTool) Schema() json.RawMessage {
-	return json.RawMessage(`{
-		"type": "object",
-		"properties": {
-			"query": {"type": "string", "description": "Search query"},
-			"num": {"type": "integer", "description": "Number of results (default: 10, max: 100)"},
-			"type": {"type": "string", "description": "Search type: keyword | neural (default: keyword)"},
-			"verbose": {"type": "boolean", "description": "Include full text excerpts (default: false)"}
-		},
-		"required": ["query"]
-	}`)
-}
-
-func (t *ExaSearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
-	var params struct {
-		Query   string `json:"query"`
-		Num     int    `json:"num"`
-		Type    string `json:"type"`
-		Verbose bool   `json:"verbose"`
-	}
-	if err := json.Unmarshal(input, &params); err != nil {
-		return ToolResult{Error: "invalid input: " + err.Error()}, nil
-	}
-	if params.Query == "" {
-		return ToolResult{Error: "query is required"}, nil
-	}
-	if params.Num == 0 {
-		params.Num = 10
-	}
-	if params.Type == "" {
-		params.Type = "keyword"
+// execExaSearch runs the exa.ai backend for WebAskTool: token issue (cached)
+// + search, with one retry after re-issuing the token on 401. Returns the
+// raw exa.ai JSON response (results + AI-generated summary) unmodified.
+func execExaSearch(ctx context.Context, query string, num int, searchType string, verbose bool) (string, error) {
+	if searchType == "" {
+		searchType = "keyword"
 	}
 
-	// Get JWT token.
 	token, err := getExaToken(ctx)
 	if err != nil {
-		return ToolResult{Error: "token issue failed: " + err.Error()}, nil
+		return "", fmt.Errorf("token issue failed: %w", err)
 	}
 
-	// Search.
-	result, retryErr := doExaSearch(ctx, params.Query, token, params.Num, params.Type, params.Verbose)
+	result, retryErr := doExaSearch(ctx, query, token, num, searchType, verbose)
 	if retryErr != nil {
-		// On 401, re-issue JWT and retry once.
 		if retryErr.StatusCode == 401 {
 			token, err = issueExaToken(ctx)
 			if err != nil {
-				return ToolResult{Error: "token re-issue failed: " + err.Error()}, nil
+				return "", fmt.Errorf("token re-issue failed: %w", err)
 			}
-			result, retryErr = doExaSearch(ctx, params.Query, token, params.Num, params.Type, params.Verbose)
+			result, retryErr = doExaSearch(ctx, query, token, num, searchType, verbose)
 		}
 		if retryErr != nil {
 			if retryErr.StatusCode == 429 {
-				return ToolResult{Error: "exa_search rate limited. Try again later or use fetch + manual parsing."}, nil
+				return "", fmt.Errorf("exa.ai rate limited. Try again later or use fetch + manual parsing")
 			}
-			return ToolResult{Error: retryErr.Error()}, nil
+			return "", retryErr
 		}
 	}
 
-	return ToolResult{Content: result}, nil
+	return result, nil
 }
 
 type exaHTTPError struct {

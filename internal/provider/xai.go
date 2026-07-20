@@ -6,10 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
-	"sync"
 
 	"poisson/internal/auth"
 	"poisson/internal/config"
@@ -19,7 +17,6 @@ import (
 // (OpenAI-compatible endpoint).
 type XAIProvider struct {
 	auth   auth.AuthStore
-	authMu sync.Mutex
 	config *config.Config
 	client *http.Client
 }
@@ -51,22 +48,12 @@ func (p *XAIProvider) Stream(ctx context.Context, req *Request) (<-chan StreamEv
 }
 
 func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry int) (<-chan StreamEvent, error) {
-	// Guard all auth-map access: concurrent Stream calls (parallel bash-risk
-	// assessments) would otherwise race on the shared map and crash the process.
-	p.authMu.Lock()
-	entry, ok := p.auth["xai"]
-	if ok && entry.Type == "oauth" && auth.IsExpired(entry, 5*60*1000) {
-		if refreshed, err := auth.RefreshXAIToken(entry.Refresh); err == nil {
-			p.auth["xai"] = *refreshed
-			if serr := auth.Save(p.auth); serr != nil {
-				log.Printf("warning: save xai auth after refresh: %v", serr)
-			}
-			entry = *refreshed
-		}
-	}
-	p.authMu.Unlock()
-	if !ok || entry.Type != "oauth" {
-		return nil, fmt.Errorf("no xAI OAuth credentials — run: px login xai")
+	// EnsureXAIFresh guards the shared "xai" AuthStore entry with a
+	// package-level lock (poisson/internal/auth) — WebAskTool's grok backend
+	// holds a reference to this same map and must not race writing it.
+	entry, err := auth.EnsureXAIFresh(p.auth, 5*60*1000)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build OpenAI-compatible request body.
@@ -100,19 +87,10 @@ func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry i
 	// Handle 401 with refresh + retry.
 	if resp.StatusCode == 401 && retry == 0 {
 		resp.Body.Close()
-		p.authMu.Lock()
-		refreshed, err := auth.RefreshXAIToken(entry.Refresh)
-		if err == nil {
-			p.auth["xai"] = *refreshed
-			if serr := auth.Save(p.auth); serr != nil {
-				log.Printf("warning: save xai auth after refresh: %v", serr)
-			}
+		if _, err := auth.ForceRefreshXAI(p.auth, entry.Refresh); err != nil {
+			return nil, fmt.Errorf("token expired, refresh failed: %w", err)
 		}
-		p.authMu.Unlock()
-		if err == nil {
-			return p.streamWithRetry(ctx, req, 1)
-		}
-		return nil, fmt.Errorf("token expired, refresh failed: %w", err)
+		return p.streamWithRetry(ctx, req, 1)
 	}
 
 	if resp.StatusCode != 200 {

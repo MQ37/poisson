@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -108,6 +109,53 @@ func loginXAIDeviceCode() (*AuthEntry, error) {
 	}
 
 	return nil, fmt.Errorf("device code expired")
+}
+
+// xaiRefreshMu guards refresh-then-save of the shared "xai" AuthStore entry.
+// XAIProvider (the xai chat provider) and WebAskTool's grok backend both
+// hold a reference to the *same* AuthStore map (wired once in main.go), so
+// without a shared lock a concurrent refresh from each (e.g. a main-turn
+// xai request racing a /btw or web_ask call) could both read the old entry,
+// both refresh, and race writing store["xai"] — an unsynchronized map write,
+// which Go treats as an unrecoverable fatal error, not a catchable panic.
+var xaiRefreshMu sync.Mutex
+
+// EnsureXAIFresh returns the current "xai" OAuth entry, proactively
+// refreshing and persisting it first if it's within skewMs of expiring.
+// Safe for concurrent callers sharing the same AuthStore instance.
+func EnsureXAIFresh(store AuthStore, skewMs int64) (AuthEntry, error) {
+	xaiRefreshMu.Lock()
+	defer xaiRefreshMu.Unlock()
+	entry, ok := store["xai"]
+	if !ok || entry.Type != "oauth" {
+		return AuthEntry{}, fmt.Errorf("no xAI OAuth credentials — run: px login xai")
+	}
+	if IsExpired(entry, skewMs) {
+		refreshed, err := RefreshXAIToken(entry.Refresh)
+		if err != nil {
+			return entry, nil // stale but usable; caller's request may still 401 and retry via ForceRefreshXAI
+		}
+		store["xai"] = *refreshed
+		_ = Save(store) // best-effort; a failed persist just means a re-refresh next call
+		entry = *refreshed
+	}
+	return entry, nil
+}
+
+// ForceRefreshXAI unconditionally refreshes and persists the "xai" entry —
+// used reactively after a request comes back 401 despite EnsureXAIFresh's
+// proactive check (e.g. the token was revoked server-side early). Safe for
+// concurrent callers sharing the same AuthStore instance.
+func ForceRefreshXAI(store AuthStore, refreshToken string) (AuthEntry, error) {
+	xaiRefreshMu.Lock()
+	defer xaiRefreshMu.Unlock()
+	refreshed, err := RefreshXAIToken(refreshToken)
+	if err != nil {
+		return AuthEntry{}, err
+	}
+	store["xai"] = *refreshed
+	_ = Save(store)
+	return *refreshed, nil
 }
 
 // RefreshXAIToken refreshes an expired xAI access token.
