@@ -192,7 +192,14 @@ type openaiRespItem struct {
 	CallID    string           `json:"call_id,omitempty"`
 	Name      string           `json:"name,omitempty"`
 	Arguments string           `json:"arguments,omitempty"`
-	Output    string           `json:"output,omitempty"`
+	// Output is a *string, not string+omitempty: the Responses API requires
+	// "output" present on every function_call_output item, even when the
+	// tool legitimately produced no content (e.g. `ls` on an empty dir,
+	// `read` on an empty file) — a plain string+omitempty drops the field
+	// entirely for "", and the API then rejects the request with
+	// "Missing required parameter: 'input[N].output'". Left nil (omitted)
+	// for message/function_call items, where "output" doesn't apply.
+	Output *string `json:"output,omitempty"`
 }
 
 // openaiRespPart is one content part. Text parts use input_text/output_text;
@@ -244,10 +251,11 @@ func (p *OpenAIProvider) buildRequest(req *Request) openaiRespRequest {
 		case "tool":
 			for _, cb := range msg.Content {
 				if cb.Type == "tool_result" {
+					output := cb.ToolResult
 					body.Input = append(body.Input, openaiRespItem{
 						Type:   "function_call_output",
 						CallID: cb.ToolCallID,
-						Output: cb.ToolResult,
+						Output: &output,
 					})
 				}
 			}

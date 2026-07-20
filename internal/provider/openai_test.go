@@ -37,6 +37,34 @@ func TestExtractAccountID(t *testing.T) {
 	}
 }
 
+// TestBuildRequestEmptyToolResultSendsOutputField guards against a real
+// production bug: OpenAI API error (status 400) "Missing required parameter:
+// 'input[N].output'" when a tool (e.g. `ls` on an empty dir, `read` on an
+// empty file) legitimately returns "". A plain `string` with `omitempty`
+// drops the JSON field entirely for "", but the Responses API requires
+// "output" present on every function_call_output item regardless of value.
+func TestBuildRequestEmptyToolResultSendsOutputField(t *testing.T) {
+	p := &OpenAIProvider{}
+	req := &Request{
+		Model: "gpt-5.5",
+		Messages: []Message{
+			{Role: "tool", Content: []ContentBlock{{Type: "tool_result", ToolCallID: "call_1", ToolResult: ""}}},
+		},
+	}
+	body := p.buildRequest(req)
+
+	if len(body.Input) != 1 || body.Input[0].Type != "function_call_output" {
+		t.Fatalf("input = %+v, want one function_call_output item", body.Input)
+	}
+	raw, err := json.Marshal(body.Input[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"output":""`) {
+		t.Errorf("marshaled function_call_output missing output field: %s", raw)
+	}
+}
+
 func TestMapOpenAIEffort(t *testing.T) {
 	cases := map[string]string{"": "", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "xhigh"}
 	for in, want := range cases {
@@ -83,7 +111,8 @@ func TestBuildRequestResponsesFormat(t *testing.T) {
 	if body.Input[2].Type != "function_call" || body.Input[2].CallID != "call_1" || body.Input[2].Name != "bash" {
 		t.Errorf("function_call item wrong: %+v", body.Input[2])
 	}
-	if body.Input[3].Type != "function_call_output" || body.Input[3].CallID != "call_1" || body.Input[3].Output != "a.txt" {
+	if body.Input[3].Type != "function_call_output" || body.Input[3].CallID != "call_1" ||
+		body.Input[3].Output == nil || *body.Input[3].Output != "a.txt" {
 		t.Errorf("function_call_output item wrong: %+v", body.Input[3])
 	}
 	if len(body.Tools) != 1 || body.Tools[0].Type != "function" || body.Tools[0].Name != "bash" {
