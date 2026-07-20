@@ -24,3 +24,17 @@ encodings, Ctrl+J newline, paste, arrows). Those assertions really belong at the
   (or `tui.feed`), then delete `editor.feed` + `editor.handleEscape` and their
   byte-parsing helpers.
 - Verify afterwards with `deadcode ./...`.
+
+### Long sessions: expensive compaction + repeated re-reads
+
+Analysis of real host conversations (`~/.poisson/poisson.db`) found one marathon
+session compacted 4× (400–520K raw tokens per cycle, $3.3–5.5/cycle). After each
+compaction the agent re-read the same files repeatedly (a README re-read 11
+times, an evals file 11 times) because the compaction summary doesn't retain
+"already read file X, here's its content/hash" state — the agent can't tell
+whether a stale read is still trustworthy, so it re-fetches defensively.
+
+- Possible directions: earlier/cheaper incremental compaction thresholds, or a
+  manifest of recently-read file paths (+ mtime/hash) carried in the compaction
+  summary so the agent trusts recent reads instead of re-fetching.
+- Not scoped yet — flagging only.

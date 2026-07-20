@@ -103,6 +103,54 @@ func parseEditInput(input json.RawMessage) (path string, edits []editItem, err e
 	return "", nil, fmt.Errorf("edits must be a JSON array of {oldText, newText} objects (e.g. edits: [{\"oldText\": \"...\", \"newText\": \"...\"}]), or oldText/newText directly for a single edit — not a JSON-encoded string")
 }
 
+// closestMatchHint helps recover from a failed oldText match by naming the
+// most likely cause instead of leaving the model to reread the whole file
+// blind. Two real failure classes, checked in order:
+//  1. oldText exists but differs only in whitespace (very common when a
+//     model retypes/recalls a block instead of copying it verbatim from a
+//     read) — reported with the matching line number.
+//  2. oldText's most distinctive line no longer appears anywhere — the file
+//     likely changed since the model last read it.
+//
+// Returns "" (no hint) when neither applies.
+func closestMatchHint(original, oldText string) string {
+	origLines := strings.Split(original, "\n")
+	oldLines := strings.Split(oldText, "\n")
+	normalize := func(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+	normOld := make([]string, len(oldLines))
+	for i, l := range oldLines {
+		normOld[i] = normalize(l)
+	}
+	for start := 0; start+len(oldLines) <= len(origLines); start++ {
+		match := true
+		for i, nl := range normOld {
+			if normalize(origLines[start+i]) != nl {
+				match = false
+				break
+			}
+		}
+		if match {
+			return fmt.Sprintf(" (whitespace-only mismatch at line %d — copy the exact text with the read tool instead of retyping it)", start+1)
+		}
+	}
+
+	longest := ""
+	for _, l := range oldLines {
+		if trimmed := strings.TrimSpace(l); len(trimmed) > len(longest) {
+			longest = trimmed
+		}
+	}
+	if longest != "" {
+		for i, l := range origLines {
+			if strings.Contains(l, longest) {
+				return fmt.Sprintf(" (closest line found is line %d — re-read the file, it may have changed since your last read)", i+1)
+			}
+		}
+	}
+	return ""
+}
+
 func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
 	rawPath, edits, err := parseEditInput(input)
 	if err != nil {
@@ -149,7 +197,7 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		}
 		count := strings.Count(original, e.OldText)
 		if count == 0 {
-			return ToolResult{Error: fmt.Sprintf("edit %d: oldText not found in file", i)}, nil
+			return ToolResult{Error: fmt.Sprintf("edit %d: oldText not found in file%s", i, closestMatchHint(original, e.OldText))}, nil
 		}
 		if count > 1 {
 			return ToolResult{Error: fmt.Sprintf("edit %d: oldText is not unique (%d matches)", i, count)}, nil

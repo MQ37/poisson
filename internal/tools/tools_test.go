@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"poisson/internal/testutil"
 )
@@ -355,6 +356,54 @@ func TestEdit_MissingFails(t *testing.T) {
 	}
 	if !strings.Contains(res.Error, "not found") {
 		t.Errorf("expected 'not found' in error, got %q", res.Error)
+	}
+}
+
+// TestEdit_MissingHintsWhitespaceMismatch verifies the diagnostic hint fires
+// when oldText exists in the file but with different whitespace — the most
+// common real cause of a "not found" failure.
+func TestEdit_MissingHintsWhitespaceMismatch(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	e := NewEditTool(dir, true, nil)
+
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "func foo() {\n    return 1\n}\n"}))
+
+	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"path": "f.txt",
+		"edits": []map[string]string{
+			{"oldText": "func foo() {\n\treturn 1\n}", "newText": "func foo() {\n\treturn 2\n}"},
+		},
+	}))
+	if res.Error == "" {
+		t.Fatal("expected error for whitespace-mismatched oldText")
+	}
+	if !strings.Contains(res.Error, "whitespace-only mismatch at line 1") {
+		t.Errorf("error = %q, want a whitespace-mismatch hint at line 1", res.Error)
+	}
+}
+
+// TestEdit_MissingHintsStaleContent verifies the diagnostic hint points at
+// the closest surviving line when oldText's content isn't in the file at
+// all (file changed since the model last read it).
+func TestEdit_MissingHintsStaleContent(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	e := NewEditTool(dir, true, nil)
+
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "alpha\nfindThisDistinctiveLine\ngamma\n"}))
+
+	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"path": "f.txt",
+		"edits": []map[string]string{
+			{"oldText": "before\nfindThisDistinctiveLine\nafter", "newText": "x"},
+		},
+	}))
+	if res.Error == "" {
+		t.Fatal("expected error for stale oldText")
+	}
+	if !strings.Contains(res.Error, "closest line found is line 2") {
+		t.Errorf("error = %q, want a closest-line hint at line 2", res.Error)
 	}
 }
 
@@ -1001,6 +1050,122 @@ func TestBashTool_Sandbox(t *testing.T) {
 	json.Unmarshal([]byte(res.Content), &out)
 	if strings.TrimSpace(out.Stdout) != "safe_in_sandbox" {
 		t.Errorf("stdout = %q, want 'safe_in_sandbox'", out.Stdout)
+	}
+}
+
+// TestBashTool_BackgroundProcessReportsSuccess verifies that backgrounding a
+// long-lived process (`cmd &`) is reported as success, not exitCode -1. The
+// background child inherits the stdout pipe and keeps it open past bash's
+// own exit, tripping Cmd.WaitDelay (2s) — Go returns exec.ErrWaitDelay in
+// that exact case (successful exit, pipe never closed), which must not be
+// treated as a failed command.
+func TestBashTool_BackgroundProcessReportsSuccess(t *testing.T) {
+	dir := testutil.TempDir(t)
+	b := NewBashTool(dir, true, nil) // sandbox: isolate from the approval gate
+
+	start := time.Now()
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "echo started; sleep 5 &",
+		"description": "background a long-lived process",
+	}))
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Fatalf("took %s, want ~2s (WaitDelay) not the full 5s background sleep", elapsed)
+	}
+	if res.Error != "" {
+		t.Fatalf("bash error: %s", res.Error)
+	}
+	var out bashOutput
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ExitCode != 0 {
+		t.Errorf("exit code = %d, want 0 (WaitDelay on an orphaned background child is not a failure)", out.ExitCode)
+	}
+	if !strings.Contains(out.Hint, "background process") {
+		t.Errorf("hint = %q, want a note about the background process", out.Hint)
+	}
+	if strings.TrimSpace(out.Stdout) != "started" {
+		t.Errorf("stdout = %q, want 'started'", out.Stdout)
+	}
+}
+
+// TestBashTool_DedicatedToolHint verifies the advisory hint fires for
+// commands that are plain stand-ins for read/search/glob/ls, and stays
+// silent for legitimate multi-step or non-equivalent uses.
+func TestBashTool_DedicatedToolHint(t *testing.T) {
+	dir := testutil.TempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := NewBashTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" })
+
+	cases := []struct {
+		name    string
+		command string
+		want    string // substring expected in hint, or "" for no hint
+	}{
+		{"cat", "cat f.txt", "read"},
+		{"grep", "grep hello f.txt", "search"},
+		{"ls", "ls", "ls"},
+		{"find_name", "find . -name f.txt", "glob"},
+		{"sed_range", "sed -n '1,2p' f.txt", "read"},
+		{"find_delete_no_hint", "find . -name f.txt -delete", ""},
+		{"multi_segment_no_hint", "cat f.txt && echo done", ""},
+		{"redirect_no_hint", "cat f.txt > out.txt", ""},
+		{"cd_then_cat_hint", "cd . && cat f.txt", "read"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+				"command":     c.command,
+				"description": "test",
+			}))
+			var out bashOutput
+			if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+				t.Fatalf("unmarshal: %v (res=%+v)", err, res)
+			}
+			if c.want == "" {
+				if strings.Contains(out.Hint, "prefer the") || strings.Contains(out.Hint, "this reads a file") {
+					t.Errorf("command %q: hint = %q, want no dedicated-tool hint", c.command, out.Hint)
+				}
+				return
+			}
+			if !strings.Contains(out.Hint, c.want) {
+				t.Errorf("command %q: hint = %q, want it to mention %q", c.command, out.Hint, c.want)
+			}
+		})
+	}
+}
+
+// TestBashTool_CdWorkdirHint verifies the workdir nudge fires only for a
+// leading `cd DIR &&` with no workdir param already set.
+func TestBashTool_CdWorkdirHint(t *testing.T) {
+	dir := testutil.TempDir(t)
+	b := NewBashTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" })
+
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "cd sub && echo hi",
+		"description": "test",
+	}))
+	var out bashOutput
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !strings.Contains(out.Hint, "workdir") || !strings.Contains(out.Hint, "sub") {
+		t.Errorf("hint = %q, want a workdir nudge mentioning 'sub'", out.Hint)
+	}
+
+	res2, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "echo hi",
+		"description": "test",
+		"workdir":     ".",
+	}))
+	var out2 bashOutput
+	if err := json.Unmarshal([]byte(res2.Content), &out2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if strings.Contains(out2.Hint, "workdir") {
+		t.Errorf("hint = %q, want no workdir nudge when workdir is already set / no cd prefix", out2.Hint)
 	}
 }
 
