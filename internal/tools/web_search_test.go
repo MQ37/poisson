@@ -84,6 +84,16 @@ func TestWebSearchTool_SchemaAndName(t *testing.T) {
 	}
 }
 
+func TestIsDDGChallenge(t *testing.T) {
+	challenge := `<div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div>`
+	if !isDDGChallenge([]byte(challenge)) {
+		t.Error("expected challenge page to be detected")
+	}
+	if isDDGChallenge([]byte(sampleDDGHTML)) {
+		t.Error("expected normal SERP HTML not to be flagged as a challenge")
+	}
+}
+
 func TestWebSearchTool_Execute_RequiresQuery(t *testing.T) {
 	tool := NewWebSearchTool()
 	res, err := tool.Execute(context.Background(), []byte(`{}`))

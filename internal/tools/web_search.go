@@ -28,6 +28,17 @@ var (
 	tagStripRe      = regexp.MustCompile(`<[^>]+>`)
 )
 
+// ddgChallengeMarker is text unique to DuckDuckGo's bot-challenge interstitial
+// ("Unfortunately, bots use DuckDuckGo too." / "Select all squares containing
+// a duck"), served instead of a SERP once a client IP is rate-limited. It has
+// no result__a/result__snippet blocks, so it used to fall through to the
+// generic error path, which dumped raw interstitial HTML as the tool error.
+const ddgChallengeMarker = "anomaly-modal"
+
+func isDDGChallenge(body []byte) bool {
+	return strings.Contains(string(body), ddgChallengeMarker)
+}
+
 // WebSearchTool returns a plain list of links + descriptions from
 // DuckDuckGo's web index. No AI, no summarization, no auth — the cheapest,
 // fastest, always-available search primitive. Use WebAskTool when a
@@ -100,14 +111,16 @@ func doWebSearch(ctx context.Context, query string, num int) ([]webSearchResult,
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return nil, fmt.Errorf("web_search HTTP %d: %s", resp.StatusCode, string(raw))
-	}
-
 	body, err := io.ReadAll(io.LimitReader(resp.Body, webSearchMaxBytes))
 	if err != nil {
 		return nil, fmt.Errorf("web_search read response: %w", err)
+	}
+
+	if isDDGChallenge(body) {
+		return nil, fmt.Errorf("web_search: DuckDuckGo blocked this request with a bot challenge (rate-limited). Wait a bit before retrying, or use web_ask instead")
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("web_search HTTP %d", resp.StatusCode)
 	}
 
 	return parseWebSearchResults(string(body), num), nil
