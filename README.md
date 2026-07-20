@@ -70,8 +70,10 @@ git clone <this-repo> poisson && cd poisson
 - **Multi-provider** — Anthropic (subscription OAuth), OpenAI (ChatGPT
   subscription OAuth), xAI (OAuth), Ollama (local daemon or Ollama cloud).
   Switch model/effort live.
-- **Message queueing** — type while the agent is working; your messages are sent
-  as one follow-up when the turn ends.
+- **Message queueing** — type while the agent is working (or while `/compact`
+  is running); your message is spliced into the model's very next request —
+  after the current tool round, or right before the turn would otherwise end —
+  instead of waiting for the whole turn to finish.
 
 ---
 
