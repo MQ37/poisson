@@ -23,6 +23,7 @@ type SpawnInput struct {
 	Model     string
 	Effort    string
 	Sandbox   bool
+	NoSkills  bool // mirrors the parent's SkillsEnabled(): true disables skills in the child too
 	ExtraEnv  []string
 	DBPath    string // ephemeral DB path for the child (empty = parent's DB)
 }
@@ -80,11 +81,11 @@ func SetLookupExecutableForTest(path string) (restore func()) {
 // session ("subagent silently falls back to hardcoded model") — is directly
 // unit-testable without spawning any process at all.
 func buildSpawnArgs(input SpawnInput) []string {
-	args := []string{
-		"--json",
-		"--no-skills",
-		"--session", input.SessionID,
+	args := []string{"--json"}
+	if input.NoSkills {
+		args = append(args, "--no-skills")
 	}
+	args = append(args, "--session", input.SessionID)
 	if input.Task != "" {
 		args = append(args, "--", input.Task)
 	}

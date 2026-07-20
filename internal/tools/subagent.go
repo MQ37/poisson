@@ -31,11 +31,12 @@ type SubagentApproval func(command, description, workdir, agentName, risk string
 // returned to the calling model. The parent UI shows a compact widget derived
 // from the tool_start / tool_result events, not the child's steps.
 type SubagentTool struct {
-	cwd        string
-	providerFn func() string
-	modelFn    func() string
-	effortFn   func() string
-	approvalFn SubagentApproval
+	cwd             string
+	providerFn      func() string
+	modelFn         func() string
+	effortFn        func() string
+	skillsEnabledFn func() bool // nil, or unset result, means "enabled" (matches the main session's default)
+	approvalFn      SubagentApproval
 
 	// live tracks currently-running child processes so ExpediteAll can nudge
 	// them to wrap up. Guarded by liveMu; touched from parallel tool goroutines
@@ -92,6 +93,13 @@ func (t *SubagentTool) SetRuntime(providerFn, modelFn, effortFn func() string) {
 	t.providerFn = providerFn
 	t.modelFn = modelFn
 	t.effortFn = effortFn
+}
+
+// SetSkillsEnabledFn supplies a live resolver for whether the main session
+// has skills enabled, so a spawned subagent mirrors that (SetSkills(false)
+// / --no-skills means the whole tree, not just the parent, goes without).
+func (t *SubagentTool) SetSkillsEnabledFn(fn func() bool) {
+	t.skillsEnabledFn = fn
 }
 
 // SetProgressFn supplies the live turn-count + context-usage progress
@@ -171,6 +179,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		Provider:  prov,
 		Model:     model,
 		Effort:    effort,
+		NoSkills:  t.skillsEnabledFn != nil && !t.skillsEnabledFn(),
 		DBPath:    dbPath,
 	})
 	if err != nil {

@@ -15,13 +15,42 @@ import (
 
 func TestBuildSpawnArgs(t *testing.T) {
 	args := buildSpawnArgs(SpawnInput{SessionID: "sess-1", Task: "do the thing"})
-	want := []string{"--json", "--no-skills", "--session", "sess-1", "--", "do the thing"}
+	want := []string{"--json", "--session", "sess-1", "--", "do the thing"}
 	if len(args) != len(want) {
 		t.Fatalf("args = %v, want %v", args, want)
 	}
 	for i := range want {
 		if args[i] != want[i] {
 			t.Fatalf("args = %v, want %v", args, want)
+		}
+	}
+}
+
+// TestBuildSpawnArgsNoSkills guards the propagation this bug report was about:
+// a parent session with skills disabled must produce a child argv carrying
+// --no-skills, not silently give the child skills back.
+func TestBuildSpawnArgsNoSkills(t *testing.T) {
+	args := buildSpawnArgs(SpawnInput{SessionID: "sess-1", NoSkills: true})
+	found := false
+	for _, a := range args {
+		if a == "--no-skills" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("args = %v, want --no-skills present when NoSkills is true", args)
+	}
+}
+
+// TestBuildSpawnArgsSkillsEnabledByDefault guards the reverse: a parent with
+// skills enabled (the common case) must NOT send --no-skills, since
+// runChildMode now actually honors the flag (unlike before, when it was
+// always sent but ignored).
+func TestBuildSpawnArgsSkillsEnabledByDefault(t *testing.T) {
+	args := buildSpawnArgs(SpawnInput{SessionID: "sess-1"})
+	for _, a := range args {
+		if a == "--no-skills" {
+			t.Fatalf("args = %v, should not contain --no-skills when NoSkills is false", args)
 		}
 	}
 }

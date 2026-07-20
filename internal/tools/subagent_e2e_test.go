@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"poisson/internal/subagent"
@@ -80,6 +81,64 @@ printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWind
 		if calls[i] != want[i] {
 			t.Errorf("call %d = %+v, want %+v", i, calls[i], want[i])
 		}
+	}
+}
+
+// TestSubagentToolPropagatesSkillsEnabledFn verifies SetSkillsEnabledFn
+// actually reaches the spawned child's argv: when the resolver reports
+// skills disabled, the real child process (a fake script, not px) must see
+// --no-skills on its own os.Args — the propagation bug this test guards
+// against is a resolver wired but silently ignored, or a parent whose
+// skills are disabled leaking skills back into every subagent it spawns.
+func TestSubagentToolPropagatesSkillsEnabledFn(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-argv.sh"
+	script := `#!/bin/sh
+flag=absent
+for a in "$@"; do
+  if [ "$a" = "--no-skills" ]; then flag=present; fi
+done
+printf '{"type":"text","text":"flag=%s"}\n' "$flag"
+printf '{"type":"done","success":true}\n'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	for _, tc := range []struct {
+		name          string
+		skillsEnabled bool
+		wantFlag      string
+	}{
+		{"skills enabled: no flag sent", true, "absent"},
+		{"skills disabled: flag propagated", false, "present"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := NewSubagentTool(".", alwaysApproveSubagent)
+			tool.SetRuntime(
+				func() string { return "anthropic" },
+				func() string { return "claude-opus-4-8" },
+				func() string { return "" },
+			)
+			tool.SetSkillsEnabledFn(func() bool { return tc.skillsEnabled })
+
+			res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
+			if err != nil {
+				t.Fatalf("Execute returned a Go error: %v", err)
+			}
+			if res.Error != "" {
+				t.Fatalf("Execute reported an error: %q", res.Error)
+			}
+			want := "flag=" + tc.wantFlag
+			if !strings.Contains(res.Content, want) {
+				t.Fatalf("child argv result = %q, want it to contain %q", res.Content, want)
+			}
+		})
 	}
 }
 

@@ -96,3 +96,17 @@ func BindSubagentProgress(reg *Registry, fn func(toolCallID string, turns, conte
 		st.SetProgressFn(fn)
 	}
 }
+
+// BindSubagentSkills wires a live "are skills enabled" resolver onto the
+// subagent tool, so --no-skills (or /reload-time skill disabling) propagates
+// to every spawned subagent instead of children always getting skills
+// regardless of the parent's setting.
+func BindSubagentSkills(reg *Registry, fn func() bool) {
+	t, ok := reg.Get("subagent")
+	if !ok {
+		return
+	}
+	if st, ok := t.(*SubagentTool); ok {
+		st.SetSkillsEnabledFn(fn)
+	}
+}

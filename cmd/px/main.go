@@ -349,6 +349,7 @@ func runREPL(noSkills bool) {
 	agentRef = a
 	tools.BindSubagentRuntime(reg, func() string { return a.Provider().ID() }, func() string { return a.Model() }, func() string { return a.Effort() })
 	tools.BindSubagentProgress(reg, a.SendSubagentProgress)
+	tools.BindSubagentSkills(reg, a.SkillsEnabled)
 
 	var skillList []skills.Skill
 	if !noSkills {
@@ -548,13 +549,15 @@ func cmdLogout(args []string) {
 const subagentNetworkRetryBudget = 3 * time.Minute
 
 func runChildMode() {
-	// Parse args: --json --no-skills --session <id> [-- task]
+	// Parse args: --json [--no-skills] --session <id> [-- task]
 	var sessionID, task string
+	var noSkills bool
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--json":
 		case "--no-skills":
+			noSkills = true
 		case "--session":
 			if i+1 < len(args) {
 				sessionID = args[i+1]
@@ -701,11 +704,19 @@ func runChildMode() {
 	// invoke code-quality or code-review on its own. Skills that assume
 	// spawning further subagents (council, check-work) simply can't use the
 	// subagent tool here — recursion is still bounded to one level.
-	skillList, err := skills.Discover()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: skills discover: %v\n", err)
+	// noSkills mirrors the parent's own SkillsEnabled() (propagated via
+	// SubagentTool → SpawnInput.NoSkills → this --no-skills flag), so a
+	// session that disabled skills doesn't have them silently reappear a
+	// level down.
+	var skillList []skills.Skill
+	if !noSkills {
+		var err error
+		skillList, err = skills.Discover()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skills discover: %v\n", err)
+		}
 	}
-	a.SetSkills(true, skillList)
+	a.SetSkills(!noSkills, skillList)
 
 	// Forward the parent's Ctrl+G nudge to the agent, and start the stdin reader
 	// now so it listens for expedite even in runs that never hit a bash approval.
