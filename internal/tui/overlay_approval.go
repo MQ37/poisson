@@ -21,10 +21,23 @@ type approvalOverlay struct {
 
 	// denying is set once the user has committed to denying (d/n/Esc) but
 	// hasn't confirmed yet: the panel switches to collecting an optional
-	// reason, and reason accumulates what they type until Enter/Esc finalizes
-	// the denial (or Ctrl+C sends it immediately with reason left empty).
-	denying bool
-	reason  string
+	// reason, and reasonEditor accumulates what they type until Enter/Esc
+	// finalizes the denial (or Ctrl+C sends it immediately with reason left
+	// empty). Backed by the same editor type as the main input box so it
+	// gets identical key handling for free — word-wise motion, Alt+Backspace,
+	// Ctrl+W, Home/End, paste — instead of a hand-rolled append/trim-last-char
+	// stand-in that only handled plain runes.
+	denying      bool
+	reasonEditor *editor
+}
+
+// reasonText returns the currently typed deny reason, or "" before
+// beginDenyReason has run.
+func (o *approvalOverlay) reasonText() string {
+	if o.reasonEditor == nil {
+		return ""
+	}
+	return o.reasonEditor.text()
 }
 
 func newApprovalOverlay(command, description, workdir string) *approvalOverlay {
@@ -39,6 +52,7 @@ func newApprovalOverlay(command, description, workdir string) *approvalOverlay {
 // beginDenyReason switches the panel into reason-collection mode.
 func (o *approvalOverlay) beginDenyReason() {
 	o.denying = true
+	o.reasonEditor = newEditor()
 }
 
 func (o *approvalOverlay) setRisk(risk string) {
@@ -122,7 +136,11 @@ func (o *approvalOverlay) renderDenyReasonPanel(panelRows, cols int) []string {
 	if avail < 4 {
 		avail = 4
 	}
-	shown := o.reason
+	// reasonEditor is the same multi-line editor the main input box uses, so
+	// Shift+Enter/a multi-line paste can put a literal newline into the
+	// text — but this panel renders it into one fixed-height terminal row,
+	// same reasoning as oneLine (o.command) above.
+	shown := strings.ReplaceAll(o.reasonText(), "\n", " ")
 	if rw := []rune(shown); len(rw) > avail {
 		// Keep the tail visible while typing long text.
 		shown = string(rw[len(rw)-avail:])

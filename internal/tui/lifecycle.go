@@ -309,27 +309,21 @@ func (t *TUI) feedDenyReasonKey(k Key) bool {
 		t.mu.Unlock()
 		return false
 	}
-	var finalize bool
-	switch k.Kind {
-	case KeyEnter, KeyEscape:
-		finalize = true
-	case KeyBackspace:
-		if trimOverlayFilter(&ao.reason) {
-			t.dirty.markInput()
-		}
-	case KeyRune:
-		if appendOverlayFilterRune(&ao.reason, k.Rune) {
-			t.dirty.markInput()
-		}
-	case KeyPaste:
-		if appendOverlayFilterText(&ao.reason, k.Text, nil) {
-			t.dirty.markInput()
-		}
-	}
-	reason := ao.reason
-	t.mu.Unlock()
-	if finalize {
+	if k.Kind == KeyEnter || k.Kind == KeyEscape {
+		reason := ao.reasonText()
+		t.mu.Unlock()
 		t.approvalDenyAndMaybeCancelRun(reason)
+		return true
 	}
+	// Same editor the main input box uses, so every key (word-wise
+	// Alt+Backspace/Alt+Arrow, Ctrl+W, Home/End, paste, ...) behaves
+	// identically here. The quit signal applyKey returns for Ctrl+D on an
+	// empty buffer means nothing in a reason prompt — ignored, not acted on.
+	if ao.reasonEditor.wrapWidth < 1 && t.cols > 0 {
+		ao.reasonEditor.wrapWidth = inputWrapWidth(t.cols)
+	}
+	ao.reasonEditor.applyKey(k)
+	t.dirty.markInput()
+	t.mu.Unlock()
 	return true
 }

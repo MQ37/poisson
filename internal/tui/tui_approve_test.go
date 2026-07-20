@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -285,6 +286,55 @@ func TestFeedDenyReasonKeyPassthroughWhenNotDenying(t *testing.T) {
 	}
 }
 
+// TestFeedDenyReasonKeyAltBackspaceDeletesWord verifies the reason prompt is
+// backed by the same editor as the main input box: Alt+Backspace deletes a
+// whole word, not just the last rune (the bug this fixes — the old
+// implementation only understood plain-rune append and single-char trim).
+func TestFeedDenyReasonKeyAltBackspaceDeletesWord(t *testing.T) {
+	tui := newTestTUIHelper()
+	tui.mu.Lock()
+	ao := newApprovalOverlay("rm -rf x", "danger", "")
+	ao.beginDenyReason()
+	tui.activeOverlay = ao
+	tui.mu.Unlock()
+
+	for _, r := range "too risky today" {
+		if !tui.feedDenyReasonKey(Key{Kind: KeyRune, Rune: r}) {
+			t.Fatalf("expected feedDenyReasonKey to handle rune %q", r)
+		}
+	}
+	if !tui.feedDenyReasonKey(Key{Kind: KeyBackspace, Meta: true}) {
+		t.Fatal("expected feedDenyReasonKey to handle Alt+Backspace")
+	}
+
+	tui.mu.Lock()
+	if got := ao.reasonText(); got != "too risky " {
+		t.Fatalf("reason = %q, want %q", got, "too risky ")
+	}
+	tui.mu.Unlock()
+}
+
+// TestRenderDenyReasonPanelStripsEmbeddedNewlines verifies a reason
+// containing a literal newline (reasonEditor is the full multi-line editor —
+// Shift+Enter or a multi-line paste can put one there) still renders as a
+// single well-formed terminal row instead of leaking a raw \n into it.
+func TestRenderDenyReasonPanelStripsEmbeddedNewlines(t *testing.T) {
+	ao := newApprovalOverlay("rm -rf x", "danger", "")
+	ao.beginDenyReason()
+	ao.reasonEditor.insertText("line one\nline two")
+
+	lines := ao.renderDenyReasonPanel(8, 60)
+	for _, l := range lines {
+		if strings.Contains(l, "\n") {
+			t.Fatalf("rendered panel line contains a literal newline: %q", l)
+		}
+	}
+	joined := strings.Join(lines, "")
+	if !strings.Contains(joined, "line one line two") {
+		t.Errorf("expected the newline replaced with a space, got: %q", joined)
+	}
+}
+
 // TestFeedDenyReasonKeyTypesAndFinalizes drives the reason prompt directly:
 // commit to deny, type a reason (with a backspace correction), then confirm
 // with Enter — asserting the exact reply sent on approvalAnswer.
@@ -306,8 +356,8 @@ func TestFeedDenyReasonKeyTypesAndFinalizes(t *testing.T) {
 	}
 
 	tui.mu.Lock()
-	if ao.reason != "not now" {
-		t.Fatalf("reason = %q, want %q", ao.reason, "not now")
+	if got := ao.reasonText(); got != "not now" {
+		t.Fatalf("reason = %q, want %q", got, "not now")
 	}
 	tui.mu.Unlock()
 
