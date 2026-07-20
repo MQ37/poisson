@@ -113,6 +113,19 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 
 	toSummarize := msgs[:summarizeCount]
 
+	// 2b. The messages NOT being summarized (msgs[summarizeCount:]) stay
+	// active and keep being sent in full on every future turn until some
+	// later compaction eventually reaches them. Shrink any `read` among them
+	// that a later call in that same surviving window has already made
+	// stale — see compaction_prune.go for why doing it right here is free.
+	if kept := msgs[summarizeCount:]; len(kept) > 0 {
+		cwd := a.cwd()
+		if sessBefore != nil && sessBefore.Cwd != "" {
+			cwd = sessBefore.Cwd
+		}
+		a.pruneStaleToolResults(cwd, kept)
+	}
+
 	// 3. Build summarization request.
 	summarizationMsgs := make([]provider.Message, 0, len(toSummarize)+2)
 	instruction := "Summarize the following conversation for context handoff. Produce ONLY the structured summary."

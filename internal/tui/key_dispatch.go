@@ -327,9 +327,13 @@ func (t *TUI) processEditorKey(k Key) (bool, error) {
 	submitted, quit := t.editor.applyKey(k)
 	if submitted != "" {
 		t.completion = nil
-		// A turn is in flight: queue the message instead of starting a second
-		// turn. It (and any other queued messages) are sent once this one ends.
-		if t.running() && !t.approving.Load() {
+		// A turn is in flight, or a manual /compact is running (no turn, but
+		// submit() itself would still reject outright — see its own
+		// compacting guard): queue the message instead. It (and any other
+		// queued messages) are sent once whichever is running finishes —
+		// startTurn's defer for a turn, or /compact's goroutine for a manual
+		// compaction.
+		if t.sessionBusyLocked() && !t.approving.Load() {
 			t.enqueueLocked(submitted)
 			t.refreshCompletion()
 			t.markInputDirty()

@@ -128,13 +128,39 @@ type Agent struct {
 	skillsEnabled bool
 	skills        []skills.Skill
 
-	// contextMu guards loadedContextDirs.
+	// contextMu guards loadedContextDirs and readMemos.
 	contextMu sync.Mutex
 	// loadedContextDirs records directories whose AGENTS.md has been injected
 	// into the conversation this epoch (a file was worked on there). Each is
 	// injected once; the set is reset on compaction and session switch so the
 	// files are re-loaded afterwards.
 	loadedContextDirs map[string]bool
+	// readMemos records the last successful `read` of each path this epoch,
+	// so a later re-read of the same (or a narrower) line range on an
+	// unchanged file is answered with a short pointer instead of resending
+	// the file — see read_memo.go. Reset on compaction and session switch:
+	// a stub referencing a read that's since been summarized away would
+	// dangle (the model can no longer actually see that content).
+	readMemos map[string]readMemo
+
+	// pendingInputFn lets the host (TUI) hand the turn loop a message the
+	// user queued WHILE a turn was already running, so it's sent at the next
+	// iteration boundary instead of only once the whole turn (which may run
+	// many tool rounds, sometimes for many minutes) finally finishes. nil
+	// (tests, headless/subagent use) means the loop never checks — queued
+	// input, if the host has such a concept at all, is entirely the host's
+	// business. Segments (not a flat string) so a queued @file reference gets
+	// the same expansion a normal prompt would. Text-only otherwise: nothing
+	// in this codebase queues image attachments for a message typed while a
+	// turn is already in flight.
+	pendingInputFn func() (segments []TextSegment, ok bool)
+}
+
+// SetPendingInputFn wires the callback runTurn polls at each iteration
+// boundary — after a tool round, and right before it would otherwise end the
+// turn — for a message queued mid-turn. See pendingInputFn's doc comment.
+func (a *Agent) SetPendingInputFn(fn func() ([]TextSegment, bool)) {
+	a.pendingInputFn = fn
 }
 
 // NewAgent creates an Agent ready to process prompts for the given session.
@@ -228,11 +254,13 @@ func (a *Agent) SwitchSession(sessionID string) {
 	a.resetContextTracker()
 }
 
-// resetContextTracker forgets which directories' AGENTS.md have been injected,
-// so they load again. Called on session switch and after compaction.
+// resetContextTracker forgets which directories' AGENTS.md have been injected
+// and which reads have been memoized, so both start fresh. Called on session
+// switch and after compaction.
 func (a *Agent) resetContextTracker() {
 	a.contextMu.Lock()
 	a.loadedContextDirs = map[string]bool{}
+	a.readMemos = map[string]readMemo{}
 	a.contextMu.Unlock()
 }
 
@@ -655,47 +683,14 @@ func (a *Agent) PromptSegmentsWithContext(ctx context.Context, segments []TextSe
 	}
 
 	// INGEST: append user message (images first, then the text segments).
-	var blocks []provider.ContentBlock
-	for _, im := range images {
-		if im.Path == "" {
-			continue
-		}
-		mt := im.MediaType
-		if mt == "" {
-			mt = "image/png"
-		}
-		blocks = append(blocks, provider.ContentBlock{Type: "image", MediaType: mt, ImagePath: im.Path, ImageName: im.Name})
-	}
-	textBlocks := 0
-	for _, seg := range segments {
-		if seg.Text == "" && seg.FileRef == "" {
-			continue
-		}
-		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: seg.Text, FileRef: seg.FileRef})
-		textBlocks++
-	}
-	if textBlocks == 0 && len(blocks) == 0 {
-		blocks = append(blocks, provider.ContentBlock{Type: "text"})
-	}
-	content, err := contentBlocksToJSON(blocks)
-	if err != nil {
-		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})
+	if err := a.appendUserMessage(segments, images); err != nil {
+		a.sendEvent(OutputEvent{Type: OutputError, Text: err.Error()})
 		a.sendEvent(OutputEvent{Type: OutputDone})
-		return fmt.Errorf("marshal user content: %w", err)
-	}
-	userMsg := &store.Message{
-		SessionID: a.sessionID,
-		Role:      "user",
-		Content:   content,
-	}
-	if err := a.store.AppendMessage(userMsg); err != nil {
-		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Store error: %v", err)})
-		a.sendEvent(OutputEvent{Type: OutputDone})
-		return fmt.Errorf("append user message: %w", err)
+		return err
 	}
 
 	a.runTurns.Store(0)
-	err = a.runTurn(ctx)
+	err := a.runTurn(ctx)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		// Keep the conversation visible — just stop generation. runTurn's
 		// persistPartialTurnOnCancel already saved whatever text/thinking (and
@@ -723,6 +718,80 @@ const maxTurnContinuations = 8
 var emptyResponseBackoff = 500 * time.Millisecond
 
 const expediteNudge = "\n\n[User interjection] The user needs results now and has asked you to wrap up immediately. Stop starting new work: summarize what you have accomplished so far — partial results are fine — and finish this turn without any further tool calls."
+
+// appendUserMessage builds the content blocks for a user turn (images first,
+// then text segments) and appends it to the store. Shared by
+// PromptSegmentsWithContext (the message that starts a turn) and
+// injectPendingInput (a message queued while a turn is already running).
+func (a *Agent) appendUserMessage(segments []TextSegment, images []ImageAttachment) error {
+	var blocks []provider.ContentBlock
+	for _, im := range images {
+		if im.Path == "" {
+			continue
+		}
+		mt := im.MediaType
+		if mt == "" {
+			mt = "image/png"
+		}
+		blocks = append(blocks, provider.ContentBlock{Type: "image", MediaType: mt, ImagePath: im.Path, ImageName: im.Name})
+	}
+	textBlocks := 0
+	for _, seg := range segments {
+		if seg.Text == "" && seg.FileRef == "" {
+			continue
+		}
+		blocks = append(blocks, provider.ContentBlock{Type: "text", Text: seg.Text, FileRef: seg.FileRef})
+		textBlocks++
+	}
+	if textBlocks == 0 && len(blocks) == 0 {
+		blocks = append(blocks, provider.ContentBlock{Type: "text"})
+	}
+	content, err := contentBlocksToJSON(blocks)
+	if err != nil {
+		return fmt.Errorf("marshal user content: %w", err)
+	}
+	return a.store.AppendMessage(&store.Message{
+		SessionID: a.sessionID,
+		Role:      "user",
+		Content:   content,
+	})
+}
+
+// injectPendingInput polls pendingInputFn and, if a message is queued,
+// appends it as a fresh user turn — same shape as appendContinueMessage.
+// Only safe to call where the previous message was plain assistant text (no
+// tool_use): a bare user-role row right after an assistant text reply keeps
+// roles alternating. The tool-round case (assistant tool_use → tool results)
+// is handled separately, in runTurn's dispatch loop, by folding queued text
+// into the last tool_result instead of appending a whole new row — a fresh
+// user-role row there would follow the coalesced tool-result "user" message
+// and produce two consecutive user-role messages at the wire level, which
+// Anthropic rejects. See the comment at that call site.
+func (a *Agent) injectPendingInput() (bool, error) {
+	if a.pendingInputFn == nil {
+		return false, nil
+	}
+	segments, ok := a.pendingInputFn()
+	if !ok {
+		return false, nil
+	}
+	return true, a.appendUserMessage(segments, nil)
+}
+
+// flattenSegments joins segments' text (an @file reference's expanded
+// content is already inlined into its segment's Text by the time this is
+// called) into one plain string — used where the destination is a flat
+// string field (a tool_result), not a content-block array.
+func flattenSegments(segments []TextSegment) string {
+	var b strings.Builder
+	for i, s := range segments {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.WriteString(s.Text)
+	}
+	return b.String()
+}
 
 // appendContinueMessage adds a synthetic user turn asking the model to resume
 // after its previous response was truncated by the output-token cap. A user
@@ -975,6 +1044,17 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				}
 				continue
 			}
+			// The model is about to give its final answer and stop — but if the
+			// user queued a message while this turn was running, don't end yet:
+			// splice it in as the next user turn and keep going, so it's
+			// answered now instead of requiring a fresh prompt afterward.
+			if injected, err := a.injectPendingInput(); err != nil {
+				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Store error: %v", err)})
+				a.sendEvent(OutputEvent{Type: OutputDone})
+				return fmt.Errorf("append queued message: %w", err)
+			} else if injected {
+				continue
+			}
 			a.sendEvent(OutputEvent{Type: OutputDone})
 			break
 		}
@@ -991,25 +1071,44 @@ func (a *Agent) runTurn(ctx context.Context) error {
 
 		// Dispatch concurrently; emit each tool_result to the TUI as it finishes
 		// so cards stop spinning without waiting for slower siblings (e.g. bash approval).
+		dispatchCwd := a.cwd()
 		results := make([]tools.ToolResult, len(toolCalls))
 		var wg sync.WaitGroup
 		for i, tc := range toolCalls {
 			wg.Add(1)
 			go func(idx int, call tools.ToolCall) {
 				defer wg.Done()
+				emit := func(res tools.ToolResult) {
+					results[idx] = res
+					a.sendEvent(OutputEvent{
+						Type:              OutputToolResult,
+						ToolName:          call.Name,
+						ToolCallID:        call.ID,
+						ToolResultContent: res.Content,
+						ToolError:         res.Error,
+					})
+				}
+				// A `read` at the same (or a narrower) range as an earlier,
+				// still-unchanged read in this session doesn't need to hit
+				// the filesystem again — see read_memo.go.
+				if call.Name == "read" {
+					if stub, ok := a.tryMemoizedRead(dispatchCwd, call.Input); ok {
+						emit(tools.ToolResult{Content: stub})
+						return
+					}
+				}
 				callCtx := tools.WithToolCallID(ctx, call.ID)
 				res, err := a.tools.Execute(callCtx, call.Name, call.Input)
 				if err != nil {
 					res = tools.TrimToolResult(tools.ToolResult{Error: err.Error()})
 				}
-				results[idx] = res
-				a.sendEvent(OutputEvent{
-					Type:              OutputToolResult,
-					ToolName:          call.Name,
-					ToolCallID:        call.ID,
-					ToolResultContent: res.Content,
-					ToolError:         res.Error,
-				})
+				switch {
+				case call.Name == "read" && res.Error == "":
+					a.recordRead(dispatchCwd, call.Input, res.Content)
+				case call.Name == "edit" || call.Name == "write":
+					a.invalidateReadMemo(dispatchCwd, call.Input)
+				}
+				emit(res)
 			}(i, tc)
 		}
 		wg.Wait()
@@ -1017,7 +1116,9 @@ func (a *Agent) runTurn(ctx context.Context) error {
 		// Persist tool_result messages even if the context was cancelled — the
 		// results are already computed and leaving orphaned tool_use blocks
 		// without results would cause a provider 400 on the next request.
-		turnCwd := a.cwd()
+		// dispatchCwd is reused here (rather than a fresh a.cwd() call) since
+		// cwd can't change mid-turn.
+		turnCwd := dispatchCwd
 		sysCtxPaths := a.systemPromptContextPaths(turnCwd)
 		for i, result := range results {
 			toolBlock := provider.ContentBlock{
@@ -1041,6 +1142,19 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			if i == len(results)-1 && a.expedite.Swap(false) {
 				toolBlock.ToolResult += expediteNudge
 				a.expediteForceNoTools.Store(true)
+			}
+			// A message the user queued while this tool round was running is
+			// folded into the last tool result here too, rather than appended as
+			// its own user-role row: these tool_result rows get coalesced into
+			// one "user" wire message (see anthropic.go), and a separate fresh
+			// user row right after would make two consecutive user-role
+			// messages, which Anthropic rejects. This gets it to the model on
+			// its very next completion instead of only once the whole turn
+			// (which may run many more tool rounds) finally ends.
+			if i == len(results)-1 && a.pendingInputFn != nil {
+				if segments, ok := a.pendingInputFn(); ok {
+					toolBlock.ToolResult += "\n\n[Queued user message]\n" + flattenSegments(segments)
+				}
 			}
 
 			toolContent, err := contentBlocksToJSON([]provider.ContentBlock{toolBlock})

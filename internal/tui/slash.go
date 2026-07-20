@@ -79,27 +79,10 @@ func (t *TUI) handleSlash(cmd string) error {
 		t.scroll.appendRaw(styleSystem, "  compacting context...")
 		t.markScrollDirty()
 		go func() {
-			defer t.compacting.Store(false)
 			err := t.agent.Compact()
 			t.mu.Lock()
 			defer t.mu.Unlock()
-			if err != nil {
-				if errors.Is(err, agent.ErrNothingToCompact) {
-					t.scroll.appendRaw(styleSystem, "nothing to compact")
-				} else {
-					t.scroll.appendRaw(styleError, "compaction failed: "+err.Error())
-				}
-				t.markScrollDirty()
-				return
-			}
-			before, after := 0, 0
-			if c, err := t.agent.Store().GetLastCompaction(t.sessionID); err == nil && c != nil {
-				before, after = c.TokensBefore, c.TokensAfter
-			}
-			t.appendCompactionNoticeLocked(before, after)
-			t.agent.UpdateStatus()
-			t.syncHeaderFromAgentLocked()
-			t.dirty.markStatus()
+			t.finishManualCompactLocked(err)
 		}()
 		return nil
 	case "/model":
@@ -185,6 +168,40 @@ func (t *TUI) handleSlash(cmd string) error {
 		t.markScrollDirty()
 		return nil
 	}
+}
+
+// finishManualCompactLocked is the tail of a manual /compact, run regardless
+// of whether it succeeded or failed: clears compacting, reports the outcome,
+// and drains anything the user queued while it was running. Caller must hold
+// t.mu.
+//
+// compacting must be cleared BEFORE drainQueueLocked: combineAndDisplayQueuedLocked
+// (which it calls) refuses to drain while compacting is still true — the same
+// guard submit() uses to reject a message outright rather than queue it. A
+// message typed during this manual /compact has no turn running to drain it
+// via startTurn's own end-of-turn path, so without this it would sit queued
+// forever.
+func (t *TUI) finishManualCompactLocked(err error) {
+	t.compacting.Store(false)
+	if err != nil {
+		if errors.Is(err, agent.ErrNothingToCompact) {
+			t.scroll.appendRaw(styleSystem, "nothing to compact")
+		} else {
+			t.scroll.appendRaw(styleError, "compaction failed: "+err.Error())
+		}
+		t.markScrollDirty()
+		t.drainQueueLocked()
+		return
+	}
+	before, after := 0, 0
+	if c, err := t.agent.Store().GetLastCompaction(t.sessionID); err == nil && c != nil {
+		before, after = c.TokensBefore, c.TokensAfter
+	}
+	t.appendCompactionNoticeLocked(before, after)
+	t.agent.UpdateStatus()
+	t.syncHeaderFromAgentLocked()
+	t.dirty.markStatus()
+	t.drainQueueLocked()
 }
 
 var errQuitSentinel = errors.New("quit")

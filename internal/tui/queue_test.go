@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"poisson/internal/agent"
 	"poisson/internal/provider"
 )
 
@@ -239,6 +240,167 @@ func TestQueue_PreviewRendering(t *testing.T) {
 	}
 	if !strings.Contains(out, "queue message") {
 		t.Errorf("hint missing queue affordance:\n%s", out)
+	}
+}
+
+// TestQueue_EnqueueWhileManuallyCompacting is the reported bug: typing and
+// submitting a message during a manual /compact (no turn running — status.
+// Thinking is false — but t.compacting is true) used to fall through to
+// submit()'s own hard rejection ("cannot submit while compacting"),
+// discarding the message, because the queue-vs-submit routing only checked
+// running() (Thinking), not compacting. It must be queued instead, same as
+// during a live turn.
+func TestQueue_EnqueueWhileManuallyCompacting(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.tui.mu.Lock()
+	e.tui.compacting.Store(true)
+	e.tui.mu.Unlock()
+
+	for _, r := range "hello" {
+		e.tui.feedKey(Key{Kind: KeyRune, Rune: r})
+	}
+	e.tui.feedKey(Key{Kind: KeyEnter})
+
+	e.tui.mu.Lock()
+	n := len(e.tui.queued)
+	e.tui.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("queued = %d, want 1 (message should be queued, not rejected)", n)
+	}
+	if st := e.scrollText(); strings.Contains(st, "cannot submit while compacting") {
+		t.Errorf("message was rejected instead of queued: %q", st)
+	}
+	// No turn was started (would mean it went through submit() instead).
+	if c := e.prov.CallCount(); c != 0 {
+		t.Errorf("provider called %d times, want 0 (queued, not submitted)", c)
+	}
+}
+
+// TestFinishManualCompactDrainsQueuedMessage verifies a message queued
+// during a manual /compact is sent (as a fresh turn) once compaction
+// finishes, whether it succeeded or failed — the queue must never be left
+// stranded just because there was nothing to compact or compaction errored.
+func TestFinishManualCompactDrainsQueuedMessage(t *testing.T) {
+	for _, compactErr := range []error{nil, agent.ErrNothingToCompact} {
+		e := newTUIIntegEnv(t, [][]provider.StreamEvent{
+			{{Type: provider.EventTextDelta, Text: "done"}, {Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 5, OutputTokens: 2}}},
+		})
+		stop := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				case ev := <-e.tui.output:
+					e.tui.mu.Lock()
+					e.tui.handleEvent(ev)
+					e.tui.markAfterEvent(ev)
+					e.tui.mu.Unlock()
+				}
+			}
+		}()
+
+		e.tui.mu.Lock()
+		e.tui.compacting.Store(true)
+		e.tui.queued = []string{"queued during compact"}
+		e.tui.finishManualCompactLocked(compactErr)
+		e.tui.mu.Unlock()
+
+		waitUntil(t, func() bool {
+			e.tui.mu.Lock()
+			defer e.tui.mu.Unlock()
+			return !e.tui.status.Thinking
+		})
+		close(stop)
+
+		if e.tui.compacting.Load() {
+			t.Errorf("err=%v: compacting should be cleared", compactErr)
+		}
+		e.tui.mu.Lock()
+		left := len(e.tui.queued)
+		e.tui.mu.Unlock()
+		if left != 0 {
+			t.Errorf("err=%v: queue not drained after compaction finished, %d left", compactErr, left)
+		}
+		if c := e.prov.CallCount(); c != 1 {
+			t.Errorf("err=%v: expected the queued message to start exactly one turn, got %d calls", compactErr, c)
+		}
+		if st := e.scrollText(); !strings.Contains(st, "queued during compact") {
+			t.Errorf("err=%v: queued message missing from scrollback: %q", compactErr, st)
+		}
+	}
+}
+
+// TestQueue_TakeQueuedForInjectionDrainsAndDisplays verifies the agent's
+// pendingInputFn hook (wired via a.SetPendingInputFn in main.go) drains and
+// displays queued messages exactly like drainQueueLocked, without starting a
+// new top-level turn — the running turn's own loop is what continues.
+func TestQueue_TakeQueuedForInjectionDrainsAndDisplays(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.tui.mu.Lock()
+	e.tui.status.Thinking = true
+	e.tui.queued = []string{"first task", "second task"}
+	e.tui.mu.Unlock()
+
+	segs, ok := e.tui.TakeQueuedForInjection()
+	if !ok {
+		t.Fatal("expected ok=true with messages queued")
+	}
+	var text string
+	for _, s := range segs {
+		text += s.Text
+	}
+	if !strings.Contains(text, "first task") || !strings.Contains(text, "second task") {
+		t.Errorf("segments missing queued content: %q", text)
+	}
+
+	e.tui.mu.Lock()
+	left := len(e.tui.queued)
+	e.tui.mu.Unlock()
+	if left != 0 {
+		t.Errorf("queue not drained: %d left", left)
+	}
+
+	st := e.scrollText()
+	if !strings.Contains(st, "first task") || !strings.Contains(st, "second task") {
+		t.Errorf("queued messages missing from scrollback: %q", st)
+	}
+	// No turn was started here — TakeQueuedForInjection only feeds an
+	// already-running loop; it never calls startTurn itself.
+	if c := e.prov.CallCount(); c != 0 {
+		t.Errorf("provider called %d times, want 0 (no new turn started)", c)
+	}
+}
+
+// TestQueue_TakeQueuedForInjectionEmptyQueue verifies ok=false with nothing
+// queued, so the turn loop's caller knows not to inject anything.
+func TestQueue_TakeQueuedForInjectionEmptyQueue(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	segs, ok := e.tui.TakeQueuedForInjection()
+	if ok || segs != nil {
+		t.Errorf("expected (nil, false) for an empty queue, got (%v, %v)", segs, ok)
+	}
+}
+
+// TestQueue_TakeQueuedForInjectionBlockedDuringCompaction verifies a queued
+// message is left alone (not drained) while compaction is running, matching
+// drainQueueLocked's own guard — can't submit mid-compaction.
+func TestQueue_TakeQueuedForInjectionBlockedDuringCompaction(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.tui.mu.Lock()
+	e.tui.queued = []string{"a"}
+	e.tui.mu.Unlock()
+	e.tui.compacting.Store(true)
+
+	segs, ok := e.tui.TakeQueuedForInjection()
+	if ok || segs != nil {
+		t.Errorf("expected (nil, false) during compaction, got (%v, %v)", segs, ok)
+	}
+	e.tui.mu.Lock()
+	left := len(e.tui.queued)
+	e.tui.mu.Unlock()
+	if left != 1 {
+		t.Errorf("message should remain queued during compaction, got %d left", left)
 	}
 }
 

@@ -365,6 +365,10 @@ func runREPL(noSkills bool) {
 	t := tui.NewTUI(a, sessionID, outputChan)
 	t.InstallStartupIntro(version, provName, model)
 	approveUI = t
+	// A message queued while a turn is running is spliced into that same
+	// turn's next iteration (see agent.SetPendingInputFn's doc comment)
+	// instead of only being sent once the whole turn finishes.
+	a.SetPendingInputFn(t.TakeQueuedForInjection)
 	runErr := t.Run()
 	if runErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", runErr)

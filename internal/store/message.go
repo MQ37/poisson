@@ -156,6 +156,24 @@ func (s *Store) GetMessages(sessionID string) ([]Message, error) {
 	return out, rows.Err()
 }
 
+// UpdateMessageContent overwrites a single message's content column in
+// place. Used only by compaction-time stale-tool-result pruning: unlike
+// AppendMessage/ApplyCompaction (which never rewrite history — only append
+// or soft-flag it), this genuinely mutates a still-active row. Safe to do
+// only when the caller already knows the request's cached prefix is about
+// to be rewritten anyway (compaction always changes the summary system
+// block + active message set), so this never causes an *extra* prompt-cache
+// invalidation beyond what compaction already forces. The FTS index (built
+// from the ORIGINAL content at AppendMessage time) is deliberately left
+// untouched, so /search still recalls the full pre-prune text.
+func (s *Store) UpdateMessageContent(id, content string) error {
+	_, err := s.db.Exec(`UPDATE messages SET content = ? WHERE id = ?`, content, id)
+	if err != nil {
+		return fmt.Errorf("update message content: %w", err)
+	}
+	return nil
+}
+
 // GetAllMessages returns every non-deleted message for a session, active AND
 // compacted, ordered by seq ascending. Compaction only sets compacted = 1 —
 // it never deletes rows — so the full conversation is always still here.

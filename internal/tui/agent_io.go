@@ -172,19 +172,33 @@ func (t *TUI) enqueueLocked(text string) {
 // one combined follow-up turn. No-op if the queue is empty or a compaction is
 // running. Caller must hold t.mu.
 //
-// Queued messages are rendered as ONE bubble, not one per queued message: they
-// are already sent (and stored) as a single combined turn, and hydrate.go
-// always reconstructs one stored user row as one bubble on resume. Showing N
-// separate live bubbles for what resume always shows as one would make live
-// and resume disagree — simpler and more consistent to treat "queued together,
-// sent at once" as the single message it actually becomes.
+// This is the guaranteed-delivery backstop for whatever startTurn's agent
+// goroutine (via TakeQueuedForInjection) didn't manage to splice into the
+// still-running turn before it ended — normally that's everything, since a
+// queued message is polled at every tool-round boundary and right before the
+// turn would otherwise conclude, so by the time this defer runs the queue is
+// usually already empty. It's only non-empty here for the same reason it's
+// ever non-empty: a message queued in the brief gap after the last poll but
+// before PromptSegmentsWithContext actually returned.
 func (t *TUI) drainQueueLocked() {
-	if len(t.queued) == 0 {
+	combined, ok := t.combineAndDisplayQueuedLocked()
+	if !ok {
 		return
 	}
-	if t.compacting.Load() {
-		// Can't submit during compaction; keep them queued for the next drain.
-		return
+	t.startTurn(combined)
+}
+
+// combineAndDisplayQueuedLocked drains t.queued (no-op, ok=false if empty or
+// mid-compaction — can't submit then; leave it queued for later) and combines
+// every queued message into one set of segments, appending ONE scrollback
+// bubble for all of them combined rather than one per message: they're
+// already sent (and stored) as a single combined turn, and hydrate.go always
+// reconstructs one stored user row as one bubble on resume — showing N
+// separate live bubbles for what resume always shows as one would make live
+// and resume disagree. Caller must hold t.mu.
+func (t *TUI) combineAndDisplayQueuedLocked() ([]agent.TextSegment, bool) {
+	if len(t.queued) == 0 || t.compacting.Load() {
+		return nil, false
 	}
 	msgs := t.queued
 	t.queued = nil
@@ -204,7 +218,26 @@ func (t *TUI) drainQueueLocked() {
 	t.scroll.append(StyledLine{Style: styleUser, Text: strings.Join(display, "\n\n")})
 	t.appendFileRefCardsLocked(combined)
 	t.scroll.scrollToBottom()
-	t.startTurn(combined)
+	return combined, true
+}
+
+// TakeQueuedForInjection is the agent's pendingInputFn: runTurn polls this
+// (from its own goroutine — same cross-goroutine-call-into-TUI pattern as
+// Approve) at each iteration boundary so a message queued mid-turn reaches
+// the model at the next opportunity instead of only once the whole turn
+// (which may run many tool rounds, sometimes for many minutes) finishes.
+func (t *TUI) TakeQueuedForInjection() ([]agent.TextSegment, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	combined, ok := t.combineAndDisplayQueuedLocked()
+	if !ok {
+		return nil, false
+	}
+	// The pending-preview area (part of the input region) shrinks back down
+	// now that the queue's empty — same "size changed" repaint enqueueLocked
+	// does when it grows.
+	t.dirty.markFull()
+	return combined, true
 }
 
 func (t *TUI) handleEvent(ev agent.OutputEvent) {
