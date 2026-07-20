@@ -161,6 +161,17 @@ func TestBuildSystemPrompt(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptPrefersDedicatedTools guards the proactive guideline
+// nudging the model toward read/search/glob/ls over bash cat/grep/find/sed —
+// added because the reactive per-call hint alone didn't change behavior; the
+// model needs to be told upfront, not just after it already reached for bash.
+func TestBuildSystemPromptPrefersDedicatedTools(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "read/search/glob/ls") {
+		t.Errorf("missing dedicated-tool guideline: %q", prompt)
+	}
+}
+
 func TestBuildSystemPromptNoContext(t *testing.T) {
 	opts := BuildSystemPromptOptions{
 		Cwd:       "/test",

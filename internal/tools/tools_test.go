@@ -1198,6 +1198,32 @@ func TestBashTool_Sandbox(t *testing.T) {
 	}
 }
 
+// TestBashTool_SandboxSkipsDedicatedToolBlock verifies sandbox mode bypasses
+// the dedicated-tool block too (not just the approval gate) — a stand-in
+// command like `cat` still runs and returns real content.
+func TestBashTool_SandboxSkipsDedicatedToolBlock(t *testing.T) {
+	dir := testutil.TempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	b := NewBashTool(dir, true, nil) // sandbox bypasses the dedicated-tool block
+
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "cat f.txt",
+		"description": "cat in sandbox",
+	}))
+	if res.Error != "" {
+		t.Fatalf("bash error: %s, want no block in sandbox mode", res.Error)
+	}
+	var out bashOutput
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal: %v (res=%+v)", err, res)
+	}
+	if strings.TrimSpace(out.Stdout) != "hello" {
+		t.Errorf("stdout = %q, want 'hello' (sandbox must still execute)", out.Stdout)
+	}
+}
+
 // TestBashTool_BackgroundProcessReportsSuccess verifies that backgrounding a
 // long-lived process (`cmd &`) is reported as success, not exitCode -1. The
 // background child inherits the stdout pipe and keeps it open past bash's
@@ -1234,20 +1260,20 @@ func TestBashTool_BackgroundProcessReportsSuccess(t *testing.T) {
 	}
 }
 
-// TestBashTool_DedicatedToolHint verifies the advisory hint fires for
-// commands that are plain stand-ins for read/search/glob/ls, and stays
-// silent for legitimate multi-step or non-equivalent uses.
-func TestBashTool_DedicatedToolHint(t *testing.T) {
+// TestBashTool_DedicatedToolBlocked verifies a command that is plainly just a
+// stand-in for read/search/glob/ls is refused outright — no execution, no
+// approval round trip, no real output returned — and stays silent (runs
+// normally) for legitimate multi-step or non-equivalent uses.
+func TestBashTool_DedicatedToolBlocked(t *testing.T) {
 	dir := testutil.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	b := NewBashTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" })
 
 	cases := []struct {
 		name    string
 		command string
-		want    string // substring expected in hint, or "" for no hint
+		want    string // substring expected in the block error, or "" if it must run normally
 	}{
 		{"cat", "cat f.txt", "read"},
 		{"grep", "grep hello f.txt", "search"},
@@ -1261,22 +1287,32 @@ func TestBashTool_DedicatedToolHint(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			approvalCalls := 0
+			b := NewBashTool(dir, false, func(context.Context, string, string, string) (bool, string) {
+				approvalCalls++
+				return true, ""
+			})
 			res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 				"command":     c.command,
 				"description": "test",
 			}))
-			var out bashOutput
-			if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
-				t.Fatalf("unmarshal: %v (res=%+v)", err, res)
-			}
 			if c.want == "" {
-				if strings.Contains(out.Hint, "prefer the") || strings.Contains(out.Hint, "this reads a file") {
-					t.Errorf("command %q: hint = %q, want no dedicated-tool hint", c.command, out.Hint)
+				if res.Error != "" {
+					t.Errorf("command %q: unexpectedly blocked: %q", c.command, res.Error)
+				}
+				if approvalCalls != 1 {
+					t.Errorf("command %q: approvalFn called %d times, want 1 (must still run normally)", c.command, approvalCalls)
 				}
 				return
 			}
-			if !strings.Contains(out.Hint, c.want) {
-				t.Errorf("command %q: hint = %q, want it to mention %q", c.command, out.Hint, c.want)
+			if !strings.HasPrefix(res.Error, "blocked: ") || !strings.Contains(res.Error, c.want) {
+				t.Errorf("command %q: error = %q, want a %q block message", c.command, res.Error, c.want)
+			}
+			if res.Content != "" {
+				t.Errorf("command %q: content = %q, want no output returned (blocked before execution)", c.command, res.Content)
+			}
+			if approvalCalls != 0 {
+				t.Errorf("command %q: approvalFn called %d times, want 0 (blocked before the approval gate)", c.command, approvalCalls)
 			}
 		})
 	}

@@ -32,7 +32,7 @@ func NewBashTool(cwd string, sandbox bool, approvalFn func(ctx context.Context, 
 func (t *BashTool) Name() string { return "bash" }
 
 func (t *BashTool) Description() string {
-	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. Safe commands run automatically; gated commands classified as low risk run automatically; medium/high/unknown require human approval."
+	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. Safe commands run automatically; gated commands classified as low risk run automatically; medium/high/unknown require human approval. A command that is just cat/head/tail/sed -n/grep/rg/find/ls standing in for the read/search/glob/ls tool is refused — use that tool instead."
 }
 
 func (t *BashTool) Schema() json.RawMessage {
@@ -60,9 +60,11 @@ type bashOutput struct {
 	Stderr   string `json:"stderr"`
 	ExitCode int    `json:"exitCode"`
 	// Hint is poisson-injected advisory text (not part of the command's real
-	// output) nudging the model toward a cheaper pattern next time — e.g. a
-	// dedicated tool that skips the approval gate, or the workdir param
-	// instead of a leading `cd DIR &&`. Empty when nothing applies.
+	// output) nudging the model toward a cheaper pattern next time — e.g. the
+	// workdir param instead of a leading `cd DIR &&`. A command that is just
+	// a stand-in for a dedicated tool doesn't reach here at all — it's
+	// refused before execution (see dedicatedToolHint). Empty when nothing
+	// applies.
 	Hint string `json:"hint,omitempty"`
 }
 
@@ -73,6 +75,17 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	}
 	if in.Command == "" {
 		return ToolResult{Error: "command is required"}, nil
+	}
+
+	// A command that is plainly just a stand-in for read/search/glob/ls is
+	// refused outright, before approval or execution: those tools do the same
+	// job for less (no approval round trip, no process spawn) and returning
+	// real output here would only reward the wrong habit. Sandbox mode skips
+	// this too (see dedicatedToolHint).
+	if !t.sandbox {
+		if h := dedicatedToolHint(in.Command); h != "" {
+			return ToolResult{Error: "blocked: " + h}, nil
+		}
 	}
 
 	// Resolve working directory before guard (sensitive cwd affects approval).
@@ -165,9 +178,6 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		if h := cdWorkdirHint(in.Command, in.Workdir); h != "" {
 			hints = append(hints, h)
 		}
-		if h := dedicatedToolHint(in.Command); h != "" {
-			hints = append(hints, h)
-		}
 	}
 
 	out := bashOutput{
@@ -202,8 +212,8 @@ func cdWorkdirHint(command, workdir string) string {
 	return fmt.Sprintf("this command starts with 'cd %s \u0026\u0026' — pass workdir: %q instead next time (same effect, fewer tokens).", dir, dir)
 }
 
-// dedicatedToolHint nudges the model toward read/search/glob/ls when the
-// command is plainly just a stand-in for one of them — those tools skip the
+// dedicatedToolHint reports (and, in Execute, blocks) when a command is
+// plainly just a stand-in for read/search/glob/ls — those tools skip the
 // approval gate entirely (see their descriptions), unlike bash. Only fires
 // when the command boils down to a single segment (after stripping a
 // leading `cd DIR &&`, see cdWorkdirHint) with no redirects, so it won't
