@@ -41,13 +41,13 @@ func (t *SearchTool) Schema() json.RawMessage {
 }
 
 type searchInput struct {
-	Pattern    string `json:"pattern"`
-	Path       string `json:"path"`
-	Glob       string `json:"glob"`
-	IgnoreCase bool   `json:"ignore_case"`
-	Before     int    `json:"before"`
-	After      int    `json:"after"`
-	MaxResults int    `json:"max_results"`
+	Pattern    string  `json:"pattern"`
+	Path       string  `json:"path"`
+	Glob       string  `json:"glob"`
+	IgnoreCase bool    `json:"ignore_case"`
+	Before     FlexInt `json:"before"`
+	After      FlexInt `json:"after"`
+	MaxResults FlexInt `json:"max_results"`
 }
 
 // rgMatch represents a single match from rg --json output.
@@ -73,7 +73,7 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 		return ToolResult{Error: "pattern is required"}, nil
 	}
 
-	maxResults := in.MaxResults
+	maxResults := int(in.MaxResults)
 	if maxResults <= 0 {
 		maxResults = 100
 	}
@@ -96,10 +96,10 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 		args = append(args, "-i")
 	}
 	if in.Before > 0 {
-		args = append(args, "-B", strconv.Itoa(in.Before))
+		args = append(args, "-B", strconv.Itoa(int(in.Before)))
 	}
 	if in.After > 0 {
-		args = append(args, "-A", strconv.Itoa(in.After))
+		args = append(args, "-A", strconv.Itoa(int(in.After)))
 	}
 	if in.Glob != "" {
 		args = append(args, "--glob="+in.Glob)

@@ -44,9 +44,9 @@ func (t *ReadTool) Schema() json.RawMessage {
 }
 
 type readInput struct {
-	Path   string `json:"path"`
-	Offset int    `json:"offset"`
-	Limit  int    `json:"limit"`
+	Path   string  `json:"path"`
+	Offset FlexInt `json:"offset"`
+	Limit  FlexInt `json:"limit"`
 }
 
 const (
@@ -95,8 +95,8 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	byteCount := 0
 	lineNum := 0
 
-	offset := in.Offset
-	limit := in.Limit
+	offset := int(in.Offset)
+	limit := int(in.Limit)
 
 	for scanner.Scan() {
 		lineNum++
@@ -143,6 +143,25 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		content = "(empty file)"
 	}
 	return ToolResult{Content: content}, nil
+}
+
+// ReadWasTruncated reports whether a read tool's returned content was cut
+// short by one of its own caps (maxLines/maxBytes/maxLineSize) rather than
+// ending because the file did. Callers that want to know whether a read
+// covers a file "to EOF" (e.g. agent-level read memoization, deciding
+// whether a later unbounded read is safely covered by this one) must check
+// this — an unbounded request (limit=0) that got truncated did NOT actually
+// see the rest of the file, regardless of what was asked for.
+func ReadWasTruncated(content string) bool {
+	return strings.Contains(content, "truncated")
+}
+
+// ReadIsImage reports whether a read tool's returned content is the
+// image/base64 branch (readImage) rather than plain text. Image reads carry
+// no line-range semantics, so callers doing line-range memoization must
+// exclude them.
+func ReadIsImage(content string) bool {
+	return strings.HasPrefix(content, "Image: ")
 }
 
 // imageExtensions is the set of supported image extensions.

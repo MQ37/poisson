@@ -247,6 +247,64 @@ func TestRead_OffsetLimit(t *testing.T) {
 	}
 }
 
+// TestRead_OffsetLimitAsStrings verifies offset/limit sent as numeric JSON
+// strings (some models stringify integer params) are accepted, not rejected
+// with a raw Go unmarshal-type-mismatch error.
+func TestRead_OffsetLimitAsStrings(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	r := NewReadTool(dir, true, nil)
+
+	var content strings.Builder
+	for i := 1; i <= 10; i++ {
+		content.WriteString("line")
+		itoaTest(i, &content)
+		content.WriteString("\n")
+	}
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "nums.txt", "content": content.String()}))
+
+	res, err := r.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"path":   "nums.txt",
+		"offset": "5",
+		"limit":  "3",
+	}))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("read error: %s", res.Error)
+	}
+	lines := strings.Split(strings.TrimSpace(res.Content), "\n")
+	if len(lines) != 3 || lines[0] != "5: line5" {
+		t.Errorf("got %q, want 3 lines starting at 5: line5", res.Content)
+	}
+}
+
+// TestRead_OffsetAsRangeStringRejectedClearly verifies a malformed offset
+// (a range like "80, 220" instead of a single integer — an easy mistake to
+// make calling this tool) fails with an actionable message, not Go's raw
+// "json: cannot unmarshal string into Go struct field ... of type int".
+func TestRead_OffsetAsRangeStringRejectedClearly(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	r := NewReadTool(dir, true, nil)
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "hi\n"}))
+
+	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"path":   "f.txt",
+		"offset": "80, 220",
+	}))
+	if res.Error == "" {
+		t.Fatal("expected an error for a range-shaped offset")
+	}
+	if strings.Contains(res.Error, "cannot unmarshal string into Go struct field") {
+		t.Errorf("error leaks a raw Go type-mismatch message, want an actionable one: %s", res.Error)
+	}
+	if !strings.Contains(res.Error, "single integer") {
+		t.Errorf("error should explain offset must be a single integer, got: %s", res.Error)
+	}
+}
+
 func itoaTest(n int, b *strings.Builder) {
 	if n == 0 {
 		b.WriteByte('0')
@@ -636,6 +694,57 @@ func TestSearch_BeforeContextLines(t *testing.T) {
 	}
 }
 
+// TestSearch_BeforeAfterAsStrings verifies before/after/max_results sent as
+// numeric JSON strings (some models stringify integer params) are accepted,
+// not rejected with a raw Go unmarshal-type-mismatch error — same FlexInt
+// fix applied to the read tool's offset/limit.
+func TestSearch_BeforeAfterAsStrings(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	s := NewSearchTool(dir)
+	w.Execute(context.Background(), mustJSON(t, map[string]string{
+		"path":    "a.txt",
+		"content": "one\ntwo\nMATCH\nfour\nfive\n",
+	}))
+
+	res, err := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern":     "MATCH",
+		"path":        ".",
+		"before":      "1",
+		"after":       "1",
+		"max_results": "5",
+	}))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("search error: %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "a.txt-2- two") || !strings.Contains(res.Content, "a.txt-4- four") {
+		t.Errorf("expected 1 line of before- and after-context, got %q", res.Content)
+	}
+}
+
+// TestSearch_BeforeAsRangeStringRejectedClearly verifies a malformed before/
+// after value fails with an actionable message, not Go's raw unmarshal error.
+func TestSearch_BeforeAsRangeStringRejectedClearly(t *testing.T) {
+	dir := testutil.TempDir(t)
+	s := NewSearchTool(dir)
+	res, _ := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern": "x",
+		"before":  "1, 2",
+	}))
+	if res.Error == "" {
+		t.Fatal("expected an error for a range-shaped before value")
+	}
+	if strings.Contains(res.Error, "cannot unmarshal string into Go struct field") {
+		t.Errorf("error leaks a raw Go type-mismatch message: %s", res.Error)
+	}
+	if !strings.Contains(res.Error, "single integer") {
+		t.Errorf("error should explain before must be a single integer, got: %s", res.Error)
+	}
+}
+
 func TestSearch_MaxResultsIsGlobal(t *testing.T) {
 	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir, true, nil)
@@ -826,6 +935,42 @@ func TestGlob_Doublestar(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, "sub/deep/c.go") {
 		t.Errorf("expected sub/deep/c.go: %q", res.Content)
+	}
+}
+
+// TestBashTool_TimeoutAsString verifies timeout sent as a numeric JSON string
+// is accepted (same FlexInt fix applied to read's offset/limit), and that a
+// malformed non-numeric value fails with an actionable message instead of
+// Go's raw unmarshal-type-mismatch error.
+func TestBashTool_TimeoutAsString(t *testing.T) {
+	dir := testutil.TempDir(t)
+	b := NewBashTool(dir, true, nil)
+
+	res, err := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "echo hi",
+		"description": "print hi",
+		"timeout":     "5",
+	}))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("bash error: %s", res.Error)
+	}
+
+	res, _ = b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "echo hi",
+		"description": "print hi",
+		"timeout":     "5, 10",
+	}))
+	if res.Error == "" {
+		t.Fatal("expected an error for a range-shaped timeout")
+	}
+	if strings.Contains(res.Error, "cannot unmarshal string into Go struct field") {
+		t.Errorf("error leaks a raw Go type-mismatch message: %s", res.Error)
+	}
+	if !strings.Contains(res.Error, "single integer") {
+		t.Errorf("error should explain timeout must be a single integer, got: %s", res.Error)
 	}
 }
 

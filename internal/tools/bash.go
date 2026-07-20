@@ -49,10 +49,10 @@ func (t *BashTool) Schema() json.RawMessage {
 }
 
 type bashInput struct {
-	Command     string `json:"command"`
-	Description string `json:"description"`
-	Workdir     string `json:"workdir"`
-	Timeout     int    `json:"timeout"`
+	Command     string  `json:"command"`
+	Description string  `json:"description"`
+	Workdir     string  `json:"workdir"`
+	Timeout     FlexInt `json:"timeout"`
 }
 
 type bashOutput struct {
@@ -109,7 +109,7 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	// Determine timeout.
 	timeoutSec := 120
 	if in.Timeout > 0 {
-		timeoutSec = in.Timeout
+		timeoutSec = int(in.Timeout)
 	}
 	timeoutDur := time.Duration(timeoutSec) * time.Second
 
