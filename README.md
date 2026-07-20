@@ -49,7 +49,8 @@ git clone <this-repo> poisson && cd poisson
   fallback otherwise), `fetch` (works on every provider — Ollama's own
   web_fetch API when available, otherwise a built-in HTML→Markdown
   converter), `recall` (full-text search across past sessions), plus
-  **subagents** (parallel child agents) and **skills**.
+  **subagents** (parallel child agents) and **skills** (8 built in, see
+  [below](#-built-in-skills); also user-defined via `~/.poisson/skills/`).
 - **Bash safety guard** — every shell command is risk-classified; anything
   dangerous pops an approval prompt (you decide, it never auto-allows installs,
   destructive, or `npx`/`dlx` commands).
@@ -74,6 +75,30 @@ git clone <this-repo> poisson && cd poisson
   is running); your message is spliced into the model's very next request —
   after the current tool round, or right before the turn would otherwise end —
   instead of waiting for the whole turn to finish.
+
+---
+
+## 🧰 Built-in skills
+
+Eight skills ship baked into the `px` binary — no setup, no config directory
+needed. The `skill` tool loads one by name and works the same for subagents
+as it does in the main session.
+
+| Skill | What |
+|---|---|
+| `code-quality` | Suckless-style simplicity/clarity principles — bloat, over-abstraction, needless defensiveness. Use before writing or reviewing code. |
+| `code-review` | Full multi-lens review of a diff (correctness, security, API design, tests) with subagent-verified findings and apply/escalate/skip fixes. |
+| `review-pr` | Gathers a PR/branch diff (local, GitHub, or fresh checkout) for review; hands off to `code-review` + `stacked-diff-review`. |
+| `stacked-diff-review` | Risk-tiered (🔴/🟡/🟢) write-up format for presenting a review. |
+| `check-work` | Spawns a fresh-context subagent to independently verify finished work actually satisfies the original request — PASS/FAIL verdict. |
+| `council` | Convenes parallel subagent personas (Torvalds, Hotz, Davis, ...) to critique code/architecture and synthesizes a ranked verdict. |
+| `create-issue` | Drafts a tight, single-focus issue or bug report. |
+| `create-pr` | Picks a conventional-commit title, writes a What/Why/Testing description, self-reviews the diff before pushing. |
+
+Add your own under `~/.poisson/skills/<name>/SKILL.md` — a user skill with the
+same name as a built-in one overrides it, so you can customize any of the
+eight without touching the binary. `/reload` rediscovers user skills without
+restarting.
 
 ---
 

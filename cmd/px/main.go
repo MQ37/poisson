@@ -696,7 +696,16 @@ func runChildMode() {
 	if e := os.Getenv("POISSON_SUBAGENT_EFFORT"); e != "" {
 		a.SetEffort(e)
 	}
-	a.SetSkills(false, nil)
+	// Subagents get the same skill set as the main session (builtin skills
+	// plus any user skills under ~/.poisson/skills/), so a child can e.g.
+	// invoke code-quality or code-review on its own. Skills that assume
+	// spawning further subagents (council, check-work) simply can't use the
+	// subagent tool here — recursion is still bounded to one level.
+	skillList, err := skills.Discover()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: skills discover: %v\n", err)
+	}
+	a.SetSkills(true, skillList)
 
 	// Forward the parent's Ctrl+G nudge to the agent, and start the stdin reader
 	// now so it listens for expedite even in runs that never hit a bash approval.
