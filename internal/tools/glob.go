@@ -69,7 +69,11 @@ func (t *GlobTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 
 	// Handle doublestar (**/) patterns via recursive walk.
 	if strings.Contains(in.Pattern, "**") {
-		matches, truncated = globDoublestar(ctx, base, in.Pattern)
+		var err error
+		matches, truncated, err = globDoublestar(ctx, base, in.Pattern)
+		if err != nil {
+			return ToolResult{Error: "invalid path: " + err.Error()}, nil
+		}
 	} else {
 		// Use filepath.Glob with the full pattern.
 		fullPattern := in.Pattern
@@ -112,7 +116,7 @@ func (t *GlobTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 
 // globDoublestar expands a pattern containing ** by walking the base directory.
 // It supports patterns like "**/*.go", "src/**/*.go", "**/foo".
-func globDoublestar(ctx context.Context, base, pattern string) (matches []string, truncated bool) {
+func globDoublestar(ctx context.Context, base, pattern string) (matches []string, truncated bool, retErr error) {
 	// Split the pattern on the first "**" to get a prefix and suffix.
 	parts := strings.SplitN(pattern, "**", 2)
 	prefix := strings.TrimPrefix(strings.TrimSuffix(strings.TrimSpace(parts[0]), "/"), "./")
@@ -125,6 +129,15 @@ func globDoublestar(ctx context.Context, base, pattern string) (matches []string
 	searchRoot := base
 	if prefix != "" {
 		searchRoot = filepath.Join(base, prefix)
+	}
+	// base itself was already checked by the caller, but a prefix before the
+	// "**" (e.g. "subdir/**/*.go") names its own, unchecked directory — walk
+	// would otherwise swallow a nonexistent searchRoot the same way it used
+	// to swallow a nonexistent base (see requireDir's doc comment).
+	if prefix != "" {
+		if err := requireDir(searchRoot); err != nil {
+			return nil, false, err
+		}
 	}
 
 	// Walk the search root, matching the suffix pattern against each path's
@@ -166,5 +179,5 @@ func globDoublestar(ctx context.Context, base, pattern string) (matches []string
 		// ctx cancellation or a walk error: return what we collected.
 		truncated = truncated || ctx.Err() != nil
 	}
-	return matches, truncated
+	return matches, truncated, nil
 }

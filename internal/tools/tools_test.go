@@ -958,6 +958,22 @@ func TestGlob_NonexistentBasePathErrors(t *testing.T) {
 	}
 }
 
+// TestGlob_NonexistentDoublestarPrefixErrors covers a narrower variant of the
+// same bug: a prefix before the "**" (e.g. "subdir/**/*.go") names its own
+// directory, distinct from the already-checked base. Walking straight into a
+// nonexistent searchRoot swallowed that missing directory too.
+func TestGlob_NonexistentDoublestarPrefixErrors(t *testing.T) {
+	dir := testutil.TempDir(t)
+	g := NewGlobTool(dir)
+
+	res, _ := g.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern": "does-not-exist/**/*.go",
+	}))
+	if res.Error == "" {
+		t.Fatalf("expected an error for a nonexistent doublestar prefix, got content: %q", res.Content)
+	}
+}
+
 func TestGlob_Doublestar(t *testing.T) {
 	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir, true, nil)
