@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
@@ -139,6 +140,76 @@ func TestForwardChildEvents_ToolResultWithAndWithoutError(t *testing.T) {
 // deliberately not forwarded (the child's internal steps besides
 // text/tool/retrying never reach the parent) — a stray write for one of
 // these would leak protocol noise into the parent's relay.
+// TestForwardChildEvents_ToolStartCarriesRealCumulativeUsage is the
+// integration test for the subagent-cost-rollup wire protocol: it runs a
+// REAL turn through a REAL Agent (PromptWithContext, backed by a
+// FakeProvider so no network call happens) so a.CumulativeUsage() reflects
+// actually-recorded api_calls rows, then verifies the "tool" event
+// forwardChildEvents emits afterward carries that exact usage on the wire —
+// not a hand-authored fixture, the genuine child-mode code path
+// (cmd/px/main.go) that SubagentTool.Execute's usageFn callback ultimately
+// depends on. The other subagent-cost tests either hand-write the "usage"
+// JSON in a fake shell script (internal/tools/subagent_e2e_test.go) or call
+// Agent.RecordSubagentUsage directly (internal/agent/subagent_usage_test.go)
+// — neither exercises whether THIS translation layer computes the number
+// correctly from real recorded usage.
+func TestForwardChildEvents_ToolStartCarriesRealCumulativeUsage(t *testing.T) {
+	// FakeProvider — no network, no real API call (see provider/fake.go's
+	// doc comment: "never makes real HTTP calls").
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "test-model", Name: "T", ContextWindow: 200000}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("answer", &provider.Usage{InputTokens: 123, OutputTokens: 45, CacheReadTokens: 6}),
+	})
+	outputChan := make(chan agent.OutputEvent, 8)
+	a := newChildTestAgent(t, fp, outputChan)
+
+	// Drain the real turn's own events concurrently — exactly as runChildMode
+	// does via its own forwardChildEvents goroutine — so PromptWithContext
+	// can never block on a full channel regardless of how many events one
+	// turn produces.
+	drained := make(chan struct{})
+	go func() {
+		for range outputChan {
+		}
+		close(drained)
+	}()
+
+	// Run a real turn so a.CumulativeUsage() reflects an actually-recorded
+	// api_calls row, exactly as it would inside runChildMode before the
+	// child's next tool call fires a "tool" progress event.
+	if err := a.PromptWithContext(context.Background(), "do something"); err != nil {
+		t.Fatalf("PromptWithContext: %v", err)
+	}
+	close(outputChan)
+	<-drained
+
+	wantUsage := a.CumulativeUsage()
+	if wantUsage.InputTokens != 123 || wantUsage.OutputTokens != 45 || wantUsage.CacheReadTokens != 6 {
+		t.Fatalf("CumulativeUsage() after the turn = %+v, want it to reflect the recorded usage", wantUsage)
+	}
+
+	// Isolated channel + write capture to inspect exactly what
+	// forwardChildEvents attaches to a fresh tool event now that the agent
+	// has real recorded usage.
+	toolChan := make(chan agent.OutputEvent, 1)
+	toolChan <- agent.OutputEvent{Type: agent.OutputToolStart, ToolName: "read"}
+	close(toolChan)
+	var got []map[string]interface{}
+	write := func(ev map[string]interface{}) { got = append(got, ev) }
+	forwardChildEvents(toolChan, a, write)
+
+	if len(got) != 1 || got[0]["type"] != "tool" {
+		t.Fatalf("events = %+v, want exactly one tool event", got)
+	}
+	usage, ok := got[0]["usage"].(provider.Usage)
+	if !ok {
+		t.Fatalf("tool event usage = %#v (%T), want a provider.Usage", got[0]["usage"], got[0]["usage"])
+	}
+	if usage != wantUsage {
+		t.Fatalf("tool event usage = %+v, want the agent's real CumulativeUsage() %+v", usage, wantUsage)
+	}
+}
+
 func TestForwardChildEvents_UnhandledEventTypeIsIgnored(t *testing.T) {
 	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "test-model", Name: "T", ContextWindow: 200000}})
 	outputChan := make(chan agent.OutputEvent, 8)
