@@ -30,6 +30,36 @@ func TestXAIModels(t *testing.T) {
 	}
 }
 
+// TestXAIBuildRequestToolResultFoldedIntoUserTurn covers /btw's shape (see
+// quickanswer.go's pendingToolResultBlocks): a placeholder tool_result for a
+// still-running tool call folded into the same Role:"user" message as the
+// question, rather than a separate Role:"tool" message. xAI's flat
+// role-tagged message list has no alternation constraint, so this must
+// still surface as its own role:"tool" message — not get silently dropped.
+func TestXAIBuildRequestToolResultFoldedIntoUserTurn(t *testing.T) {
+	p := NewXAIProvider(auth.AuthStore{}, config.DefaultConfig())
+	req := &Request{
+		Model: "grok-build",
+		Messages: []Message{
+			{Role: "user", Content: []ContentBlock{
+				{Type: "tool_result", ToolCallID: "call_1", ToolResult: "still running"},
+				{Type: "text", Text: "what's it doing?"},
+			}},
+		},
+	}
+	xaiReq := p.buildRequest(req)
+
+	if len(xaiReq.Messages) != 2 {
+		t.Fatalf("messages = %+v, want 2 (tool + user)", xaiReq.Messages)
+	}
+	if xaiReq.Messages[0].Role != "tool" || xaiReq.Messages[0].ToolCallID != "call_1" {
+		t.Errorf("message 0 = %+v, want tool result for call_1", xaiReq.Messages[0])
+	}
+	if xaiReq.Messages[1].Role != "user" {
+		t.Errorf("message 1 = %+v, want user", xaiReq.Messages[1])
+	}
+}
+
 func TestXAIBuildRequest(t *testing.T) {
 	p := NewXAIProvider(auth.AuthStore{}, config.DefaultConfig())
 	req := &Request{

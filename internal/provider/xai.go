@@ -215,6 +215,21 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 						Arguments: string(cb.ToolInput),
 					},
 				})
+			case "tool_result":
+				// A user turn is normally plain text/image, but /btw folds a
+				// placeholder tool_result for a still-running tool call (see
+				// quickanswer.go's pendingToolResultBlocks) into the same
+				// turn as its question, rather than a separate "tool"-role
+				// message — that's an Anthropic-specific constraint (it
+				// rejects two consecutive user-role messages). xAI's chat
+				// messages are a flat, role-tagged list with no such
+				// alternation rule, so this is emitted as its own ordinary
+				// role:"tool" message ahead of the user message below.
+				ar.Messages = append(ar.Messages, xaiMessage{
+					Role:       "tool",
+					Content:    cb.ToolResult,
+					ToolCallID: cb.ToolCallID,
+				})
 			}
 		}
 

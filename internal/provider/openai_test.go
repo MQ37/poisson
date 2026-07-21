@@ -65,6 +65,37 @@ func TestBuildRequestEmptyToolResultSendsOutputField(t *testing.T) {
 	}
 }
 
+// TestBuildRequestToolResultFoldedIntoUserTurn covers /btw's shape (see
+// quickanswer.go's pendingToolResultBlocks): a placeholder tool_result for a
+// still-running tool call folded into the same Role:"user" message as the
+// question, rather than a separate Role:"tool" message (Anthropic rejects
+// two consecutive user-role messages, so /btw never produces that shape).
+// The Responses API has no role-alternation constraint, so this must still
+// become a function_call_output item — not get silently dropped.
+func TestBuildRequestToolResultFoldedIntoUserTurn(t *testing.T) {
+	p := &OpenAIProvider{}
+	req := &Request{
+		Model: "gpt-5.5",
+		Messages: []Message{
+			{Role: "user", Content: []ContentBlock{
+				{Type: "tool_result", ToolCallID: "call_1", ToolResult: "still running"},
+				{Type: "text", Text: "what's it doing?"},
+			}},
+		},
+	}
+	body := p.buildRequest(req)
+
+	if len(body.Input) != 2 {
+		t.Fatalf("input = %+v, want 2 items (function_call_output + message)", body.Input)
+	}
+	if body.Input[0].Type != "function_call_output" || body.Input[0].CallID != "call_1" {
+		t.Errorf("item 0 = %+v, want function_call_output for call_1", body.Input[0])
+	}
+	if body.Input[1].Type != "message" || body.Input[1].Role != "user" {
+		t.Errorf("item 1 = %+v, want user message", body.Input[1])
+	}
+}
+
 func TestMapOpenAIEffort(t *testing.T) {
 	cases := map[string]string{"": "", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": "xhigh"}
 	for in, want := range cases {

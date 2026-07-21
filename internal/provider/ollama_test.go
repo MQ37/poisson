@@ -182,6 +182,37 @@ func TestOllamaBuildRequestUsesOpenAIEndpointFields(t *testing.T) {
 	}
 }
 
+// TestOllamaBuildRequestToolResultFoldedIntoUserTurn covers /btw's shape
+// (see quickanswer.go's pendingToolResultBlocks): a placeholder tool_result
+// for a still-running tool call folded into the same Role:"user" message as
+// the question, rather than a separate Role:"tool" message. This
+// OpenAI-compatible chat format has no role-alternation constraint, so it
+// must still surface as its own role:"tool" message — not get silently
+// dropped.
+func TestOllamaBuildRequestToolResultFoldedIntoUserTurn(t *testing.T) {
+	p := NewOllamaProvider("http://localhost:11434", "glm-5.2:cloud")
+	req := &Request{
+		Model: "glm-5.2:cloud",
+		Messages: []Message{
+			{Role: "user", Content: []ContentBlock{
+				{Type: "tool_result", ToolCallID: "call_1", ToolResult: "still running"},
+				{Type: "text", Text: "what's it doing?"},
+			}},
+		},
+	}
+	body := p.buildOllamaRequest(req)
+
+	if len(body.Messages) != 2 {
+		t.Fatalf("messages = %+v, want 2 (tool + user)", body.Messages)
+	}
+	if body.Messages[0].Role != "tool" || body.Messages[0].ToolCallID != "call_1" {
+		t.Errorf("message 0 = %+v, want tool result for call_1", body.Messages[0])
+	}
+	if body.Messages[1].Role != "user" {
+		t.Errorf("message 1 = %+v, want user", body.Messages[1])
+	}
+}
+
 func TestOllamaStreamUsesV1ChatCompletions(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any

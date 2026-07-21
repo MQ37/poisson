@@ -119,6 +119,80 @@ func TestStreamQuickAnswerUsesConversationContext(t *testing.T) {
 	}
 }
 
+// TestStreamQuickAnswerWithPendingToolUse covers /btw firing while the live
+// turn's own tool call (e.g. a still-running subagent) is mid-flight: its
+// assistant tool_use message is in the store, but the matching tool_result
+// hasn't landed yet (runTurn appends the assistant message, then waits on
+// the tool). Anthropic rejects a request whose history ends in an
+// unresolved tool_use followed directly by a new user turn — /btw must
+// synthesize a placeholder result and fold it into the same turn as the
+// question, never send that shape.
+func TestStreamQuickAnswerWithPendingToolUse(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{{
+		{Type: provider.EventTextDelta, Text: "still working, but here's what I know"},
+		{Type: provider.EventDone, Usage: &provider.Usage{OutputTokens: 2}},
+	}})
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+
+	uc, _ := contentBlocksToJSON([]provider.ContentBlock{{Type: "text", Text: "run the tests"}})
+	if err := s.AppendMessage(&store.Message{SessionID: sid, Role: "user", Content: uc}); err != nil {
+		t.Fatal(err)
+	}
+	// Pending tool_use: the assistant message runTurn writes before wg.Wait()
+	// on the tool call, with no resolving tool_result appended yet.
+	ac, _ := contentBlocksToJSON([]provider.ContentBlock{
+		{Type: "tool_use", ToolCallID: "call-1", ToolName: "subagent", ToolInput: []byte(`{}`)},
+	})
+	if err := s.AppendMessage(&store.Message{SessionID: sid, Role: "assistant", Content: ac}); err != nil {
+		t.Fatal(err)
+	}
+
+	ch := make(chan OutputEvent, 8)
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, ch, nil)
+	a.SetModel("m")
+
+	textCh, errCh, err := a.StreamQuickAnswer(context.Background(), "what's it doing?", nil)
+	if err != nil {
+		t.Fatalf("StreamQuickAnswer: %v", err)
+	}
+	for range textCh {
+	}
+	select {
+	case streamErr := <-errCh:
+		if streamErr != nil {
+			t.Fatalf("unexpected stream error: %v", streamErr)
+		}
+	default:
+	}
+
+	req := fp.LastRequest()
+	if req == nil {
+		t.Fatal("no request captured")
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if last.Role != "user" {
+		t.Fatalf("final turn role = %q, want user", last.Role)
+	}
+	if len(last.Content) != 2 {
+		t.Fatalf("final turn content = %d blocks, want 2 (tool_result + question), got %+v", len(last.Content), last.Content)
+	}
+	tr := last.Content[0]
+	if tr.Type != "tool_result" || tr.ToolCallID != "call-1" {
+		t.Errorf("expected placeholder tool_result for call-1 first, got %+v", tr)
+	}
+	q := last.Content[1]
+	if q.Type != "text" || !strings.Contains(q.Text, "what's it doing?") {
+		t.Errorf("expected question text block second, got %+v", q)
+	}
+	// No message in between the pending tool_use and its resolution: exactly
+	// the seeded user+assistant plus this one folded turn.
+	if len(req.Messages) != 3 {
+		t.Fatalf("messages = %d, want 3 (seeded user+assistant + folded tool_result/question turn)", len(req.Messages))
+	}
+}
+
 func TestStreamQuickAnswerCancel(t *testing.T) {
 	fp := provider.NewFakeProvider("fake", nil)
 	fp.SetResponses([][]provider.StreamEvent{{

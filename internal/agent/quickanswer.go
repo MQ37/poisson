@@ -82,13 +82,19 @@ func (a *Agent) StreamQuickAnswer(ctx context.Context, question string, onToolSt
 			Effort: "low",
 		}
 	}
-	req.Messages = append(req.Messages, provider.Message{
-		Role: "user",
-		Content: []provider.ContentBlock{{
-			Type: "text",
-			Text: btwQuestionPrefix + question,
-		}},
-	})
+	// The live turn may be mid-flight: its assistant message with tool_use
+	// blocks (e.g. a still-running subagent) is stored before the matching
+	// tool_result is (see agent.go's runTurn — append, then wg.Wait()). If a
+	// /btw fires in that window, the copy of history buildRequest just handed
+	// back ends in an unresolved tool_use, and the API rejects a request that
+	// doesn't immediately follow it with a tool_result. Always fork a safe
+	// copy here: synthesize placeholder results for any pending calls and
+	// fold them into the same user turn as the question itself, rather than
+	// a separate message — a bare extra user message right after would be
+	// two user turns in a row, which the API also rejects.
+	questionBlock := provider.ContentBlock{Type: "text", Text: btwQuestionPrefix + question}
+	blocks := append(pendingToolResultBlocks(req.Messages), questionBlock)
+	req.Messages = append(req.Messages, provider.Message{Role: "user", Content: blocks})
 
 	textCh := make(chan string, 32)
 	errCh := make(chan error, 1)
@@ -208,6 +214,32 @@ func btwToolStatusText(name string, input json.RawMessage) string {
 		}
 	}
 	return name
+}
+
+// pendingToolResultBlocks returns a placeholder tool_result block for every
+// tool_use in msgs' last message that isn't already resolved — i.e. the
+// live turn's still-running tool call(s). Returns nil once the last message
+// isn't an assistant tool_use turn, which is the normal case.
+func pendingToolResultBlocks(msgs []provider.Message) []provider.ContentBlock {
+	if len(msgs) == 0 {
+		return nil
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != "assistant" {
+		return nil
+	}
+	var blocks []provider.ContentBlock
+	for _, cb := range last.Content {
+		if cb.Type != "tool_use" {
+			continue
+		}
+		blocks = append(blocks, provider.ContentBlock{
+			Type:       "tool_result",
+			ToolCallID: cb.ToolCallID,
+			ToolResult: "[still running in the main conversation — not available yet for this side question]",
+		})
+	}
+	return blocks
 }
 
 func trimSpace(s string) string {

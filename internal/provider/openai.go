@@ -282,6 +282,26 @@ func (p *OpenAIProvider) buildRequest(req *Request) openaiRespRequest {
 			}
 			body.Input = append(body.Input, calls...)
 		default: // user
+			// A user turn is normally plain text/image, but /btw folds
+			// placeholder tool_result blocks for a still-running tool call
+			// (see quickanswer.go's pendingToolResultBlocks) into the same
+			// turn as its question, rather than a separate "tool"-role
+			// message — Anthropic rejects two consecutive user-role
+			// messages. The Responses API has no such alternation
+			// constraint (input is a flat, order-based item list), so
+			// those blocks are just emitted as their own
+			// function_call_output items ahead of the user message.
+			for _, cb := range msg.Content {
+				if cb.Type != "tool_result" {
+					continue
+				}
+				output := cb.ToolResult
+				body.Input = append(body.Input, openaiRespItem{
+					Type:   "function_call_output",
+					CallID: cb.ToolCallID,
+					Output: &output,
+				})
+			}
 			parts := openaiUserParts(msg.Content)
 			if len(parts) > 0 {
 				body.Input = append(body.Input, openaiRespItem{Type: "message", Role: "user", Content: parts})
