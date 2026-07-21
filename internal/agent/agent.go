@@ -154,6 +154,16 @@ type Agent struct {
 	// in this codebase queues image attachments for a message typed while a
 	// turn is already in flight.
 	pendingInputFn func() (segments []TextSegment, ok bool)
+
+	// cumUsageMu guards cumUsage.
+	cumUsageMu sync.Mutex
+	// cumUsage is the running total of every api_calls row this Agent has
+	// recorded for its session so far (main turns, compaction, and auxiliary
+	// calls like "btw"/"risk" alike — recordAPICallFor accumulates into it
+	// uniformly regardless of purpose). Read via CumulativeUsage(); used by
+	// subagent/child mode to report live spend back to the parent process on
+	// every progress tick without an extra SQL query per tick.
+	cumUsage provider.Usage
 }
 
 // SetPendingInputFn wires the callback runTurn polls at each iteration
@@ -1537,7 +1547,62 @@ func (a *Agent) recordAPICallFor(usage *provider.Usage, purpose, providerID, mod
 	if err := a.store.RecordAPICall(call); err != nil {
 		return "", err
 	}
+	a.addCumulativeUsage(usage)
 	return call.ID, nil
+}
+
+// addCumulativeUsage folds usage into the running total (see cumUsage).
+func (a *Agent) addCumulativeUsage(usage *provider.Usage) {
+	a.cumUsageMu.Lock()
+	defer a.cumUsageMu.Unlock()
+	a.cumUsage.InputTokens += usage.InputTokens
+	a.cumUsage.OutputTokens += usage.OutputTokens
+	a.cumUsage.CacheReadTokens += usage.CacheReadTokens
+	a.cumUsage.CacheWriteTokens += usage.CacheWriteTokens
+	a.cumUsage.InputTokensUnknown = a.cumUsage.InputTokensUnknown || usage.InputTokensUnknown
+}
+
+// CumulativeUsage returns the running total of every api_calls row recorded
+// for this Agent's session so far. Cheap (in-memory, mutex-guarded) — safe to
+// call on every turn-loop tick, unlike GetSessionTokenBreakdown which re-sums
+// via SQL. Used by subagent/child mode to relay live spend to the parent.
+func (a *Agent) CumulativeUsage() provider.Usage {
+	a.cumUsageMu.Lock()
+	defer a.cumUsageMu.Unlock()
+	return a.cumUsage
+}
+
+// RecordSubagentUsage records a finished (or partially finished — e.g. the
+// parent turn was cancelled mid-run) subagent invocation's accumulated token
+// usage as a "subagent"-purpose api_calls row on the PARENT session, so
+// subagent spend counts toward GetSessionCost/GetSessionTokenBreakdown
+// instead of vanishing with the child's ephemeral, throwaway DB. Deliberately
+// does not go through recordAuxiliaryAPICall: that helper prices against
+// a.providerID()/a.currentModel() — this Agent's *current* provider/model —
+// which could have moved on (via /model, /provider) by the time a
+// long-running subagent finishes. providerID/model here must be whatever the
+// subagent was actually spawned against (SubagentTool captures them once, at
+// spawn time). Returns the computed cost.
+func (a *Agent) RecordSubagentUsage(providerID, model string, usage *provider.Usage) (float64, error) {
+	cost := a.computeCost(providerID, model,
+		usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
+	call := &store.APICall{
+		SessionID:          a.sessionID,
+		Seq:                a.nextAPICallSeq(),
+		Provider:           providerID,
+		Model:              model,
+		InputTokens:        usage.InputTokens,
+		InputTokensUnknown: usage.InputTokensUnknown,
+		OutputTokens:       usage.OutputTokens,
+		CacheReadTokens:    usage.CacheReadTokens,
+		CacheWriteTokens:   usage.CacheWriteTokens,
+		Cost:               cost,
+		Purpose:            "subagent",
+	}
+	if err := a.store.RecordAPICall(call); err != nil {
+		return 0, err
+	}
+	return cost, nil
 }
 
 // nextAPICallSeq returns the next sequence number for api_calls in this

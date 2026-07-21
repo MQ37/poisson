@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/store"
 	"github.com/mq37/poisson/internal/subagent"
 )
@@ -51,6 +53,14 @@ type SubagentTool struct {
 	// lost: ... — reconnecting…" / "reconnected — resuming") for the widget
 	// to show in place of the turn/context line.
 	progressFn func(toolCallID string, turns, contextTokens, contextWindow int, status string)
+
+	// usageFn records a finished (or partially finished) subagent's
+	// accumulated token usage as a "subagent" api_calls row on the parent
+	// session, so the spend counts toward the parent's /cost and status-bar
+	// total instead of vanishing with the child's ephemeral, throwaway DB.
+	// Returns the computed cost. nil means no recorder wired (e.g. tests
+	// that don't care) — Execute treats that as "nothing to record".
+	usageFn func(providerID, model string, usage *provider.Usage) (float64, error)
 }
 
 // NewSubagentTool creates a subagent tool.
@@ -106,6 +116,12 @@ func (t *SubagentTool) SetSkillsEnabledFn(fn func() bool) {
 // callback (called from Execute's goroutine as the child reports each new turn).
 func (t *SubagentTool) SetProgressFn(fn func(toolCallID string, turns, contextTokens, contextWindow int, status string)) {
 	t.progressFn = fn
+}
+
+// SetUsageFn supplies the callback that rolls a finished subagent's token
+// usage into the parent session's cost (see usageFn's doc comment).
+func (t *SubagentTool) SetUsageFn(fn func(providerID, model string, usage *provider.Usage) (float64, error)) {
+	t.usageFn = fn
 }
 
 func (t *SubagentTool) Name() string { return "subagent" }
@@ -200,6 +216,37 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		}
 	}
 
+	// lastUsage holds the child's most recently reported cumulative token
+	// usage (relayed on every "tool" tick and on "done", see ChildEvent.Usage)
+	// and recordedCost/recorded track whether it's already been rolled into
+	// the parent session. Recording explicitly happens at the "done" event so
+	// the cost can be folded into the returned summary text; the deferred
+	// call below is a guarded fallback that fires the same recording exactly
+	// once for every OTHER return path in this function (ctx cancelled,
+	// approval-send failure, etc.) — a subagent killed mid-run by a cancelled
+	// parent turn still gets partial credit for whatever it had already
+	// spent as of its last progress tick.
+	var lastUsage provider.Usage
+	var usageSeen, recorded bool
+	var recordedCost float64
+	recordUsage := func() {
+		if recorded || !usageSeen || t.usageFn == nil {
+			return
+		}
+		if lastUsage.InputTokens == 0 && lastUsage.OutputTokens == 0 &&
+			lastUsage.CacheReadTokens == 0 && lastUsage.CacheWriteTokens == 0 {
+			return // nothing billed yet (e.g. cancelled before the child's first turn completed)
+		}
+		recorded = true
+		cost, err := t.usageFn(prov, model, &lastUsage)
+		if err != nil {
+			log.Printf("warning: record subagent usage: %v", err)
+			return
+		}
+		recordedCost = cost
+	}
+	defer recordUsage()
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return ToolResult{Content: output.String(), Error: "subagent cancelled"}, nil
@@ -251,6 +298,9 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 					// widget was showing.
 					reportProgress("")
 				}
+				if ev.Usage != nil {
+					lastUsage, usageSeen = *ev.Usage, true
+				}
 
 			case "retrying":
 				// Relayed from the child's own network-retry notice (see
@@ -281,6 +331,9 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 					contextTokens, contextWindow = ev.ContextTokens, ev.ContextWindow
 					reportProgress("") // final count, before the card flips to done
 				}
+				if ev.Usage != nil {
+					lastUsage, usageSeen = *ev.Usage, true
+				}
 				if ev.Error != "" {
 					childErr = ev.Error
 				}
@@ -294,8 +347,17 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	}
 
 done:
+	// Record now (rather than leaving it entirely to the deferred fallback)
+	// so the cost, once known, can be folded into the summary text below.
+	// recordUsage() is idempotent (guarded by `recorded`), so the deferred
+	// call is then a no-op here and only does real work on the return paths
+	// above that jump straight past this label.
+	recordUsage()
 	result := output.String()
 	result += fmt.Sprintf("\n\n---\nSubagent finished. %d tool calls, %d turns.", toolCount, turns)
+	if recorded {
+		result += fmt.Sprintf(" Cost: $%.4f.", recordedCost)
+	}
 	if childErr != "" {
 		result += "\nError: " + childErr
 		return ToolResult{Content: result, Error: childErr}, nil

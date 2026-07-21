@@ -350,6 +350,7 @@ func runREPL(noSkills bool) {
 	tools.BindSubagentRuntime(reg, func() string { return a.Provider().ID() }, func() string { return a.Model() }, func() string { return a.Effort() })
 	tools.BindSubagentProgress(reg, a.SendSubagentProgress)
 	tools.BindSubagentSkills(reg, a.SkillsEnabled)
+	tools.BindSubagentUsage(reg, a.RecordSubagentUsage)
 
 	var skillList []skills.Skill
 	if !noSkills {
@@ -755,6 +756,7 @@ func runChildMode() {
 	wg.Wait()
 
 	ctxUsed, ctxWindow := a.ContextTokens()
+	usage := a.CumulativeUsage()
 	writeChildEvent(map[string]interface{}{
 		"type":          "done",
 		"success":       success,
@@ -762,6 +764,7 @@ func runChildMode() {
 		"turns":         a.RunTurns(),
 		"contextTokens": ctxUsed,
 		"contextWindow": ctxWindow,
+		"usage":         usage,
 	})
 }
 
@@ -782,9 +785,11 @@ func forwardChildEvents(outputChan <-chan agent.OutputEvent, a *agent.Agent, wri
 		case agent.OutputToolStart:
 			toolCount++
 			ctxUsed, ctxWindow := a.ContextTokens()
+			usage := a.CumulativeUsage()
 			write(map[string]interface{}{
 				"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput,
 				"turns": a.RunTurns(), "contextTokens": ctxUsed, "contextWindow": ctxWindow,
+				"usage": usage,
 			})
 		case agent.OutputRetrying:
 			// Relayed so the parent's subagent widget can show "reconnecting"

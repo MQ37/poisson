@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/store"
 )
 
@@ -74,27 +75,27 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	return reg
 }
 
+// withSubagentTool looks up the registry's subagent tool and applies fn to
+// it, a no-op if the tool isn't registered (e.g. a child registry, which
+// never gets one — see BuildRegistry). Shared by every BindSubagent* below
+// so adding a new one doesn't mean copy-pasting the lookup again.
+func withSubagentTool(reg *Registry, fn func(*SubagentTool)) {
+	if t, ok := reg.Get("subagent"); ok {
+		if st, ok := t.(*SubagentTool); ok {
+			fn(st)
+		}
+	}
+}
+
 // BindSubagentRuntime wires live provider/model/effort resolvers on the subagent tool.
 func BindSubagentRuntime(reg *Registry, providerFn, modelFn, effortFn func() string) {
-	t, ok := reg.Get("subagent")
-	if !ok {
-		return
-	}
-	if st, ok := t.(*SubagentTool); ok {
-		st.SetRuntime(providerFn, modelFn, effortFn)
-	}
+	withSubagentTool(reg, func(st *SubagentTool) { st.SetRuntime(providerFn, modelFn, effortFn) })
 }
 
 // BindSubagentProgress wires a live turn-count + context-usage progress
 // callback (for the running subagent card) onto the subagent tool.
 func BindSubagentProgress(reg *Registry, fn func(toolCallID string, turns, contextTokens, contextWindow int, status string)) {
-	t, ok := reg.Get("subagent")
-	if !ok {
-		return
-	}
-	if st, ok := t.(*SubagentTool); ok {
-		st.SetProgressFn(fn)
-	}
+	withSubagentTool(reg, func(st *SubagentTool) { st.SetProgressFn(fn) })
 }
 
 // BindSubagentSkills wires a live "are skills enabled" resolver onto the
@@ -102,11 +103,11 @@ func BindSubagentProgress(reg *Registry, fn func(toolCallID string, turns, conte
 // to every spawned subagent instead of children always getting skills
 // regardless of the parent's setting.
 func BindSubagentSkills(reg *Registry, fn func() bool) {
-	t, ok := reg.Get("subagent")
-	if !ok {
-		return
-	}
-	if st, ok := t.(*SubagentTool); ok {
-		st.SetSkillsEnabledFn(fn)
-	}
+	withSubagentTool(reg, func(st *SubagentTool) { st.SetSkillsEnabledFn(fn) })
+}
+
+// BindSubagentUsage wires the callback that rolls a finished subagent's token
+// usage into the parent session's cost (see SubagentTool.usageFn).
+func BindSubagentUsage(reg *Registry, fn func(providerID, model string, usage *provider.Usage) (float64, error)) {
+	withSubagentTool(reg, func(st *SubagentTool) { st.SetUsageFn(fn) })
 }

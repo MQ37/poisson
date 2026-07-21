@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/mq37/poisson/internal/provider"
 )
 
 // SpawnInput holds the parameters for spawning a child Poisson process.
@@ -54,6 +56,12 @@ type ChildEvent struct {
 	ContextTokens int             `json:"contextTokens,omitempty"`
 	ContextWindow int             `json:"contextWindow,omitempty"`
 	Error         string          `json:"error,omitempty"`
+	// Usage is the child's cumulative token usage across its whole run so
+	// far (see Agent.CumulativeUsage) — sent on "tool" and "done" events so
+	// the parent can roll subagent spend into its own session cost even if
+	// the parent's turn is cancelled before the child sends "done" (see
+	// SubagentTool.Execute). nil means no usage to report yet.
+	Usage *provider.Usage `json:"usage,omitempty"`
 }
 
 // lookupExecutable resolves the binary Spawn execs as the child. A package

@@ -3,11 +3,14 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/subagent"
 )
 
@@ -188,5 +191,163 @@ exit 1
 	}
 	if lastStatus != "connection lost - giving up soon" {
 		t.Errorf("last non-empty progress status = %q, want the retrying text to have been relayed before the child died", lastStatus)
+	}
+}
+
+// TestSubagentToolRecordsUsageOnDone is the regression test for the bug this
+// feature fixes: a subagent's spend used to be computed once inside its own
+// ephemeral, throwaway DB and never reach the parent. Verify the usageFn
+// callback fires exactly once, with the provider/model the subagent was
+// spawned against and the child's final reported usage, and that the
+// returned cost is folded into the result text.
+func TestSubagentToolRecordsUsageOnDone(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-usage.sh"
+	script := `#!/bin/sh
+printf '{"type":"tool","tool":"read","turns":1,"usage":{"InputTokens":100,"OutputTokens":50}}\n'
+printf '{"type":"done","success":true,"turns":2,"usage":{"InputTokens":300,"OutputTokens":120,"CacheReadTokens":10,"CacheWriteTokens":5}}\n'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := NewSubagentTool(".", alwaysApproveSubagent)
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-opus-4-8" },
+		func() string { return "" },
+	)
+
+	type call struct {
+		providerID, model string
+		usage             provider.Usage
+	}
+	var calls []call
+	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage) (float64, error) {
+		calls = append(calls, call{providerID, model, *usage})
+		return 0.0042, nil
+	})
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error: %q", res.Error)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("usageFn called %d times, want exactly 1: %+v", len(calls), calls)
+	}
+	got := calls[0]
+	if got.providerID != "anthropic" || got.model != "claude-opus-4-8" {
+		t.Fatalf("usageFn provider/model = %s/%s, want anthropic/claude-opus-4-8", got.providerID, got.model)
+	}
+	want := provider.Usage{InputTokens: 300, OutputTokens: 120, CacheReadTokens: 10, CacheWriteTokens: 5}
+	if got.usage != want {
+		t.Fatalf("usageFn usage = %+v, want the final done event's totals %+v (not the earlier tool tick)", got.usage, want)
+	}
+	if !strings.Contains(res.Content, fmt.Sprintf("$%.4f", 0.0042)) {
+		t.Fatalf("result text = %q, want it to contain the recorded cost", res.Content)
+	}
+}
+
+// TestSubagentToolRecordsUsageFromLastTickWhenCancelled verifies the
+// council-flagged gap: a subagent killed by a cancelled parent turn (e.g.
+// user hits Esc) skips the "done" event and the normal `done:` label
+// entirely (subagent.go's ctx.Done()/ctx.Err() early returns) — but it must
+// still get credit for whatever the child had already reported spending as
+// of its last progress tick, via the deferred usageFn fallback.
+func TestSubagentToolRecordsUsageFromLastTickWhenCancelled(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-hangs.sh"
+	// One usage-bearing tick, then hang well past the test's context timeout
+	// (simulating a child mid-flight when the parent's turn is cancelled).
+	script := `#!/bin/sh
+printf '{"type":"tool","tool":"bash","turns":1,"usage":{"InputTokens":1000,"OutputTokens":200}}\n'
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := NewSubagentTool(".", alwaysApproveSubagent)
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-opus-4-8" },
+		func() string { return "" },
+	)
+
+	var calls int
+	var gotUsage provider.Usage
+	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage) (float64, error) {
+		calls++
+		gotUsage = *usage
+		return 0.01, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	res, err := tool.Execute(ctx, json.RawMessage(`{"task":"do something"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if res.Error == "" {
+		t.Fatal("expected a ToolResult.Error when the parent turn was cancelled")
+	}
+	if calls != 1 {
+		t.Fatalf("usageFn called %d times, want exactly 1 (via the deferred fallback)", calls)
+	}
+	want := provider.Usage{InputTokens: 1000, OutputTokens: 200}
+	if gotUsage != want {
+		t.Fatalf("usageFn usage = %+v, want the last reported tick's totals %+v", gotUsage, want)
+	}
+}
+
+// TestSubagentToolNoUsageFnIsSafe verifies a tool with no usageFn wired
+// (tests that don't care, or any future caller that never binds one) neither
+// panics nor appends a bogus cost to the result text.
+func TestSubagentToolNoUsageFnIsSafe(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-nousagefn.sh"
+	script := `#!/bin/sh
+printf '{"type":"done","success":true,"usage":{"InputTokens":100,"OutputTokens":50}}\n'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := NewSubagentTool(".", alwaysApproveSubagent)
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-opus-4-8" },
+		func() string { return "" },
+	)
+	// No SetUsageFn call.
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error: %q", res.Error)
+	}
+	if strings.Contains(res.Content, "Cost:") {
+		t.Fatalf("result text = %q, should not mention a cost with no usageFn wired", res.Content)
 	}
 }
