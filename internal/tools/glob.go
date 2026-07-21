@@ -60,6 +60,9 @@ func (t *GlobTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		base = t.cwd
 	}
 	base = resolvePath(t.cwd, base)
+	if err := requireDir(base); err != nil {
+		return ToolResult{Error: "invalid path: " + err.Error()}, nil
+	}
 
 	var matches []string
 	truncated := false

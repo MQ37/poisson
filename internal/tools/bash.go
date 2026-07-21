@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -266,6 +267,24 @@ func resolvePath(cwd, p string) string {
 		return p
 	}
 	return filepath.Join(cwd, p)
+}
+
+// requireDir errors out if p doesn't exist or isn't a directory. Callers that
+// walk p (filepath.Walk) must check this themselves first: Walk invokes its
+// callback once with the root's own stat error, and a callback that returns
+// nil for it (to keep walking past unrelated errors deeper in the tree, e.g.
+// a permission-denied subdir) makes Walk swallow that root error entirely —
+// a nonexistent base directory then silently looks identical to a real
+// directory with zero matching entries, instead of surfacing as an error.
+func requireDir(p string) error {
+	info, err := os.Stat(p)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", p)
+	}
+	return nil
 }
 
 // sensitivePathDenyMsg builds the error a file tool returns when access to a

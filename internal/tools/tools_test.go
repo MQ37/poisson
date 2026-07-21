@@ -856,6 +856,24 @@ func TestLs(t *testing.T) {
 	}
 }
 
+// TestLsRecursive_NonexistentPathErrors is ls's side of the same bug fixed in
+// TestGlob_NonexistentBasePathErrors: filepath.Walk's callback returning nil
+// for every walkErr (needed to skip past unrelated errors deeper in the
+// tree) also swallowed the walk root's own stat error, silently reporting
+// zero entries for a nonexistent directory instead of an error.
+func TestLsRecursive_NonexistentPathErrors(t *testing.T) {
+	dir := testutil.TempDir(t)
+	ls := NewLsTool(dir)
+
+	res, _ := ls.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"path":      "does/not/exist",
+		"recursive": true,
+	}))
+	if res.Error == "" {
+		t.Fatalf("expected an error for a nonexistent path, got content: %q", res.Content)
+	}
+}
+
 // Recursive ls must not leak dotfiles nested in subdirectories, nor descend
 // into hidden subdirectories, when all=false.
 func TestLsRecursiveSkipsNestedHidden(t *testing.T) {
@@ -909,6 +927,34 @@ func TestGlob(t *testing.T) {
 	}
 	if strings.Contains(res.Content, "c.txt") {
 		t.Errorf("c.txt should not match *.go: %q", res.Content)
+	}
+}
+
+// TestGlob_NonexistentBasePathErrors is a regression test: filepath.Walk
+// invokes its callback once with the walk root's own stat error, and the
+// doublestar walker's callback returned nil for every walkErr (so a deeper,
+// unrelated permission error wouldn't abort the whole walk) — which also
+// swallowed a nonexistent *base* directory, silently reporting "no files
+// matched" identical to a real, empty directory. A typo'd or wrong-cwd path
+// must be reported as an error instead.
+func TestGlob_NonexistentBasePathErrors(t *testing.T) {
+	dir := testutil.TempDir(t)
+	g := NewGlobTool(dir)
+
+	res, _ := g.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern": "**/*.go",
+		"path":    "does/not/exist",
+	}))
+	if res.Error == "" {
+		t.Fatalf("expected an error for a nonexistent base path, got content: %q", res.Content)
+	}
+
+	res, _ = g.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern": "*.go",
+		"path":    "does/not/exist",
+	}))
+	if res.Error == "" {
+		t.Fatalf("expected an error for a nonexistent base path (non-doublestar), got content: %q", res.Content)
 	}
 }
 

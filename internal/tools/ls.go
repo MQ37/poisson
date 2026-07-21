@@ -52,6 +52,9 @@ func (t *LsTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult
 		dir = t.cwd
 	}
 	dir = resolvePath(t.cwd, dir)
+	if err := requireDir(dir); err != nil {
+		return ToolResult{Error: "invalid path: " + err.Error()}, nil
+	}
 
 	var entries []string
 	truncated := false
