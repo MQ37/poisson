@@ -89,6 +89,32 @@ func AnthropicRetryableStatus(code int) bool {
 	return code == 529 || DefaultRetryableStatus(code)
 }
 
+// retryableStreamErrorTypes are the provider-reported error "type"/"code"
+// strings that mean "temporary capacity/load problem, try again" rather than
+// "this request is wrong" — used to classify an EventError that arrives
+// mid-stream (after HTTP 200), which DoWithRetry's pre-stream retry never
+// sees. Deliberately excludes client-error types (invalid_request_error,
+// authentication_error, permission_error, not_found_error, request_too_large,
+// context_length_exceeded, ...): retrying those wastes an attempt and, for a
+// subagent with a bounded budget, could burn through it on an error retrying
+// can never fix.
+var retryableStreamErrorTypes = map[string]bool{
+	"overloaded_error":    true, // Anthropic 529 equivalent, arriving mid-stream
+	"api_error":           true, // Anthropic: generic transient server fault
+	"rate_limit_error":    true, // Anthropic: momentary throttling
+	"timeout_error":       true, // Anthropic: upstream timeout
+	"server_error":        true, // OpenAI: generic transient server fault
+	"rate_limit_exceeded": true, // OpenAI: momentary throttling
+	"timeout":             true, // OpenAI: upstream timeout
+}
+
+// IsRetryableStreamErrorType reports whether a mid-stream provider error
+// "type" or "code" string names a transient condition worth retrying. Empty
+// or unrecognized strings are treated as non-retryable (the safe default).
+func IsRetryableStreamErrorType(typ string) bool {
+	return retryableStreamErrorTypes[typ]
+}
+
 // RetryTrace lets a caller observe backoff retries happening inside
 // DoWithRetry without putting transport state on the StreamEvent channel
 // (which carries model output, not transport plumbing) or on Request

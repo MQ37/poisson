@@ -143,13 +143,22 @@ const (
 //   - EventToolUseDelta:    ToolCall (Input carries the incremental args)
 //   - EventToolUseStop:     ToolCall (final Input)
 //   - EventDone:            Usage (exact token counts from the provider)
-//   - EventError:           Error
+//   - EventError:           Error, Retryable
 type StreamEvent struct {
 	Type     StreamEventType
 	Text     string
 	ToolCall *ToolCall
 	Error    error
-	Usage    *Usage // exact token counts from the provider (on EventDone)
+	// Retryable marks an EventError arriving mid-stream (after the response
+	// already started with HTTP 200, so DoWithRetry's pre-stream retry never
+	// sees it) as a transient, provider-side condition — e.g. Anthropic's
+	// "overloaded_error" or OpenAI's "server_error"/"rate_limit_exceeded" —
+	// rather than a client-side mistake like a bad request or an expired
+	// context window. The agent retries the whole round on a Retryable error
+	// (if nothing was streamed to the user yet this round); everything else
+	// still fails the turn immediately.
+	Retryable bool
+	Usage     *Usage // exact token counts from the provider (on EventDone)
 	// StopReason is the provider's finish reason on EventDone (e.g. Anthropic
 	// "max_tokens", "end_turn"). Empty when unknown. Used to continue a turn
 	// that was cut off by the output-token cap.

@@ -136,14 +136,22 @@ func pumpOpenAIResponsesSSE(ctx context.Context, body io.ReadCloser, ch chan<- S
 			send(StreamEvent{Type: EventDone, Usage: convertOpenAIRespUsage(ev.Response.Usage)})
 			return
 		case "response.failed":
-			send(StreamEvent{Type: EventError, Error: formatOpenAIStreamError(ev.Response.Error, "OpenAI response failed")})
+			send(StreamEvent{
+				Type:      EventError,
+				Error:     formatOpenAIStreamError(ev.Response.Error, "OpenAI response failed"),
+				Retryable: isRetryableOpenAIStreamError(ev.Response.Error),
+			})
 			return
 		case "error":
 			detail := ev.Error
 			if detail == nil {
 				detail = &openaiRespError{Code: ev.Code, Message: ev.Message}
 			}
-			send(StreamEvent{Type: EventError, Error: formatOpenAIStreamError(detail, "OpenAI request failed")})
+			send(StreamEvent{
+				Type:      EventError,
+				Error:     formatOpenAIStreamError(detail, "OpenAI request failed"),
+				Retryable: isRetryableOpenAIStreamError(detail),
+			})
 			return
 		}
 	}
@@ -161,6 +169,20 @@ type openaiRespError struct {
 	Type    string `json:"type"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// isRetryableOpenAIStreamError classifies a mid-stream OpenAI error by its
+// code (falling back to type) using the shared retryable-type set — see
+// IsRetryableStreamErrorType.
+func isRetryableOpenAIStreamError(detail *openaiRespError) bool {
+	if detail == nil {
+		return false
+	}
+	code := strings.TrimSpace(detail.Code)
+	if code == "" {
+		code = strings.TrimSpace(detail.Type)
+	}
+	return IsRetryableStreamErrorType(code)
 }
 
 func formatOpenAIStreamError(detail *openaiRespError, fallback string) error {

@@ -174,10 +174,22 @@ func FakeMultiToolCallResponse(toolName1 string, toolInput1 interface{}, toolNam
 	return first, second
 }
 
-// FakeErrorResponse builds an event sequence that emits an error.
+// FakeErrorResponse builds an event sequence that emits a non-retryable
+// error (e.g. a bad request) — the same shape a real provider sends for a
+// client-side mistake.
 func FakeErrorResponse(err error) []StreamEvent {
 	return []StreamEvent{
 		{Type: EventError, Error: err},
+	}
+}
+
+// FakeRetryableErrorResponse builds an event sequence that emits a Retryable
+// mid-stream error (e.g. Anthropic's overloaded_error), simulating a
+// transient provider-side failure that arrives after the response already
+// started with HTTP 200.
+func FakeRetryableErrorResponse(err error) []StreamEvent {
+	return []StreamEvent{
+		{Type: EventError, Error: err, Retryable: true},
 	}
 }
 

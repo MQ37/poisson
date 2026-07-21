@@ -727,6 +727,17 @@ const maxTurnContinuations = 8
 // emptyResponseBackoff is a var so tests can shorten it.
 var emptyResponseBackoff = 500 * time.Millisecond
 
+// maxMidStreamErrorRetries bounds how many times runTurn retries a round
+// that failed with a Retryable mid-stream provider error (e.g. Anthropic's
+// overloaded_error arriving as an SSE event after the response already
+// started with HTTP 200 — DoWithRetry's pre-stream retry never sees these).
+// Only retried when nothing has been streamed to the user yet this round;
+// see the EventError case in runTurn.
+const maxMidStreamErrorRetries = 3
+
+// midStreamErrorBackoff is a var so tests can shorten it.
+var midStreamErrorBackoff = 1 * time.Second
+
 const expediteNudge = "\n\n[User interjection] The user needs results now and has asked you to wrap up immediately. Stop starting new work: summarize what you have accomplished so far — partial results are fine — and finish this turn without any further tool calls."
 
 // appendUserMessage builds the content blocks for a user turn (images first,
@@ -855,6 +866,8 @@ func (a *Agent) streamWithRetryNotice(ctx context.Context, req *provider.Request
 func (a *Agent) runTurn(ctx context.Context) error {
 	emptyAttempts := 0
 	continuations := 0
+	midStreamRetries := 0
+roundLoop:
 	for {
 		if err := ctx.Err(); err != nil {
 			a.sendEvent(OutputEvent{Type: OutputDone})
@@ -959,6 +972,26 @@ func (a *Agent) runTurn(ctx context.Context) error {
 				// send on ch must see streamCtx cancelled to take its ctx.Done()
 				// escape instead of blocking forever with no reader left.
 				cancel()
+				// A Retryable error (provider-side capacity/load problem, not a
+				// bad request) is worth retrying the whole round for — but only
+				// if nothing has reached the user yet this round. Once any text,
+				// thinking, or tool-call content has streamed out, retrying would
+				// re-send it from scratch and duplicate what's already visible;
+				// safer to fail like any other mid-stream error at that point.
+				noContentYet := textBuilder.Len() == 0 && thinkingBuilder.Len() == 0 &&
+					len(toolCalls) == 0 && len(redactedThinking) == 0
+				if ev.Retryable && noContentYet && midStreamRetries < maxMidStreamErrorRetries {
+					midStreamRetries++
+					a.sendEvent(OutputEvent{Type: OutputRetrying, Text: fmt.Sprintf(
+						"provider overloaded: %s — retrying (%d/%d)…", ev.Error, midStreamRetries, maxMidStreamErrorRetries)})
+					select {
+					case <-ctx.Done():
+						a.sendEvent(OutputEvent{Type: OutputDone})
+						return ctx.Err()
+					case <-time.After(time.Duration(midStreamRetries) * midStreamErrorBackoff):
+					}
+					continue roundLoop
+				}
 				a.sendEvent(OutputEvent{Type: OutputError, Text: ev.Error.Error()})
 				a.sendEvent(OutputEvent{Type: OutputDone})
 				return fmt.Errorf("stream error: %w", ev.Error)
@@ -1014,6 +1047,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 			return fmt.Errorf("model returned empty response")
 		}
 		emptyAttempts = 0
+		midStreamRetries = 0
 		assistantContent, err := contentBlocksToJSON(assistantBlocks)
 		if err != nil {
 			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})
