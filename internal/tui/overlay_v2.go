@@ -17,6 +17,16 @@ func (t *TUI) openBTW(question string) {
 	go t.runBTW(ctx, o, question)
 }
 
+// openBTWPrompt opens the Ctrl+B floating input for a /btw side question —
+// same flow as typing "/btw <question>" in the main input, but usable
+// without clearing whatever the user already has drafted there (including
+// while a turn is running, same as /btw itself).
+func (t *TUI) openBTWPrompt() {
+	t.setActiveOverlay(newBTWPromptOverlay(func(question string) {
+		t.openBTW(question)
+	}))
+}
+
 func (t *TUI) runBTW(ctx context.Context, o *btwOverlay, question string) {
 	onStatus := func(text string) {
 		o.setStatus(text)
@@ -264,6 +274,8 @@ func (t *TUI) handleOverlayPaste(k Key) bool {
 		return o.appendPaste(k.Text)
 	case *filterableListOverlay:
 		return appendOverlayFilterText(&o.filter, k.Text, &o.idx)
+	case *btwPromptOverlay:
+		return appendOverlayFilterText(&o.query, k.Text, nil)
 	}
 	return false
 }

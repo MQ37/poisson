@@ -273,6 +273,9 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 
 	if t.completion.empty() && t.activeOverlay == nil && k.Kind == KeyCtrl {
 		switch k.Byte {
+		case 2:
+			t.openBTWPrompt()
+			return false, nil
 		case 12:
 			t.openEffortPicker()
 			return false, nil

@@ -11,6 +11,7 @@ func keybindingLines() []string {
 		"  PgUp/Dn      Scroll conversation",
 		"  Shift+←/→    Previous/next prompt (conv focus)",
 		"  Ctrl+F       Find in scrollback",
+		"  Ctrl+B       Side question popup (keeps your draft)",
 		"  Ctrl+P / .   Command palette",
 		"  Ctrl+S       Session picker (Ctrl+D deletes, Ctrl+N named-only filter)",
 		"  Ctrl+M       Model picker",
@@ -46,7 +47,7 @@ func renderHelp() string {
   /cost        Show session cost
   /openai-reset-usage  Spend a free Codex reset credit to reset usage now
   /status      Session info + loaded context files & skills
-  /btw <q>     Side question in floating box`, "\n"))
+  /btw <q>     Side question in floating box (or Ctrl+B popup)`, "\n"))
 	b.WriteString("\n\n")
 	for _, ln := range keybindingLines() {
 		b.WriteString(ln)
