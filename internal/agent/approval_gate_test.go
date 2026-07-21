@@ -88,6 +88,45 @@ func TestWrapRiskGatedApprovalRequiresHumanWhenLLMFails(t *testing.T) {
 	}
 }
 
+// TestWrapRiskGatedApprovalRequiresHumanForGitCommit verifies `git commit`
+// always reaches the human, even with a FakeProvider that would say "low" if
+// consulted — proving the gate never gives the LLM a chance to auto-approve
+// a commit at all.
+func TestWrapRiskGatedApprovalRequiresHumanForGitCommit(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("low", nil),
+		provider.FakeTextResponse("low", nil),
+	})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	var gotRisk BashRisk
+	asked := false
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) (bool, string) {
+		asked = true
+		gotRisk = risk
+		return true, ""
+	})
+
+	allowed, _ := approve(context.Background(), "git commit -m 'wip'", "commit changes", "/tmp")
+	if !allowed {
+		t.Fatal("expected human allow")
+	}
+	if !asked {
+		t.Fatal("git commit must always reach the human, never auto-approve")
+	}
+	if gotRisk != BashRiskHigh {
+		t.Fatalf("risk = %q, want high", gotRisk)
+	}
+	if fp.CallCount() != 0 {
+		t.Fatalf("LLM was called %d times for git commit (should be 0)", fp.CallCount())
+	}
+}
+
 func TestWrapRiskGatedApprovalNilAgent(t *testing.T) {
 	asked := false
 	approve := WrapRiskGatedApproval(nil, func(_, _, _ string, risk BashRisk) (bool, string) {

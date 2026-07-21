@@ -16,6 +16,48 @@ func TestClassify_Reason(t *testing.T) {
 	}
 }
 
+func TestIsGitCommit(t *testing.T) {
+	yes := []string{
+		"git commit -m 'fix bug'",
+		"git commit --amend",
+		"cd /repo && git add -A && git commit -m wip",
+		"GIT COMMIT -M X", // tokenize lowercases via normalizeToken
+		"/usr/bin/git commit",
+		// Global options before the subcommand.
+		"git -C /repo commit -m done",
+		"git --no-pager commit -m done",
+		"git -c user.name=x commit -m done",
+		"git -C /repo --no-pager commit",
+		// Leading env-assignment prefix.
+		"GIT_AUTHOR_NAME=x git commit -m y",
+		"FOO=bar BAZ=qux git commit",
+		// One level into a shell wrapper.
+		`sh -c "git commit -m foo"`,
+		`bash -c 'git add -A && git commit -m wip'`,
+	}
+	for _, cmd := range yes {
+		if !IsGitCommit(cmd) {
+			t.Errorf("IsGitCommit(%q) = false, want true", cmd)
+		}
+	}
+	no := []string{
+		"git status",
+		"git commit-msg-lint", // not a separate "commit" token
+		"git commit-tree abc123",
+		"git log --oneline",
+		"echo 'do not run git commit'", // one segment, first token is echo
+		"ls -la",
+		"make GIT_COMMIT=1 build", // GIT_COMMIT=1 is an arg to make, not an env prefix on git
+		"git -C /repo status",
+		`sh -c "echo hello"`,
+	}
+	for _, cmd := range no {
+		if IsGitCommit(cmd) {
+			t.Errorf("IsGitCommit(%q) = true, want false", cmd)
+		}
+	}
+}
+
 func TestSegments(t *testing.T) {
 	tests := []struct {
 		cmd  string

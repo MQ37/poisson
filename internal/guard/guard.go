@@ -78,6 +78,104 @@ func Classify(command string) (safe bool, reason string) {
 	return true, ""
 }
 
+// gitGlobalOptsWithValue are git global options (given before the subcommand)
+// that consume the following token as a separate argument, e.g. "git -C
+// /repo commit" — "/repo" is not the subcommand. Options given as "--opt=value"
+// (one token) or that take no value at all (--no-pager, --bare, -p, ...) need
+// no special casing: the scan in IsGitCommit just skips any "-"-prefixed
+// token until it finds one that isn't.
+var gitGlobalOptsWithValue = map[string]bool{
+	"-C": true, "-c": true, "--git-dir": true, "--work-tree": true,
+	"--namespace": true, "--exec-path": true, "--super-prefix": true,
+}
+
+// shellInterpreters mirrors dangerousTokens' shell subset — used by
+// IsGitCommit to look one level into a "sh -c '...'"-style wrapped command.
+var shellInterpreters = map[string]bool{
+	"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true, "fish": true,
+}
+
+// isEnvAssignment reports whether token is a shell "NAME=value" prefix (e.g.
+// "GIT_AUTHOR_NAME=x" in "GIT_AUTHOR_NAME=x git commit ..."), which runs the
+// command that follows exactly like a plain invocation from the caller's
+// point of view.
+func isEnvAssignment(token string) bool {
+	eq := strings.IndexByte(token, '=')
+	if eq <= 0 {
+		return false
+	}
+	for i, r := range token[:eq] {
+		switch {
+		case r == '_', r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// gitSubcommandAfter returns the subcommand token following "git" in tokens
+// (tokens[gitIdx] must already be "git" — skipping any leading environment
+// assignments before gitIdx is the caller's job), skipping any global options
+// between "git" and the subcommand — e.g. "-C /repo", "--no-pager", "-c
+// name=value" — so "git -C /repo --no-pager commit" resolves to "commit",
+// not "-C". Returns "" if there's no subcommand token.
+func gitSubcommandAfter(tokens []string, gitIdx int) string {
+	i := gitIdx + 1
+	for i < len(tokens) {
+		t := tokens[i]
+		if !strings.HasPrefix(t, "-") {
+			return normalizeToken(t)
+		}
+		if gitGlobalOptsWithValue[t] {
+			i += 2 // flag + its separate-argument value
+			continue
+		}
+		i++ // flag alone, or an "--opt=value" glued form
+	}
+	return ""
+}
+
+// IsGitCommit reports whether any segment of command invokes `git commit` —
+// directly ("git commit -m foo"), through a leading env-assignment prefix
+// ("GIT_AUTHOR_NAME=x git commit"), past global git options before the
+// subcommand ("git -C /repo --no-pager commit"), or one level into a
+// shell-wrapped invocation ("sh -c 'git commit -m foo'"). Committing changes
+// the repository's permanent history, so callers use this for a hard rule:
+// always ask a human, never let an LLM risk classifier auto-approve it — see
+// agent.WrapRiskGatedApproval. Unlike Classify, this never consults
+// POISSON_SANDBOX: a sandboxed commit still needs the same hard stop as an
+// unsandboxed one.
+func IsGitCommit(command string) bool {
+	for _, seg := range Segments(command) {
+		tokens := tokenize(seg)
+		i := 0
+		for i < len(tokens) && isEnvAssignment(tokens[i]) {
+			i++
+		}
+		if i >= len(tokens) {
+			continue
+		}
+		if normalizeToken(tokens[i]) == "git" && gitSubcommandAfter(tokens, i) == "commit" {
+			return true
+		}
+		// One level into a shell wrapper: "sh -c 'git commit -m foo'",
+		// "bash -c \"git add -A && git commit\"". Not a real shell parse —
+		// just a textual "does the script argument mention git and commit as
+		// separate words" heuristic, which only ever adds an extra human
+		// confirmation in the false-positive case, never removes one.
+		if shellInterpreters[normalizeToken(tokens[i])] {
+			for _, arg := range tokens[i+1:] {
+				if IsGitCommit(strings.Trim(arg, `'"`)) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 // tokenize splits a segment into whitespace-delimited tokens, respecting
 // quotes.
 func tokenize(seg string) []string {

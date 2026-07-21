@@ -38,7 +38,10 @@ func TestAssessBashRiskUsesIsolatedContext(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	a.AssessBashRisk(ctx, "git commit -am wip", "commit work", "/tmp")
+	// A plain build script, not git commit — that's now a fast path
+	// (BashRiskHigh without any LLM call, see TestAssessBashRiskGitCommitFastPath)
+	// and would never reach the LLM this test needs to inspect.
+	a.AssessBashRisk(ctx, "./scripts/build.sh --release", "build release", "/tmp")
 
 	req := fp.LastRequest()
 	if req == nil {
@@ -51,7 +54,7 @@ func TestAssessBashRiskUsesIsolatedContext(t *testing.T) {
 		t.Fatalf("risk request system must be the classifier prompt only, got %+v", req.System)
 	}
 	userText := req.Messages[0].Content[0].Text
-	if !strings.Contains(userText, "git commit -am wip") {
+	if !strings.Contains(userText, "./scripts/build.sh --release") {
 		t.Errorf("risk prompt should contain the command, got %q", userText)
 	}
 	// The conversation must not appear anywhere in the request.
@@ -406,6 +409,38 @@ func TestAssessBashRiskDestructiveFastPath(t *testing.T) {
 	}
 	if fp.CallCount() != 0 {
 		t.Fatalf("LLM was called %d times for a destructive command (should be 0)", fp.CallCount())
+	}
+}
+
+// TestAssessBashRiskGitCommitFastPath verifies `git commit` is escalated to
+// high without ever calling the LLM (zero provider calls) — even when the
+// (fake) LLM is configured to say "low", proving the fast path short-
+// circuits before any classification round trip, not just that it happens
+// to agree with the LLM.
+func TestAssessBashRiskGitCommitFastPath(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("low", nil),
+		provider.FakeTextResponse("low", nil),
+	})
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	cases := []string{
+		"git commit -m 'wip'",
+		"git commit --amend",
+		"cd /repo && git add -A && git commit -m done",
+	}
+	for _, cmd := range cases {
+		got := a.AssessBashRisk(context.Background(), cmd, "commit changes", "/tmp")
+		if got != BashRiskHigh {
+			t.Errorf("AssessBashRisk(%q) = %q, want high", cmd, got)
+		}
+	}
+	if fp.CallCount() != 0 {
+		t.Fatalf("LLM was called %d times for git commit (should be 0 — must never be auto-approvable)", fp.CallCount())
 	}
 }
 

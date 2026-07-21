@@ -95,16 +95,25 @@ Rules:
 No explanation. One word only.`
 
 // AssessBashRisk asks the active provider (LLM) to rate command risk. It never
-// consults the deterministic guard: on failure or ambiguous output it returns
-// BashRiskUnknown, which the approval gate treats as "must ask the human".
-// Destructive commands (rm, rmdir, shred, find -delete, …) and untrusted-exec
-// commands (npx, pnpm dlx, …) are fast-pathed to BashRiskHigh; package-install
-// commands are fast-pathed to BashRiskMedium — all without an LLM call.
+// consults the deterministic guard for a LOW verdict: on failure or ambiguous
+// output it returns BashRiskUnknown, which the approval gate treats as "must
+// ask the human". Destructive commands (rm, rmdir, shred, find -delete, …),
+// untrusted-exec commands (npx, pnpm dlx, …), and `git commit` are fast-pathed
+// to BashRiskHigh; package-install commands are fast-pathed to BashRiskMedium
+// — all without an LLM call, so a misclassification can never auto-approve
+// any of them (WrapRiskGatedApproval only auto-approves BashRiskLow).
 func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdir string) BashRisk {
 	if isDestructiveCommand(command) {
 		return BashRiskHigh
 	}
 	if isUntrustedExecCommand(command) {
+		return BashRiskHigh
+	}
+	if guard.IsGitCommit(command) {
+		// A commit permanently rewrites repository history; the human always
+		// verifies it, regardless of what an LLM classifier might guess — no
+		// risk-classification round trip is worth the exposure of getting
+		// this one auto-approved by mistake.
 		return BashRiskHigh
 	}
 	if isPackageInstallCommand(command) {
