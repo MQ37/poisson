@@ -75,6 +75,9 @@ func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessa
 		res := TrimToolResult(ToolResult{Error: "tool not registered: " + name})
 		return res, fmt.Errorf("tool not registered: %s", name)
 	}
+	if err := validateToolInput(t.Schema(), input); err != nil {
+		return TrimToolResult(ToolResult{Error: err.Error()}), nil
+	}
 	res, err := t.Execute(ctx, input)
 	return TrimToolResult(res), err
 }

@@ -32,6 +32,7 @@ func (t *SearchTool) Schema() json.RawMessage {
     "path": { "type": "string", "description": "One or more files/directories to search, space-separated like ripgrep (e.g. 'internal cmd docs'). Default: cwd." },
     "glob": { "type": "string", "description": "File glob filter (e.g. '*.go')" },
     "ignore_case": { "type": "boolean" },
+    "fixed_strings": { "type": "boolean", "description": "Treat pattern as a literal string, not a regex — use this for code snippets containing ( ) { } [ ] . * etc. so you don't have to escape them." },
     "before": { "type": "integer", "description": "Lines of context to show before each match (like grep -B)" },
     "after": { "type": "integer", "description": "Lines of context to show after each match (like grep -A)" },
     "max_results": { "type": "integer", "default": 100 }
@@ -41,13 +42,14 @@ func (t *SearchTool) Schema() json.RawMessage {
 }
 
 type searchInput struct {
-	Pattern    string  `json:"pattern"`
-	Path       string  `json:"path"`
-	Glob       string  `json:"glob"`
-	IgnoreCase bool    `json:"ignore_case"`
-	Before     FlexInt `json:"before"`
-	After      FlexInt `json:"after"`
-	MaxResults FlexInt `json:"max_results"`
+	Pattern      string  `json:"pattern"`
+	Path         string  `json:"path"`
+	Glob         string  `json:"glob"`
+	IgnoreCase   bool    `json:"ignore_case"`
+	FixedStrings bool    `json:"fixed_strings"`
+	Before       FlexInt `json:"before"`
+	After        FlexInt `json:"after"`
+	MaxResults   FlexInt `json:"max_results"`
 }
 
 // rgMatch represents a single match from rg --json output.
@@ -94,6 +96,9 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 	args := []string{"--json", "--max-count", strconv.Itoa(maxResults)}
 	if in.IgnoreCase {
 		args = append(args, "-i")
+	}
+	if in.FixedStrings {
+		args = append(args, "-F")
 	}
 	if in.Before > 0 {
 		args = append(args, "-B", strconv.Itoa(int(in.Before)))
@@ -177,7 +182,7 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 	}
 	if count == 0 {
 		if waitErr != nil && strings.TrimSpace(stderr.String()) != "" {
-			return ToolResult{Error: strings.TrimSpace(stderr.String())}, nil
+			return ToolResult{Error: regexErrorHint(strings.TrimSpace(stderr.String()))}, nil
 		}
 		return ToolResult{Content: "no matches found"}, nil
 	}
@@ -185,4 +190,18 @@ func (t *SearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 		b.WriteString(fmt.Sprintf("... (truncated at %d matches)\n", maxResults))
 	}
 	return ToolResult{Content: b.String()}, nil
+}
+
+// regexErrorHint appends an actionable one-liner to rg's own regex-parse
+// error. rg's Rust regex engine treats ( ) { } [ ] . * + ? | ^ $ as
+// metacharacters even when a model clearly meant them literally (e.g.
+// pasting a code snippet like `ToolResult{}` or `foo(bar)` as the pattern),
+// which was the single most common cause of search-tool failures observed
+// in practice — this points at the fix (fixed_strings, or escaping) instead
+// of leaving the model to guess from rg's raw parser error.
+func regexErrorHint(stderr string) string {
+	if !strings.Contains(stderr, "regex parse error") && !strings.Contains(stderr, "unclosed group") {
+		return stderr
+	}
+	return stderr + "\nhint: rg treats ( ) { } [ ] . * + ? | ^ $ as regex metacharacters. To search for a literal code snippet containing them, set fixed_strings: true instead of escaping."
 }

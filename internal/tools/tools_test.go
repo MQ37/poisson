@@ -778,6 +778,50 @@ func TestSearch_InvalidRegexReturnsError(t *testing.T) {
 	}
 }
 
+// TestSearch_InvalidRegexHintsFixedStrings covers the single most common
+// real-world search failure: a model pastes a code snippet containing
+// regex metacharacters ( ) { } as the pattern (e.g. "ToolResult{}") and rg's
+// Rust regex engine rejects it. The error should point at fixed_strings
+// instead of leaving the model to guess how to escape it.
+func TestSearch_InvalidRegexHintsFixedStrings(t *testing.T) {
+	dir := testutil.TempDir(t)
+	s := NewSearchTool(dir)
+	res, _ := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern": "ToolResult{}",
+		"path":    ".",
+	}))
+	if res.Error == "" {
+		t.Fatal("expected a regex error for unescaped {}")
+	}
+	if !strings.Contains(res.Error, "fixed_strings") {
+		t.Errorf("expected a fixed_strings hint, got: %s", res.Error)
+	}
+}
+
+// TestSearch_FixedStrings verifies fixed_strings: true (rg -F) matches a
+// pattern containing regex metacharacters literally, with no escaping.
+func TestSearch_FixedStrings(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	s := NewSearchTool(dir)
+	w.Execute(context.Background(), mustJSON(t, map[string]string{
+		"path":    "a.go",
+		"content": "return ToolResult{}, nil\n",
+	}))
+
+	res, _ := s.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"pattern":       "ToolResult{}",
+		"path":          ".",
+		"fixed_strings": true,
+	}))
+	if res.Error != "" {
+		t.Fatalf("search error: %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "a.go") {
+		t.Errorf("expected a.go match with fixed_strings, got %q", res.Content)
+	}
+}
+
 func TestSearch_NoMatches(t *testing.T) {
 	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir, true, nil)
