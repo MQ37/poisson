@@ -13,6 +13,8 @@ An issue exists so someone can **act on it**. Give them exactly what they need t
 
 **Keep it short.** ≤30 lines for non-trivial, a few lines for the rest. The right size is where cutting one more sentence would lose information the fixer needs.
 
+**Never manually wrap lines.** Write each paragraph as one long line — GitHub soft-wraps it for the reader. Hard-wrapping at ~70–80 chars only deforms the rendered body and the raw markdown.
+
 ---
 
 ## 🐛 Bugs
@@ -54,27 +56,21 @@ Say what you want, plainly. Add *why* only if it's non-obvious — and keep it t
 **Reproducible bug:**
 
 ```markdown
-`parseConfig` (`config.ts:42`) swallows parse errors and returns null, so a
-malformed config looks identical to an empty one.
+`parseConfig` (`config.ts:42`) swallows parse errors and returns null, so a malformed config looks identical to an empty one.
 
-Repro: start with `config.json` = `{ "port": }` → server boots with defaults,
-no error logged.
+Repro: start with `config.json` = `{ "port": }` → server boots with defaults, no error logged.
 ```
 
 **Bug that can't be reproduced:**
 
 ```markdown
-Checkout intermittently double-charges. Seen twice in prod (orders #4471,
-#4488; logs attached) — couldn't reproduce locally. Both hit the retry path
-in `payment.ts` within ~2s of a gateway timeout. Hunch: retry fires before
-the first charge settles, but unconfirmed.
+Checkout intermittently double-charges. Seen twice in prod (orders #4471, #4488; logs attached) — couldn't reproduce locally. Both hit the retry path in `payment.ts` within ~2s of a gateway timeout. Hunch: retry fires before the first charge settles, but unconfirmed.
 ```
 
 **Feature / change:**
 
 ```markdown
-Add a `--dry-run` flag to the import command that prints what would change
-without writing. Entry point is `import.ts:20`.
+Add a `--dry-run` flag to the import command that prints what would change without writing. Entry point is `import.ts:20`.
 ```
 
 ---
@@ -87,6 +83,7 @@ without writing. Entry point is `import.ts:20`.
 - [ ] No justification padding — the bug speaks for itself.
 - [ ] One proposal, not a menu.
 - [ ] Short, focused, no marketing or AI-slop language.
+- [ ] No manually wrapped lines — each paragraph is one long line.
 
 ---
 

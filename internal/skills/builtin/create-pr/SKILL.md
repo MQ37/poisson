@@ -11,6 +11,8 @@ A PR description is not an essay. It is the **minimum context a reviewer needs t
 
 > **Two skills, one job.** This skill is the **workflow** for producing the PR. The [`code-quality`](../code-quality/SKILL.md) skill is the **content rules** for what's inside the diff. Load both for a non-trivial PR.
 
+**Never manually wrap lines.** Write each paragraph in the description as one long line — GitHub soft-wraps it for the reader. Hard-wrapping at ~70–80 chars only deforms the rendered body and the raw markdown.
+
 ---
 
 ## 🧪 Workflow
@@ -64,12 +66,10 @@ The only three sections. If a sentence describes *what the code does* line by li
 [1–3 sentences: the change, at the level a reviewer skims before reading code.]
 
 ## Why
-[1–3 sentences: the reason it's needed and any non-obvious decision worth flagging.
- Link the ticket / issue / related PR. This is the only part the diff can't show.]
+[1–3 sentences: the reason it's needed and any non-obvious decision worth flagging. Link the ticket / issue / related PR. This is the only part the diff can't show.]
 
 ## Testing
-[How you verified it: tests added/run, manual steps, edge cases checked.
- "Didn't test" is an honest answer that tells the reviewer where to look.]
+[How you verified it: tests added/run, manual steps, edge cases checked. "Didn't test" is an honest answer that tells the reviewer where to look.]
 ```
 
 **Size:** 5–30 lines. A trivial fix is three short bullets. If you're past ~40 lines you're explaining the diff back to the reviewer — stop.
@@ -123,6 +123,7 @@ If a single PR is doing **two of {types, core, wiring, UI, infra, tests-only}**,
 - [ ] Walked the [`code-quality`](../code-quality/SKILL.md) pre-flight checklist.
 - [ ] Breaking change marked with `!` in the title.
 - [ ] The diff is as small as the change allows.
+- [ ] No manually wrapped lines — each paragraph is one long line.
 
 ---
 
