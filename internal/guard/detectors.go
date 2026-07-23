@@ -496,11 +496,60 @@ func matchesFlag(token, short, long string) bool {
 // leading path prefix (e.g. /usr/bin/git → git).
 func normalizeToken(token string) string {
 	t := strings.TrimSpace(token)
-	t = strings.Trim(t, "'\"")
+	t = stripEmbeddedQuotes(t)
 	// Strip path prefix: keep the base name of the command.
 	if strings.Contains(t, "/") {
 		t = filepath.Base(t)
 	}
 	t = strings.ToLower(t)
 	return t
+}
+
+// stripEmbeddedQuotes removes quote *delimiters* (not their contents) from a
+// single word — the same "quote removal" step a real shell performs before
+// treating adjacent quoted/unquoted fragments as one word. tokenize()
+// preserves quote characters verbatim in its output (they matter for
+// splitting, not for meaning), so without this step a command name spliced
+// across empty quotes to dodge a literal-string match — r”m, r"m", 'r'm,
+// all real bash for "rm" — normalizes to a string like "r”m" that matches
+// neither the SAFE list nor any dangerous/destructive token, silently
+// falling through to non-deterministic LLM judgment instead of the
+// deterministic block/escalation an unobfuscated "rm" gets. This only
+// undoes quoting within one already-tokenized word; it is not a shell
+// parser and doesn't attempt variable expansion, command substitution, or
+// cross-token effects — those are refused outright elsewhere (see
+// hasCommandSubstitution) rather than interpreted.
+func stripEmbeddedQuotes(token string) string {
+	var b strings.Builder
+	i, n := 0, len(token)
+	for i < n {
+		c := token[i]
+		switch c {
+		case '\'', '"':
+			quote := c
+			i++
+			for i < n && token[i] != quote {
+				b.WriteByte(token[i])
+				i++
+			}
+			if i < n {
+				i++ // skip the closing quote
+			}
+		case '\\':
+			// Defensive: tokenize() already drops an unquoted backslash at
+			// the top level, so none should remain here in practice — kept
+			// idempotent in case a caller ever normalizes a raw token
+			// directly instead of one that already went through tokenize().
+			if i+1 < n {
+				b.WriteByte(token[i+1])
+				i += 2
+			} else {
+				i++
+			}
+		default:
+			b.WriteByte(c)
+			i++
+		}
+	}
+	return b.String()
 }

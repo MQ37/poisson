@@ -1,6 +1,9 @@
 package guard
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Per-command danger detectors are the last line of defense before a
 // command is deemed auto-safe (no LLM call, no human prompt in Fast mode —
@@ -280,6 +283,50 @@ func TestMatchesFlag(t *testing.T) {
 	for _, c := range cases {
 		if got := matchesFlag(c.token, c.short, c.long); got != c.want {
 			t.Errorf("matchesFlag(%q, %q, %q) = %v, want %v", c.token, c.short, c.long, got, c.want)
+		}
+	}
+}
+
+// TestStripEmbeddedQuotes_SeesThroughQuoteSplicing locks down the exact
+// obfuscation class normalizeToken must see through: a command name built
+// from adjacent quoted/unquoted fragments (real, valid bash — quotes just
+// group characters, they don't add a separator) that a naive
+// leading/trailing-only trim would miss entirely.
+func TestStripEmbeddedQuotes_SeesThroughQuoteSplicing(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"r''m", "rm"},
+		{"'r'm", "rm"},
+		{`r"m"`, "rm"},
+		{`rm""`, "rm"},
+		{"r'm'", "rm"},
+		{"ls", "ls"},   // unaffected — no quotes at all
+		{"'ls'", "ls"}, // whole token quoted — same as before
+		{"cat", "cat"},
+	}
+	for _, c := range cases {
+		if got := stripEmbeddedQuotes(c.in); got != c.want {
+			t.Errorf("stripEmbeddedQuotes(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// TestClassify_QuoteSplicedDestructiveCommand is the end-to-end version:
+// guard.Classify must deterministically reject a quote-spliced "rm", not
+// just fail to recognize it as safe by accident.
+func TestClassify_QuoteSplicedDestructiveCommand(t *testing.T) {
+	cases := []string{
+		`r''m -rf /tmp/x`,
+		`'r'm -rf /tmp/x`,
+		`r"m" -rf /tmp/x`,
+		`R''M -rf /tmp/x`,
+	}
+	for _, cmd := range cases {
+		safe, reason := Classify(cmd)
+		if safe {
+			t.Errorf("Classify(%q) = safe, want unsafe (quote-spliced rm)", cmd)
+		}
+		if !strings.Contains(reason, "destructive") {
+			t.Errorf("Classify(%q) reason = %q, want it recognized as a destructive command, not just \"not in safe list\"", cmd, reason)
 		}
 	}
 }

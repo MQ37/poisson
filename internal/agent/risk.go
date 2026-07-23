@@ -134,12 +134,44 @@ func lowestEffort(cfg *config.Config, providerID, model string) string {
 	return s.EffortLevels[0]
 }
 
+// skipWrapperTokens returns the index of the first non-wrapper token in an
+// already-normalized token slice, skipping any leading sudo/env/time/nohup/
+// command prefix (e.g. "sudo rm -rf /" must still be recognized as rm).
+func skipWrapperTokens(tokens []string) int {
+	i := 0
+	for i < len(tokens) {
+		switch tokens[i] {
+		case "sudo", "env", "time", "nohup", "command":
+			i++
+			continue
+		}
+		break
+	}
+	return i
+}
+
+// normalizedTokens tokenizes and normalizes every token of a command
+// fragment the same way guard.Classify does — honoring quotes and
+// unquoted-backslash escapes, stripping a leading path prefix, lowercasing —
+// so a fast-escalation detector below can't be defeated by the same trivial
+// obfuscation guard.Classify itself already sees through (a naive
+// strings.Fields split treats "\rm" as a token that's never equal to "rm",
+// silently skipping the escalation entirely and leaving the command's fate
+// to a single non-deterministic LLM classification instead of a guaranteed
+// BashRiskHigh).
+func normalizedTokens(part string) []string {
+	raw := guard.Tokenize(part)
+	out := make([]string, len(raw))
+	for i, t := range raw {
+		out[i] = guard.NormalizeToken(t)
+	}
+	return out
+}
+
 // isDestructiveCommand reports whether the command deletes files or directories.
 // Such commands are fast-pathed to BashRiskHigh without an LLM call.
 func isDestructiveCommand(command string) bool {
-	for _, part := range strings.FieldsFunc(command, func(r rune) bool {
-		return r == '&' || r == '|' || r == ';' || r == '\n'
-	}) {
+	for _, part := range guard.Segments(command) {
 		if detectDestructiveInPart(part) {
 			return true
 		}
@@ -149,15 +181,8 @@ func isDestructiveCommand(command string) bool {
 
 // detectDestructiveInPart checks whether a single sub-command deletes files.
 func detectDestructiveInPart(part string) bool {
-	tokens := strings.Fields(part)
-	// Skip leading wrappers (sudo, env, time, …).
-	i := 0
-	for i < len(tokens) {
-		if tokens[i] != "sudo" && tokens[i] != "env" && tokens[i] != "time" && tokens[i] != "nohup" && tokens[i] != "command" {
-			break
-		}
-		i++
-	}
+	tokens := normalizedTokens(part)
+	i := skipWrapperTokens(tokens)
 	if i >= len(tokens) {
 		return false
 	}
@@ -186,9 +211,7 @@ func detectDestructiveInPart(part string) bool {
 // untrusted remote package (npx, pnpm dlx, yarn dlx, pipx run, bunx, …).
 // These are fast-pathed to BashRiskHigh without an LLM call.
 func isUntrustedExecCommand(command string) bool {
-	for _, part := range strings.FieldsFunc(command, func(r rune) bool {
-		return r == '&' || r == '|' || r == ';' || r == '\n'
-	}) {
+	for _, part := range guard.Segments(command) {
 		if detectUntrustedExecInPart(part) {
 			return true
 		}
@@ -197,15 +220,8 @@ func isUntrustedExecCommand(command string) bool {
 }
 
 func detectUntrustedExecInPart(part string) bool {
-	tokens := strings.Fields(part)
-	// Skip leading wrappers (sudo, env, time, …).
-	i := 0
-	for i < len(tokens) {
-		if tokens[i] != "sudo" && tokens[i] != "env" && tokens[i] != "time" && tokens[i] != "nohup" && tokens[i] != "command" {
-			break
-		}
-		i++
-	}
+	tokens := normalizedTokens(part)
+	i := skipWrapperTokens(tokens)
 	if i >= len(tokens) {
 		return false
 	}
@@ -238,9 +254,7 @@ func detectUntrustedExecInPart(part string) bool {
 // packages that a human should review before allowing. This is a fast-path
 // escalation: such commands skip the LLM and go straight to human approval.
 func isPackageInstallCommand(command string) bool {
-	for _, part := range strings.FieldsFunc(command, func(r rune) bool {
-		return r == '&' || r == '|' || r == ';' || r == '\n'
-	}) {
+	for _, part := range guard.Segments(command) {
 		if detectInstallInPart(part) {
 			return true
 		}
@@ -251,15 +265,8 @@ func isPackageInstallCommand(command string) bool {
 // detectInstallInPart checks whether a single sub-command (no chain operators)
 // is a package-install command.
 func detectInstallInPart(part string) bool {
-	tokens := strings.Fields(part)
-	// Skip leading wrappers (sudo, env, time, …).
-	i := 0
-	for i < len(tokens) {
-		if tokens[i] != "sudo" && tokens[i] != "env" && tokens[i] != "time" && tokens[i] != "nohup" && tokens[i] != "command" {
-			break
-		}
-		i++
-	}
+	tokens := normalizedTokens(part)
+	i := skipWrapperTokens(tokens)
 	rest := tokens[i:]
 	if len(rest) == 0 {
 		return false

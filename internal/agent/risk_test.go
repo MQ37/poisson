@@ -10,6 +10,66 @@ import (
 	"github.com/mq37/poisson/internal/store"
 )
 
+// TestWrapRiskGatedApproval_NeverAutoApprovesObfuscatedDestructiveCommand is
+// the master regression test for the whole point of the destructive-command
+// fast path: even against an ADVERSARIAL FakeProvider hard-coded to always
+// say "low" (simulating an LLM misclassification, the exact failure mode the
+// fast path exists to make impossible), rm-family commands — including
+// trivially obfuscated spellings that a naive strings.Fields-based detector
+// used to miss (see the fixed isDestructiveCommand/isUntrustedExecCommand/
+// isPackageInstallCommand) — must always reach the human, with zero LLM
+// calls spent getting there.
+func TestWrapRiskGatedApproval_NeverAutoApprovesObfuscatedDestructiveCommand(t *testing.T) {
+	cases := []string{
+		"rm -rf /",
+		"rm -rf /tmp/x",
+		`\rm -rf /tmp/x`,
+		`sudo \rm -rf /tmp/x`,
+		"RM -rf /tmp/x",
+		"/bin/rm -rf /tmp/x",
+		"find . -delete",
+		"find . -exec rm {} \\;",
+		`\npx some-evil-package`,
+		`\npm install some-evil-package`,
+		"r''m -rf /tmp/x", // quote-spliced — real bash for "rm"
+		"'r'm -rf /tmp/x",
+		`r"m" -rf /tmp/x`,
+	}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+			// Adversarial: the LLM always says low, as if compromised,
+			// confused by obfuscation, or just wrong. The fast path must
+			// never let this matter.
+			fp.SetResponses([][]provider.StreamEvent{
+				provider.FakeTextResponse("low", nil),
+				provider.FakeTextResponse("low", nil),
+			})
+			s := newTestStore(t)
+			sid := newTestSession(t, s, "m")
+			a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+			a.SetModel("m")
+
+			asked := false
+			approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk, _ ApprovalOrigin) (bool, string) {
+				asked = true
+				if risk != BashRiskHigh && risk != BashRiskMedium {
+					t.Errorf("risk seen by human callback = %q, want high or medium (never low/unknown for a known-dangerous command)", risk)
+				}
+				return false, "" // the human denies — that's the point, not the interesting part
+			})
+			_, _ = approve(context.Background(), cmd, "test", "/tmp")
+
+			if !asked {
+				t.Fatalf("command %q was auto-approved without ever asking a human — the adversarial LLM's 'low' verdict was allowed to stand", cmd)
+			}
+			if fp.CallCount() != 0 {
+				t.Errorf("command %q spent %d LLM call(s) reaching the human — want 0 (deterministic fast path should short-circuit before any classification)", cmd, fp.CallCount())
+			}
+		})
+	}
+}
+
 // TestAssessBashRiskUsesIsolatedContext guards that the bash-risk classifier
 // call never carries the conversation: even with a populated session history,
 // the request must be a single synthetic user message + the fixed classifier
@@ -307,6 +367,10 @@ func TestIsPackageInstallCommand(t *testing.T) {
 		{"cd /tmp \u0026\u0026 npm install", true},
 		{"echo hi; pip install evil", true},
 		{"git pull \u0026\u0026 yarn install \u0026\u0026 yarn build", true},
+		// Obfuscation — same rationale as TestIsDestructiveCommand above.
+		{`\npm install evil-pkg`, true},
+		{"NPM install evil-pkg", true},
+		{"n''pm install evil-pkg", true},
 		// Non-install commands.
 		{"npm run build", false},
 		{"npm test", false},
@@ -372,6 +436,19 @@ func TestIsDestructiveCommand(t *testing.T) {
 		{"find . -execdir rmdir {} +", true},
 		{"cd /tmp \u0026\u0026 rm -rf build", true},
 		{"echo hi; rm foo", true},
+		// Obfuscation guard.Classify itself already sees through — the
+		// escalation must too, or a destructive command dressed up this way
+		// skips straight to the (non-deterministic) LLM classifier instead
+		// of a guaranteed BashRiskHigh. See TestWrapRiskGatedApproval_NeverAutoApprovesObfuscatedDestructiveCommand
+		// for the full exploit-shaped end-to-end proof.
+		{`\rm -rf /`, true},
+		{`sudo \rm -rf /tmp/x`, true},
+		{"RM -rf /tmp/x", true},
+		{"/bin/rm -rf /tmp/x", true},
+		{"Rmdir /tmp/empty", true},
+		{"r''m -rf /tmp/x", true}, // quote-spliced — real bash for "rm"
+		{"'r'm -rf /tmp/x", true},
+		{`r"m" -rf /tmp/x`, true},
 		// Non-destructive.
 		{"cat file.txt", false},
 		{"ls -la", false},
@@ -461,6 +538,11 @@ func TestIsUntrustedExecCommand(t *testing.T) {
 		{"dlx cowsay", true},
 		{"cd /tmp \u0026\u0026 npx shadcn@latest add button", true},
 		{"echo hi; npx evil", true},
+		// Obfuscation — same rationale as TestIsDestructiveCommand above.
+		{`\npx cowsay`, true},
+		{"NPX cowsay", true},
+		{"/usr/bin/npx cowsay", true},
+		{"n''px cowsay", true},
 		// Non-untrusted-exec.
 		{"npm run build", false},
 		{"pnpm install", false},

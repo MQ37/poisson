@@ -5,6 +5,18 @@ import (
 	"strings"
 )
 
+// Tokenize splits a single command segment into whitespace-delimited tokens,
+// honoring quotes and unquoted-backslash escapes exactly like Classify's own
+// per-segment parsing (see tokenize) — exported so callers outside this
+// package (agent.isDestructiveCommand and friends) that need to recognize a
+// command name can't accidentally fall back to a naive strings.Fields split
+// a simple `\rm` or quote-spliced command name would slip past.
+func Tokenize(seg string) []string { return tokenize(seg) }
+
+// NormalizeToken trims quotes/whitespace, strips a leading path prefix, and
+// lowercases a token — exported for the same reason as Tokenize.
+func NormalizeToken(token string) string { return normalizeToken(token) }
+
 // Classify runs the full classification pipeline and returns whether the
 // command is safe, and a reason if it is not. Equivalent to
 // ClassifyInDir(command, "") — relative-path sensitivity/symlink checks
