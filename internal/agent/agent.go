@@ -692,6 +692,23 @@ func (a *Agent) PromptSegmentsWithContext(ctx context.Context, segments []TextSe
 		return fmt.Errorf("ensure session: %w", err)
 	}
 
+	// A prior process may have died mid tool-round (killed, crashed, machine
+	// lost power) leaving the last assistant message's tool_use blocks
+	// without matching tool_result rows in the store. Repair that before
+	// appending the new user message, while the dangling tool_use is still
+	// trailing — every provider rejects a request whose history has a
+	// tool_use without a following tool_result, so an unrepaired resume
+	// fails every time with a 400. Safe to call here (and nowhere else):
+	// this is the sole entry point that starts a new turn, so there is
+	// never a legitimately still-running tool call to mistake for a dead
+	// one (contrast quickanswer's buildRequest call mid-turn, which must
+	// NOT trigger this — see pendingToolResultBlocks).
+	if err := a.repairDanglingToolUse(); err != nil {
+		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Session error: %v", err)})
+		a.sendEvent(OutputEvent{Type: OutputDone})
+		return fmt.Errorf("repair dangling tool_use: %w", err)
+	}
+
 	// INGEST: append user message (images first, then the text segments).
 	if err := a.appendUserMessage(segments, images); err != nil {
 		a.sendEvent(OutputEvent{Type: OutputError, Text: err.Error()})
@@ -1447,6 +1464,75 @@ func buildAssistantBlocks(thinking, thinkingSig string, redacted []provider.Cont
 		})
 	}
 	return blocks
+}
+
+// repairDanglingToolUse guards against a session resumed after the process
+// died mid tool-round (killed, crashed, machine lost power) rather than via
+// graceful cancellation. persistPartialTurnOnCancel handles the graceful
+// path; this handles the case where nothing ran at all before the process
+// exited, so the assistant's tool_use message was persisted (buildAssistantBlocks
+// writes it before tools are dispatched) but some or all of the matching
+// tool_result messages never made it to the store. Anthropic (and others)
+// reject any request whose history has a tool_use without a following
+// tool_result, so an unrepaired history is permanently stuck erroring on
+// every resume. Must only be called before a new turn starts (see call site
+// in PromptSegmentsWithContext) — that's the only point where a dangling
+// trailing tool_use is unambiguously dead rather than a tool call still
+// legitimately running in another goroutine of this same process.
+//
+// Finds the trailing run of "tool" messages plus the assistant message
+// before them, diffs resolved tool_call IDs against the tool_use IDs the
+// assistant emitted, and appends a synthetic error tool_result for each one
+// still missing — an honest record that the tool's outcome was lost, not a
+// fabricated result. Idempotent: once repaired, later calls find nothing
+// missing and are a no-op.
+func (a *Agent) repairDanglingToolUse() error {
+	msgs, err := a.store.GetMessages(a.sessionID)
+	if err != nil {
+		return fmt.Errorf("get messages: %w", err)
+	}
+	i := len(msgs)
+	for i > 0 && msgs[i-1].Role == "tool" {
+		i--
+	}
+	if i == 0 || msgs[i-1].Role != "assistant" {
+		return nil
+	}
+	var assistantBlocks []contentBlockJSON
+	if err := json.Unmarshal([]byte(msgs[i-1].Content), &assistantBlocks); err != nil {
+		return nil
+	}
+	resolved := map[string]bool{}
+	for _, m := range msgs[i:] {
+		var toolBlocks []contentBlockJSON
+		if json.Unmarshal([]byte(m.Content), &toolBlocks) != nil {
+			continue
+		}
+		for _, b := range toolBlocks {
+			if b.Type == "tool_result" {
+				resolved[b.ToolCallID] = true
+			}
+		}
+	}
+	var missing []string
+	for _, b := range assistantBlocks {
+		if b.Type == "tool_use" && !resolved[b.ToolCallID] {
+			missing = append(missing, b.ToolCallID)
+		}
+	}
+	for _, id := range missing {
+		content, err := contentBlocksToJSON([]provider.ContentBlock{{
+			Type: "tool_result", ToolCallID: id, ToolIsError: true,
+			ToolResult: "interrupted — the session ended before this tool's result was recorded",
+		}})
+		if err != nil {
+			return fmt.Errorf("marshal recovered tool result: %w", err)
+		}
+		if err := a.store.AppendMessage(&store.Message{SessionID: a.sessionID, Role: "tool", Content: content}); err != nil {
+			return fmt.Errorf("append recovered tool result: %w", err)
+		}
+	}
+	return nil
 }
 
 // updateToolCall updates a tool call in the list by matching ID. If the ID
