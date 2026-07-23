@@ -122,6 +122,12 @@ type Agent struct {
 	// agent works. Written by the turn-loop goroutine, read by the TUI goroutine.
 	runTurns atomic.Int64
 
+	// approvalMode gates how much of WrapRiskGatedApproval runs automatically
+	// (see ApprovalMode) — Fast (default, zero value) or Paranoid. Toggled by
+	// the TUI's Shift+Tab, read by the approval closure on the turn-loop
+	// goroutine — hence atomic.
+	approvalMode atomic.Int32
+
 	// compactBackoffUntil suppresses auto-compaction retries after a failure.
 	compactBackoffUntil time.Time
 
@@ -1480,18 +1486,48 @@ func buildAssistantBlocks(thinking, thinkingSig string, redacted []provider.Cont
 // trailing tool_use is unambiguously dead rather than a tool call still
 // legitimately running in another goroutine of this same process.
 //
-// Finds the trailing run of "tool" messages plus the assistant message
-// before them, diffs resolved tool_call IDs against the tool_use IDs the
-// assistant emitted, and appends a synthetic error tool_result for each one
-// still missing — an honest record that the tool's outcome was lost, not a
-// fabricated result. Idempotent: once repaired, later calls find nothing
-// missing and are a no-op.
+// A dangling tool_use always sits directly under a run of "tool" messages
+// (whatever of its own results made it to the store — possibly none) and,
+// if the same broken history was retried one or more times before this fix
+// existed (each retry's request 400s, but appendUserMessage had already run,
+// so the row sticks), under a further run of unanswered "user" retries on
+// top of that. repairDanglingToolUse walks back through both runs to find
+// the assistant message underneath and only acts if that assistant message
+// really has unresolved tool_use — a legitimately pre-seeded trailing user
+// message unrelated to this bug (e.g. history assembled directly for a test,
+// or some future flow that intentionally idles on one) must be left alone,
+// since a lone trailing user row on its own isn't proof of anything broken.
+//
+// When it does find a genuine dangling tool_use, it:
+//  1. Appends a synthetic error tool_result for every tool_use ID the
+//     assistant message emitted that has no matching tool_result among the
+//     trailing "tool" messages — an honest record that the tool's outcome
+//     was lost, not a fabricated result.
+//  2. Soft-deletes the trailing "user" retries sitting on top of it: they're
+//     failed re-attempts against this exact same broken history, add nothing
+//     (the freshest is about to be superseded by the new prompt this call is
+//     starting anyway), and left in place are themselves illegal — Anthropic
+//     rejects consecutive same-role messages just as it rejects a dangling
+//     tool_use. Soft-deleted, not hard-deleted, so they stay inspectable.
+//
+// Must only be called before a new turn starts (see call site in
+// PromptSegmentsWithContext) — that's the only point where a dangling
+// trailing tool_use is unambiguously dead rather than a tool call still
+// legitimately running in another goroutine of this same process. Idempotent:
+// once repaired, later calls find nothing unresolved and are a no-op.
 func (a *Agent) repairDanglingToolUse() error {
 	msgs, err := a.store.GetMessages(a.sessionID)
 	if err != nil {
 		return fmt.Errorf("get messages: %w", err)
 	}
-	i := len(msgs)
+
+	end := len(msgs)
+	i := end
+	for i > 0 && msgs[i-1].Role == "user" {
+		i--
+	}
+	staleRetries := msgs[i:end]
+	toolEnd := i
 	for i > 0 && msgs[i-1].Role == "tool" {
 		i--
 	}
@@ -1503,7 +1539,7 @@ func (a *Agent) repairDanglingToolUse() error {
 		return nil
 	}
 	resolved := map[string]bool{}
-	for _, m := range msgs[i:] {
+	for _, m := range msgs[i:toolEnd] {
 		var toolBlocks []contentBlockJSON
 		if json.Unmarshal([]byte(m.Content), &toolBlocks) != nil {
 			continue
@@ -1518,6 +1554,14 @@ func (a *Agent) repairDanglingToolUse() error {
 	for _, b := range assistantBlocks {
 		if b.Type == "tool_use" && !resolved[b.ToolCallID] {
 			missing = append(missing, b.ToolCallID)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	for _, stale := range staleRetries {
+		if err := a.store.SoftDeleteMessage(stale.ID); err != nil {
+			return fmt.Errorf("prune stale retry message: %w", err)
 		}
 	}
 	for _, id := range missing {

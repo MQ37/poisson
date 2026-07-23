@@ -128,6 +128,86 @@ func TestRepairDanglingToolUse_CleanHistoryUnchanged(t *testing.T) {
 	}
 }
 
+// TestRepairDanglingToolUse_PrunesStaleRetryMessages reproduces the real
+// crash-recovery shape: an assistant message with a dangling tool_use, then
+// two "continue" retries piled up by a user hitting the same broken history
+// twice before the fix shipped (each retry's provider call 400s, but
+// appendUserMessage already ran, so the row sticks around). Both stray user
+// rows must be pruned and the tool_use resolved, leaving a clean tail.
+func TestRepairDanglingToolUse_PrunesStaleRetryMessages(t *testing.T) {
+	st := newTestStore(t)
+	sid := "sess-crash-retried"
+	if err := st.CreateSession(&store.Session{ID: sid, Cwd: "/tmp", Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	appendToolUse(t, st, sid, "call_1", "subagent", map[string]any{"task": "verify"})
+	appendUserText(t, st, sid, "continue")
+	appendUserText(t, st, sid, "continue")
+
+	a := &Agent{store: st, sessionID: sid}
+	if err := a.repairDanglingToolUse(); err != nil {
+		t.Fatalf("repairDanglingToolUse: %v", err)
+	}
+
+	msgs, err := st.GetMessages(sid)
+	if err != nil {
+		t.Fatalf("get messages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("want 2 active messages (assistant tool_use + synthetic result), got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "assistant" || msgs[1].Role != "tool" {
+		t.Fatalf("want [assistant, tool], got [%s, %s]", msgs[0].Role, msgs[1].Role)
+	}
+	var blocks []contentBlockJSON
+	if err := json.Unmarshal([]byte(msgs[1].Content), &blocks); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(blocks) != 1 || blocks[0].ToolCallID != "call_1" {
+		t.Fatalf("unexpected synthetic tool_result: %+v", blocks)
+	}
+
+	// The two stray "continue" rows must still exist, just soft-deleted —
+	// GetAllMessages (deleted_at IS NULL, same filter as GetMessages here)
+	// should also not surface them, but a raw count confirms they weren't
+	// hard-deleted.
+	all, err := st.GetAllMessages(sid)
+	if err != nil {
+		t.Fatalf("get all messages: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("stray retries should be excluded from GetAllMessages too, got %d", len(all))
+	}
+}
+
+// TestRepairDanglingToolUse_LoneTrailingUserMessageUntouched covers a
+// trailing user message that has nothing to do with this bug — no assistant
+// message underneath it, let alone one with a dangling tool_use. Must be
+// left alone: a lone trailing user row on its own isn't proof of anything
+// broken (e.g. TestPromptCompactsBeforeFirstRequestAfterSmallerWindowSwitch
+// seeds a session this way on purpose to test compaction).
+func TestRepairDanglingToolUse_LoneTrailingUserMessageUntouched(t *testing.T) {
+	st := newTestStore(t)
+	sid := "sess-lone-user"
+	if err := st.CreateSession(&store.Session{ID: sid, Cwd: "/tmp", Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	appendUserText(t, st, sid, "old context")
+
+	a := &Agent{store: st, sessionID: sid}
+	if err := a.repairDanglingToolUse(); err != nil {
+		t.Fatalf("repairDanglingToolUse: %v", err)
+	}
+
+	msgs, err := st.GetMessages(sid)
+	if err != nil {
+		t.Fatalf("get messages: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Role != "user" {
+		t.Fatalf("lone trailing user message should be untouched, got %+v", msgs)
+	}
+}
+
 // TestPromptSegmentsWithContext_RepairsDanglingToolUseBeforeNewTurn covers
 // the real crash-recovery path end to end: a session left with a dangling
 // tool_use (previous process died mid tool-round) must not make the next

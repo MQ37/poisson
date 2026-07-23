@@ -174,6 +174,25 @@ func (s *Store) UpdateMessageContent(id, content string) error {
 	return nil
 }
 
+// SoftDeleteMessage flags a message deleted (excluded from GetMessages,
+// GetAllMessages, and FTS search) without removing the row — used to prune
+// stray messages (e.g. crash-recovery leftovers) while keeping them
+// available to anything that queries the table directly for audit.
+func (s *Store) SoftDeleteMessage(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin soft delete tx: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE messages SET deleted_at = ? WHERE id = ?`, time.Now().Unix(), id); err != nil {
+		return fmt.Errorf("soft delete message: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM messages_fts WHERE message_id = ?`, id); err != nil {
+		return fmt.Errorf("purge fts for deleted message: %w", err)
+	}
+	return tx.Commit()
+}
+
 // GetAllMessages returns every non-deleted message for a session, active AND
 // compacted, ordered by seq ascending. Compaction only sets compacted = 1 —
 // it never deletes rows — so the full conversation is always still here.
