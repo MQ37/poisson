@@ -363,6 +363,11 @@ func TestIsPackageInstallCommand(t *testing.T) {
 		{"poetry install", true},
 		{"poetry add django", true},
 		{"nix profile install nixpkgs#hello", true},
+		{"pipx install ruff", true},
+		// yarn/composer's "global" is a positional subcommand modifier —
+		// the real verb sits one position further right.
+		{"yarn global add evilpkg", true},
+		{"composer global require vendor/evilpkg", true},
 		// Chained commands.
 		{"cd /tmp \u0026\u0026 npm install", true},
 		{"echo hi; pip install evil", true},
@@ -385,7 +390,11 @@ func TestIsPackageInstallCommand(t *testing.T) {
 		{"git status", false},
 		{"echo hello", false},
 		{"ls -la", false},
-		{"npm install -g", true}, // global install is still install
+		{"npm install -g", true},           // global install is still install
+		{"pipx run ruff", false},           // run, not install (untrusted-exec instead)
+		{"yarn global list", false},        // global read, not install
+		{"composer global update", false},  // global mutation, but not require/install
+		{"sh -c 'npm install evil'", true}, // shell-wrapped install
 	}
 	for _, c := range cases {
 		got := isPackageInstallCommand(c.cmd)
@@ -449,15 +458,62 @@ func TestIsDestructiveCommand(t *testing.T) {
 		{"r''m -rf /tmp/x", true}, // quote-spliced — real bash for "rm"
 		{"'r'm -rf /tmp/x", true},
 		{`r"m" -rf /tmp/x`, true},
+		// Red-team round 2: wrapper binaries beyond sudo/env/time/nohup/
+		// command — everyday idioms for bounding/serializing/backgrounding
+		// a command, not exotic obfuscation.
+		{"timeout 10 rm -rf /tmp/foo", true},
+		{"timeout -s SIGKILL 10 rm -rf /tmp/foo", true},
+		{"nice -n 19 rm -rf /tmp/foo", true},
+		{"flock /tmp/lock rm -rf /tmp/foo", true},
+		{"flock -w 5 /tmp/lock rm -rf /tmp/foo", true},
+		{"setsid rm -rf /tmp/foo", true},
+		{"stdbuf -i0 rm -rf /tmp/foo", true},
+		{"watch -n1 rm -rf /tmp/foo", true},
+		{"busybox rm -rf /tmp/foo", true},
+		{"sudo timeout 10 nice -n 19 rm -rf /tmp/foo", true}, // chained wrappers
+		// xargs builds the wrapped command's argv from stdin — the
+		// destructive verb is xargs's own argument, not its first token.
+		{"find . -type f | xargs rm -f", true},
+		{"ls -la | xargs rm -rf", true},
+		{"find . -name '*.tmp' | xargs -I{} rm {}", true},
+		// A subshell or brace group must be exactly as visible as its
+		// unwrapped equivalent — including a later statement hidden behind
+		// an innocuous first one (parens are depth-tracked, so a naive
+		// split alone would never expose it).
+		{"(rm -rf /tmp/foo)", true},
+		{"{ rm -rf /tmp/foo; }", true},
+		{"(echo hi; rm -rf /tmp/x)", true},
+		{"(echo hi && rm -rf /tmp/x)", true},
+		// A shell interpreter given a script string carries the real
+		// command as an opaque argument, not a literal next token.
+		{`find . -exec sh -c 'rm -rf {}' \;`, true},
+		{`nohup sh -c 'rm -rf /tmp/foo' &`, true},
+		{`bash -c "rm -rf /tmp/x"`, true},
+		{`sh -c 'echo hi; rm -rf /tmp/x'`, true},
+		// git subcommands that delete tracked files or discard work,
+		// looked at past any wrapper prefix too.
+		{"git rm -rf .", true},
+		{"git rm file.go", true},
+		{"git checkout -- .", true},
+		{"git restore -- .", true},
+		{"git reset --hard", true},
+		{"git push --force", true},
+		{"git push -f origin main", true},
+		{"sudo git rm -rf .", true},
 		// Non-destructive.
 		{"cat file.txt", false},
 		{"ls -la", false},
 		{"git status", false},
+		{"git push", false},          // plain push — LLM-judged, not a hard escalation
+		{"git checkout main", false}, // branch switch, not a discard
 		{"echo rm", false},
 		{"find . -name '*.go'", false},
 		{"find . -exec cat {} \\\\;", false},
 		{"npm install", false}, // install, not destructive
 		{"make install", false},
+		{"nice -n 19 echo hi", false},
+		{"timeout 10 npm test", false},
+		{"sh -c 'echo hi'", false},
 	}
 	for _, c := range cases {
 		got := isDestructiveCommand(c.cmd)

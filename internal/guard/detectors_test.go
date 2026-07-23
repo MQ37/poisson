@@ -48,6 +48,20 @@ func TestGhApiIsMutating(t *testing.T) {
 		"gh api repos/x/y -X PATCH",
 		"gh api repos/x/y --method PUT",
 		"gh api repos/x/y -X post", // case-insensitive
+		// Implicit POST via -f/-F/--raw-field/--field — no --method/-X at
+		// all. This is the common real-world way to mutate via gh api
+		// (issue/comment/collaborator/gist creation, repo settings), per
+		// gh's own docs: "default HTTP request method is GET ... POST if
+		// any parameters were added".
+		"gh api repos/x/y/issues -f title=pwn",
+		"gh api repos/x/y/collaborators/attacker -f permission=admin",
+		"gh api gists -F public=true",
+		"gh api repos/x/y --raw-field archived=true",
+		"gh api repos/x/y --field archived=true",
+		// GraphQL always POSTs; a mutation there is indistinguishable from
+		// a query by argument shape alone, so the endpoint itself is
+		// enough to flag it.
+		"gh api graphql -f query=mutation{deleteRepository}",
 	}
 	for _, cmd := range mutating {
 		if !ghApiIsMutating(tokenize(cmd)) {
@@ -58,6 +72,9 @@ func TestGhApiIsMutating(t *testing.T) {
 		"gh api repos/x/y/issues",
 		"gh api repos/x/y --method GET",
 		"gh api repos/x/y -X GET",
+		// Explicit GET always wins, even with field params (gh sends them
+		// as a query string instead of a POST body).
+		"gh api repos/x/y --method GET -f q=1",
 	}
 	for _, cmd := range safe {
 		if ghApiIsMutating(tokenize(cmd)) {
@@ -100,6 +117,13 @@ func TestGitSubIsMutating(t *testing.T) {
 		"git remote add origin url",
 		"git remote rename old new",
 		"git remote set-url origin url",
+		// Force-move an existing ref — doesn't delete, but silently
+		// repoints a release tag or a branch (possibly main) to an
+		// arbitrary commit with no fast-forward safety check.
+		"git branch -f main HEAD~50",
+		"git branch --force main HEAD~50",
+		"git tag -f v1.0.0 HEAD~50",
+		"git tag --force v1.0.0 HEAD~50",
 	}
 	for _, cmd := range mutating {
 		if !gitSubIsMutating(tokenize(cmd)) {
@@ -327,6 +351,67 @@ func TestClassify_QuoteSplicedDestructiveCommand(t *testing.T) {
 		}
 		if !strings.Contains(reason, "destructive") {
 			t.Errorf("Classify(%q) reason = %q, want it recognized as a destructive command, not just \"not in safe list\"", cmd, reason)
+		}
+	}
+}
+
+// TestSafeListCommandName_RejectsLookalikes locks down the fix for a real
+// command-name-spoofing gap: normalizeToken's path-Base stripping is
+// correct for the "flag as dangerous" direction (over-inclusive there is
+// harmless) but was, before this fix, also used to decide SAFE-list trust —
+// letting a relative or arbitrary-absolute path whose final component
+// merely spells a safe-listed name (e.g. "./evil/Cat", planted by an
+// attacker or a manipulated agent in any writable directory) auto-run with
+// zero LLM/human review, and incidentally letting malformed fragments like
+// "(0000/Cd" (found by fuzzing) slip through as "cd" too.
+func TestSafeListCommandName_RejectsLookalikes(t *testing.T) {
+	notEligible := []string{
+		"./evil/Cat",       // relative path lookalike
+		"evil/Cat",         // relative, no leading "./"
+		"/tmp/attacker/ls", // absolute but writable-dir lookalike
+		"0000/Cd",          // malformed fragment, coincidental Base match
+		"garbage/Cat",
+	}
+	for _, tok := range notEligible {
+		if got := safeListCommandName(tok); got != "" {
+			t.Errorf("safeListCommandName(%q) = %q, want \"\" (not eligible for SAFE-list trust)", tok, got)
+		}
+	}
+	eligible := []struct{ tok, want string }{
+		{"cat", "cat"},          // bare — real $PATH lookup
+		{"CAT", "cat"},          // case-insensitive
+		{"/usr/bin/git", "git"}, // standard system directory
+		{"/bin/cat", "cat"},
+		{"/usr/local/bin/rg", "rg"},
+	}
+	for _, c := range eligible {
+		if got := safeListCommandName(c.tok); got != c.want {
+			t.Errorf("safeListCommandName(%q) = %q, want %q", c.tok, got, c.want)
+		}
+	}
+}
+
+// TestClassify_RejectsCommandNameLookalike is the end-to-end version: a
+// path-qualified lookalike must fail the SAFE list (fall through to
+// LLM/human review), not auto-run.
+func TestClassify_RejectsCommandNameLookalike(t *testing.T) {
+	cmds := []string{
+		"./evil/Cat notes.txt",
+		"evil/Cat notes.txt",
+		"/tmp/attacker/ls -la",
+		"(0000/Cd",
+		"{0000/Cd",
+	}
+	for _, cmd := range cmds {
+		if safe, reason := Classify(cmd); safe {
+			t.Errorf("Classify(%q) = safe (reason=%q), want unsafe", cmd, reason)
+		}
+	}
+	// Sanity: the legitimate forms these are impersonating still work.
+	legit := []string{"cat notes.txt", "/usr/bin/git status", "ls -la"}
+	for _, cmd := range legit {
+		if safe, reason := Classify(cmd); !safe {
+			t.Errorf("Classify(%q) = unsafe (%s), want safe", cmd, reason)
 		}
 	}
 }

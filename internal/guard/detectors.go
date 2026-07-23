@@ -289,21 +289,47 @@ func findHasDangerousFlag(tokens []string) bool {
 	return false
 }
 
-// ghApiIsMutating detects gh api calls that are not GET (mutations).
-// gh api with --method POST/PUT/PATCH/DELETE is mutating.
+// ghApiIsMutating detects gh api calls that are not GET (mutations). Per gh's
+// own docs ("gh api --help"): the default HTTP method is GET, and only
+// switches to POST if -f/--raw-field or -F/--field parameters are given
+// (this is the common way to mutate — issue/comment/collaborator/gist
+// creation, repo settings, GraphQL mutations — and is far more frequent in
+// practice than an explicit --method flag). --method/-X GET is an explicit
+// override that always wins, matching gh's own precedence. The "graphql"
+// endpoint is also always flagged: the GitHub GraphQL API only accepts
+// POST, and a mutation there ("mutation { ... }") looks identical to a
+// query call from the CLI's argument shape alone.
 func ghApiIsMutating(tokens []string) bool {
+	explicitGet := false
+	explicitMutate := false
+	hasFieldParam := false
+	hasGraphqlEndpoint := false
 	for i, t := range tokens {
-		if t == "--method" || t == "-X" {
+		switch t {
+		case "--method", "-X":
 			if i+1 < len(tokens) {
-				m := strings.ToUpper(tokens[i+1])
-				switch m {
+				switch strings.ToUpper(tokens[i+1]) {
+				case "GET", "HEAD":
+					explicitGet = true
 				case "POST", "PUT", "PATCH", "DELETE":
-					return true
+					explicitMutate = true
 				}
+			}
+		case "-f", "-F":
+			hasFieldParam = true
+		default:
+			if matchesFlag(t, "", "--raw-field") || matchesFlag(t, "", "--field") {
+				hasFieldParam = true
+			}
+			if strings.EqualFold(t, "graphql") {
+				hasGraphqlEndpoint = true
 			}
 		}
 	}
-	return false
+	if explicitGet {
+		return false
+	}
+	return explicitMutate || hasFieldParam || hasGraphqlEndpoint
 }
 
 // gitSubIsMutating detects mutating git subcommands (push, commit, rebase,
@@ -329,18 +355,24 @@ func gitSubIsMutating(tokens []string) bool {
 			return true
 		}
 	}
-	// branch with delete/move flags.
+	// branch with delete/move/force flags. -f/--force silently repoints an
+	// existing ref (no fast-forward safety check) instead of just creating
+	// or listing — just as mutating as delete/move, and previously missed
+	// here entirely.
 	if sub == "branch" {
 		for _, t := range tokens[2:] {
-			if t == "-d" || t == "-D" || t == "--delete" || t == "-m" || t == "--move" {
+			if t == "-d" || t == "-D" || t == "--delete" || t == "-m" || t == "--move" ||
+				matchesFlag(t, "-f", "--force") {
 				return true
 			}
 		}
 	}
-	// tag with delete flag.
+	// tag with delete/force flags. -f/--force silently repoints an existing
+	// tag to an arbitrary commit — same "not just create/list" reasoning
+	// as branch above.
 	if sub == "tag" {
 		for _, t := range tokens[2:] {
-			if t == "-d" || t == "--delete" {
+			if t == "-d" || t == "--delete" || matchesFlag(t, "-f", "--force") {
 				return true
 			}
 		}
@@ -490,6 +522,89 @@ func matchesFlag(token, short, long string) bool {
 		name = token[:eq]
 	}
 	return strings.HasPrefix(long, name)
+}
+
+// skipGroupTokens drops any leading tokens that are "{" or "}" — pure
+// grouping syntax, not a real command name — so the caller's tokens[0] is
+// the actual command a "{ rm -rf x; }" brace group really invokes (see
+// guard.Segments' doc comment for why braces need this while parens don't).
+//
+// Skips nothing at all unless groupWellFormed is true — the caller has
+// already verified the overall command has both a "{"-leading segment and
+// a matching bare "}" segment somewhere (from the same guard.Segments
+// call). Without that check, an unmatched "{" or "}" (malformed/incomplete
+// input — a real shell would reject it as a syntax error and never
+// execute anything) would let whatever follows it be treated as a clean,
+// standalone command, e.g. the unbalanced "{ CAt" or "} CAt" resolving to
+// a bare, trusted-looking "cat" and passing the SAFE list (found by
+// fuzzing).
+//
+// Deliberately does NOT skip "(" / ")" at all, under any condition: by the
+// time a segment reaches this point, Segments' group-flattening has
+// already unwrapped every well-formed "(...)" group — a leading "("
+// surviving to here means it never closed, with no sibling-segment check
+// able to rescue it (parens are depth-tracked, so an unbalanced "("
+// swallows the rest of the string into one segment rather than leaving a
+// separate closing ")" segment to look for).
+func skipGroupTokens(tokens []string, groupWellFormed bool) []string {
+	if !groupWellFormed {
+		return tokens
+	}
+	i := 0
+	for i < len(tokens) && (tokens[i] == "{" || tokens[i] == "}") {
+		i++
+	}
+	return tokens[i:]
+}
+
+// standardBinDirs are the well-known system binary directories a normal,
+// unprivileged user can't write into. Only used by safeListCommandName —
+// see its doc comment for why this matters.
+var standardBinDirs = map[string]bool{
+	"/bin": true, "/usr/bin": true, "/usr/local/bin": true,
+	"/sbin": true, "/usr/sbin": true, "/usr/local/sbin": true,
+	"/opt/homebrew/bin": true, "/opt/homebrew/sbin": true,
+}
+
+// safeListCommandName returns the command name eligible to match the SAFE
+// list for token, or "" if token isn't eligible at all. Deliberately
+// stricter than normalizeToken's general path-prefix stripping (which is
+// fine — even desirable — for the "flag this as dangerous" direction, where
+// being over-inclusive just means one extra human confirmation): granting
+// SAFE-list trust is the one place in this whole guard where a
+// misjudgment means a command runs with *zero* review at all, so it must
+// never trust a mere basename match.
+//
+// A bare token with no "/" (e.g. "cat") is genuinely resolved via $PATH, so
+// on a normal system it really is the trusted system tool of that name.
+// But a slash-QUALIFIED path — relative ("./cat", "some/dir/cat") or
+// absolute outside the standard system directories — bypasses $PATH
+// entirely and just execs whatever file sits at that exact location. Any
+// caller (an attacker, or a manipulated agent) able to write anywhere at
+// all — the project's own working directory, /tmp, a subfolder under
+// $HOME — could otherwise plant a file literally named "cat"/"ls"/"git"
+// containing anything, and have it silently auto-approved as though it
+// were the real, trusted tool merely because its path *ends* in that name.
+// This also closes a more mundane correctness bug fuzzing found: a
+// malformed/incomplete fragment like "(0000/Cd" was normalizing (via
+// filepath.Base of the whole leftover string) to a bare "cd" and matching
+// the SAFE list, even though it isn't a real command invocation at all.
+//
+// A relative path, or an absolute path outside standardBinDirs, might
+// genuinely be the trusted tool — this guard just has no way to tell that
+// apart from a lookalike, so it never silently trusts it. Such a token is
+// checked byte-for-byte against the SAFE list instead (which will simply
+// never match), falling through to LLM/human review — fails closed, not
+// open.
+func safeListCommandName(token string) string {
+	t := stripEmbeddedQuotes(strings.TrimSpace(token))
+	if !strings.Contains(t, "/") {
+		return strings.ToLower(t)
+	}
+	if standardBinDirs[filepath.Dir(t)] {
+		return strings.ToLower(filepath.Base(t))
+	}
+	return ""
 }
 
 // normalizeToken trims whitespace, lowercases the command name, and strips a

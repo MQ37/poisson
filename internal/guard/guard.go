@@ -52,6 +52,30 @@ func ClassifyInDir(command, workdir string) (safe bool, reason string) {
 	// 3. Split into segments.
 	segs := Segments(raw)
 
+	// A leading "{" is only safe to skip past (see skipGroupTokens) if the
+	// group is well-formed: *some* segment leads with "{" (an opener
+	// exists at all — a bare "}" alone, with no opener anywhere, is just
+	// as malformed as an opener with no closer) *and* some other segment
+	// is the matching bare "}". Otherwise the "{" never closes
+	// (malformed/incomplete input, which real bash would itself reject as
+	// a syntax error and never execute at all) and treating whatever
+	// follows it as a clean, standalone command would let something like
+	// "{ CAt" resolve to a bare, trusted-looking "cat" and pass the SAFE
+	// list — found by fuzzing (FuzzClassifySafeInvariant), along with the
+	// bare-"}"-alone variant.
+	hasOpenBrace, hasCloseBrace := false, false
+	for _, s := range segs {
+		t := strings.TrimSpace(s)
+		if t == "}" {
+			hasCloseBrace = true
+			continue
+		}
+		if toks := tokenize(t); len(toks) > 0 && toks[0] == "{" {
+			hasOpenBrace = true
+		}
+	}
+	braceGroupWellFormed := hasOpenBrace && hasCloseBrace
+
 	// Collect all tokens across segments for path/env checks.
 	var allTokens []string
 
@@ -61,6 +85,35 @@ func ClassifyInDir(command, workdir string) (safe bool, reason string) {
 			continue
 		}
 		allTokens = append(allTokens, tokens...)
+		// Skip leading pure-syntax grouping tokens ("{", "}" — a brace
+		// group's interior operators already leak to the top level in
+		// rawSegments, see guard.Segments doc, but its opening "{" stays
+		// glued to the segment via whitespace, not an operator, so it's
+		// still the segment's tokens[0] here). "(" / ")" are handled by
+		// Segments' group-flattening before segments ever reach this loop
+		// — a leading "(" surviving to this point means it never closed,
+		// so skipGroupTokens deliberately leaves it alone (see its doc).
+		tokens = skipGroupTokens(tokens, braceGroupWellFormed)
+		if len(tokens) == 0 {
+			// A bare "}" segment is the harmless tail of a brace group
+			// whose opening "{" (and everything inside) was already fully
+			// checked as its own segment(s) above — nothing left to check.
+			// Gated on braceGroupWellFormed too: a "}" with no "{" opener
+			// anywhere (e.g. the whole command is just "}") is exactly as
+			// malformed as an unmatched "{" and must fail closed the same
+			// way, not be waved through as if it were a validated pair.
+			if braceGroupWellFormed && strings.TrimSpace(seg) == "}" {
+				continue
+			}
+			// Anything else that's nothing but grouping punctuation (e.g.
+			// a bare, unbalanced "(" that flattenGroup couldn't unwrap, or
+			// a "{" with no matching close anywhere) has no recognizable
+			// command at all — that's strictly less information than an
+			// ordinary segment, so it fails closed (blocked, not silently
+			// skipped) rather than falling through with nothing left to
+			// check and no reason ever set to unsafe.
+			return false, "command not in safe list: " + seg
+		}
 
 		// Check first token for destructive commands.
 		first := normalizeToken(tokens[0])
@@ -137,6 +190,16 @@ func isEnvAssignment(token string) bool {
 	return true
 }
 
+// IsEnvAssignment is IsEnvAssignment exported for callers outside this
+// package (agent's deterministic risk escalators) that need to recognize a
+// leading "NAME=value" prefix the same way the git-commit detector does.
+func IsEnvAssignment(token string) bool { return isEnvAssignment(token) }
+
+// IsShellInterpreter reports whether name (already normalized) is a shell
+// that executes a script via "-c '<commands>'" — bash, sh, zsh, dash, ksh,
+// fish. Exported for the same reason as IsEnvAssignment.
+func IsShellInterpreter(name string) bool { return shellInterpreters[name] }
+
 // gitSubcommandAfter returns the subcommand token following "git" in tokens
 // (tokens[gitIdx] must already be "git" — skipping any leading environment
 // assignments before gitIdx is the caller's job), skipping any global options
@@ -170,6 +233,82 @@ func gitSubcommandAfter(tokens []string, gitIdx int) string {
 // POISSON_SANDBOX: a sandboxed commit still needs the same hard stop as an
 // unsandboxed one.
 func IsGitCommit(command string) bool {
+	return anyGitInvocationMatches(command, func(sub string, _ []string) bool {
+		return sub == "commit"
+	})
+}
+
+// IsGitDangerous reports whether any segment of command invokes a git
+// subcommand that permanently discards work or history: commit (see
+// IsGitCommit), rm (deletes tracked files), checkout/restore with a "--"
+// pathspec separator (discards uncommitted changes to those paths), reset
+// --hard (discards uncommitted changes repo-wide), or push/branch/tag with
+// a force flag (can overwrite or lose remote/ref history with no
+// fast-forward safety check). Same traversal rules as IsGitCommit (env
+// prefix, global options, one level into a shell wrapper); same hard-stop
+// use: never let an LLM risk classifier auto-approve these.
+func IsGitDangerous(command string) bool {
+	return anyGitInvocationMatches(command, gitSubcommandIsDangerous)
+}
+
+// GitInvocationIsDangerous reports whether tokens — already tokenized and
+// normalized, with tokens[0] == "git" — invokes a dangerous git subcommand
+// (see IsGitDangerous). Exported for callers that have already resolved
+// past their own wrapper prefix (sudo, timeout, an env-assignment, ...) via
+// their own logic and just need the git-specific judgment applied to the
+// remaining tokens, without re-parsing the original string (which would
+// have to rediscover the same wrapper prefix all over again).
+func GitInvocationIsDangerous(tokens []string) bool {
+	if len(tokens) == 0 || normalizeToken(tokens[0]) != "git" {
+		return false
+	}
+	return gitSubcommandIsDangerous(gitSubcommandAfter(tokens, 0), tokens)
+}
+
+func gitSubcommandIsDangerous(sub string, tokens []string) bool {
+	switch sub {
+	case "commit", "rm":
+		return true
+	case "checkout", "restore":
+		return tokenPresent(tokens, "--")
+	case "reset":
+		return hasAnyFlag(tokens, "", "--hard")
+	case "push":
+		return hasAnyFlag(tokens, "-f", "--force") ||
+			hasAnyFlag(tokens, "", "--force-with-lease") ||
+			hasAnyFlag(tokens, "", "--force-if-includes")
+	case "branch", "tag":
+		return hasAnyFlag(tokens, "-f", "--force")
+	}
+	return false
+}
+
+func tokenPresent(tokens []string, want string) bool {
+	for _, t := range tokens {
+		if t == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyFlag(tokens []string, short, long string) bool {
+	for _, t := range tokens {
+		if matchesFlag(t, short, long) {
+			return true
+		}
+	}
+	return false
+}
+
+// anyGitInvocationMatches walks every segment of command looking for a git
+// invocation — directly, past a leading env-assignment prefix, past global
+// git options before the subcommand, or one level into a shell-wrapped
+// invocation ("sh -c 'git ...'") — and reports whether match returns true
+// for the subcommand found (sub) given the remaining tokens starting at
+// "git" (so match can inspect flags anywhere in the invocation, not just
+// the subcommand word itself).
+func anyGitInvocationMatches(command string, match func(sub string, tokens []string) bool) bool {
 	for _, seg := range Segments(command) {
 		tokens := tokenize(seg)
 		i := 0
@@ -179,17 +318,20 @@ func IsGitCommit(command string) bool {
 		if i >= len(tokens) {
 			continue
 		}
-		if normalizeToken(tokens[i]) == "git" && gitSubcommandAfter(tokens, i) == "commit" {
-			return true
+		if normalizeToken(tokens[i]) == "git" {
+			sub := gitSubcommandAfter(tokens, i)
+			if match(sub, tokens[i:]) {
+				return true
+			}
 		}
 		// One level into a shell wrapper: "sh -c 'git commit -m foo'",
 		// "bash -c \"git add -A && git commit\"". Not a real shell parse —
-		// just a textual "does the script argument mention git and commit as
-		// separate words" heuristic, which only ever adds an extra human
+		// just a textual "does the script argument mention git as a
+		// separate word" heuristic, which only ever adds an extra human
 		// confirmation in the false-positive case, never removes one.
 		if shellInterpreters[normalizeToken(tokens[i])] {
 			for _, arg := range tokens[i+1:] {
-				if IsGitCommit(strings.Trim(arg, `'"`)) {
+				if anyGitInvocationMatches(strings.Trim(arg, `'"`), match) {
 					return true
 				}
 			}
@@ -255,6 +397,22 @@ func tokenize(seg string) []string {
 			i += 2
 			continue
 		}
+		// Unquoted '(' / ')' are always their own shell operator tokens in
+		// real bash — a word can never legitimately contain one unescaped,
+		// unquoted (subshells don't need surrounding whitespace: "(rm -rf
+		// x)" is valid). Without this, "(rm" glues into one token that no
+		// per-command detector (which switches on tokens[0]) ever
+		// recognizes as "rm" — see guard.Segments' group-flattening, which
+		// depends on this split to find the real command inside a subshell.
+		if c == '(' || c == ')' {
+			if cur.Len() > 0 {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+			}
+			tokens = append(tokens, string(c))
+			i++
+			continue
+		}
 		cur.WriteByte(c)
 		i++
 	}
@@ -270,7 +428,10 @@ func isSegmentSafe(tokens []string) bool {
 	if len(tokens) == 0 {
 		return false
 	}
-	cmd := normalizeToken(tokens[0])
+	cmd := safeListCommandName(tokens[0])
+	if cmd == "" {
+		return false
+	}
 
 	// Build the candidate prefix from the first 1–3 tokens, normalized.
 	candidates := []string{cmd}

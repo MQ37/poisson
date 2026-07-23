@@ -58,6 +58,55 @@ func TestIsGitCommit(t *testing.T) {
 	}
 }
 
+func TestIsGitDangerous(t *testing.T) {
+	yes := []string{
+		"git commit -m wip", // superset of IsGitCommit
+		"git rm -rf .",
+		"git rm file.go",
+		"git checkout -- .",
+		"git checkout -- file.go",
+		"git restore -- .",
+		"git reset --hard",
+		"git reset --hard HEAD~3",
+		"git push --force",
+		"git push -f origin main",
+		"git push --force-with-lease",
+		"git push --force-if-includes",
+		"git branch -f main HEAD~50",
+		"git branch --force main HEAD~50",
+		"git tag -f v1.0.0 HEAD~50",
+		// Global options / env prefix / shell wrapper — same traversal as
+		// IsGitCommit.
+		"git -C /repo push --force",
+		"GIT_AUTHOR_NAME=x git rm -rf .",
+		`sh -c "git push --force"`,
+	}
+	for _, cmd := range yes {
+		if !IsGitDangerous(cmd) {
+			t.Errorf("IsGitDangerous(%q) = false, want true", cmd)
+		}
+	}
+	no := []string{
+		"git status",
+		"git log --oneline",
+		"git checkout main",       // branch switch, not a discard
+		"git checkout -b feature", // new branch, not a discard
+		"git push",                // plain push — LLM-judged medium, not a hard escalation
+		"git push origin main",
+		"git reset",      // no --hard: mixed reset, doesn't touch working tree
+		"git reset HEAD", // still no --hard
+		"git branch feature",
+		"git branch -d feature", // delete, not force — already caught elsewhere
+		"git tag v1.0.0",
+		"git rm-old-thing", // not a separate "rm" token
+	}
+	for _, cmd := range no {
+		if IsGitDangerous(cmd) {
+			t.Errorf("IsGitDangerous(%q) = true, want false", cmd)
+		}
+	}
+}
+
 func TestSegments(t *testing.T) {
 	tests := []struct {
 		cmd  string
@@ -87,10 +136,116 @@ func TestSegments(t *testing.T) {
 }
 
 func TestSegments_Parentheses(t *testing.T) {
-	// Parens at top level split; inside parens don't split.
+	// A "(...)" subshell is recursively flattened into its own inner
+	// segments, not returned as one opaque blob — every statement inside
+	// must be exactly as visible to per-command detectors as if it were
+	// unwrapped, including the second one (a bare depth-tracking split
+	// would never expose it, since parens suppress their interior ";" from
+	// reaching the top level).
 	got := Segments("echo a; (echo b; echo c)")
-	if len(got) != 2 {
-		t.Errorf("expected 2 segments, got %d: %v", len(got), got)
+	want := []string{"echo a", "echo b", "echo c"}
+	if len(got) != len(want) {
+		t.Fatalf("Segments(...) = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Segments(...)[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestSegments_GroupFlattening(t *testing.T) {
+	tests := []struct {
+		cmd  string
+		want []string
+	}{
+		// Single command, no space after '(' — real bash allows this.
+		{"(rm -rf /tmp/foo)", []string{"rm -rf /tmp/foo"}},
+		// A later statement inside a multi-statement subshell, hidden
+		// behind an innocuous first one, must still surface on its own —
+		// parens are depth-tracked, so a naive top-level split alone would
+		// never expose it (unlike braces below, whose interior operators
+		// already leak to the top level; see TestSegments_BraceGroup).
+		{"(echo hi; rm -rf /tmp/x)", []string{"echo hi", "rm -rf /tmp/x"}},
+		{"(echo hi && rm -rf /tmp/x)", []string{"echo hi", "rm -rf /tmp/x"}},
+		// Nested groups unwrap recursively.
+		{"((rm -rf /tmp/x))", []string{"rm -rf /tmp/x"}},
+		// Piped into a subshell.
+		{"cat foo |(rm -rf /tmp/x)", []string{"cat foo", "rm -rf /tmp/x"}},
+		// Not a group: '(' isn't the first character.
+		{"echo (a)", []string{"echo (a)"}},
+	}
+	for _, tc := range tests {
+		got := Segments(tc.cmd)
+		if len(got) != len(tc.want) {
+			t.Errorf("Segments(%q) = %v, want %v", tc.cmd, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("Segments(%q)[%d] = %q, want %q", tc.cmd, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
+// TestSegments_BraceGroup documents why Segments doesn't need — and must
+// not gain — depth-tracking for '{'/'}' the way it has for '('/')': unlike
+// parens, a bare unquoted '{' or '}' routinely appears unbalanced in
+// ordinary arguments (regexes, glob-like text, JSON fragments) that have
+// nothing to do with "{ cmd; }" grouping syntax. Blindly tracking brace
+// depth would let one stray unquoted '{' in an argument suppress splitting
+// for the rest of the command — hiding everything after it (including any
+// destructive command) inside one glued, unscanned blob. Real bash's own
+// "{ ...; }" grouping syntax requires a command terminator immediately
+// before the closing '}', so that terminator is always exposed as an
+// ordinary top-level separator anyway — Segments splits on it like any
+// other ';'/'&&'/'||', with no group-aware depth-tracking required. Only
+// the leading "{" token (glued to the group by whitespace, not an
+// operator) needs to be recognized and skipped by whatever resolves "the
+// real command" downstream — see guard.checkPerCommandDetectors and
+// agent.skipWrapperTokens.
+func TestSegments_BraceGroup(t *testing.T) {
+	got := Segments("{ rm -rf /tmp/foo; }")
+	want := []string{"{ rm -rf /tmp/foo", "}"}
+	if len(got) != len(want) {
+		t.Fatalf("Segments(...) = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Segments(...)[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestClassify_RejectsUnclosedGroup locks down two fuzz-found variants of
+// the same bug class: a "{" or "(" that never closes (malformed/incomplete
+// input a real shell would itself reject as a syntax error, never
+// executing anything) must not have whatever follows it treated as a
+// clean, standalone command — that let "(0000/Cd" and "{ CAt" resolve to a
+// bare, trusted-looking "cd"/"cat" and pass the SAFE list.
+func TestClassify_RejectsUnclosedGroup(t *testing.T) {
+	cmds := []string{
+		"(",
+		"{",
+		"}", // bare close, no opener anywhere at all
+		"(Cd",
+		"{ CAt",
+		"(0000/Cd",
+		"{ rm -rf /tmp/x", // no closing "}" anywhere
+		"(rm -rf /tmp/x",  // no closing ")" anywhere
+	}
+	for _, cmd := range cmds {
+		if safe, reason := Classify(cmd); safe {
+			t.Errorf("Classify(%q) = safe (reason=%q), want unsafe (unclosed group)", cmd, reason)
+		}
+	}
+	// Sanity: the well-formed, properly-closed equivalents still work.
+	legit := []string{"{ cat notes.txt; }", "(cat notes.txt)"}
+	for _, cmd := range legit {
+		if safe, reason := Classify(cmd); !safe {
+			t.Errorf("Classify(%q) = unsafe (%s), want safe", cmd, reason)
+		}
 	}
 }
 

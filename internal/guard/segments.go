@@ -8,7 +8,96 @@ import "strings"
 // Quoted strings (single and double) are not split.
 // Parentheses nesting is tracked so that |() / &() subshell separators are
 // only recognized at the top level.
+//
+// A segment that, once trimmed, is entirely wrapped by one top-level
+// "(...)" subshell or "{ ...; }" group is recursively flattened into its
+// own inner segments rather than returned as one opaque blob — real bash
+// runs a group's contents as ordinary commands, just scoped, so
+// "(rm -rf x)" and "{ echo hi; rm -rf x; }" must be exactly as visible to
+// every per-command detector as their unwrapped equivalents. Without this,
+// the group's first "token" is a bare grouping character no detector
+// recognizes as a command name, and any statement after the first inside a
+// multi-statement "(...)" group (parens are depth-tracked, so its internal
+// ";"/"&&"/"||" never reaches the top level on their own) is never even
+// looked at.
 func Segments(cmd string) []string {
+	var out []string
+	for _, seg := range rawSegments(cmd) {
+		out = append(out, flattenGroup(seg)...)
+	}
+	return out
+}
+
+// flattenGroup recursively unwraps seg if it is entirely one top-level
+// "(...)" or "{...}" group, returning its interior's own segments. Returns
+// seg unchanged (as a one-element slice) if it isn't such a group.
+func flattenGroup(seg string) []string {
+	t := strings.TrimSpace(seg)
+	if len(t) < 2 || (t[0] != '(' && t[0] != '{') {
+		return []string{seg}
+	}
+	if !closesAtEnd(t) {
+		return []string{seg}
+	}
+	inner := strings.TrimSpace(t[1 : len(t)-1])
+	if inner == "" {
+		return nil
+	}
+	return Segments(inner)
+}
+
+// closesAtEnd reports whether t — which starts with '(' or '{' — has its
+// balancing close at the very last byte, i.e. t is one fully-enclosing
+// group rather than a group followed by trailing text or two adjacent
+// groups. Assumes well-formed (balanced) input; malformed input just
+// returns false, leaving the segment unflattened (fails safe — it's still
+// scanned as an opaque blob exactly as before, never auto-approved).
+func closesAtEnd(t string) bool {
+	var wantClose byte
+	switch t[0] {
+	case '(':
+		wantClose = ')'
+	case '{':
+		wantClose = '}'
+	default:
+		return false
+	}
+	depth := 0
+	inSingle, inDouble := false, false
+	for i := 0; i < len(t); i++ {
+		c := t[i]
+		switch {
+		case inSingle:
+			if c == '\'' {
+				inSingle = false
+			}
+		case inDouble:
+			if c == '\\' && i+1 < len(t) {
+				i++
+			} else if c == '"' {
+				inDouble = false
+			}
+		case c == '\'':
+			inSingle = true
+		case c == '"':
+			inDouble = true
+		case c == '(' || c == '{':
+			depth++
+		case c == ')' || c == '}':
+			depth--
+			if depth < 0 {
+				return false
+			}
+			if depth == 0 {
+				return i == len(t)-1 && c == wantClose
+			}
+		}
+	}
+	return false
+}
+
+// rawSegments is Segments' top-level splitter, before group-flattening.
+func rawSegments(cmd string) []string {
 	var segs []string
 	var cur strings.Builder
 	i := 0
