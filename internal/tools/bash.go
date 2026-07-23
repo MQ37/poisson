@@ -33,7 +33,7 @@ func NewBashTool(cwd string, sandbox bool, approvalFn func(ctx context.Context, 
 func (t *BashTool) Name() string { return "bash" }
 
 func (t *BashTool) Description() string {
-	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. Safe commands run automatically; gated commands classified as low risk run automatically; medium/high/unknown require human approval. A command that is just cat/head/tail/sed -n/grep/rg/find/ls standing in for the read/search/glob/ls tool is refused — use that tool instead."
+	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. A command that is just cat/head/tail/sed -n standing in for the read tool is refused — use that tool instead (offset/limit, image support, skips the gate too)."
 }
 
 func (t *BashTool) Schema() json.RawMessage {
@@ -78,11 +78,11 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		return ToolResult{Error: "command is required"}, nil
 	}
 
-	// A command that is plainly just a stand-in for read/search/glob/ls is
-	// refused outright, before approval or execution: those tools do the same
-	// job for less (no approval round trip, no process spawn) and returning
-	// real output here would only reward the wrong habit. Sandbox mode skips
-	// this too (see dedicatedToolHint).
+	// A command that is plainly just a stand-in for read is refused
+	// outright, before approval or execution: that tool does the same job
+	// for less (no approval round trip, offset/limit, image decode) and
+	// returning real output here would only reward the wrong habit. Sandbox
+	// mode skips this too (see dedicatedToolHint).
 	if !t.sandbox {
 		if h := dedicatedToolHint(in.Command); h != "" {
 			return ToolResult{Error: "blocked: " + h}, nil
@@ -214,11 +214,15 @@ func cdWorkdirHint(command, workdir string) string {
 }
 
 // dedicatedToolHint reports (and, in Execute, blocks) when a command is
-// plainly just a stand-in for read/search/glob/ls — those tools skip the
-// approval gate entirely (see their descriptions), unlike bash. Only fires
-// when the command boils down to a single segment (after stripping a
-// leading `cd DIR &&`, see cdWorkdirHint) with no redirects, so it won't
-// fire on multi-step pipelines that legitimately combine several commands.
+// plainly just a stand-in for read — the only tool left that still beats an
+// equivalent bash call (offset/limit line ranges, image decode, no shell
+// parsing) — skipping the approval gate entirely (see its description).
+// ls/grep/rg/find have no such dedicated tool anymore: they're plain bash,
+// gated by the deterministic guard fast path instead (see
+// agent.WrapRiskGatedApproval). Only fires when the command boils down to a
+// single segment (after stripping a leading `cd DIR &&`, see
+// cdWorkdirHint) with no redirects, so it won't fire on multi-step
+// pipelines that legitimately combine several commands.
 func dedicatedToolHint(command string) string {
 	segs := guard.Segments(command)
 	i := 0
@@ -242,17 +246,6 @@ func dedicatedToolHint(command string) string {
 			return ""
 		}
 		return "this reads a file — prefer the 'read' tool (skips the approval gate, supports offset/limit)."
-	case "grep", "rg":
-		return "prefer the 'search' tool for pattern search — skips the approval gate."
-	case "find":
-		for _, f := range fields[1:] {
-			if f == "-delete" || f == "-exec" || f == "-execdir" {
-				return ""
-			}
-		}
-		return "prefer the 'glob' tool for filename patterns — skips the approval gate."
-	case "ls":
-		return "prefer the 'ls' tool — skips the approval gate."
 	case "sed":
 		if len(fields) >= 2 && fields[1] == "-n" {
 			return "prefer the 'read' tool with offset/limit for line ranges — skips the approval gate."

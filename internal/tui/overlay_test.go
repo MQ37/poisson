@@ -3,10 +3,12 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/mq37/poisson/internal/agent"
 )
 
 func TestApprovalOverlayRenderFits(t *testing.T) {
-	o := newApprovalOverlay("rm -rf ./build", "dangerous", "")
+	o := newApprovalOverlay("rm -rf ./build", "dangerous", "", agent.ApprovalOriginMain)
 	lines := o.renderInputPanel(8, 80)
 	if len(lines) != 8 {
 		t.Fatalf("expected 8 panel lines, got %d", len(lines))
@@ -19,7 +21,7 @@ func TestApprovalOverlayRenderFits(t *testing.T) {
 }
 
 func TestApprovalOverlayShowsRiskLine(t *testing.T) {
-	o := newApprovalOverlay("rm -rf x", "cleanup", "/tmp")
+	o := newApprovalOverlay("rm -rf x", "cleanup", "/tmp", agent.ApprovalOriginMain)
 	o.setRisk("high")
 	lines := o.renderInputPanel(8, 80)
 	found := false
@@ -35,7 +37,7 @@ func TestApprovalOverlayShowsRiskLine(t *testing.T) {
 }
 
 func TestApprovalOverlayShowsPurposeLine(t *testing.T) {
-	o := newApprovalOverlay("rm -rf ./build", "clean build artifacts", "")
+	o := newApprovalOverlay("rm -rf ./build", "clean build artifacts", "", agent.ApprovalOriginMain)
 	lines := o.renderInputPanel(8, 80)
 	foundCmd := false
 	foundPurpose := false
@@ -57,7 +59,7 @@ func TestApprovalOverlayShowsPurposeLine(t *testing.T) {
 }
 
 func TestApprovalOverlayPurposePlaceholderWhenNoDescription(t *testing.T) {
-	o := newApprovalOverlay("rm -rf x", "", "")
+	o := newApprovalOverlay("rm -rf x", "", "", agent.ApprovalOriginMain)
 	lines := o.renderInputPanel(8, 60)
 	found := false
 	for _, ln := range lines {

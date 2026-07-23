@@ -17,25 +17,24 @@ const quickAnswerSystem = `You answer brief side questions while the user contin
 // (never the system prompt) so the cached system+tools+messages prefix stays
 // byte-identical to the main agent's request and hits the cache.
 const btwQuestionPrefix = "[Side question from the user — answer directly and concisely using the conversation above for context. " +
-	"You may use read-only tools (read, ls, glob, search, web_search, web_ask, fetch, recall) if it helps answer accurately, " +
+	"You may use read, bash, web_search, web_ask, and fetch/recall if it helps answer accurately — " +
+	"a bash command that needs human approval will pause for it, same as in the main conversation — " +
 	"but do not call any other tool.]\n\n"
 
 // btwAllowedTools are the only tools /btw's side-question loop will actually
-// execute — read-only introspection, never approval-gated. bash/edit/write/
-// subagent are deliberately excluded even though the full tool schema is
-// still sent (see StreamQuickAnswer): a call to any of them is denied, not
-// executed. Two independent reasons, not one: (1) the approval overlay is a
-// single shared slot, and /btw's own side panel is ITSELF an overlay — a
-// bash approval prompt would destroy it mid-answer; (2) mutating the
-// filesystem or spawning a child agent from an unaudited, never-persisted
-// side channel that can run concurrently with the main turn's own tool
-// calls is a bad property regardless of how easy the approval plumbing
-// would be to wire up.
+// execute; any other tool call is denied, not executed, even though the full
+// tool schema is still sent (see StreamQuickAnswer). bash is gated by the
+// exact same approval mechanism as the main conversation (guard fast path,
+// LLM risk classification, human approval when neither auto-approves) — see
+// WrapRiskGatedApproval and tui.TUI.Approve's origin-aware overlay handling,
+// which keeps /btw's own side panel alive (and resumes it) instead of being
+// destroyed by a concurrent approval prompt. edit/write/subagent remain
+// excluded: mutating the filesystem or spawning a child agent from an
+// unaudited, never-persisted side channel that can run concurrently with the
+// main turn's own tool calls is a bad property regardless of approval.
 var btwAllowedTools = map[string]bool{
 	"read":       true,
-	"ls":         true,
-	"glob":       true,
-	"search":     true,
+	"bash":       true,
 	"web_search": true,
 	"web_ask":    true,
 	"fetch":      true,
@@ -54,11 +53,12 @@ const btwMaxToolRounds = 6
 // agent output channel. Text deltas stream on textCh; a terminal error (if any)
 // on errCh; both close when the goroutine exits. Cancelling ctx stops it.
 //
-// The model may call read-only tools (see btwAllowedTools) to ground its
-// answer in real file/search content; onToolStatus, if non-nil, is called
-// with a short description of each tool call as it runs so the caller can
-// show live progress. Any other tool the model attempts is denied with a
-// tool_result error, never executed.
+// The model may call a limited set of tools (see btwAllowedTools) — read-only
+// introspection plus bash, gated by the normal approval mechanism — to
+// ground its answer in real file/command output; onToolStatus, if non-nil,
+// is called with a short description of each tool call as it runs so the
+// caller can show live progress. Any other tool the model attempts is
+// denied with a tool_result error, never executed.
 func (a *Agent) StreamQuickAnswer(ctx context.Context, question string, onToolStatus func(string)) (<-chan string, <-chan error, error) {
 	if a == nil || a.provider == nil {
 		return nil, nil, fmt.Errorf("agent not configured")
@@ -184,7 +184,11 @@ func (a *Agent) runQuickAnswerLoop(ctx context.Context, req *provider.Request, t
 				if onToolStatus != nil {
 					onToolStatus(btwToolStatusText(tc.Name, tc.Input))
 				}
-				callCtx := tools.WithToolCallID(ctx, tc.ID)
+				// Tag the dispatch context so any approval this call
+				// triggers (bash risk gate or a sensitive-path file check)
+				// knows it came from /btw, not the main turn — see
+				// ApprovalOriginBTW and tui.TUI.Approve.
+				callCtx := WithApprovalOrigin(tools.WithToolCallID(ctx, tc.ID), ApprovalOriginBTW)
 				res, execErr := a.tools.Execute(callCtx, tc.Name, tc.Input)
 				if execErr != nil {
 					res = tools.TrimToolResult(tools.ToolResult{Error: execErr.Error()})

@@ -304,7 +304,14 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 // Approve renders an approval prompt for a dangerous bash command and waits
 // for the user's answer. When risk is already known, the overlay shows it
 // immediately without a second LLM call.
-func (t *TUI) Approve(command, description, workdir string, risk agent.BashRisk) (bool, string) {
+//
+// origin == agent.ApprovalOriginBTW gets different overlay handling: /btw's
+// side panel is itself an overlay (t.activeOverlay), and this approval fires
+// WHILE that panel is showing and its underlying quick-answer stream is still
+// running. Every other origin replaces + cancels whatever overlay work was
+// active, same as always; btw's is preserved and restored once the human
+// answers, instead of being destroyed mid-answer.
+func (t *TUI) Approve(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
 	t.approvalMu.Lock()
 	defer t.approvalMu.Unlock()
 
@@ -331,8 +338,16 @@ drained:
 
 	t.mu.Lock()
 	t.clearCompletionLocked()
-	t.cancelOverlayWork()
-	overlay := newApprovalOverlay(command, description, workdir)
+	var resumeBTW *btwOverlay
+	if origin == agent.ApprovalOriginBTW {
+		if b, ok := t.activeOverlay.(*btwOverlay); ok {
+			resumeBTW = b // keep its stream alive; restore it once answered
+		}
+	}
+	if resumeBTW == nil {
+		t.cancelOverlayWork()
+	}
+	overlay := newApprovalOverlay(command, description, workdir, origin)
 	if r := bashRiskLabel(risk); r != "" {
 		overlay.setRisk(r)
 	}
@@ -353,8 +368,19 @@ drained:
 	}
 
 	var cancelCh <-chan struct{}
-	if runCtx != nil {
+	// A /btw approval must survive the main turn's own cancellation — the two
+	// run concurrently and Esc-cancelling the main turn has nothing to do
+	// with whether the side question's own command should proceed.
+	if runCtx != nil && resumeBTW == nil {
 		cancelCh = runCtx.Done()
+	}
+
+	restoreOverlay := func() {
+		if resumeBTW != nil {
+			t.activeOverlay = resumeBTW
+		} else {
+			t.activeOverlay = nil
+		}
 	}
 
 	var reply approvalReply
@@ -362,7 +388,7 @@ drained:
 	case reply = <-t.approvalAnswer:
 	case <-t.done:
 		t.mu.Lock()
-		t.activeOverlay = nil
+		restoreOverlay()
 		t.lastOverlayLines = 0
 		t.mu.Unlock()
 		return false, ""
@@ -371,7 +397,7 @@ drained:
 	}
 
 	t.mu.Lock()
-	t.activeOverlay = nil
+	restoreOverlay()
 	t.lastOverlayLines = 0
 	t.markScrollDirty()
 	t.mu.Unlock()

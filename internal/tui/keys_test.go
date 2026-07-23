@@ -40,6 +40,45 @@ func TestDecoderIncompleteCSINeverEmitsBracketRune(t *testing.T) {
 	}
 }
 
+// TestDecoderLegacyShiftTab verifies the classic xterm Shift+Tab escape
+// ("\x1b[Z", sent when the kitty keyboard protocol isn't active) decodes to
+// KeyShiftTab, not KeyTab or KeyUnknown.
+func TestDecoderLegacyShiftTab(t *testing.T) {
+	var d Decoder
+	keys := d.Push([]byte{27, '[', 'Z'})
+	if len(keys) != 1 || keys[0].Kind != KeyShiftTab {
+		t.Fatalf("keys=%v, want single KeyShiftTab", keys)
+	}
+}
+
+// TestDecoderKittyShiftTab verifies the kitty keyboard protocol's Tab code
+// (57346) with the shift modifier bit set decodes to KeyShiftTab, and
+// without it decodes to plain KeyTab.
+func TestDecoderKittyShiftTab(t *testing.T) {
+	var d Decoder
+	// kitty functional key 57346 (Tab), mods=2 (shift: mods-1=1, bit0 set).
+	keys := d.Push([]byte("\x1b[57346;2u"))
+	if len(keys) != 1 || keys[0].Kind != KeyShiftTab {
+		t.Fatalf("keys=%v, want single KeyShiftTab", keys)
+	}
+	var d2 Decoder
+	keys2 := d2.Push([]byte("\x1b[57346u"))
+	if len(keys2) != 1 || keys2[0].Kind != KeyTab {
+		t.Fatalf("keys=%v, want plain KeyTab with no modifier", keys2)
+	}
+}
+
+// TestDecoderPlainTabUnaffected verifies a bare Tab byte (no kitty protocol,
+// no CSI) still decodes to plain KeyTab — Shift+Tab decoding must not
+// regress the far more common plain-Tab path.
+func TestDecoderPlainTabUnaffected(t *testing.T) {
+	var d Decoder
+	keys := d.Push([]byte{'\t'})
+	if len(keys) != 1 || keys[0].Kind != KeyTab {
+		t.Fatalf("keys=%v, want single KeyTab", keys)
+	}
+}
+
 func TestPickerFeedKeyKittyArrowDoesNotFilter(t *testing.T) {
 	p := newPickerOverlay("Models", []pickerItem{
 		{id: "a", label: "alpha"},

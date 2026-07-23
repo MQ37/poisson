@@ -62,8 +62,6 @@ func newTUIIntegEnv(t *testing.T, responses [][]provider.StreamEvent) *tuiIntegE
 	reg := tools.NewRegistry()
 	reg.Register(tools.NewReadTool(dir, true, nil))
 	reg.Register(tools.NewWriteTool(dir, true, nil))
-	reg.Register(tools.NewLsTool(dir))
-	reg.Register(tools.NewGlobTool(dir))
 	reg.Register(tools.NewBashTool(dir, true, alwaysApprove))
 
 	if err := st.CreateSession(&store.Session{

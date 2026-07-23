@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/mq37/poisson/internal/agent"
 	"golang.org/x/term"
 )
 
@@ -172,7 +173,25 @@ func (t *TUI) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc int
 	return truncateToWidth(b.String(), maxWidth)
 }
 
-func (t *TUI) renderHintLine() string {
+// renderHintLine renders the bottom-most row of the input region: keybinding
+// hints on the left, the current approval mode (Fast/Paranoid, Shift+Tab to
+// toggle) right-aligned to width. Falls back to the left part alone when
+// there isn't room for both — the hint must never be sacrificed to make
+// space for the mode tag.
+func (t *TUI) renderHintLine(width int) string {
+	left := t.hintLineLeft()
+	if width < 1 {
+		return left
+	}
+	right := t.approvalModeTag()
+	gap := width - visibleWidth(left) - visibleWidth(right)
+	if gap < 1 {
+		return left
+	}
+	return left + strings.Repeat(" ", gap) + right
+}
+
+func (t *TUI) hintLineLeft() string {
 	if t.focusRegion == focusConv {
 		return dim + "Tab:input · PgUp/Dn:scroll · Shift+←/→:prompts · Ctrl+E:tool" + reset
 	}
@@ -180,10 +199,31 @@ func (t *TUI) renderHintLine() string {
 	if t.running() {
 		base = "Enter:queue message · Esc:cancel · Ctrl+G:expedite · Ctrl+T:think · Ctrl+E:tool"
 	}
-	if t.status.Hint != "" {
-		return dim + t.status.Hint + " · " + base + reset
-	}
 	return dim + base + reset
+}
+
+// renderInfoLine renders the ephemeral status.Hint (e.g. "Copied N lines to
+// clipboard", a mode-toggle notice, ...) on its own row, directly above the
+// keybinding hint row — kept off that already-long line so it doesn't push
+// the mode tag (or the keybindings themselves) past the terminal width.
+// Empty when there's no active hint (prepareLayout then omits the row
+// entirely — see infoRow in render_v2.go).
+func (t *TUI) renderInfoLine() string {
+	if t.status.Hint == "" {
+		return ""
+	}
+	return dim + t.status.Hint + reset
+}
+
+// approvalModeTag renders the current bash-approval mode for the status
+// line's bottom-right corner. Paranoid is called out in yellow — it means
+// every command, however trivial, stops for a human; Fast is dim/green since
+// it's the default, low-friction path.
+func (t *TUI) approvalModeTag() string {
+	if t.status.ApprovalMode == agent.ApprovalModeParanoid {
+		return fgYellow + "⇥ PARANOID" + reset
+	}
+	return dim + fgGreen + "⇥ FAST" + reset
 }
 
 // scrollByDelta scrolls the scrollback viewport. Caller must hold t.mu.

@@ -35,6 +35,7 @@ const (
 	KeyDelete
 	KeyInsert
 	KeyTab
+	KeyShiftTab
 	KeyEscape
 	KeyArrowUp
 	KeyArrowDown
@@ -295,6 +296,9 @@ func keyFromKitty(code, mods int) (Key, bool) {
 		}
 		return Key{Kind: KeyEnter}, true
 	case kittyKeyTab, 9:
+		if shift {
+			return Key{Kind: KeyShiftTab}, true
+		}
 		return Key{Kind: KeyTab}, true
 	case kittyKeyBackspace, 8, 127:
 		if alt {
@@ -345,6 +349,10 @@ func keyFromCSI(seq []byte) (Key, bool) {
 		if key, ok := keyFromCSIArrow(seq, final); ok {
 			return key, true
 		}
+	case 'Z':
+		// CSI Z ("\x1b[Z") is the classic xterm Shift+Tab sequence — always
+		// shift-tab, no modifier digits to parse (unlike the arrow keys).
+		return Key{Kind: KeyShiftTab}, true
 	}
 	if indexOf(seq, []byte("\x1b[1;2D")) >= 0 || indexOf(seq, []byte("\x1b[1;4D")) >= 0 {
 		return Key{Kind: KeyShiftArrowLeft}, true

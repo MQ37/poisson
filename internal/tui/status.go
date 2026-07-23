@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/mq37/poisson/internal/agent"
 )
 
 // StatusSnapshot is the data rendered in the 2-line status bar at the bottom
@@ -33,6 +35,12 @@ type StatusSnapshot struct {
 	Hint          string
 	ShowTokens    bool
 	ShowCost      bool
+
+	// ApprovalMode is the bash approval gate's current speed (Fast, the
+	// default, or Paranoid — toggled by Shift+Tab), shown bottom-right of the
+	// input hint line so it's always visible, not just at the moment it's
+	// toggled.
+	ApprovalMode agent.ApprovalMode
 
 	// Anthropic-only 5h/7-day usage (see internal/provider/anthropic_usage.go).
 	// AnthropicUsage is nil when the active provider isn't Anthropic, or when

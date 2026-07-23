@@ -6,8 +6,18 @@ import (
 )
 
 // Classify runs the full classification pipeline and returns whether the
-// command is safe, and a reason if it is not.
+// command is safe, and a reason if it is not. Equivalent to
+// ClassifyInDir(command, "") — relative-path sensitivity/symlink checks
+// resolve against the process's own cwd instead of a caller-supplied workdir.
 func Classify(command string) (safe bool, reason string) {
+	return ClassifyInDir(command, "")
+}
+
+// ClassifyInDir is Classify with an explicit workdir, used to resolve
+// relative path tokens (and the symlinks they might point through) for the
+// sensitive-path check — a bash tool call carries its own workdir, which
+// may differ from px's process cwd.
+func ClassifyInDir(command, workdir string) (safe bool, reason string) {
 	if os.Getenv("POISSON_SANDBOX") == "1" || os.Getenv("IS_SANDBOX") == "1" {
 		return true, ""
 	}
@@ -71,7 +81,7 @@ func Classify(command string) (safe bool, reason string) {
 	if touchesEnv(allTokens) {
 		return false, "touches environment/shell config file"
 	}
-	if touchesSensitivePath(allTokens) {
+	if touchesSensitivePath(allTokens, workdir) {
 		return false, "touches sensitive path"
 	}
 

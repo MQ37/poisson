@@ -18,6 +18,7 @@ type layoutSnapshot struct {
 	queuedRows  int // pending-message preview rows, between separator and body
 	bodyRows    int
 	bodyStart   int
+	infoRow     int // ephemeral status.Hint row, above hintRow; 0 when inactive
 	hintRow     int
 	firstRow    int
 	sr          int
@@ -58,7 +59,16 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 		queuedRows = t.queuedPreviewRows()
 		attachRows = t.attachmentRows()
 	}
-	bodyRows := t.inputRows - 2 - queuedRows - attachRows
+	// chrome must match inputHeight's own reservation exactly (separator +
+	// keybinding row, +1 more when an ephemeral status.Hint is showing) or
+	// bodyRows silently absorbs the mismatch, pushing hintRow past the
+	// terminal's last row.
+	hintActive := t.status.Hint != ""
+	chrome := 2
+	if hintActive {
+		chrome = 3
+	}
+	bodyRows := t.inputRows - chrome - queuedRows - attachRows
 	if bodyRows < 1 {
 		bodyRows = 1
 	}
@@ -69,6 +79,17 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 	if sr >= bodyRows {
 		firstRow = sr - bodyRows + 1
 	}
+	// The ephemeral status.Hint gets its own row directly above the
+	// keybinding hint row instead of being prepended onto it — that used to
+	// make one already-long line even longer and push the mode tag (or the
+	// hint itself) past the terminal width. infoRow stays 0 (unused) when
+	// there's no ephemeral hint, so hintRow sits exactly where it always has.
+	infoRow := 0
+	hintRow := bodyStart + bodyRows
+	if hintActive {
+		infoRow = hintRow
+		hintRow = infoRow + 1
+	}
 	return layoutSnapshot{
 		wrapWidth:   wrapWidth,
 		scrollStart: scrollStart,
@@ -77,7 +98,8 @@ func (t *TUI) prepareLayout() layoutSnapshot {
 		queuedRows:  queuedRows,
 		bodyRows:    bodyRows,
 		bodyStart:   bodyStart,
-		hintRow:     bodyStart + bodyRows,
+		infoRow:     infoRow,
+		hintRow:     hintRow,
 		firstRow:    firstRow,
 		sr:          sr,
 		sc:          sc,
@@ -251,20 +273,21 @@ func (t *TUI) paintInputRegion(b *strings.Builder, lay layoutSnapshot) {
 		}
 	}
 
+	if lay.infoRow > 0 {
+		b.WriteString(cup(lay.infoRow, 1))
+		b.WriteString(clearLine())
+		b.WriteString(truncateToWidth(t.renderInfoLine(), lay.wrapWidth))
+	}
+
 	b.WriteString(cup(lay.hintRow, 1))
 	b.WriteString(clearLine())
-	// Unlike every other row in this region, the hint line was never
-	// truncated to the terminal width. Its base text alone fits, but a long
-	// ephemeral hint prepended to it (e.g. "Copied N lines to clipboard" from
-	// Ctrl+Y) can push the combined string past t.cols on a narrower
-	// terminal. With no scroll region configured, a real terminal auto-wraps
-	// an overlong line at the last row and scrolls the whole screen up by
-	// one — corrupting every other absolute-row-addressed write already on
-	// screen. Confirmed via a real terminal emulator (pyte) replaying a
-	// captured session: the separator row duplicated once per keystroke
-	// while the ephemeral hint was still showing, each one an extra
-	// terminal-driven scroll from this exact overflow.
-	b.WriteString(truncateToWidth(t.renderHintLine(), lay.wrapWidth))
+	// With no scroll region configured, a real terminal auto-wraps an
+	// overlong line at the last row and scrolls the whole screen up by one —
+	// corrupting every other absolute-row-addressed write already on screen
+	// (confirmed via a real terminal emulator replaying a captured session).
+	// truncateToWidth is the safety net; renderHintLine itself already keeps
+	// the line within width (dropping the mode tag first, never the hint).
+	b.WriteString(truncateToWidth(t.renderHintLine(lay.wrapWidth), lay.wrapWidth))
 
 	for r := lay.hintRow + 1; r <= t.rows; r++ {
 		b.WriteString(cup(r, 1))

@@ -236,13 +236,13 @@ func TestAssessBashRiskLLMFailureUnknown(t *testing.T) {
 }
 
 func TestGuardRiskFallback(t *testing.T) {
-	if got := GuardRiskFallback("rmdir foo"); got != BashRiskHigh {
+	if got := GuardRiskFallback("rmdir foo", ""); got != BashRiskHigh {
 		t.Fatalf("GuardRiskFallback(rmdir) = %q, want high", got)
 	}
-	if got := GuardRiskFallback("make install"); got != BashRiskMedium {
+	if got := GuardRiskFallback("make install", ""); got != BashRiskMedium {
 		t.Fatalf("GuardRiskFallback(make) = %q, want medium", got)
 	}
-	if got := GuardRiskFallback("git status"); got != BashRiskLow {
+	if got := GuardRiskFallback("git status", ""); got != BashRiskLow {
 		t.Fatalf("GuardRiskFallback(git status) = %q, want low", got)
 	}
 }

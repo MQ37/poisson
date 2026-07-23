@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/mq37/poisson/internal/agent"
 )
 
 func TestClickBlockAtThinking(t *testing.T) {
@@ -82,7 +84,7 @@ func TestApprovalMouseWheelScrollDirection(t *testing.T) {
 		cmd.WriteString("echo line")
 		cmd.WriteByte('\n')
 	}
-	ao := newApprovalOverlay(cmd.String(), "test", "")
+	ao := newApprovalOverlay(cmd.String(), "test", "", agent.ApprovalOriginMain)
 	tui.activeOverlay = ao
 
 	// Wheel up (btn 64) → earlier command lines → lower scroll index.

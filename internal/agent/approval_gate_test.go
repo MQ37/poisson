@@ -20,7 +20,7 @@ func TestWrapRiskGatedApprovalAutoLow(t *testing.T) {
 	a.SetModel("m")
 
 	asked := false
-	approve := WrapRiskGatedApproval(a, func(_, _, _ string, _ BashRisk) (bool, string) {
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, _ BashRisk, _ ApprovalOrigin) (bool, string) {
 		asked = true
 		return false, ""
 	})
@@ -47,7 +47,7 @@ func TestWrapRiskGatedApprovalRequiresHumanForHigh(t *testing.T) {
 	a.SetModel("m")
 
 	var gotRisk BashRisk
-	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) (bool, string) {
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk, _ ApprovalOrigin) (bool, string) {
 		gotRisk = risk
 		return true, ""
 	})
@@ -74,7 +74,7 @@ func TestWrapRiskGatedApprovalRequiresHumanWhenLLMFails(t *testing.T) {
 	a.SetModel("m")
 
 	asked := false
-	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) (bool, string) {
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk, _ ApprovalOrigin) (bool, string) {
 		asked = true
 		if risk == BashRiskLow {
 			t.Fatalf("risk = low, want non-low fallback")
@@ -106,7 +106,7 @@ func TestWrapRiskGatedApprovalRequiresHumanForGitCommit(t *testing.T) {
 
 	var gotRisk BashRisk
 	asked := false
-	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) (bool, string) {
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk, _ ApprovalOrigin) (bool, string) {
 		asked = true
 		gotRisk = risk
 		return true, ""
@@ -129,7 +129,7 @@ func TestWrapRiskGatedApprovalRequiresHumanForGitCommit(t *testing.T) {
 
 func TestWrapRiskGatedApprovalNilAgent(t *testing.T) {
 	asked := false
-	approve := WrapRiskGatedApproval(nil, func(_, _, _ string, risk BashRisk) (bool, string) {
+	approve := WrapRiskGatedApproval(nil, func(_, _, _ string, risk BashRisk, _ ApprovalOrigin) (bool, string) {
 		asked = true
 		if risk != BashRiskUnknown {
 			t.Fatalf("risk = %q, want unknown", risk)
@@ -158,7 +158,7 @@ func TestWrapRiskGatedApprovalMediumNotAuto(t *testing.T) {
 	a.SetModel("m")
 
 	asked := false
-	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk) (bool, string) {
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk, _ ApprovalOrigin) (bool, string) {
 		asked = true
 		if risk != BashRiskMedium {
 			t.Fatalf("risk = %q, want medium", risk)
@@ -174,7 +174,7 @@ func TestWrapRiskGatedApprovalMediumNotAuto(t *testing.T) {
 // TestWrapRiskGatedApprovalForwardsReason verifies a human's denial reason
 // passes straight through the risk gate unmodified.
 func TestWrapRiskGatedApprovalForwardsReason(t *testing.T) {
-	approve := WrapRiskGatedApproval(nil, func(_, _, _ string, _ BashRisk) (bool, string) {
+	approve := WrapRiskGatedApproval(nil, func(_, _, _ string, _ BashRisk, _ ApprovalOrigin) (bool, string) {
 		return false, "not now, finish the tests first"
 	})
 	allowed, reason := approve(context.Background(), "rm -rf /", "x", "/")
@@ -183,5 +183,86 @@ func TestWrapRiskGatedApprovalForwardsReason(t *testing.T) {
 	}
 	if reason != "not now, finish the tests first" {
 		t.Fatalf("reason = %q, want it forwarded unmodified", reason)
+	}
+}
+
+// TestWrapRiskGatedApprovalFastModeGuardAutoApprove verifies the guard fast
+// path auto-approves a read-only command with ZERO LLM calls and no human
+// prompt — the whole point of Fast mode.
+func TestWrapRiskGatedApprovalFastModeGuardAutoApprove(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	// No responses queued: any provider call would panic/fail on FakeProvider,
+	// proving the guard fast path never reaches the LLM.
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	asked := false
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, _ BashRisk, _ ApprovalOrigin) (bool, string) {
+		asked = true
+		return false, ""
+	})
+	allowed, _ := approve(context.Background(), "ls -la", "list files", "/tmp")
+	if !allowed {
+		t.Fatal("expected guard fast path to auto-approve a safe command")
+	}
+	if asked {
+		t.Fatal("human approval should not run for a guard-safe command")
+	}
+	if fp.CallCount() != 0 {
+		t.Fatalf("LLM was called %d times, want 0 (guard fast path should short-circuit)", fp.CallCount())
+	}
+}
+
+// TestWrapRiskGatedApprovalParanoidModeAsksAlways verifies Paranoid mode
+// skips BOTH the guard fast path and the LLM classifier for a trivially safe
+// command — every command reaches the human.
+func TestWrapRiskGatedApprovalParanoidModeAsksAlways(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+	a.SetApprovalMode(ApprovalModeParanoid)
+
+	asked := false
+	var gotRisk BashRisk
+	approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk, _ ApprovalOrigin) (bool, string) {
+		asked = true
+		gotRisk = risk
+		return true, ""
+	})
+	allowed, _ := approve(context.Background(), "echo hi", "say hi", "/tmp")
+	if !allowed {
+		t.Fatal("expected human allow")
+	}
+	if !asked {
+		t.Fatal("paranoid mode must always ask the human, even for a trivial command")
+	}
+	if gotRisk != BashRiskUnknown {
+		t.Fatalf("risk = %q, want unknown (no classification in paranoid mode)", gotRisk)
+	}
+	if fp.CallCount() != 0 {
+		t.Fatalf("LLM was called %d times, want 0 (paranoid mode must not classify)", fp.CallCount())
+	}
+}
+
+// TestApprovalModeDefaultIsFast verifies a freshly constructed Agent starts
+// in Fast mode (zero value), and Shift+Tab-style toggling flips it both ways.
+func TestApprovalModeDefaultIsFast(t *testing.T) {
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, newFakeProvider(), newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	if a.ApprovalMode() != ApprovalModeFast {
+		t.Fatalf("default ApprovalMode = %v, want Fast", a.ApprovalMode())
+	}
+	a.SetApprovalMode(ApprovalModeParanoid)
+	if a.ApprovalMode() != ApprovalModeParanoid {
+		t.Fatal("SetApprovalMode(Paranoid) did not take")
+	}
+	a.SetApprovalMode(ApprovalModeFast)
+	if a.ApprovalMode() != ApprovalModeFast {
+		t.Fatal("SetApprovalMode(Fast) did not take")
 	}
 }

@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	"github.com/mq37/poisson/internal/agent"
 )
 
 func TestDecoderModifyOtherKeysShiftEnter(t *testing.T) {
@@ -166,7 +168,7 @@ func TestModelPickerKittyEscapeDismisses(t *testing.T) {
 }
 
 func TestApprovalBoxEqualWidth(t *testing.T) {
-	o := newApprovalOverlay("rm -rf /tmp/x", "cleanup", "")
+	o := newApprovalOverlay("rm -rf /tmp/x", "cleanup", "", agent.ApprovalOriginMain)
 	lines := o.renderInputPanel(10, 80)
 	if len(lines) != 10 {
 		t.Fatalf("expected 10 panel lines, got %d", len(lines))
@@ -187,7 +189,7 @@ func TestApprovalOverlayShowsLongScript(t *testing.T) {
 		cmd.WriteString("echo line")
 		cmd.WriteByte('\n')
 	}
-	o := newApprovalOverlay(cmd.String(), "long summer script", "")
+	o := newApprovalOverlay(cmd.String(), "long summer script", "", agent.ApprovalOriginMain)
 	lines := o.renderInputPanel(12, 80)
 	plain := stripANSI(strings.Join(lines, "\n"))
 	if !strings.Contains(plain, "echo line") {
@@ -208,7 +210,7 @@ func TestApprovalOverlayScrollChangesView(t *testing.T) {
 		cmd.WriteString(itoa(i))
 		cmd.WriteByte('\n')
 	}
-	o := newApprovalOverlay(cmd.String(), "numbered script", "")
+	o := newApprovalOverlay(cmd.String(), "numbered script", "", agent.ApprovalOriginMain)
 	before := o.renderInputPanel(10, 80)
 	o.scrollBy(5)
 	after := o.renderInputPanel(10, 80)

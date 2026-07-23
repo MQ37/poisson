@@ -295,19 +295,22 @@ func TestStreamQuickAnswerRunsReadOnlyTool(t *testing.T) {
 }
 
 // TestStreamQuickAnswerDeniesDisallowedTool confirms a tool outside the
-// read-only allowlist (bash here) is never executed — the model gets a
-// denial tool_result instead, and the underlying tool's Execute never runs
-// (proven by the sandboxed bash command's side effect never happening).
+// allowlist (write here — it mutates the filesystem from an unaudited,
+// never-persisted side channel, unlike bash which is now allowed and gated
+// by the normal approval mechanism instead of a blanket ban) is never
+// executed — the model gets a denial tool_result instead, and the
+// underlying tool's Execute never runs (proven by the sandboxed write's side
+// effect never happening).
 func TestStreamQuickAnswerDeniesDisallowedTool(t *testing.T) {
 	dir := testutil.TempDir(t)
-	marker := filepath.Join(dir, "marker")
+	marker := filepath.Join(dir, "marker.txt")
 	reg := tools.NewRegistry()
 	// approvalFn always denies too, as a second line of defense, but the
 	// point of this test is that Execute must never even be reached.
-	reg.Register(tools.NewBashTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" }))
+	reg.Register(tools.NewWriteTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" }))
 
 	fp := provider.NewFakeProvider("fake", nil)
-	first, second := provider.FakeToolCallResponse("bash", map[string]string{"command": "touch " + marker, "description": "touch a marker file"}, "done")
+	first, second := provider.FakeToolCallResponse("write", map[string]string{"path": marker, "content": "hi"}, "done")
 	fp.SetResponses([][]provider.StreamEvent{first, second})
 
 	s := newTestStore(t)
@@ -326,7 +329,7 @@ func TestStreamQuickAnswerDeniesDisallowedTool(t *testing.T) {
 	}
 
 	if _, err := os.Stat(marker); err == nil {
-		t.Fatal("bash tool actually ran — marker file was created")
+		t.Fatal("write tool actually ran — marker file was created")
 	}
 
 	reqs := fp.Requests()
@@ -345,7 +348,122 @@ func TestStreamQuickAnswerDeniesDisallowedTool(t *testing.T) {
 		}
 	}
 	if !sawDenial {
-		t.Fatal("expected a denial tool_result for the disallowed bash call")
+		t.Fatal("expected a denial tool_result for the disallowed write call")
+	}
+}
+
+// TestStreamQuickAnswerRunsGuardSafeBash confirms bash IS now allowed for
+// /btw, and a guard-safe command (no approval needed at all, Fast mode's
+// deterministic fast path) actually executes and its real output reaches the
+// model — not just "not denied".
+func TestStreamQuickAnswerRunsGuardSafeBash(t *testing.T) {
+	dir := testutil.TempDir(t)
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("the secret is 42"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var agentRef *Agent
+	humanFn := func(command, description, workdir string, risk BashRisk, origin ApprovalOrigin) (bool, string) {
+		t.Fatal("human approval should never be reached for a guard-safe command")
+		return false, ""
+	}
+	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
+		if agentRef == nil {
+			return false, ""
+		}
+		return WrapRiskGatedApproval(agentRef, humanFn)(ctx, command, description, workdir)
+	}
+	reg := tools.NewRegistry()
+	reg.Register(tools.NewBashTool(dir, false, approvalFn))
+
+	// grep, not cat: a bare `cat file` is still redirected to the dedicated
+	// `read` tool (bash.go's dedicatedToolHint) — real, but a different
+	// mechanism than the guard fast path this test is about.
+	fp := provider.NewFakeProvider("fake", nil)
+	first, second := provider.FakeToolCallResponse("bash", map[string]string{"command": "grep secret notes.txt", "description": "search notes"}, "the answer is 42")
+	fp.SetResponses([][]provider.StreamEvent{first, second})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, reg, newTestConfig(), sid, nil, nil)
+	agentRef = a
+	a.SetModel("m")
+
+	textCh, errCh, err := a.StreamQuickAnswer(context.Background(), "what's in notes.txt?", nil)
+	if err != nil {
+		t.Fatalf("StreamQuickAnswer: %v", err)
+	}
+	for range textCh {
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+
+	reqs := fp.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(reqs))
+	}
+	var sawContent bool
+	for _, m := range reqs[1].Messages {
+		if m.Role != "tool" {
+			continue
+		}
+		for _, b := range m.Content {
+			if b.Type == "tool_result" && !b.ToolIsError && strings.Contains(b.ToolResult, "the secret is 42") {
+				sawContent = true
+			}
+		}
+	}
+	if !sawContent {
+		t.Fatal("expected the real file content in the tool_result, bash never actually ran")
+	}
+}
+
+// TestStreamQuickAnswerBashTaggedWithBTWOrigin confirms a bash call from
+// /btw tags its dispatch context with ApprovalOriginBTW, so an approval
+// prompt it triggers can be labeled and given /btw's overlay-coexistence
+// handling (see tui.TUI.Approve) — not indistinguishable from a
+// main-conversation command. Uses Paranoid mode so even a trivial command
+// reaches the approval callback without needing to fake an LLM risk call.
+func TestStreamQuickAnswerBashTaggedWithBTWOrigin(t *testing.T) {
+	dir := testutil.TempDir(t)
+	var gotOrigin ApprovalOrigin
+	humanFn := func(command, description, workdir string, risk BashRisk, origin ApprovalOrigin) (bool, string) {
+		gotOrigin = origin
+		return true, ""
+	}
+	var agentRef *Agent
+	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
+		if agentRef == nil {
+			return false, ""
+		}
+		return WrapRiskGatedApproval(agentRef, humanFn)(ctx, command, description, workdir)
+	}
+	reg := tools.NewRegistry()
+	reg.Register(tools.NewBashTool(dir, false, approvalFn))
+
+	fp := provider.NewFakeProvider("fake", nil)
+	first, second := provider.FakeToolCallResponse("bash", map[string]string{"command": "echo hi", "description": "say hi"}, "done")
+	fp.SetResponses([][]provider.StreamEvent{first, second})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, reg, newTestConfig(), sid, nil, nil)
+	agentRef = a
+	a.SetModel("m")
+	a.SetApprovalMode(ApprovalModeParanoid) // force the approval callback for a trivial command
+
+	textCh, errCh, err := a.StreamQuickAnswer(context.Background(), "say hi", nil)
+	if err != nil {
+		t.Fatalf("StreamQuickAnswer: %v", err)
+	}
+	for range textCh {
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+
+	if gotOrigin != ApprovalOriginBTW {
+		t.Fatalf("origin seen by approvalFn = %q, want %q", gotOrigin, ApprovalOriginBTW)
 	}
 }
 

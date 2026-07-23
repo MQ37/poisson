@@ -50,6 +50,7 @@ func (t *TUI) syncHeaderFromAgentLocked() {
 	t.status.ToolCalls, t.status.ToolErrors = a.SessionToolStats()
 	t.status.Turns = a.RunTurns()
 	t.status.WarnContext = t.status.ContextPct > 75.0
+	t.status.ApprovalMode = a.ApprovalMode()
 
 	if tb, err := a.Store().GetSessionTokenBreakdown(a.SessionID()); err == nil {
 		t.status.Cost = tb.TotalCost

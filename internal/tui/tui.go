@@ -230,16 +230,26 @@ func (t *TUI) inputHeight(width int) int {
 	}
 	q := t.queuedPreviewRows() + t.attachmentRows()
 	visual := totalVisualLines(t.editor, width)
-	n := visual + 2 + q // +1 separator, +1 hint (header row reclaimed), +previews
-	if visual > 1 && n < 5+q {
-		n = 5 + q // show multiple wrapped rows (3 body lines + chrome)
+	// chrome = separator + keybinding hint row, +1 more when an ephemeral
+	// status.Hint (e.g. "Copied N lines", "paranoid mode — ...") is active:
+	// it gets its own row above the keybinding row instead of being crammed
+	// onto the same line, which used to push the line past the terminal
+	// width and truncate the mode tag (or the hint itself) on anything but a
+	// very wide terminal.
+	chrome := 2
+	if t.status.Hint != "" {
+		chrome = 3
 	}
-	if n < 3+q {
-		n = 3 + q
+	n := visual + chrome + q
+	if visual > 1 && n < chrome+3+q {
+		n = chrome + 3 + q // show multiple wrapped rows (3 body lines + chrome)
+	}
+	if n < chrome+1+q {
+		n = chrome + 1 + q
 	}
 	max := t.rows / 3
-	if max < 5+q {
-		max = 5 + q
+	if max < chrome+3+q {
+		max = chrome + 3 + q
 	}
 	if n > max {
 		n = max

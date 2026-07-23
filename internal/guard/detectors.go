@@ -172,35 +172,62 @@ func touchesEnv(tokens []string) bool {
 	return false
 }
 
-// touchesSensitivePath reports whether any token references a sensitive path.
-func touchesSensitivePath(tokens []string) bool {
+// touchesSensitivePath reports whether any token references a sensitive
+// path, either directly or through a symlink that resolves into one. workdir
+// (may be "") resolves relative tokens for symlink lookup only — the plain
+// literal-path checks below are workdir-independent, matching prior
+// behavior exactly when workdir is empty.
+func touchesSensitivePath(tokens []string, workdir string) bool {
 	for _, t := range tokens {
 		orig := t
 		t = strings.Trim(t, "'\"")
-		base := filepath.Base(t)
-		if sensitiveExactBasenames[base] {
+		if pathTextIsSensitive(t) {
 			return true
 		}
-		if sshPrivKeyRe.MatchString(base) {
-			return true
-		}
-		for _, pat := range sensitiveDirPatterns {
-			if strings.Contains(t, pat) {
-				return true
-			}
-		}
+		expanded := t
 		// Check expanded home-dir form.
 		if strings.HasPrefix(orig, "~") {
-			expanded := os.ExpandEnv(strings.Replace(orig, "~", "$HOME", 1))
-			for _, pat := range sensitiveDirPatterns {
-				if strings.Contains(expanded, pat) {
-					return true
-				}
-			}
-			eb := filepath.Base(expanded)
-			if sensitiveExactBasenames[eb] || sshPrivKeyRe.MatchString(eb) {
+			expanded = os.ExpandEnv(strings.Replace(orig, "~", "$HOME", 1))
+			if pathTextIsSensitive(expanded) {
 				return true
 			}
+		}
+		// Resolve symlinks: a token that looks harmless by name (including a
+		// bare relative filename with no "/", e.g. "notes.txt") can still
+		// point at a sensitive file. Only flags are skipped — everything
+		// else gets a cheap stat attempt; a token that isn't really a path
+		// (a grep pattern, a hostname, ...) just fails fast (ENOENT) and
+		// falls through unchanged, same as the literal check already does.
+		if expanded == "" || strings.HasPrefix(expanded, "-") {
+			continue
+		}
+		candidate := expanded
+		if !filepath.IsAbs(candidate) && workdir != "" {
+			candidate = filepath.Join(workdir, candidate)
+		}
+		if resolved := ResolveSymlinkTarget(candidate); resolved != candidate {
+			if pathTextIsSensitive(resolved) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// pathTextIsSensitive checks a path string (already quote-trimmed and
+// tilde-expanded by the caller) against the basename/directory-pattern
+// tables, without touching the filesystem.
+func pathTextIsSensitive(t string) bool {
+	base := filepath.Base(t)
+	if sensitiveExactBasenames[base] {
+		return true
+	}
+	if sshPrivKeyRe.MatchString(base) {
+		return true
+	}
+	for _, pat := range sensitiveDirPatterns {
+		if strings.Contains(t, pat) {
+			return true
 		}
 	}
 	return false
@@ -212,8 +239,22 @@ func touchesSensitivePath(tokens []string) bool {
 // least joined with the caller's cwd) — it reuses the same basename/
 // directory-pattern tables the bash guard checks tokens against, so file
 // tools (read/write/edit) and the bash guard agree on what counts as
-// sensitive.
+// sensitive. Also follows symlinks: a file with an innocuous name that
+// secretly points at e.g. ~/.ssh/id_rsa is caught via its resolved target,
+// not just its literal name.
 func SensitivePathReason(path string) string {
+	if r := sensitivePathReasonLiteral(path); r != "" {
+		return r
+	}
+	if resolved := ResolveSymlinkTarget(path); resolved != path {
+		if r := sensitivePathReasonLiteral(resolved); r != "" {
+			return r + " (via symlink)"
+		}
+	}
+	return ""
+}
+
+func sensitivePathReasonLiteral(path string) string {
 	base := filepath.Base(path)
 	switch {
 	case sensitiveExactBasenames[base]:
@@ -371,7 +412,13 @@ func sedScriptIsDangerous(tokens []string) bool {
 
 func containsSedDangerousCmd(script string) bool {
 	// Check for sed 'w' (write file) or 'e' (execute) commands.
-	// These appear as standalone commands or after s/.../.../.
+	// These appear as standalone commands or after s/.../.../. A real sed
+	// command letter is always isolated on BOTH sides by a non-alpha byte
+	// (an address, a preceding '/', ';', or the string's edge) — checking
+	// only the left side flags any ordinary English word starting with w/e
+	// inside a regex (e.g. "/word/d", "/error/p" both contain a mid-word 'w'
+	// or 'e' immediately after a non-alpha '/'), which would block plainly
+	// harmless sed scripts from ever being auto-approved.
 	for i := 0; i < len(script); i++ {
 		c := script[i]
 		if c == '\'' || c == '"' {
@@ -379,8 +426,9 @@ func containsSedDangerousCmd(script string) bool {
 			continue
 		}
 		if c == 'w' || c == 'e' {
-			// Check it's a command, not part of a word.
-			if i == 0 || !isAlpha(script[i-1]) {
+			prevOK := i == 0 || !isAlpha(script[i-1])
+			nextOK := i == len(script)-1 || !isAlpha(script[i+1])
+			if prevOK && nextOK {
 				return true
 			}
 		}

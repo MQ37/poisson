@@ -110,7 +110,7 @@ func classifyTokenDanger(token, normalized string) string {
 	if normalized == "env" || normalized == "printenv" {
 		return "env-leak"
 	}
-	if touchesSensitivePath([]string{normalized}) {
+	if touchesSensitivePath([]string{normalized}, "") {
 		return "sensitive-path"
 	}
 	return ""

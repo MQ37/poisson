@@ -57,7 +57,6 @@ func newTestConfig() *config.Config {
 func newTestRegistry(cwd string) *tools.Registry {
 	reg := tools.NewRegistry()
 	reg.Register(tools.NewReadTool(cwd, true, nil))
-	reg.Register(tools.NewLsTool(cwd))
 	reg.Register(tools.NewBashTool(cwd, true, nil)) // sandbox=true
 	return reg
 }
@@ -308,7 +307,7 @@ func TestSubagentSessionAutoCompacts(t *testing.T) {
 	cfg.Compaction.Threshold = 0.001 // 0.001 * 8192 ≈ 8 tokens: the tool turn's 20 trips it.
 
 	prov := newFakeProvider()
-	first, second := provider.FakeToolCallResponse("ls", map[string]string{"path": "."}, "done exploring")
+	first, second := provider.FakeToolCallResponse("bash", map[string]string{"command": "ls", "description": "look around"}, "done exploring")
 	summary := provider.FakeTextResponse("## Big Picture\nExplored the dir.", nil)
 	prov.SetResponses([][]provider.StreamEvent{first, summary, second})
 

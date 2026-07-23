@@ -17,7 +17,7 @@
 ---
 
 **poisson** is a small, fast coding agent you run in your terminal. It streams a
-real conversation, calls tools (bash, file read/write/edit, search, subagents),
+real conversation, calls tools (bash, file read/write/edit, subagents),
 tracks every token and dollar, and keeps your whole history in a local SQLite
 database you own. No cloud account for the app itself, no telemetry, no
 Electron — just one static binary and your terminal.
@@ -42,7 +42,7 @@ px                                                   # launch the TUI
   blocks (Ctrl+T to fold), tool cards you can expand (Ctrl+E) — including
   colored diffs for `edit`/`write` — a command palette (Ctrl+P), mouse scroll,
   and a status bar with live context % and exact cost.
-- **Real tools** — `bash`, `read`, `write`, `edit`, `ls`, `glob`, `search`,
+- **Real tools** — `bash`, `read`, `write`, `edit`,
   `web_search` (plain DuckDuckGo link list, no account), `web_ask`
   (AI-synthesized answer — xAI Grok via OAuth when logged in, exa.ai keyless
   fallback otherwise), `fetch` (works on every provider — Ollama's own
@@ -50,9 +50,20 @@ px                                                   # launch the TUI
   converter), `recall` (full-text search across past sessions), plus
   **subagents** (parallel child agents) and **skills** (8 built in, see
   [below](#-built-in-skills); also user-defined via `~/.poisson/skills/`).
-- **Bash safety guard** — every shell command is risk-classified; anything
-  dangerous pops an approval prompt (you decide, it never auto-allows installs,
-  destructive, or `npx`/`dlx` commands).
+  Listing/searching/finding files (`ls`/`grep`/`rg`/`find`/`cat`/...) is plain
+  `bash` — no dedicated tool needed — see the safety guard below for why
+  that's fine.
+- **Bash safety guard, two speeds** — every shell command is checked before it
+  runs. **Fast mode** (default): a deterministic guard auto-approves
+  read-only, side-effect-free commands (`ls`, `cat`, `grep`/`rg`, `find`,
+  `git status`/`diff`/`log`, ...) with zero LLM calls and no prompt at all —
+  it also follows symlinks, so a sensitive file can't hide behind an
+  innocent-looking name. Anything else is risk-classified by the LLM; low
+  risk runs automatically, medium/high/unknown pops an approval prompt (you
+  decide — it never auto-allows installs, destructive, or `npx`/`dlx`
+  commands). **Paranoid mode** (**Shift+Tab** to toggle, shown bottom-right
+  of the input): both the guard and the LLM classifier are skipped —
+  literally every command asks you first.
 - **Sessions in SQLite** — every message, tool call, and API call is persisted.
   **Full-text search** (FTS5) across your history, resume any session, and
   auto-compaction that summarizes old turns when context fills up.
@@ -266,6 +277,7 @@ Bottom-bar keys (input focus):
 ```
 Enter send · Ctrl+V image · Ctrl+F find · Ctrl+P palette
 Ctrl+L effort · Ctrl+T fold thinking · Ctrl+E expand tool
+Shift+Tab fast/paranoid approval mode
 Esc cancel running turn · Ctrl+C clear input (twice to exit)
 ```
 

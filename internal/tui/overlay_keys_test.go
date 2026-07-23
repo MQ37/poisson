@@ -129,7 +129,7 @@ func TestApproveBufferedAnswerBeforeReceive(t *testing.T) {
 	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -155,6 +155,7 @@ func TestApprovalRoutesToHandler(t *testing.T) {
 		want      bool
 	}{
 		{"Tab always routes (toggle focus)", Key{Kind: KeyTab}, false, true},
+		{"Shift+Tab always routes (mode toggle)", Key{Kind: KeyShiftTab}, false, true},
 		{"PgUp always routes (scroll convo)", Key{Kind: KeyPageUp}, false, true},
 		{"PgDn always routes", Key{Kind: KeyPageDown}, false, true},
 		{"Shift+Up always routes", Key{Kind: KeyShiftArrowUp}, false, true},

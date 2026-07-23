@@ -212,20 +212,20 @@ func runPrint(opts printOpts) {
 
 	yolo := opts.yolo
 	var agentRef *agent.Agent
-	humanApproval := func(command, description, workdir string, risk agent.BashRisk) (bool, string) {
+	humanApproval := func(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
 		return yolo, "" // headless: only --yolo approves escalated commands
 	}
 	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
 		if agentRef != nil {
 			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(ctx, command, description, workdir)
 		}
-		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
+		return humanApproval(command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginMain)
 	}
 	// Sensitive files (.env*, SSH/cloud credentials, ~/.poisson secrets, ...)
 	// are deterministically flagged by guard.SensitivePathReason, so this asks
 	// the human directly — no LLM risk classification needed.
 	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
-		return humanApproval(action, reason, workdir, agent.BashRiskHigh)
+		return humanApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
 	}
 	reg := tools.BuildRegistry(tools.BuildOptions{Cwd: cwd, Store: st, Auth: authStore, ApprovalFn: approvalFn, FileApprovalFn: fileApprovalFn})
 
@@ -311,9 +311,9 @@ func runREPL(noSkills bool) {
 	// terminal runs raw with a nonblocking Ctrl+C poller otherwise.
 	var approveUI tui.Approver
 	var agentRef *agent.Agent
-	humanApproval := func(command, description, workdir string, risk agent.BashRisk) (bool, string) {
+	humanApproval := func(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
 		if approveUI != nil {
-			return approveUI.Approve(command, description, workdir, risk)
+			return approveUI.Approve(command, description, workdir, risk, origin)
 		}
 		return false, ""
 	}
@@ -321,18 +321,17 @@ func runREPL(noSkills bool) {
 		if agentRef != nil {
 			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(ctx, command, description, workdir)
 		}
-		return humanApproval(command, description, workdir, agent.BashRiskUnknown)
+		return humanApproval(command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginFromContext(ctx))
 	}
 	// Sensitive files (.env*, SSH/cloud credentials, ~/.poisson secrets, ...)
 	// are deterministically flagged by guard.SensitivePathReason, so this asks
 	// the human directly — no LLM risk classification needed.
 	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
-		return humanApproval(action, reason, workdir, agent.BashRiskHigh)
+		return humanApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
 	}
 
 	subApprovalFn := func(command, description, workdir, agentName, risk string) (bool, string) {
-		_ = agentName // overlay uses command context; name available for future UI
-		return humanApproval(command, description, workdir, agent.ParseBashRisk(risk))
+		return humanApproval(command, description, workdir, agent.ParseBashRisk(risk), agent.SubagentOrigin(agentName))
 	}
 
 	reg := tools.BuildRegistry(tools.BuildOptions{
@@ -650,7 +649,11 @@ func runChildMode() {
 	var approvalBroker childApprovalBroker
 
 	var childAgentRef *agent.Agent
-	humanChildApproval := func(command, description, workdir string, risk agent.BashRisk) (bool, string) {
+	// origin is unused here: the parent process is the one that labels this
+	// approval as coming from a subagent, via the "agent" field already sent
+	// below and read back into agent.SubagentOrigin by subApprovalFn in the
+	// parent's own main().
+	humanChildApproval := func(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
 		if sandbox {
 			return true, ""
 		}
@@ -670,17 +673,17 @@ func runChildMode() {
 		if childAgentRef != nil {
 			return agent.WrapRiskGatedApproval(childAgentRef, humanChildApproval)(ctx, command, description, workdir)
 		}
-		return humanChildApproval(command, description, workdir, agent.BashRiskUnknown)
+		return humanChildApproval(command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginMain)
 	}
 	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
 		if sandbox {
 			return true, ""
 		}
-		return humanChildApproval(action, reason, workdir, agent.BashRiskHigh)
+		return humanChildApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginMain)
 	}
 
 	// Child:true grants every tool except subagent, so a subagent gets the full
-	// tool set (read/write/edit/bash/search/ls/glob/web_search/web_ask/recall)
+	// tool set (read/write/edit/bash/web_search/web_ask/recall)
 	// but cannot spawn further subagents — recursion is bounded to one level.
 	reg := tools.BuildRegistry(tools.BuildOptions{
 		Cwd:            cwd,

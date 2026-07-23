@@ -59,9 +59,6 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	reg.Register(NewReadTool(opts.Cwd, opts.Sandbox, fileApproval))
 	reg.Register(NewWriteTool(opts.Cwd, opts.Sandbox, fileApproval))
 	reg.Register(NewEditTool(opts.Cwd, opts.Sandbox, fileApproval))
-	reg.Register(NewSearchTool(opts.Cwd))
-	reg.Register(NewLsTool(opts.Cwd))
-	reg.Register(NewGlobTool(opts.Cwd))
 	reg.Register(NewWebSearchTool())
 	reg.Register(NewWebAskTool(opts.Auth))
 	if opts.Store != nil {

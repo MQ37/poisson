@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/mq37/poisson/internal/agent"
 )
 
 func (t *TUI) feed(data []byte) (bool, error) {
@@ -22,7 +24,7 @@ func (t *TUI) feed(data []byte) (bool, error) {
 // (a/y/d/n/Enter/Esc in input focus) and command-panel arrows are handled by
 // the caller.
 func approvalRoutesToHandler(k Key, convFocus bool, scrollRows int) bool {
-	if k.Kind == KeyTab {
+	if k.Kind == KeyTab || k.Kind == KeyShiftTab {
 		return true
 	}
 	if _, ok := scrollDeltaForKey(k, scrollRows); ok {
@@ -61,6 +63,11 @@ func (t *TUI) feedKey(k Key) (bool, error) {
 	}
 	if t.sel.set {
 		t.clearSelectionLocked()
+	}
+
+	if k.Kind == KeyShiftTab {
+		t.toggleApprovalModeLocked()
+		return false, nil
 	}
 
 	if k.isCtrlC() {
@@ -361,6 +368,26 @@ func (t *TUI) processEditorKey(k Key) (bool, error) {
 	t.refreshCompletion()
 	t.markInputDirty()
 	return false, nil
+}
+
+// toggleApprovalModeLocked flips the bash approval gate between Fast
+// (deterministic guard fast path + LLM classification, the default) and
+// Paranoid (every command asks a human, no auto-approval of any kind).
+// Caller holds t.mu.
+func (t *TUI) toggleApprovalModeLocked() {
+	if t.agent == nil {
+		return
+	}
+	next := agent.ApprovalModeParanoid
+	label := "paranoid mode — every command now asks for approval"
+	if t.agent.ApprovalMode() == agent.ApprovalModeParanoid {
+		next = agent.ApprovalModeFast
+		label = "fast mode — safe commands run automatically"
+	}
+	t.agent.SetApprovalMode(next)
+	t.status.ApprovalMode = next
+	t.setEphemeralHintLocked(label, 2*time.Second)
+	t.dirty.markInput()
 }
 
 // expediteSubagentsLocked forwards the user's Ctrl+G "finish now" nudge to every

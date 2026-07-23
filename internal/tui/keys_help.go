@@ -19,6 +19,7 @@ func keybindingLines() []string {
 		"  Ctrl+T       Toggle thinking block",
 		"  Ctrl+E       Expand/collapse tool card",
 		"  Ctrl+G       Expedite running subagents (finish ASAP)",
+		"  Shift+Tab    Toggle fast/paranoid approval mode",
 		"  Esc          Cancel running turn",
 		"  Ctrl+C       Clear input · twice to exit",
 		"  Ctrl+D       Exit",

@@ -1,6 +1,10 @@
 package tui
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/mq37/poisson/internal/agent"
+)
 
 // approvalReply is the user's answer to a pending bash approval: whether it
 // was allowed, and (when denied) an optional human-supplied reason forwarded
@@ -17,6 +21,7 @@ type approvalOverlay struct {
 	description string
 	workdir     string
 	risk        string // "pending", "low", "medium", "high", "failed"
+	origin      agent.ApprovalOrigin
 	scroll      int
 
 	// denying is set once the user has committed to denying (d/n/Esc) but
@@ -40,12 +45,34 @@ func (o *approvalOverlay) reasonText() string {
 	return o.reasonEditor.text()
 }
 
-func newApprovalOverlay(command, description, workdir string) *approvalOverlay {
+func newApprovalOverlay(command, description, workdir string, origin agent.ApprovalOrigin) *approvalOverlay {
 	return &approvalOverlay{
 		command:     command,
 		description: resolveApprovalPurpose(command, description),
 		workdir:     workdir,
 		risk:        "pending",
+		origin:      origin,
+	}
+}
+
+// approvalOriginLabel renders where the command came from, for the panel
+// title — "" for the ordinary main-conversation case (no badge needed), a
+// short tag otherwise so a /btw or subagent approval doesn't look identical
+// to a main-turn one.
+func approvalOriginLabel(origin agent.ApprovalOrigin) string {
+	switch {
+	case origin == "" || origin == agent.ApprovalOriginMain:
+		return ""
+	case origin == agent.ApprovalOriginBTW:
+		return "  ·  from /btw"
+	case strings.HasPrefix(string(origin), "subagent"):
+		name := strings.TrimPrefix(string(origin), "subagent:")
+		if name == "" || name == string(origin) {
+			return "  ·  from subagent"
+		}
+		return "  ·  from subagent " + name
+	default:
+		return "  ·  from " + string(origin)
 	}
 }
 
@@ -183,7 +210,7 @@ func (o *approvalOverlay) renderInputPanel(panelRows, cols int) []string {
 	mk := func(content string) string { return fillWidthBG(bg, content, cols) }
 	blank := mk("")
 
-	title := mk(fgYellow + bold + "⚠  Approval required" + reset)
+	title := mk(fgYellow + bold + "⚠  Approval required" + approvalOriginLabel(o.origin) + reset)
 	footer := mk(dim + "[A/y/Enter] Allow · [D/n/Esc] Deny · Tab/PgUp review convo · Ctrl+C cancel" + reset)
 
 	var meta []string

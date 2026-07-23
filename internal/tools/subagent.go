@@ -127,7 +127,7 @@ func (t *SubagentTool) SetUsageFn(fn func(providerID, model string, usage *provi
 func (t *SubagentTool) Name() string { return "subagent" }
 
 func (t *SubagentTool) Description() string {
-	return "Spawn a one-shot child Poisson agent to complete a specific task. The child has every tool you do (read, write, edit, bash, search, ls, glob, web_search, web_ask, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. The child returns its final output when done. It cannot ask questions — give it a complete, self-contained task."
+	return "Spawn a one-shot child Poisson agent to complete a specific task. The child has every tool you do (read, write, edit, bash, web_search, web_ask, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. The child returns its final output when done. It cannot ask questions — give it a complete, self-contained task."
 }
 
 func (t *SubagentTool) Schema() json.RawMessage {

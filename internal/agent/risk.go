@@ -316,7 +316,7 @@ func (a *Agent) AssessBashRiskEval(ctx context.Context, command, description, wo
 	switch mode {
 	case BashRiskEvalGuard:
 		return BashRiskEvalResult{
-			Risk:   GuardRiskFallback(command),
+			Risk:   GuardRiskFallback(command, workdir),
 			Source: BashRiskSourceGuard,
 		}
 	case BashRiskEvalLLM:
@@ -332,7 +332,7 @@ func (a *Agent) AssessBashRiskEval(ctx context.Context, command, description, wo
 			}
 		}
 		return BashRiskEvalResult{
-			Risk:    GuardRiskFallback(command),
+			Risk:    GuardRiskFallback(command, workdir),
 			Source:  BashRiskSourceGuard,
 			RawLLM:  out.RawLLM,
 			LLMRuns: out.Runs,
@@ -466,9 +466,11 @@ func bashRiskPriority(r BashRisk) int {
 	}
 }
 
-// GuardRiskFallback maps guard.Classify reasons to a risk band when the LLM fails.
-func GuardRiskFallback(command string) BashRisk {
-	safe, reason := guard.Classify(command)
+// GuardRiskFallback maps guard.Classify reasons to a risk band when the LLM
+// fails. workdir (may be "") resolves relative sensitive-path tokens for the
+// symlink check — see guard.ClassifyInDir.
+func GuardRiskFallback(command, workdir string) BashRisk {
+	safe, reason := guard.ClassifyInDir(command, workdir)
 	if safe {
 		return BashRiskLow
 	}

@@ -30,7 +30,7 @@ func TestApproveLifecycle(t *testing.T) {
 	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 
@@ -95,7 +95,7 @@ func TestApproveWhileAgentRunning(t *testing.T) {
 	tui.status.Thinking = true
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -197,7 +197,7 @@ func TestApproveCancelsRiskAssessment(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("git push origin main", "danger", "/tmp", agent.BashRiskUnknown)
+		allowed, _ := tui.Approve("git push origin main", "danger", "/tmp", agent.BashRiskUnknown, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 
@@ -249,7 +249,7 @@ func TestApproveCancelledByRunCancel(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 
@@ -278,7 +278,7 @@ func TestApproveCancelledByRunCancel(t *testing.T) {
 func TestFeedDenyReasonKeyPassthroughWhenNotDenying(t *testing.T) {
 	tui := newTestTUIHelper()
 	tui.mu.Lock()
-	tui.activeOverlay = newApprovalOverlay("rm -rf x", "danger", "")
+	tui.activeOverlay = newApprovalOverlay("rm -rf x", "danger", "", agent.ApprovalOriginMain)
 	tui.mu.Unlock()
 
 	if tui.feedDenyReasonKey(Key{Kind: KeyRune, Rune: 'x'}) {
@@ -293,7 +293,7 @@ func TestFeedDenyReasonKeyPassthroughWhenNotDenying(t *testing.T) {
 func TestFeedDenyReasonKeyAltBackspaceDeletesWord(t *testing.T) {
 	tui := newTestTUIHelper()
 	tui.mu.Lock()
-	ao := newApprovalOverlay("rm -rf x", "danger", "")
+	ao := newApprovalOverlay("rm -rf x", "danger", "", agent.ApprovalOriginMain)
 	ao.beginDenyReason()
 	tui.activeOverlay = ao
 	tui.mu.Unlock()
@@ -319,7 +319,7 @@ func TestFeedDenyReasonKeyAltBackspaceDeletesWord(t *testing.T) {
 // Shift+Enter or a multi-line paste can put one there) still renders as a
 // single well-formed terminal row instead of leaking a raw \n into it.
 func TestRenderDenyReasonPanelStripsEmbeddedNewlines(t *testing.T) {
-	ao := newApprovalOverlay("rm -rf x", "danger", "")
+	ao := newApprovalOverlay("rm -rf x", "danger", "", agent.ApprovalOriginMain)
 	ao.beginDenyReason()
 	ao.reasonEditor.insertText("line one\nline two")
 
@@ -341,7 +341,7 @@ func TestRenderDenyReasonPanelStripsEmbeddedNewlines(t *testing.T) {
 func TestFeedDenyReasonKeyTypesAndFinalizes(t *testing.T) {
 	tui := newTestTUIHelper()
 	tui.mu.Lock()
-	ao := newApprovalOverlay("rm -rf x", "danger", "")
+	ao := newApprovalOverlay("rm -rf x", "danger", "", agent.ApprovalOriginMain)
 	ao.beginDenyReason()
 	tui.activeOverlay = ao
 	tui.mu.Unlock()
@@ -390,7 +390,7 @@ func TestApproveEndToEndDenyReason(t *testing.T) {
 	}
 	result := make(chan outcome, 1)
 	go func() {
-		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- outcome{allowed, reason}
 	}()
 
@@ -441,7 +441,7 @@ func TestApproveEndToEndDenyEmptyReason(t *testing.T) {
 	}
 	result := make(chan outcome, 1)
 	go func() {
-		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- outcome{allowed, reason}
 	}()
 
@@ -492,7 +492,7 @@ func TestDenyWithReasonLeavesRunRunning(t *testing.T) {
 	}
 	result := make(chan outcome, 1)
 	go func() {
-		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- outcome{allowed, reason}
 	}()
 
@@ -544,7 +544,7 @@ func TestDenyWithEmptyReasonCancelsRun(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh)
+		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 
