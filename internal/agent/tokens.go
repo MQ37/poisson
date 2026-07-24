@@ -190,6 +190,33 @@ func (a *Agent) ContextWindow() int {
 	}
 }
 
+// sendInferenceSpeedEvent reports one completed streaming round's average
+// output tokens/sec — usage.OutputTokens (exact, provider-reported) divided
+// by wall-clock elapsed time since the request was sent. This is the same
+// real number for every block the round produced (thinking, answer text,
+// tool calls): none of poisson's providers (anthropic, openai, xai, ollama)
+// break usage down more finely than one total for the whole response, so
+// there is no finer-grained real figure to report per block instead.
+//
+// Always sends exactly one event per round, even when there's no reading to
+// report (usage nil/zero output tokens, or the round was too short to measure
+// meaningfully — see minInferenceSpeedElapsed) — then TokensPerSec is left at
+// zero, which the TUI never displays (every render site gates on > 0). The
+// TUI's scrollback.applyInferenceSpeed clears its "blocks from the round in
+// flight" set as a side effect of handling this event; skipping the send
+// entirely on the no-reading path would leave that set stuck, so the NEXT
+// round's real reading would wrongly retag this round's blocks too.
+func (a *Agent) sendInferenceSpeedEvent(usage *provider.Usage, roundStart time.Time) {
+	ev := OutputEvent{Type: OutputInferenceSpeed}
+	if usage != nil && usage.OutputTokens > 0 {
+		if elapsed := time.Since(roundStart); elapsed >= minInferenceSpeedElapsed {
+			ev.OutputTokens = usage.OutputTokens
+			ev.TokensPerSec = float64(usage.OutputTokens) / elapsed.Seconds()
+		}
+	}
+	a.sendEvent(ev)
+}
+
 // UpdateStatus sends a status OutputEvent to the output channel.
 func (a *Agent) UpdateStatus() {
 	used, total := a.ContextTokens()

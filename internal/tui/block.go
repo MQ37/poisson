@@ -1,6 +1,9 @@
 package tui
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // BlockKind categorizes a scrollback document block.
 type BlockKind uint8
@@ -25,13 +28,14 @@ type BlockMeta struct {
 	ToolName              string
 	ProviderCallID        string
 	ToolInput             []byte
-	SubagentTask          string // subagent widget: the task prompt (truncated for display)
-	SubagentModel         string // subagent widget: provider/model label
-	SubagentTurns         int    // subagent widget: live/final turn count reported by the child
-	SubagentContextTokens int    // subagent widget: live/final context tokens used, reported by the child
-	SubagentContextWindow int    // subagent widget: the child's own model context window
-	SubagentStatus        string // subagent widget: non-empty while the child is retrying a network failure (see agent.OutputRetrying) — shown in place of the turn/context line
-	Expediting            bool   // subagent widget: user pressed Ctrl+G, child is wrapping up
+	SubagentTask          string  // subagent widget: the task prompt (truncated for display)
+	SubagentModel         string  // subagent widget: provider/model label
+	SubagentTurns         int     // subagent widget: live/final turn count reported by the child
+	SubagentContextTokens int     // subagent widget: live/final context tokens used, reported by the child
+	SubagentContextWindow int     // subagent widget: the child's own model context window
+	SubagentStatus        string  // subagent widget: non-empty while the child is retrying a network failure (see agent.OutputRetrying) — shown in place of the turn/context line
+	SubagentTokensPerSec  float64 // subagent widget: the child's own last-reported inference speed (0 = none reported yet)
+	Expediting            bool    // subagent widget: user pressed Ctrl+G, child is wrapping up
 	ToolResult            string
 	ToolError             string
 	ToolDone              bool
@@ -42,6 +46,13 @@ type BlockMeta struct {
 	Streaming             bool // true while assistant/thinking/tool stream is in flight
 	StartedAt             time.Time
 	DurationMs            int64
+	// TokensPerSec is the average output tokens/sec of the streaming round
+	// that produced this block (thinking, assistant text, or tool call) — see
+	// agent.OutputInferenceSpeed and scrollback.applyInferenceSpeed. Zero
+	// means unknown: not yet reported (round still in flight), or the block
+	// was reconstructed from a resumed session, which never replays the
+	// original round's timing.
+	TokensPerSec float64
 }
 
 // Block is one logical document unit in the scrollback.
@@ -150,6 +161,9 @@ func (b *Block) layoutPlain(width int) []ScreenRow {
 	switch b.kind {
 	case blockAssistant:
 		chunks := layoutRichMarkdown(b.raw, width, kindStylePrefix(b.kind))
+		if b.meta.TokensPerSec > 0 {
+			chunks = append(chunks, dim+fmt.Sprintf("  %.0f tok/s", b.meta.TokensPerSec)+reset)
+		}
 		rows = screenRowsFromChunks(b.id, chunks)
 	case blockThinking:
 		rows = layoutThinking(b, width, 0)

@@ -800,6 +800,14 @@ func forwardChildEvents(outputChan <-chan agent.OutputEvent, a *agent.Agent, wri
 			// numbers with no explanation while this child's own network
 			// retry (see provider.DoWithRetry) is in progress.
 			write(map[string]interface{}{"type": "retrying", "text": ev.Text})
+		case agent.OutputInferenceSpeed:
+			// Only when there's an actual reading — a zero here would just
+			// mean "nothing to report this round" (see
+			// agent.OutputInferenceSpeed), and the parent widget already
+			// shows nothing until it sees a positive value.
+			if ev.TokensPerSec > 0 {
+				write(map[string]interface{}{"type": "speed", "tokensPerSec": ev.TokensPerSec})
+			}
 		case agent.OutputToolResult:
 			payload := map[string]interface{}{
 				"type":   "tool_result",

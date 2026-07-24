@@ -159,6 +159,17 @@ func formatToolCardBodyLineANSI(content string, width int) string {
 	return fgYellow + "│ " + reset + content + strings.Repeat(" ", pad) + fgYellow + " │" + reset
 }
 
+// toolCardSpeedSuffix renders the average output tokens/sec of the streaming
+// round that produced this tool call's arguments (see
+// agent.OutputInferenceSpeed) — "" when unknown (still in flight, or a
+// resumed session, which never replays the original round's timing).
+func toolCardSpeedSuffix(b *Block) string {
+	if b.meta.TokensPerSec <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" · %.0f tok/s", b.meta.TokensPerSec)
+}
+
 // toolCardCollapsedResultLines returns inner (unboxed) result preview rows shown
 // inside the card before the footer when the tool is done but not expanded.
 func toolCardCollapsedResultLines(b *Block, width int) []string {
@@ -188,6 +199,7 @@ func toolCardCollapsedResultLines(b *Block, width int) []string {
 	if b.meta.DurationMs > 0 {
 		suffix = fmt.Sprintf(" · %.1fs", float64(b.meta.DurationMs)/1000)
 	}
+	suffix += toolCardSpeedSuffix(b)
 	hint := ""
 	if toolResultNeedsExpand(b) {
 		hint = " · click/Ctrl+E"
@@ -213,6 +225,7 @@ func (s *scrollback) appendToolCall(id int64, providerCallID, name string, input
 		StartedAt:      time.Now(),
 	}
 	s.blocks = append(s.blocks, b)
+	s.markRoundBlock(b.id)
 	s.totalAdded++
 	s.trim()
 }

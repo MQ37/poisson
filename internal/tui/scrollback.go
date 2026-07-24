@@ -45,6 +45,38 @@ type scrollback struct {
 	// everything and legitimately changes the count for unrelated reasons).
 	lastWidth    int
 	lastRowCount int
+
+	// pendingSpeedBlocks holds the IDs of every block created or extended by
+	// the round currently in flight (thinking, assistant text, tool calls) —
+	// applyInferenceSpeed tags all of them with the round's tok/s once the
+	// agent reports it (see agent.OutputInferenceSpeed) and then clears this.
+	pendingSpeedBlocks map[int64]bool
+}
+
+// markRoundBlock records id as belonging to the round currently in flight, so
+// a later applyInferenceSpeed call knows to tag it. Safe to call repeatedly
+// for the same id (e.g. once per streamed chunk merged into one tail block).
+func (s *scrollback) markRoundBlock(id int64) {
+	if s.pendingSpeedBlocks == nil {
+		s.pendingSpeedBlocks = make(map[int64]bool, 4)
+	}
+	s.pendingSpeedBlocks[id] = true
+}
+
+// applyInferenceSpeed tags every block the in-flight round produced with its
+// average output tokens/sec, then clears the pending set — see
+// agent.OutputInferenceSpeed for why one figure applies to the whole round.
+func (s *scrollback) applyInferenceSpeed(tokPerSec float64) {
+	if len(s.pendingSpeedBlocks) == 0 {
+		return
+	}
+	for i := range s.blocks {
+		if s.pendingSpeedBlocks[s.blocks[i].id] {
+			s.blocks[i].meta.TokensPerSec = tokPerSec
+			s.blocks[i].invalidateLayout()
+		}
+	}
+	s.pendingSpeedBlocks = nil
 }
 
 func newScrollback(max int) *scrollback {
@@ -71,6 +103,7 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 		if kind == blockThinking {
 			if len(s.blocks) > 0 && s.blocks[len(s.blocks)-1].kind == blockThinking {
 				s.markThinkingStreaming()
+				s.markRoundBlock(s.blocks[len(s.blocks)-1].id)
 				return
 			}
 			b := s.newBlock(kind, "")
@@ -78,6 +111,7 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 			b.meta.StartedAt = time.Now()
 			s.blocks = append(s.blocks, b)
 			s.markThinkingStreaming()
+			s.markRoundBlock(b.id)
 			s.totalAdded++
 			s.trim()
 		}
@@ -92,6 +126,7 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 				if kind == blockThinking {
 					s.markThinkingStreaming()
 				}
+				s.markRoundBlock(tail.id)
 				s.totalAdded++
 				s.trim()
 				return
@@ -103,6 +138,7 @@ func (s *scrollback) appendBlock(kind BlockKind, raw string) {
 			b.meta.StartedAt = time.Now()
 		}
 		s.blocks = append(s.blocks, b)
+		s.markRoundBlock(b.id)
 		if kind == blockThinking {
 			s.markThinkingStreaming()
 		}

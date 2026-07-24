@@ -49,31 +49,47 @@ const (
 	// so far, and ContextTokens/ContextWindow (reused from the status fields)
 	// are the child's own context usage.
 	OutputSubagentProgress = "subagent_progress"
+	// OutputInferenceSpeed reports the average output tokens/sec for one
+	// completed streaming round: the provider's exact OutputTokens (reused
+	// from the status field) divided by wall-clock time from request-sent to
+	// EventDone. Always sent exactly once per round (see
+	// sendInferenceSpeedEvent — TokensPerSec is left at zero, never shown,
+	// when there's nothing measurable to report), after every block that
+	// round produced (thinking, answer text, tool calls) already exists in
+	// the TUI — which applies TokensPerSec to all of them, since no provider
+	// breaks usage down more finely than "total output tokens for this
+	// response". Sending every round unconditionally (not skipping the
+	// no-reading case) matters: it's also how the TUI clears its "blocks from
+	// the round in flight" bookkeeping, so skipping it would leak this
+	// round's blocks into the next round's figure.
+	OutputInferenceSpeed = "inference_speed"
 )
 
 // OutputEvent is a serialized terminal rendering event. The TUI goroutine
 // drains these from the agent's outputChan and renders them.
 type OutputEvent struct {
-	Type              string          // text | tool_start | tool_result | status | approval | error | compacting
-	Text              string          // text | error | compacting
-	ToolName          string          // tool_start | tool_result
-	ToolCallID        string          // tool_start | tool_result (provider call id)
-	ToolInput         json.RawMessage // tool_start
-	ToolResultContent string          // tool_result
-	ToolError         string          // tool_result
-	ContextPct        float64         // status
-	ContextTokens     int             // status, subagent_progress
-	ContextWindow     int             // status, subagent_progress
-	Cost              float64         // status
-	Model             string          // status
-	OutputTokens      int             // status
-	CacheReadTokens   int             // status
-	CacheWriteTokens  int             // status
-	CallCount         int             // status
-	ToolCalls         int             // status
-	ToolErrors        int             // status
-	Effort            string          // status
-	SubagentTurns     int             // subagent_progress
+	Type                 string          // text | tool_start | tool_result | status | approval | error | compacting
+	Text                 string          // text | error | compacting
+	ToolName             string          // tool_start | tool_result
+	ToolCallID           string          // tool_start | tool_result (provider call id)
+	ToolInput            json.RawMessage // tool_start
+	ToolResultContent    string          // tool_result
+	ToolError            string          // tool_result
+	ContextPct           float64         // status
+	ContextTokens        int             // status, subagent_progress
+	ContextWindow        int             // status, subagent_progress
+	Cost                 float64         // status
+	Model                string          // status
+	OutputTokens         int             // status, inference_speed (this round's exact output tokens)
+	CacheReadTokens      int             // status
+	CacheWriteTokens     int             // status
+	CallCount            int             // status
+	ToolCalls            int             // status
+	ToolErrors           int             // status
+	Effort               string          // status
+	SubagentTurns        int             // subagent_progress
+	TokensPerSec         float64         // inference_speed
+	SubagentTokensPerSec float64         // subagent_progress (child's own inference speed)
 
 	CompactionTokensBefore int  // compacted
 	CompactionTokensAfter  int  // compacted
@@ -617,18 +633,21 @@ func (a *Agent) RunTurns() int { return int(a.runTurns.Load()) }
 
 // SendSubagentProgress emits a live turn-count + context-usage update for a
 // running subagent widget. toolCallID correlates to the OutputToolStart that
-// created it (see tools.WithToolCallID). status is normally "" (ordinary
-// progress); when the child is mid-network-retry it carries a short
-// human-readable status ("connection lost: ... — reconnecting…" /
-// "reconnected — resuming") for the widget to show in place of its turn/
-// context line. Called from the subagent tool's own goroutine while its
-// child is still running, concurrently with the rest of the turn loop —
-// sendEvent is the same channel-send already used for tool_result from that
-// goroutine, so this is safe.
-func (a *Agent) SendSubagentProgress(toolCallID string, turns, contextTokens, contextWindow int, status string) {
+// created it (see tools.WithToolCallID). tokensPerSec is the child's own
+// last-reported inference speed (0 if it hasn't reported one yet — see
+// agent.OutputInferenceSpeed and subagent.ChildEvent.TokensPerSec). status is
+// normally "" (ordinary progress); when the child is mid-network-retry it
+// carries a short human-readable status ("connection lost: ... —
+// reconnecting…" / "reconnected — resuming") for the widget to show in place
+// of its turn/context line. Called from the subagent tool's own goroutine
+// while its child is still running, concurrently with the rest of the turn
+// loop — sendEvent is the same channel-send already used for tool_result
+// from that goroutine, so this is safe.
+func (a *Agent) SendSubagentProgress(toolCallID string, turns, contextTokens, contextWindow int, tokensPerSec float64, status string) {
 	a.sendEvent(OutputEvent{
 		Type: OutputSubagentProgress, ToolCallID: toolCallID, SubagentTurns: turns,
-		ContextTokens: contextTokens, ContextWindow: contextWindow, Text: status,
+		ContextTokens: contextTokens, ContextWindow: contextWindow,
+		SubagentTokensPerSec: tokensPerSec, Text: status,
 	})
 }
 
@@ -782,6 +801,15 @@ const maxMidStreamErrorRetries = 3
 
 // midStreamErrorBackoff is a var so tests can shorten it.
 var midStreamErrorBackoff = 1 * time.Second
+
+// minInferenceSpeedElapsed floors how short a round's wall-clock duration may
+// be before sendInferenceSpeedEvent bothers reporting a tok/s figure for it.
+// Below this, timer granularity and request/response overhead dominate the
+// measurement — dividing a handful of tokens by a near-zero duration produces
+// a wildly inflated number, not a meaningful speed reading. A var (like
+// emptyResponseBackoff/midStreamErrorBackoff above) so tests can shrink it
+// instead of needing a real sleep to clear the floor.
+var minInferenceSpeedElapsed = 100 * time.Millisecond
 
 const expediteNudge = "\n\n[User interjection] The user needs results now and has asked you to wrap up immediately. Stop starting new work: summarize what you have accomplished so far — partial results are fine — and finish this turn without any further tool calls."
 
@@ -953,6 +981,7 @@ roundLoop:
 		// on the interactive REPL's main turn loop, so a pump left blocked on a
 		// send has no way to ever unblock.
 		streamCtx, cancel := context.WithCancel(ctx)
+		roundStart := time.Now()
 		ch, err := a.streamWithRetryNotice(streamCtx, req)
 		if err != nil {
 			cancel()
@@ -1122,6 +1151,10 @@ roundLoop:
 		// preserves role alternation, which Anthropic requires. Bounded to avoid
 		// an unbounded loop if the model keeps hitting the cap.
 		if len(toolCalls) == 0 {
+			// No tool calls this round — every block it produced (thinking,
+			// answer text) already exists in the TUI, so it's safe to report
+			// this round's speed now, before whichever exit path below runs.
+			a.sendInferenceSpeedEvent(usage, roundStart)
 			if stopReason == "max_tokens" && continuations < maxTurnContinuations {
 				continuations++
 				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf(
@@ -1157,6 +1190,10 @@ roundLoop:
 				ToolInput:  tc.Input,
 			})
 		}
+		// Report this round's speed only now that the tool-call blocks it
+		// produced exist in the TUI too (thinking/text blocks, if any,
+		// already existed — they streamed live during the round above).
+		a.sendInferenceSpeedEvent(usage, roundStart)
 
 		// Dispatch concurrently; emit each tool_result to the TUI as it finishes
 		// so cards stop spinning without waiting for slower siblings (e.g. bash approval).

@@ -76,6 +76,16 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 		}
 	}
 
+	// The child's own inference speed, once it's reported one.
+	if b.meta.SubagentTokensPerSec > 0 && !reconnecting {
+		speedText := fmt.Sprintf("%.0f tok/s", b.meta.SubagentTokensPerSec)
+		if dur != "" {
+			dur += "  " + speedText
+		} else {
+			dur = speedText
+		}
+	}
+
 	detail := b.meta.SubagentTask
 	if m := b.meta.SubagentModel; m != "" {
 		if detail != "" {
@@ -225,8 +235,12 @@ func (s *scrollback) finalizeOrphanSubagents() {
 // (when status != "") a network-retry status to show in place of that
 // turn/context line — see agent.OutputRetrying and BlockMeta.SubagentStatus.
 // A non-retry update (status == "") always clears any prior status: a real
-// progress report means the child is actively working again.
-func (s *scrollback) updateSubagentProgress(providerCallID string, turns, contextTokens, contextWindow int, status string) {
+// progress report means the child is actively working again. tokensPerSec is
+// the child's own last-reported inference speed (0 if it hasn't reported one
+// yet); like turns/contextTokens, callers pass through their last-known value
+// on ticks that don't carry a fresh reading (e.g. a retry-status-only tick),
+// so this always assigns rather than conditionally updating.
+func (s *scrollback) updateSubagentProgress(providerCallID string, turns, contextTokens, contextWindow int, tokensPerSec float64, status string) {
 	for i := len(s.blocks) - 1; i >= 0; i-- {
 		b := &s.blocks[i]
 		if b.kind != blockSubagent || b.meta.ProviderCallID != providerCallID {
@@ -235,6 +249,7 @@ func (s *scrollback) updateSubagentProgress(providerCallID string, turns, contex
 		b.meta.SubagentTurns = turns
 		b.meta.SubagentContextTokens = contextTokens
 		b.meta.SubagentContextWindow = contextWindow
+		b.meta.SubagentTokensPerSec = tokensPerSec
 		b.meta.SubagentStatus = status
 		b.invalidateLayout()
 		return

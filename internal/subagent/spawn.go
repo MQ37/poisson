@@ -62,6 +62,12 @@ type ChildEvent struct {
 	// the parent's turn is cancelled before the child sends "done" (see
 	// SubagentTool.Execute). nil means no usage to report yet.
 	Usage *provider.Usage `json:"usage,omitempty"`
+	// TokensPerSec is the child's own average output tokens/sec for its most
+	// recently completed streaming round (see agent.OutputInferenceSpeed),
+	// sent on a "speed" event — lets the parent's subagent widget show the
+	// child's inference speed the same way the main conversation shows it
+	// for its own rounds. Zero/omitted means nothing measurable to report.
+	TokensPerSec float64 `json:"tokensPerSec,omitempty"`
 }
 
 // lookupExecutable resolves the binary Spawn execs as the child. A package

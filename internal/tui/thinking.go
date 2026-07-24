@@ -9,10 +9,17 @@ import (
 const thinkingStreamMarker = "▾ thinking"
 
 // formatThinkingCollapsed renders the one-line collapsed thinking header.
-func formatThinkingCollapsed(charCount int, durationMs int64) string {
+// tokPerSec is the round's average output speed (see
+// agent.OutputInferenceSpeed); <= 0 (unknown — still streaming, or the block
+// came from a resumed session) omits it entirely.
+func formatThinkingCollapsed(charCount int, durationMs int64, tokPerSec float64) string {
 	chars := formatNum(charCount)
 	dur := formatThinkingDuration(durationMs)
-	return dim + italic + "▸ thinking (" + chars + " chars, " + dur + ")" + reset
+	speed := ""
+	if tokPerSec > 0 {
+		speed = fmt.Sprintf(", %.0f tok/s", tokPerSec)
+	}
+	return dim + italic + "▸ thinking (" + chars + " chars, " + dur + speed + ")" + reset
 }
 
 // formatThinkingStreaming renders the streaming thinking status line.
@@ -46,7 +53,7 @@ func layoutThinking(b *Block, width int, _ int) []ScreenRow {
 		if b.meta.Streaming && !b.meta.StartedAt.IsZero() {
 			dur = time.Since(b.meta.StartedAt).Milliseconds()
 		}
-		text := prefix + formatThinkingCollapsed(len([]rune(b.raw)), dur) + reset
+		text := prefix + formatThinkingCollapsed(len([]rune(b.raw)), dur, b.meta.TokensPerSec) + reset
 		return []ScreenRow{{Text: text, Tag: RowTag{BlockID: b.id, RowIdx: 0}}}
 	}
 	var chunks []string

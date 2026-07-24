@@ -272,7 +272,7 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		t.nextToolID++
 		t.scroll.appendToolCall(id, ev.ToolCallID, ev.ToolName, ev.ToolInput)
 	case agent.OutputSubagentProgress:
-		t.scroll.updateSubagentProgress(ev.ToolCallID, ev.SubagentTurns, ev.ContextTokens, ev.ContextWindow, ev.Text)
+		t.scroll.updateSubagentProgress(ev.ToolCallID, ev.SubagentTurns, ev.ContextTokens, ev.ContextWindow, ev.SubagentTokensPerSec, ev.Text)
 	case agent.OutputToolResult:
 		if ev.ToolName == "subagent" {
 			t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolError, 0)
@@ -292,6 +292,8 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		// retried isn't a failure, and this fires at most twice per outage
 		// (start + recovery), never once per backoff attempt.
 		t.scroll.appendRaw(styleCompacting, "  "+ev.Text)
+	case agent.OutputInferenceSpeed:
+		t.scroll.applyInferenceSpeed(ev.TokensPerSec)
 	case agent.OutputCompacted:
 		t.appendCompactionNoticeLocked(ev.CompactionTokensBefore, ev.CompactionTokensAfter)
 		t.agent.UpdateStatus()

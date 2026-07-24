@@ -48,14 +48,15 @@ printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWind
 
 	type progressCall struct {
 		turns, contextTokens, contextWindow int
+		tokensPerSec                        float64
 		status                              string
 	}
 	var calls []progressCall
-	tool.SetProgressFn(func(toolCallID string, turns, contextTokens, contextWindow int, status string) {
+	tool.SetProgressFn(func(toolCallID string, turns, contextTokens, contextWindow int, tokensPerSec float64, status string) {
 		if toolCallID != "call-1" {
 			t.Errorf("toolCallID = %q, want call-1", toolCallID)
 		}
-		calls = append(calls, progressCall{turns, contextTokens, contextWindow, status})
+		calls = append(calls, progressCall{turns, contextTokens, contextWindow, tokensPerSec, status})
 	})
 
 	ctx := WithToolCallID(context.Background(), "call-1")
@@ -72,10 +73,10 @@ printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWind
 	// automatically once real progress resumes" behavior end-to-end, not
 	// just at the unit level.
 	want := []progressCall{
-		{1, 100, 200000, ""},
-		{1, 100, 200000, "connection lost: dial tcp - reconnecting"},
-		{2, 150, 200000, ""},
-		{2, 150, 200000, ""},
+		{1, 100, 200000, 0, ""},
+		{1, 100, 200000, 0, "connection lost: dial tcp - reconnecting"},
+		{2, 150, 200000, 0, ""},
+		{2, 150, 200000, 0, ""},
 	}
 	if len(calls) != len(want) {
 		t.Fatalf("progressFn calls = %+v, want %+v", calls, want)
@@ -83,6 +84,65 @@ printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWind
 	for i := range want {
 		if calls[i] != want[i] {
 			t.Errorf("call %d = %+v, want %+v", i, calls[i], want[i])
+		}
+	}
+}
+
+// TestSubagentToolRelaysInferenceSpeedEndToEnd exercises the child's own
+// inference-speed relay ("speed" ChildEvent -> SubagentTool.Execute's switch
+// -> reportProgress -> progressFn's tokensPerSec) with a REAL spawned process,
+// mirroring TestSubagentToolRelaysRetryingStatusEndToEnd's approach. Also
+// verifies the reading persists across a later tick that doesn't carry a
+// fresh one (a plain turn update) — same persistence turns/contextTokens
+// already get.
+func TestSubagentToolRelaysInferenceSpeedEndToEnd(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-speed.sh"
+	script := `#!/bin/sh
+printf '{"type":"tool","tool":"read","turns":1,"contextTokens":100,"contextWindow":200000}\n'
+printf '{"type":"speed","tokensPerSec":37.5}\n'
+printf '{"type":"tool","tool":"read","turns":2,"contextTokens":150,"contextWindow":200000}\n'
+printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWindow":200000}\n'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := NewSubagentTool(".", alwaysApproveSubagent)
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-opus-4-8" },
+		func() string { return "" },
+	)
+
+	var speeds []float64
+	tool.SetProgressFn(func(_ string, _, _, _ int, tokensPerSec float64, _ string) {
+		speeds = append(speeds, tokensPerSec)
+	})
+
+	ctx := WithToolCallID(context.Background(), "call-1")
+	res, err := tool.Execute(ctx, json.RawMessage(`{"task":"do something"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error: %q (content=%q)", res.Error, res.Content)
+	}
+
+	// Expect exactly: turn 1 (no reading yet), speed reading, turn 2 (reading
+	// persists), final done (reading still persists).
+	want := []float64{0, 37.5, 37.5, 37.5}
+	if len(speeds) != len(want) {
+		t.Fatalf("progressFn tokensPerSec calls = %v, want %v", speeds, want)
+	}
+	for i := range want {
+		if speeds[i] != want[i] {
+			t.Errorf("call %d tokensPerSec = %v, want %v", i, speeds[i], want[i])
 		}
 	}
 }
@@ -175,7 +235,7 @@ exit 1
 	)
 
 	var lastStatus string
-	tool.SetProgressFn(func(_ string, _, _, _ int, status string) {
+	tool.SetProgressFn(func(_ string, _, _, _ int, _ float64, status string) {
 		if status != "" {
 			lastStatus = status
 		}

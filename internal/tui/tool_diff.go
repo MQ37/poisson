@@ -197,6 +197,7 @@ func diffCardCollapsedLines(b *Block, width int) []string {
 	if b.meta.DurationMs > 0 {
 		suffix = fmt.Sprintf(" · %.1fs", float64(b.meta.DurationMs)/1000)
 	}
+	suffix += toolCardSpeedSuffix(b)
 	hint := ""
 	if toolDiffNeedsExpand(b) {
 		hint = " · click/Ctrl+E"

@@ -202,4 +202,12 @@ func (t *TUI) hydrateScrollbackLocked() {
 	t.scroll.finalizeOrphanSubagents()
 	t.scroll.finalizeThinking()
 	t.scroll.scrollToBottom()
+	// Replaying history above went through the same scroll.append/appendBlock
+	// path a live round uses, which marks every thinking/assistant block it
+	// touches as "pending" for the NEXT applyInferenceSpeed call (see
+	// scrollback.markRoundBlock) — there is no live round in progress here,
+	// so that would wrongly stamp the entire replayed history with whatever
+	// tok/s the first real round after resume reports. Nothing hydrated here
+	// was ever part of an in-flight round; drop it.
+	t.scroll.pendingSpeedBlocks = nil
 }

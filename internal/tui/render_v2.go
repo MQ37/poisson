@@ -614,6 +614,16 @@ func (t *TUI) markAfterEvent(ev agent.OutputEvent) {
 		t.dirty.markStatus()
 	case agent.OutputDone:
 		t.scroll.finalizeThinking()
+		// A turn can end without ever reaching either sendInferenceSpeedEvent
+		// call site in runTurn — cancellation mid-stream (persistPartialTurnOnCancel)
+		// and a non-retryable/exhausted-retry mid-stream error both return after
+		// content already streamed (and its blocks got markRoundBlock'd) — yet
+		// OutputDone is sent on every one of runTurn's exit paths, with no
+		// exception. Clearing here, unconditionally, is what actually closes the
+		// leak: relying on every current and future exit path to remember an
+		// OutputInferenceSpeed send first is exactly the kind of assumption that
+		// already broke once (see agent.sendInferenceSpeedEvent's own doc).
+		t.scroll.pendingSpeedBlocks = nil
 		t.activeTools = 0
 		if t.turnCancelled {
 			t.turnCancelled = false

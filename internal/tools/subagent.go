@@ -51,8 +51,9 @@ type SubagentTool struct {
 	// context. status is normally "" (ordinary progress); when the child is
 	// mid-network-retry it carries a short human-readable status ("connection
 	// lost: ... — reconnecting…" / "reconnected — resuming") for the widget
-	// to show in place of the turn/context line.
-	progressFn func(toolCallID string, turns, contextTokens, contextWindow int, status string)
+	// to show in place of the turn/context line. tokensPerSec is the child's
+	// own last-reported inference speed (0 if none reported yet).
+	progressFn func(toolCallID string, turns, contextTokens, contextWindow int, tokensPerSec float64, status string)
 
 	// usageFn records a finished (or partially finished) subagent's
 	// accumulated token usage as a "subagent" api_calls row on the parent
@@ -114,7 +115,7 @@ func (t *SubagentTool) SetSkillsEnabledFn(fn func() bool) {
 
 // SetProgressFn supplies the live turn-count + context-usage progress
 // callback (called from Execute's goroutine as the child reports each new turn).
-func (t *SubagentTool) SetProgressFn(fn func(toolCallID string, turns, contextTokens, contextWindow int, status string)) {
+func (t *SubagentTool) SetProgressFn(fn func(toolCallID string, turns, contextTokens, contextWindow int, tokensPerSec float64, status string)) {
 	t.progressFn = fn
 }
 
@@ -207,12 +208,13 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 
 	var output strings.Builder
 	var toolCount, turns, contextTokens, contextWindow int
+	var tokensPerSec float64
 	var success bool
 	var childErr string
 	toolCallID, hasToolCallID := ToolCallIDFromContext(ctx)
 	reportProgress := func(status string) {
 		if hasToolCallID && t.progressFn != nil {
-			t.progressFn(toolCallID, turns, contextTokens, contextWindow, status)
+			t.progressFn(toolCallID, turns, contextTokens, contextWindow, tokensPerSec, status)
 		}
 	}
 
@@ -308,6 +310,13 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 				// instead of freezing on stale turn/context numbers with no
 				// explanation while the child's connection recovers.
 				reportProgress(ev.Text)
+
+			case "speed":
+				// Relayed from the child's own agent.OutputInferenceSpeed —
+				// only sent by the child when it has an actual reading (see
+				// forwardChildEvents), so this is always a real update.
+				tokensPerSec = ev.TokensPerSec
+				reportProgress("")
 
 			case "tool_result":
 

@@ -41,6 +41,44 @@ func TestHydrateScrollbackFromSession(t *testing.T) {
 	}
 }
 
+// TestHydrateDoesNotLeaveStalePendingSpeedBlocks reproduces a real bug: replaying
+// history (thinking + assistant text) goes through the same scroll.append path
+// a live streaming round uses, which marks every block it touches as "pending"
+// for the next inference-speed reading (see scrollback.markRoundBlock) — but
+// there's no live round in progress during hydration. Left unfixed, the first
+// real round after resuming this session would wrongly stamp its tok/s onto
+// this entire replayed history too, via applyInferenceSpeed.
+func TestHydrateDoesNotLeaveStalePendingSpeedBlocks(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(dir + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	sid := "hydrate-speed-test"
+	st.CreateSession(&store.Session{ID: sid, Cwd: ".", Provider: "fake", Model: "m"})
+	st.AppendMessage(&store.Message{
+		SessionID: sid, Role: "user", Content: `[{"type":"text","text":"hello"}]`,
+	})
+	st.AppendMessage(&store.Message{
+		SessionID: sid, Role: "assistant",
+		Content: `[{"type":"thinking","thinking":"thinking about it"},{"type":"text","text":"world"}]`,
+	})
+
+	a := agent.NewAgent(st, provider.NewFakeProvider("fake", nil), tools.NewRegistry(),
+		config.DefaultConfig(), sid, nil, nil)
+	tui := newTUI(a, sid, nil)
+	tui.mu.Lock()
+	tui.resetSessionViewLocked()
+	pending := len(tui.scroll.pendingSpeedBlocks)
+	tui.mu.Unlock()
+
+	if pending != 0 {
+		t.Fatalf("pendingSpeedBlocks after hydrate = %d, want 0 (replayed history isn't part of any in-flight round)", pending)
+	}
+}
+
 // TestHydrateScrollbackShowsFullHistoryAfterCompaction reproduces a live user
 // report: resuming a compacted session used to show only an opaque
 // placeholder line for everything before the compaction, discarding the
