@@ -3,13 +3,17 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const toolCardSpinnerSlot = "◌" // replaced at paint time with animated spinner
 
-// layoutToolCard renders a structured tool invocation card.
+// layoutToolCard renders a tool invocation. bash/read and other non-diff tools
+// collapse to a single thinking-style line; edit/write always show a borderless
+// full diff (green/red background + syntax highlight + line numbers).
 func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 	if width < 12 {
 		width = 12
@@ -18,62 +22,37 @@ func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 	if name == "" {
 		name = "tool"
 	}
-	spin := toolCardSpinnerSlot
-	if b.meta.ToolDone {
-		if b.meta.ToolError != "" {
-			spin = "✗"
-		} else {
-			spin = "✓"
-		}
+
+	// edit/write: always-expanded borderless diff.
+	if isDiffTool(name) && b.meta.ToolError == "" {
+		return layoutDiffTool(b, width)
 	}
-	header := toolCardHeader(name, spin, width)
-	bodyLines := toolCardBody(name, b.meta.ToolInput, width)
+
+	// Compact single-line tools (bash, read, fetch, …) — collapsed by default,
+	// including while still running. Expand (click/Ctrl+E) reveals command + result.
+	if !b.meta.Expanded {
+		text := formatToolCollapsed(b, width)
+		return []ScreenRow{{Text: text, Tag: RowTag{BlockID: b.id, RowIdx: 0}}}
+	}
+
 	var chunks []string
-	chunks = append(chunks, fgYellow+header+reset)
-	inner := width - 4
-	if inner < 1 {
-		inner = 1
+	chunks = append(chunks, formatToolExpandedHeader(b))
+
+	// Body: input summary / command.
+	for _, ln := range toolExpandedInputLines(name, b.meta.ToolInput, width) {
+		chunks = append(chunks, ln)
 	}
-	for _, ln := range bodyLines {
-		if strings.Contains(ln, "\x1b[") {
-			for _, chunk := range wrapANSI(ln, inner) {
-				chunks = append(chunks, formatToolCardBodyLineANSI(chunk, width))
-			}
-			continue
-		}
-		for _, chunk := range wrapLine(stripANSI(ln), inner) {
-			chunks = append(chunks, fgYellow+formatToolCardBodyLine(chunk, width)+reset)
-		}
-	}
-	diffCard := b.meta.ToolDone && isDiffTool(name) && b.meta.ToolError == ""
-	if diffCard {
-		lines := diffCardCollapsedLines(b, width)
-		if b.meta.Expanded {
-			lines = diffCardExpandedLines(b, width)
-		}
-		for _, ln := range lines {
-			chunks = append(chunks, formatToolCardBodyLineANSI(ln, width))
-		}
-	}
-	if b.meta.ToolDone && !b.meta.Expanded && !diffCard {
+
+	if b.meta.ToolDone {
 		style := fgGray
 		if b.meta.ToolError != "" {
 			style = fgRed
 		}
-		for _, ln := range toolCardCollapsedResultLines(b, width) {
-			chunks = append(chunks, style+toolCardBodyLine(ln, width)+reset)
-		}
-	}
-	if b.meta.ToolDone && b.meta.Expanded && !diffCard {
 		for _, ln := range toolCardExpandedResultLines(b, width) {
-			style := fgGray
-			if b.meta.ToolError != "" {
-				style = fgRed
-			}
-			chunks = append(chunks, style+toolCardBodyLine(ln, width)+reset)
+			chunks = append(chunks, style+ln+reset)
 		}
 	}
-	chunks = append(chunks, fgYellow+toolCardFooter(width)+reset)
+
 	rows := make([]ScreenRow, len(chunks))
 	for i, chunk := range chunks {
 		rows[i] = ScreenRow{Text: chunk, Tag: RowTag{BlockID: b.id, RowIdx: i}}
@@ -81,82 +60,251 @@ func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 	return rows
 }
 
-func toolCardHeader(name, status string, width int) string {
-	title := "─ " + name + " "
-	fill := width - visibleWidth("╭"+title+status+" ─╮")
-	if fill < 0 {
-		fill = 0
+// layoutDiffTool renders edit/write: one header line + full colored diff, no box.
+func layoutDiffTool(b *Block, width int) []ScreenRow {
+	var chunks []string
+	chunks = append(chunks, formatDiffToolHeader(b))
+
+	lang := toolLangFromInput(b.meta.ToolName, b.meta.ToolInput)
+	diff := toolDiffLines(b.meta.ToolName, b.meta.ToolInput)
+	for _, ln := range renderDiffLines(diff, width, lang) {
+		chunks = append(chunks, ln)
 	}
-	return "╭" + title + strings.Repeat("─", fill) + " " + status + " ╮"
+
+	// Still surface a failure path even for diff tools if ToolError is set —
+	// callers gate on ToolError == "" before calling us, but keep a safety net.
+	if b.meta.ToolError != "" {
+		chunks = append(chunks, fgRed+"✗ "+b.meta.ToolError+reset)
+	}
+
+	rows := make([]ScreenRow, len(chunks))
+	for i, chunk := range chunks {
+		rows[i] = ScreenRow{Text: chunk, Tag: RowTag{BlockID: b.id, RowIdx: i}}
+	}
+	return rows
 }
 
-func formatToolCardBodyLine(chunk string, width int) string {
-	inner := width - 4
+func formatDiffToolHeader(b *Block) string {
+	name := b.meta.ToolName
+	preview := toolInputPreview(name, b.meta.ToolInput)
+	mark := "✓"
+	if !b.meta.ToolDone {
+		mark = toolCardSpinnerSlot
+	} else if b.meta.ToolError != "" {
+		mark = "✗"
+	}
+	title := titleCaseTool(name)
+	meta := ""
+	if b.meta.ToolDone {
+		if b.meta.DurationMs > 0 {
+			meta = fmt.Sprintf(" · %.1fs", float64(b.meta.DurationMs)/1000)
+		}
+		meta += toolCardSpeedSuffix(b)
+	}
+	return dim + italic + mark + " " + title + " · " + reset + dim + preview + meta + reset
+}
+
+// formatToolCollapsed is the one-line thinking-style header for bash/read/etc.
+// Shape: "▸ Bash - reason (0.4s, 55 tok/s)" — reason is the bash description
+// or the path/url/etc. for other tools. While still running the mark is the
+// spinner slot and duration is live elapsed.
+func formatToolCollapsed(b *Block, width int) string {
+	name := b.meta.ToolName
+	if name == "" {
+		name = "tool"
+	}
+	title := titleCaseTool(name)
+	reason := toolCollapsedReason(name, b.meta.ToolInput)
+	if reason == "" {
+		reason = "…"
+	}
+
+	mark := "▸"
+	switch {
+	case !b.meta.ToolDone:
+		mark = toolCardSpinnerSlot
+	case b.meta.ToolError != "":
+		mark = "✗"
+	}
+
+	metaParts := []string{}
+	durMs := b.meta.DurationMs
+	if !b.meta.ToolDone && !b.meta.StartedAt.IsZero() {
+		durMs = time.Since(b.meta.StartedAt).Milliseconds()
+	}
+	if durMs > 0 {
+		metaParts = append(metaParts, fmt.Sprintf("%.1fs", float64(durMs)/1000))
+	}
+	if b.meta.TokensPerSec > 0 {
+		metaParts = append(metaParts, fmt.Sprintf("%.0f tok/s", b.meta.TokensPerSec))
+	}
+	meta := ""
+	if len(metaParts) > 0 {
+		meta = " (" + strings.Join(metaParts, ", ") + ")"
+	}
+
+	// "▸ Bash - reason (meta)" — trim reason to fit width.
+	prefix := mark + " " + title + " - "
+	suffix := meta
+	avail := width - visibleWidth(prefix) - visibleWidth(suffix)
+	if avail < 8 {
+		avail = 8
+	}
+	reason = truncateToWidth(reason, avail)
+
+	style := dim + italic
+	if b.meta.ToolError != "" {
+		style = fgRed + italic
+	}
+	return style + prefix + reason + suffix + reset
+}
+
+func formatToolExpandedHeader(b *Block) string {
+	name := b.meta.ToolName
+	if name == "" {
+		name = "tool"
+	}
+	title := titleCaseTool(name)
+	reason := toolCollapsedReason(name, b.meta.ToolInput)
+
+	mark := "▾"
+	if !b.meta.ToolDone {
+		mark = toolCardSpinnerSlot
+	} else if b.meta.ToolError != "" {
+		mark = "✗"
+	}
+
+	metaParts := []string{}
+	if b.meta.ToolDone {
+		if b.meta.DurationMs > 0 {
+			metaParts = append(metaParts, fmt.Sprintf("%.1fs", float64(b.meta.DurationMs)/1000))
+		}
+		if b.meta.TokensPerSec > 0 {
+			metaParts = append(metaParts, fmt.Sprintf("%.0f tok/s", b.meta.TokensPerSec))
+		}
+	} else {
+		metaParts = append(metaParts, "…")
+	}
+	meta := ""
+	if len(metaParts) > 0 {
+		meta = " (" + strings.Join(metaParts, ", ") + ")"
+	}
+
+	head := mark + " " + title
+	if reason != "" {
+		head += " - " + reason
+	}
+	style := dim + italic
+	if b.meta.ToolError != "" {
+		style = fgRed + italic
+	}
+	return style + head + meta + reset
+}
+
+// toolCollapsedReason is the short purpose shown on the collapsed line:
+// bash description, read path, fetch url, etc.
+func toolCollapsedReason(toolName string, input []byte) string {
+	if len(input) == 0 {
+		return ""
+	}
+	switch toolName {
+	case "bash":
+		var in struct {
+			Description string `json:"description"`
+			Command     string `json:"command"`
+		}
+		if json.Unmarshal(input, &in) == nil {
+			if d := strings.TrimSpace(in.Description); d != "" {
+				return previewText(d, 120)
+			}
+			if in.Command != "" {
+				return previewText(in.Command, 80)
+			}
+		}
+	case "read", "@file":
+		var in struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Path != "" {
+			return previewText(in.Path, 100)
+		}
+	case "write", "edit":
+		return toolInputPreview(toolName, input)
+	case "fetch":
+		var in struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.URL != "" {
+			return previewText(in.URL, 100)
+		}
+	case "web_search", "web_ask":
+		var in struct {
+			Query string `json:"query"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Query != "" {
+			return previewText(in.Query, 100)
+		}
+	case "skill":
+		var in struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Name != "" {
+			return previewText(in.Name, 80)
+		}
+	case "subagent":
+		var in struct {
+			Name string `json:"name"`
+			Task string `json:"task"`
+		}
+		if json.Unmarshal(input, &in) == nil {
+			if in.Name != "" {
+				return previewText(in.Name, 80)
+			}
+			return previewText(in.Task, 80)
+		}
+	case "@image":
+		return toolInputPreview(toolName, input)
+	}
+	return toolInputPreview(toolName, input)
+}
+
+// toolExpandedInputLines is the body shown under an expanded compact tool
+// header: the bash command (highlighted) or a plain input preview.
+func toolExpandedInputLines(toolName string, input []byte, width int) []string {
+	inner := width
 	if inner < 1 {
 		inner = 1
 	}
-	pad := inner - len([]rune(chunk))
-	if pad < 0 {
-		pad = 0
-	}
-	return "│ " + chunk + strings.Repeat(" ", pad) + " │"
-}
-
-func toolCardBodyLine(content string, width int) string {
-	inner := width - 4
-	if inner < 1 {
-		inner = 1
-	}
-	chunks := wrapLine(stripANSI(content), inner)
-	if len(chunks) == 0 {
-		return "│ " + strings.Repeat(" ", inner) + " │"
-	}
-	return formatToolCardBodyLine(chunks[0], width)
-}
-
-func toolCardFooter(width int) string {
-	fill := width - 2
-	if fill < 0 {
-		fill = 0
-	}
-	return "╰" + strings.Repeat("─", fill) + "╯"
-}
-
-func toolCardBody(toolName string, input []byte, width int) []string {
 	if toolName == "bash" {
 		var in struct {
 			Command string `json:"command"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Command != "" {
-			inner := width - 4
-			if inner < 1 {
-				inner = 1
-			}
 			return bashToolCommandLines(in.Command, inner)
 		}
 	}
 	preview := toolInputPreview(toolName, input)
-	inner := width - 4
-	if inner < 1 {
-		inner = 1
+	if preview == "" || preview == "..." {
+		return nil
 	}
-	return wrapLine(preview, inner)
+	var out []string
+	for _, chunk := range wrapLine(preview, inner) {
+		out = append(out, dim+"  "+chunk+reset)
+	}
+	return out
 }
 
-func formatToolCardBodyLineANSI(content string, width int) string {
-	inner := width - 4
-	if inner < 1 {
-		inner = 1
+func titleCaseTool(name string) string {
+	if name == "" {
+		return "Tool"
 	}
-	pad := inner - visibleWidth(content)
-	if pad < 0 {
-		content = truncateToWidth(content, inner)
-		pad = inner - visibleWidth(content)
+	// Keep @file / @image readable.
+	if strings.HasPrefix(name, "@") {
+		return name
 	}
-	if pad < 0 {
-		pad = 0
-	}
-	return fgYellow + "│ " + reset + content + strings.Repeat(" ", pad) + fgYellow + " │" + reset
+	runes := []rune(name)
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
 }
 
 // toolCardSpeedSuffix renders the average output tokens/sec of the streaming
@@ -170,59 +318,18 @@ func toolCardSpeedSuffix(b *Block) string {
 	return fmt.Sprintf(" · %.0f tok/s", b.meta.TokensPerSec)
 }
 
-// toolCardCollapsedResultLines returns inner (unboxed) result preview rows shown
-// inside the card before the footer when the tool is done but not expanded.
-func toolCardCollapsedResultLines(b *Block, width int) []string {
-	text := toolResultFullText(b)
-	preview := previewText(text, toolResultCollapsedBytes)
-	inner := width - 4
-	if inner < 1 {
-		inner = 1
-	}
-	lines := wrapLine(preview, inner)
-	if len(lines) > toolResultCollapsedLines {
-		lines = lines[:toolResultCollapsedLines]
-	}
-	if len(lines) == 0 {
-		lines = []string{""}
-	}
-	prefix := "✓ "
-	if b.meta.ToolError != "" {
-		prefix = "✗ "
-	}
-	lines[0] = prefix + strings.TrimSpace(lines[0])
-	for i := 1; i < len(lines); i++ {
-		lines[i] = "  " + strings.TrimSpace(lines[i])
-	}
-	last := len(lines) - 1
-	suffix := ""
-	if b.meta.DurationMs > 0 {
-		suffix = fmt.Sprintf(" · %.1fs", float64(b.meta.DurationMs)/1000)
-	}
-	suffix += toolCardSpeedSuffix(b)
-	hint := ""
-	if toolResultNeedsExpand(b) {
-		hint = " · click/Ctrl+E"
-	}
-	avail := inner - visibleWidth(suffix+hint)
-	if avail < 4 {
-		avail = inner
-		suffix = ""
-		hint = ""
-	}
-	lines[last] = truncateToWidth(lines[last], avail) + suffix + hint
-	return lines
-}
-
 // appendToolCall adds a tool invocation block.
 func (s *scrollback) appendToolCall(id int64, providerCallID, name string, input []byte) {
 	b := s.newBlock(blockToolCall, "")
+	// edit/write are always fully visible — mark Expanded so click/Ctrl+E is a no-op.
+	alwaysOpen := isDiffTool(name)
 	b.meta = BlockMeta{
 		ToolName:       name,
 		ProviderCallID: providerCallID,
 		ToolInput:      append([]byte(nil), input...),
 		Streaming:      true,
 		StartedAt:      time.Now(),
+		Expanded:       alwaysOpen,
 	}
 	s.blocks = append(s.blocks, b)
 	s.markRoundBlock(b.id)
@@ -231,14 +338,9 @@ func (s *scrollback) appendToolCall(id int64, providerCallID, name string, input
 }
 
 // appendFileRefCard adds a collapsible card for an @path reference the user
-// typed — the same tool-card look as a "read" call, expandable via Ctrl+E
-// like any other tool card. It's synthetic (no matching tool_use/tool_result
-// in the conversation, resolved the instant it's created): @-expansion
-// happens client-side before the turn even starts, so there's nothing to
-// wait on. Used both live (right after the user's message) and on resume
-// (hydrate.go, reconstructed from the FileRef the content block carries) so
-// the file's content never has to be dumped inline into the user's message
-// just to be visible.
+// typed — same compact look as a "read" call, expandable via Ctrl+E. Synthetic
+// (no matching tool_use/tool_result): @-expansion happens client-side before
+// the turn starts. Used live and on resume (hydrate.go).
 func (s *scrollback) appendFileRefCard(id int64, path, content string) {
 	b := s.newBlock(blockToolCall, "")
 	b.meta = BlockMeta{
@@ -253,12 +355,7 @@ func (s *scrollback) appendFileRefCard(id int64, path, content string) {
 	s.trim()
 }
 
-// appendImageRefCard adds a collapsible card for an image attachment — the
-// same tool-card look as appendFileRefCard, so a pasted or @-referenced image
-// is never silently absent from the conversation history. It's synthetic (no
-// matching tool_use/tool_result), resolved the instant it's created. Used
-// both live (right after the user's message, attachments.go) and on resume
-// (hydrate.go, reconstructed from the image content block).
+// appendImageRefCard adds a collapsible card for an image attachment.
 func (s *scrollback) appendImageRefCard(id int64, name, mediaType string, size int) {
 	b := s.newBlock(blockToolCall, "")
 	b.meta = BlockMeta{
@@ -288,6 +385,12 @@ func (s *scrollback) completeToolCall(providerCallID, result, err string, durati
 		b.meta.ToolDone = true
 		b.meta.ToolResult = result
 		b.meta.ToolError = err
+		// Diff tools stay expanded; everything else collapses to one line.
+		if isDiffTool(b.meta.ToolName) {
+			b.meta.Expanded = true
+		} else {
+			b.meta.Expanded = false
+		}
 		if durationMs > 0 {
 			b.meta.DurationMs = durationMs
 		} else if !b.meta.StartedAt.IsZero() {
@@ -311,6 +414,11 @@ func (s *scrollback) finalizeOrphanToolCalls() {
 		b.meta.ToolDone = true
 		if b.meta.ToolResult == "" {
 			b.meta.ToolResult = "(no result)"
+		}
+		if isDiffTool(b.meta.ToolName) {
+			b.meta.Expanded = true
+		} else {
+			b.meta.Expanded = false
 		}
 		b.invalidateLayout()
 	}
@@ -339,9 +447,7 @@ func animateSpinnerInLine(text string, frame int) string {
 	// Replace the spinner-slot glyph in place. The glyph (U+25CC) only ever
 	// appears in visible content, never inside ANSI escapes, so a direct rune
 	// swap is correct even when the line has ANSI codes interspersed (e.g. the
-	// subagent widget styles the name, timer, and task separately). The earlier
-	// approach assumed a single leading style prefix and duplicated content on
-	// lines that violated that assumption.
+	// subagent widget styles the name, timer, and task separately).
 	return strings.Replace(text, toolCardSpinnerSlot, spinnerChar(frame), 1)
 }
 
@@ -349,4 +455,41 @@ func animateSpinnerInLine(text string, frame int) string {
 func toolInputJSON(toolName string, v any) []byte {
 	b, _ := json.Marshal(v)
 	return b
+}
+
+// toolLangFromInput guesses a highlight language from the tool's path argument.
+func toolLangFromInput(name string, input []byte) string {
+	var in struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(input, &in) != nil || in.Path == "" {
+		return ""
+	}
+	return langFromPath(in.Path)
+}
+
+func langFromPath(path string) string {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".go":
+		return "go"
+	case ".py":
+		return "python"
+	case ".js", ".mjs", ".cjs":
+		return "javascript"
+	case ".ts", ".tsx":
+		return "typescript"
+	case ".json":
+		return "json"
+	case ".yml", ".yaml":
+		return "yaml"
+	case ".sh", ".bash", ".zsh":
+		return "bash"
+	case ".rs":
+		return "rust"
+	case ".md", ".markdown":
+		return "text"
+	default:
+		return ""
+	}
 }

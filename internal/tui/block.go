@@ -152,9 +152,12 @@ func (b *Block) layoutPlain(width int) []ScreenRow {
 	if width < 1 {
 		width = 1
 	}
-	// Running subagent widgets show a live elapsed timer, so their layout must
-	// not be cached — recompute every paint while streaming.
-	if b.cacheWidth == width && b.cachedRows != nil && !(b.kind == blockSubagent && b.meta.Streaming) {
+	// Running subagent widgets and in-flight compact tool cards show a live
+	// elapsed timer, so their layout must not be cached — recompute every
+	// paint while streaming.
+	liveTimer := (b.kind == blockSubagent && b.meta.Streaming) ||
+		(b.kind == blockToolCall && !b.meta.ToolDone && !b.meta.Expanded)
+	if b.cacheWidth == width && b.cachedRows != nil && !liveTimer {
 		return b.cachedRows
 	}
 	var rows []ScreenRow

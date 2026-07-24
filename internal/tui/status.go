@@ -36,6 +36,10 @@ type StatusSnapshot struct {
 	ShowTokens    bool
 	ShowCost      bool
 
+	// AvgTokensPerSec is the session-wide weighted average output tokens/sec
+	// (0 until the first measurable round). Shown in the top header.
+	AvgTokensPerSec float64
+
 	// ApprovalMode is the bash approval gate's current speed (Fast, the
 	// default, or Paranoid — toggled by Shift+Tab), shown bottom-right of the
 	// input hint line so it's always visible, not just at the moment it's
@@ -111,6 +115,12 @@ func (s StatusSnapshot) renderHeaderRight() string {
 		b.WriteString(formatNum(s.ContextWindow))
 		b.WriteString(reset)
 		b.WriteString("  ")
+	}
+	if s.AvgTokensPerSec > 0 {
+		b.WriteString(fgCyan)
+		b.WriteString(fmt.Sprintf("%.0f", s.AvgTokensPerSec))
+		b.WriteString(reset)
+		b.WriteString(dim + " tok/s  " + reset)
 	}
 	if s.Thinking || s.Compacting {
 		switch {

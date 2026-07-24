@@ -38,8 +38,9 @@ func toolResultFullText(b *Block) string {
 }
 
 func toolResultNeedsExpand(b *Block) bool {
+	// edit/write always render fully — nothing to expand/collapse.
 	if isDiffTool(b.meta.ToolName) && b.meta.ToolError == "" {
-		return toolDiffNeedsExpand(b)
+		return false
 	}
 	text := toolResultFullText(b)
 	if len(text) > toolResultCollapsedBytes {
@@ -54,7 +55,7 @@ func toolResultNeedsExpand(b *Block) bool {
 
 func toolCardExpandedResultLines(b *Block, width int) []string {
 	text := toolResultFullText(b)
-	inner := width - 4
+	inner := width
 	if inner < 1 {
 		inner = 1
 	}
@@ -100,13 +101,17 @@ func (s *scrollback) toggleToolExpandInView(height, width int) bool {
 
 func (s *scrollback) toggleToolExpandBlock(id int64) bool {
 	for i := range s.blocks {
-		if s.blocks[i].id != id || s.blocks[i].kind != blockToolCall || !s.blocks[i].meta.ToolDone {
+		if s.blocks[i].id != id || s.blocks[i].kind != blockToolCall {
 			continue
 		}
 		b := &s.blocks[i]
-		if !b.meta.Expanded && !toolResultNeedsExpand(b) {
+		// edit/write always render fully — never collapse or focus-scroll.
+		if isDiffTool(b.meta.ToolName) && b.meta.ToolError == "" {
 			return false
 		}
+		// Any non-diff tool can expand to reveal the command (+ result once
+		// done), even while still running and even for short results — the
+		// collapsed line only shows the reason.
 		b.meta.Expanded = !b.meta.Expanded
 		b.meta.ToolScroll = 0
 		if b.meta.Expanded {

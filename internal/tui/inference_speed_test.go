@@ -23,7 +23,7 @@ func TestApplyInferenceSpeedTagsRoundBlocks(t *testing.T) {
 	if len(s.pendingSpeedBlocks) != 3 {
 		t.Fatalf("pendingSpeedBlocks = %d, want 3 (thinking, assistant, tool call)", len(s.pendingSpeedBlocks))
 	}
-	s.applyInferenceSpeed(42.5)
+	s.applyInferenceSpeed(42.5, 100)
 
 	if len(s.blocks) != 3 {
 		t.Fatalf("blocks = %d, want 3", len(s.blocks))
@@ -47,7 +47,7 @@ func TestApplyInferenceSpeedTagsRoundBlocks(t *testing.T) {
 	if got := s.blocks[3].meta.TokensPerSec; got != 0 {
 		t.Fatalf("round 2 block tagged before its own applyInferenceSpeed call: %v", got)
 	}
-	s.applyInferenceSpeed(10)
+	s.applyInferenceSpeed(10, 20)
 	if s.blocks[3].meta.TokensPerSec != 10 {
 		t.Fatalf("round 2 block TokensPerSec = %v, want 10", s.blocks[3].meta.TokensPerSec)
 	}
@@ -104,9 +104,24 @@ func TestPendingSpeedBlocksClearOnTurnEndEvenWithoutAReading(t *testing.T) {
 func TestApplyInferenceSpeedNoopWhenNothingPending(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendBlock(blockUser, "hi")
-	s.applyInferenceSpeed(99) // nothing pending: blockUser was never marked
+	s.applyInferenceSpeed(99, 50) // nothing pending: blockUser was never marked
 	if s.blocks[0].meta.TokensPerSec != 0 {
 		t.Fatalf("unrelated block tagged: %v", s.blocks[0].meta.TokensPerSec)
+	}
+	if s.avgTokensPerSec() != 0 {
+		t.Fatalf("avg should stay 0 when nothing pending, got %v", s.avgTokensPerSec())
+	}
+}
+
+func TestSessionAvgTokensPerSecWeighted(t *testing.T) {
+	s := newScrollback(1024)
+	s.appendBlock(blockAssistant, "a")
+	s.applyInferenceSpeed(100, 10) // 10 tokens @ 100 tok/s
+	s.appendBlock(blockAssistant, "b")
+	s.applyInferenceSpeed(50, 30) // 30 tokens @ 50 tok/s
+	// weighted: (100*10 + 50*30) / (10+30) = 2500/40 = 62.5
+	if got := s.avgTokensPerSec(); got < 62.4 || got > 62.6 {
+		t.Fatalf("avg = %v, want 62.5", got)
 	}
 }
 

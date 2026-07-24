@@ -2,31 +2,29 @@ package tui
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 )
 
-// isDiffTool reports whether a tool's expandable content is a colored diff
-// of its input (what it's about to write/change) rather than a preview of
-// its result. edit and write both act on files the model already has full
-// knowledge of — the useful thing to show a human is what changed, not the
-// terse "edited path (2 edits)" that goes back to the model as ToolResult.
+// isDiffTool reports whether a tool always renders as a borderless colored
+// diff of its input (what it's about to write/change) rather than a
+// collapsible result preview. edit and write both act on files the model
+// already has full knowledge of — the useful thing to show a human is what
+// changed, not the terse "edited path (2 edits)" that goes back to the model.
 func isDiffTool(name string) bool {
 	return name == "edit" || name == "write"
 }
 
 // diffLine is one row of a computed edit/write diff. sign is '+' (added,
-// green), '-' (removed, red), or ' ' (blank separator between edits, no
-// color).
+// green bg), '-' (removed, red bg), or ' ' (blank separator between edits).
+// lineNo is the 1-based line number within its side of the hunk (0 = none).
 type diffLine struct {
-	sign byte
-	text string
+	sign   byte
+	text   string
+	lineNo int
 }
 
 // toolDiffLines computes diff lines for an edit/write tool call from its
-// input JSON (the same input already sent to the model — no extra tokens
-// spent reconstructing this for display). Returns nil if name isn't a diff
-// tool or the input can't be parsed.
+// input JSON. Returns nil if name isn't a diff tool or the input can't be parsed.
 func toolDiffLines(name string, input []byte) []diffLine {
 	switch name {
 	case "write":
@@ -45,9 +43,13 @@ func writeDiffLines(input []byte) []diffLine {
 		return nil
 	}
 	lines := strings.Split(in.Content, "\n")
+	// Drop trailing empty line that Split leaves for a final "\n".
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
 	out := make([]diffLine, len(lines))
 	for i, ln := range lines {
-		out[i] = diffLine{sign: '+', text: ln}
+		out[i] = diffLine{sign: '+', text: ln, lineNo: i + 1}
 	}
 	return out
 }
@@ -56,9 +58,7 @@ func writeDiffLines(input []byte) []diffLine {
 // it must recognize every shape internal/tools/edit.go's parseEditInput
 // accepts: the documented edits: [{oldText, newText}, ...] array, the flat
 // top-level {oldText, newText} shorthand for a single edit, and edits sent
-// as a JSON-encoded string (some models double-encode the array). Duplicated
-// here rather than imported from internal/tools to keep this package's own
-// display-only reparse self-contained, matching writeDiffLines just below.
+// as a JSON-encoded string (some models double-encode the array).
 func editDiffLines(input []byte) []diffLine {
 	type edit struct {
 		OldText string `json:"oldText"`
@@ -90,159 +90,167 @@ func editDiffLines(input []byte) []diffLine {
 	var out []diffLine
 	for i, e := range edits {
 		if i > 0 {
-			out = append(out, diffLine{sign: ' ', text: ""})
+			out = append(out, diffLine{sign: ' ', text: "", lineNo: 0})
 		}
-		for _, ln := range strings.Split(e.OldText, "\n") {
-			out = append(out, diffLine{sign: '-', text: ln})
+		oldLines := splitContentLines(e.OldText)
+		for j, ln := range oldLines {
+			out = append(out, diffLine{sign: '-', text: ln, lineNo: j + 1})
 		}
-		for _, ln := range strings.Split(e.NewText, "\n") {
-			out = append(out, diffLine{sign: '+', text: ln})
+		newLines := splitContentLines(e.NewText)
+		for j, ln := range newLines {
+			out = append(out, diffLine{sign: '+', text: ln, lineNo: j + 1})
 		}
 	}
 	return out
 }
 
-// diffLinePrefix returns the sign column and its color for a diff line.
-func diffLinePrefix(sign byte) (prefix, style string) {
+func splitContentLines(s string) []string {
+	if s == "" {
+		return []string{""}
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+// diffBG returns the background style for a diff sign.
+func diffBG(sign byte) string {
 	switch sign {
 	case '+':
-		return "+ ", fgGreen
+		return bgDiffAdd
 	case '-':
-		return "- ", fgRed
+		return bgDiffDel
 	default:
-		return "  ", ""
+		return ""
 	}
 }
 
-// wrapDiffLines wraps diff lines to width visible columns, returning
-// ANSI-colored strings ready to render \u2014 one per screen row. Every wrapped
-// continuation row repeats the sign's color: dirty-row repaints address rows
-// independently, so color can't carry over from a row outside the current
-// repaint batch.
-func wrapDiffLines(lines []diffLine, width int) []string {
-	if width < 1 {
-		width = 1
+// diffFG returns the foreground style for the sign column.
+func diffFG(sign byte) string {
+	switch sign {
+	case '+':
+		return fgGreen
+	case '-':
+		return fgRed
+	default:
+		return dim
 	}
+}
+
+// keepBG rewrites every hard reset inside s so the surrounding background
+// stays painted. highlightLine emits reset after every token; without this
+// the green/red fill would end mid-line and the trailing pad would be bare.
+func keepBG(s, bg string) string {
+	if bg == "" || s == "" {
+		return s
+	}
+	return strings.ReplaceAll(s, reset, reset+bg)
+}
+
+// renderDiffLines paints borderless diff rows: " NN │± code" with green/red
+// background on the whole line, naive syntax highlighting on the code, and a
+// right-padded fill so the bg spans the terminal width.
+func renderDiffLines(lines []diffLine, width int, lang string) []string {
+	if width < 12 {
+		width = 12
+	}
+	// Line-number column width from the largest number present.
+	maxNo := 0
+	for _, dl := range lines {
+		if dl.lineNo > maxNo {
+			maxNo = dl.lineNo
+		}
+	}
+	numW := len(itoa(maxNo))
+	if numW < 2 {
+		numW = 2
+	}
+	// " NN │± " prefix: numW + space-in-num + │ + sign + space-before-code.
+	prefixW := numW + 4
+	codeW := width - prefixW
+	if codeW < 8 {
+		codeW = 8
+	}
+
 	var out []string
 	for _, dl := range lines {
-		prefix, style := diffLinePrefix(dl.sign)
-		inner := width - len(prefix)
-		if inner < 1 {
-			inner = 1
+		if dl.sign == ' ' && dl.text == "" {
+			// Blank separator between edit hunks.
+			out = append(out, strings.Repeat(" ", width))
+			continue
 		}
-		for _, w := range wrapLine(dl.text, inner) {
-			out = append(out, style+prefix+w+reset)
+		bg := diffBG(dl.sign)
+		fg := diffFG(dl.sign)
+		num := strings.Repeat(" ", numW)
+		if dl.lineNo > 0 {
+			n := itoa(dl.lineNo)
+			num = strings.Repeat(" ", numW-len(n)) + n
+		}
+		signCh := string(dl.sign)
+		if dl.sign != '+' && dl.sign != '-' {
+			signCh = " "
+		}
+
+		// Highlight the code (per logical line), then wrap. keepBG so each
+		// token's reset doesn't kill the row's green/red fill.
+		hi := keepBG(highlightLine(lang, dl.text), bg)
+		wrapped := wrapANSI(hi, codeW)
+		if len(wrapped) == 0 {
+			wrapped = []string{""}
+		}
+		for i, chunk := range wrapped {
+			var b strings.Builder
+			b.WriteString(bg)
+			if i == 0 {
+				b.WriteString(dim)
+				b.WriteString(num)
+				b.WriteString(reset)
+				b.WriteString(bg)
+				b.WriteString(dim)
+				b.WriteString(" │")
+				b.WriteString(reset)
+				b.WriteString(bg)
+				b.WriteString(fg)
+				b.WriteString(signCh)
+				b.WriteString(reset)
+				b.WriteString(bg)
+				b.WriteString(" ")
+			} else {
+				// Continuation: indent under the code column (still on bg).
+				b.WriteString(strings.Repeat(" ", prefixW))
+			}
+			b.WriteString(chunk)
+			// Pad under bg so the fill spans the full terminal width.
+			used := prefixW + visibleWidth(chunk)
+			if used < width {
+				b.WriteString(bg)
+				b.WriteString(strings.Repeat(" ", width-used))
+			}
+			b.WriteString(reset)
+			out = append(out, b.String())
 		}
 	}
 	return out
-}
-
-// toolDiffNeedsExpand reports whether a diff tool's content is long enough
-// to warrant the expand affordance. Mirrors toolResultNeedsExpand's
-// byte/line heuristics but works from line count directly since diff lines
-// are already split \u2014 callers (e.g. the expand-toggle keybinding) don't
-// always have a real render width on hand.
-func toolDiffNeedsExpand(b *Block) bool {
-	lines := toolDiffLines(b.meta.ToolName, b.meta.ToolInput)
-	if len(lines) > toolResultCollapsedLines {
-		return true
-	}
-	total := 0
-	for _, l := range lines {
-		total += len(l.text)
-	}
-	return total > toolResultCollapsedBytes
 }
 
 // toolExpandLineCount returns how many wrapped rows a tool's expandable
-// content has at the given width \u2014 the diff for edit/write, or the plain
-// result preview for everything else \u2014 clamped the same way the actual
-// rendering paths clamp (toolResultExpandedMax). Used to compute scroll
-// bounds and whether pagination applies.
+// content has at the given width. Diff tools don't paginate (always full);
+// other tools use the plain result preview, clamped to toolResultExpandedMax.
 func toolExpandLineCount(b *Block, width int) int {
-	inner := width - 4
+	if isDiffTool(b.meta.ToolName) && b.meta.ToolError == "" {
+		// Full diff is always shown; no internal scroll window.
+		lang := toolLangFromInput(b.meta.ToolName, b.meta.ToolInput)
+		return len(renderDiffLines(toolDiffLines(b.meta.ToolName, b.meta.ToolInput), width, lang))
+	}
+	inner := width
 	if inner < 1 {
 		inner = 1
 	}
-	var lines []string
-	if isDiffTool(b.meta.ToolName) && b.meta.ToolError == "" {
-		lines = wrapDiffLines(toolDiffLines(b.meta.ToolName, b.meta.ToolInput), inner)
-	} else {
-		lines = wrapLine(toolResultFullText(b), inner)
-	}
+	lines := wrapLine(toolResultFullText(b), inner)
 	if len(lines) > toolResultExpandedMax {
 		lines = lines[:toolResultExpandedMax]
 	}
 	return len(lines)
-}
-
-// diffCardCollapsedLines returns the pre-styled, boxed-ready diff preview
-// rows shown before the footer when a diff tool is done but not expanded.
-func diffCardCollapsedLines(b *Block, width int) []string {
-	inner := width - 4
-	if inner < 1 {
-		inner = 1
-	}
-	all := wrapDiffLines(toolDiffLines(b.meta.ToolName, b.meta.ToolInput), inner)
-	if len(all) == 0 {
-		return []string{""}
-	}
-	lines := all
-	if len(lines) > toolResultCollapsedLines {
-		lines = lines[:toolResultCollapsedLines]
-	}
-	lines = append([]string(nil), lines...) // don't mutate all's backing array below
-	last := len(lines) - 1
-	suffix := ""
-	if b.meta.DurationMs > 0 {
-		suffix = fmt.Sprintf(" · %.1fs", float64(b.meta.DurationMs)/1000)
-	}
-	suffix += toolCardSpeedSuffix(b)
-	hint := ""
-	if toolDiffNeedsExpand(b) {
-		hint = " · click/Ctrl+E"
-	}
-	avail := inner - visibleWidth(suffix+hint)
-	if avail < 4 {
-		avail = inner
-		suffix = ""
-		hint = ""
-	}
-	lines[last] = truncateToWidth(lines[last], avail) + reset + dim + suffix + hint + reset
-	return lines
-}
-
-// diffCardExpandedLines returns the pre-styled, paginated diff rows shown
-// when a diff tool card is expanded, honoring b.meta.ToolScroll.
-func diffCardExpandedLines(b *Block, width int) []string {
-	inner := width - 4
-	if inner < 1 {
-		inner = 1
-	}
-	lines := wrapDiffLines(toolDiffLines(b.meta.ToolName, b.meta.ToolInput), inner)
-	total := len(lines)
-	truncated := total > toolResultExpandedMax
-	if truncated {
-		lines = lines[:toolResultExpandedMax]
-	}
-	start := b.meta.ToolScroll
-	if start < 0 {
-		start = 0
-	}
-	if start > len(lines) {
-		start = len(lines)
-	}
-	end := start + toolResultExpandedView
-	if end > len(lines) {
-		end = len(lines)
-	}
-	if start >= end {
-		return nil
-	}
-	out := lines[start:end]
-	if truncated && end >= len(lines) {
-		remaining := total - toolResultExpandedMax
-		out = append(out, fmt.Sprintf("%s… %d more lines (↑↓ scroll)%s", dim, remaining, reset))
-	}
-	return out
 }

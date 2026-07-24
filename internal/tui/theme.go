@@ -78,6 +78,9 @@ func applyDark16() {
 	bgYellow = "\x1b[43m"
 	bgBlue = "\x1b[44m"
 	bgMagenta = "\x1b[45m"
+	// 16-color: plain green/red backgrounds for diff lines.
+	bgDiffAdd = "\x1b[42m"
+	bgDiffDel = "\x1b[41m"
 }
 
 // applyLight16 uses darker foreground codes for readability on light profiles.
@@ -102,6 +105,8 @@ func applyLight16() {
 	bgYellow = "\x1b[43m"
 	bgBlue = "\x1b[44m"
 	bgMagenta = "\x1b[45m"
+	bgDiffAdd = "\x1b[42m"
+	bgDiffDel = "\x1b[41m"
 }
 
 // applyDarkTruecolor uses 24-bit RGB tuned for dark terminals.
@@ -127,6 +132,9 @@ func applyDarkTruecolor() {
 	bgYellow = "\x1b[48;2;90;75;25m"
 	bgBlue = "\x1b[48;2;35;55;100m"
 	bgMagenta = "\x1b[48;2;80;35;80m"
+	// Muted green/red fills that keep fg text readable on dark terminals.
+	bgDiffAdd = "\x1b[48;2;28;56;36m"
+	bgDiffDel = "\x1b[48;2;72;32;32m"
 }
 
 // applyLightTruecolor uses 24-bit RGB tuned for light terminals (darker
@@ -153,6 +161,8 @@ func applyLightTruecolor() {
 	bgYellow = "\x1b[48;2;255;245;190m"
 	bgBlue = "\x1b[48;2;210;225;255m"
 	bgMagenta = "\x1b[48;2;245;210;255m"
+	bgDiffAdd = "\x1b[48;2;210;240;215m"
+	bgDiffDel = "\x1b[48;2;255;220;220m"
 }
 
 func init() {

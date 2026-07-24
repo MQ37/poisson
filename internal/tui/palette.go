@@ -26,6 +26,10 @@ var (
 	bgYellow  string
 	bgBlue    string
 	bgMagenta string
+
+	// Diff line backgrounds for borderless edit/write rendering.
+	bgDiffAdd string
+	bgDiffDel string
 )
 
 // Cursor / screen control.

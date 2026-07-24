@@ -103,3 +103,51 @@ func TestThemeColorDiffersLightVsDark(t *testing.T) {
 		t.Errorf("dark and light blue are identical under truecolor: %q", darkBlue)
 	}
 }
+
+// TestThemeDiffBackgroundsSetInEveryPalette is the regression for the
+// edit/write borderless diff: every apply* path must populate bgDiffAdd /
+// bgDiffDel. A missing assignment (as dark-truecolor once had) silently
+// paints no green/red fill, and string-Contains checks against "" pass.
+func TestThemeDiffBackgroundsSetInEveryPalette(t *testing.T) {
+	t.Cleanup(func() { applyTheme("dark") })
+
+	cases := []struct {
+		name  string
+		setup func()
+	}{
+		{"dark16", func() {
+			t.Setenv("COLORTERM", "")
+			t.Setenv("TERM", "xterm")
+			applyTheme("dark")
+		}},
+		{"light16", func() {
+			t.Setenv("COLORTERM", "")
+			t.Setenv("TERM", "xterm")
+			applyTheme("light")
+		}},
+		{"darkTruecolor", func() {
+			t.Setenv("COLORTERM", "truecolor")
+			t.Setenv("TERM", "xterm")
+			applyTheme("dark")
+		}},
+		{"lightTruecolor", func() {
+			t.Setenv("COLORTERM", "truecolor")
+			t.Setenv("TERM", "xterm")
+			applyTheme("light")
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setup()
+			if bgDiffAdd == "" {
+				t.Error("bgDiffAdd empty")
+			}
+			if bgDiffDel == "" {
+				t.Error("bgDiffDel empty")
+			}
+			if bgDiffAdd == bgDiffDel {
+				t.Errorf("add and del backgrounds identical: %q", bgDiffAdd)
+			}
+		})
+	}
+}

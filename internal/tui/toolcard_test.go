@@ -3,31 +3,72 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestToolCardLayout(t *testing.T) {
+func TestToolCardLayoutCollapsedBash(t *testing.T) {
 	b := Block{
 		id:   1,
 		kind: blockToolCall,
 		meta: BlockMeta{
 			ToolName: "bash",
 			ToolInput: toolInputJSON("bash", map[string]string{
-				"command": "git status",
+				"command":     "git status",
+				"description": "check git status",
 			}),
-			Streaming: true,
+			ToolDone:   true,
+			DurationMs: 400,
 		},
 	}
-	rows := layoutToolCard(&b, 40, 0)
-	if len(rows) < 3 {
-		t.Fatalf("rows = %d", len(rows))
+	rows := layoutToolCard(&b, 60, 0)
+	if len(rows) != 1 {
+		t.Fatalf("collapsed bash should be 1 row, got %d", len(rows))
 	}
-	top := stripANSI(rows[0].Text)
-	if !strings.Contains(top, "╭") || !strings.Contains(top, "bash") {
-		t.Fatalf("header %q", top)
+	plain := stripANSI(rows[0].Text)
+	if !strings.Contains(plain, "Bash") {
+		t.Fatalf("header missing tool name: %q", plain)
 	}
-	body := stripANSI(rows[1].Text)
-	if !strings.Contains(body, "git status") {
-		t.Fatalf("body %q", body)
+	if !strings.Contains(plain, "check git status") {
+		t.Fatalf("header missing description: %q", plain)
+	}
+	if !strings.Contains(plain, "0.4s") {
+		t.Fatalf("header missing duration: %q", plain)
+	}
+	// No yellow box borders.
+	if strings.Contains(plain, "╭") || strings.Contains(plain, "│") || strings.Contains(plain, "╰") {
+		t.Fatalf("collapsed card must not have box borders: %q", plain)
+	}
+}
+
+func TestToolCardLayoutStreamingBash(t *testing.T) {
+	// In-flight bash is still a single collapsed line (spinner + reason).
+	b := Block{
+		id:   1,
+		kind: blockToolCall,
+		meta: BlockMeta{
+			ToolName: "bash",
+			ToolInput: toolInputJSON("bash", map[string]string{
+				"command":     "ls -la /tmp/secret-path-xyz",
+				"description": "list temp dir",
+			}),
+			Streaming: true,
+			StartedAt: time.Now(),
+		},
+	}
+	rows := layoutToolCard(&b, 60, 0)
+	if len(rows) != 1 {
+		t.Fatalf("streaming bash should be 1 collapsed row, got %d", len(rows))
+	}
+	plain := stripANSI(rows[0].Text)
+	if !strings.Contains(plain, "list temp dir") {
+		t.Fatalf("streaming header missing description: %q", plain)
+	}
+	// Command itself stays hidden until expand.
+	if strings.Contains(plain, "secret-path-xyz") {
+		t.Fatalf("command should not leak into collapsed header: %q", plain)
+	}
+	if !strings.Contains(plain, toolCardSpinnerSlot) {
+		t.Fatalf("streaming header missing spinner slot: %q", plain)
 	}
 }
 
@@ -39,30 +80,23 @@ func TestToolCardComplete(t *testing.T) {
 	if !b.meta.ToolDone || b.meta.ToolResult != "package main" {
 		t.Fatalf("meta = %+v", b.meta)
 	}
+	if b.meta.Expanded {
+		t.Fatal("completed read should collapse")
+	}
 	rows := layoutToolCard(&b, 50, 0)
-	last := stripANSI(rows[len(rows)-1].Text)
-	if !strings.HasPrefix(last, "╰") {
-		t.Fatalf("last row should be footer, got %q", last)
+	if len(rows) != 1 {
+		t.Fatalf("collapsed read = %d rows, want 1", len(rows))
 	}
-	foundResult := false
-	for _, row := range rows {
-		plain := stripANSI(row.Text)
-		if strings.Contains(plain, "✓") && strings.Contains(plain, "package main") {
-			if !strings.HasPrefix(plain, "│") {
-				t.Fatalf("result should be inside box: %q", plain)
-			}
-			foundResult = true
-		}
-	}
-	if !foundResult {
-		t.Fatal("expected boxed result row")
+	plain := stripANSI(rows[0].Text)
+	if !strings.Contains(plain, "Read") || !strings.Contains(plain, "main.go") {
+		t.Fatalf("collapsed read header = %q", plain)
 	}
 }
 
 func TestToolCardParallelPairingFIFO(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendToolCall(0, "call_a", "read", toolInputJSON("read", map[string]string{"path": "a.go"}))
-	s.appendToolCall(1, "call_b", "bash", toolInputJSON("bash", map[string]string{"command": "ls"}))
+	s.appendToolCall(1, "call_b", "bash", toolInputJSON("bash", map[string]string{"command": "ls", "description": "list"}))
 	s.completeToolCall("call_a", "READ_OUT", "", 0)
 	if s.blocks[0].meta.ToolDone != true || s.blocks[0].meta.ToolResult != "READ_OUT" {
 		t.Fatalf("block0 = %+v", s.blocks[0].meta)
@@ -85,25 +119,20 @@ func TestToolCardExpandHint(t *testing.T) {
 			ToolName:   "bash",
 			ToolDone:   true,
 			ToolResult: `{"stdout":"` + long + `","stderr":"","exitCode":0}`,
+			ToolInput:  toolInputJSON("bash", map[string]string{"command": "echo", "description": "long out"}),
 		},
 	}
-	rows := layoutToolCard(&b, 60, 0)
-	foundHint := false
-	for _, row := range rows {
-		plain := stripANSI(row.Text)
-		if strings.Contains(plain, "Ctrl+E") {
-			if !strings.HasPrefix(plain, "│") {
-				t.Fatalf("expand hint should be inside box: %q", plain)
-			}
-			foundHint = true
-		}
+	// Collapsed: single line, expandable.
+	if !toolResultNeedsExpand(&b) {
+		t.Fatal("long bash result should need expand")
 	}
-	if !foundHint {
-		t.Fatal("expected expand hint inside tool card")
+	rows := layoutToolCard(&b, 60, 0)
+	if len(rows) != 1 {
+		t.Fatalf("collapsed = %d rows", len(rows))
 	}
 }
 
-func TestToolCardCollapsedResultInsideBox(t *testing.T) {
+func TestToolCardCollapsedIsSingleLine(t *testing.T) {
 	b := Block{
 		id:   6,
 		kind: blockToolCall,
@@ -111,33 +140,20 @@ func TestToolCardCollapsedResultInsideBox(t *testing.T) {
 			ToolName:   "bash",
 			ToolDone:   true,
 			ToolResult: `{"stdout":"LONG BASH COMMAND EXTRAVAGANZA","stderr":"","exitCode":0}`,
+			ToolInput:  toolInputJSON("bash", map[string]string{"command": "echo LONG", "description": "print long"}),
 		},
 	}
 	rows := layoutToolCard(&b, 60, 0)
-	footerIdx := -1
-	for i, row := range rows {
-		if strings.HasPrefix(stripANSI(row.Text), "╰") {
-			footerIdx = i
-		}
+	if len(rows) != 1 {
+		t.Fatalf("want 1 collapsed row, got %d", len(rows))
 	}
-	if footerIdx < 1 {
-		t.Fatal("expected footer row")
+	// Result body is hidden when collapsed — only the description shows.
+	plain := stripANSI(rows[0].Text)
+	if strings.Contains(plain, "LONG BASH COMMAND EXTRAVAGANZA") {
+		t.Fatalf("result body leaked into collapsed header: %q", plain)
 	}
-	found := false
-	for i := 1; i < footerIdx; i++ {
-		plain := stripANSI(rows[i].Text)
-		if strings.Contains(plain, "LONG BASH COMMAND") {
-			if !strings.HasPrefix(plain, "│") {
-				t.Fatalf("result outside box at row %d: %q", i, plain)
-			}
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("expected collapsed result inside card")
-	}
-	for i := footerIdx + 1; i < len(rows); i++ {
-		t.Fatalf("unexpected row after footer: %q", stripANSI(rows[i].Text))
+	if !strings.Contains(plain, "print long") {
+		t.Fatalf("description missing from collapsed header: %q", plain)
 	}
 }
 
@@ -153,6 +169,7 @@ func TestToolCardExpandedLayout(t *testing.T) {
 			ToolName:   "read",
 			ToolDone:   true,
 			ToolResult: strings.Join(lines, "\n"),
+			ToolInput:  toolInputJSON("read", map[string]string{"path": "big.go"}),
 			Expanded:   true,
 		},
 	}
@@ -165,12 +182,15 @@ func TestToolCardExpandedLayout(t *testing.T) {
 	if len(collapsed) >= len(expanded) {
 		t.Fatalf("collapsed %d should be fewer than expanded %d", len(collapsed), len(expanded))
 	}
+	if len(collapsed) != 1 {
+		t.Fatalf("collapsed = %d, want 1", len(collapsed))
+	}
 }
 
 func TestToggleToolExpandInView(t *testing.T) {
 	s := newScrollback(1024)
 	long := strings.Repeat("z", 600)
-	s.appendToolCall(1, "", "bash", toolInputJSON("bash", map[string]string{"command": "echo"}))
+	s.appendToolCall(1, "", "bash", toolInputJSON("bash", map[string]string{"command": "echo", "description": "echo"}))
 	s.completeToolCall("", `{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", 10)
 	if !s.toggleToolExpandInView(10, 50) {
 		t.Fatal("toggle expand failed")
@@ -194,11 +214,31 @@ func TestToolCardError(t *testing.T) {
 			ToolName:  "bash",
 			ToolDone:  true,
 			ToolError: "permission denied",
+			ToolInput: toolInputJSON("bash", map[string]string{"command": "rm -rf /", "description": "wipe root"}),
 		},
 	}
-	rows := layoutToolCard(&b, 40, 0)
-	top := stripANSI(rows[0].Text)
-	if !strings.Contains(top, "✗") {
-		t.Fatalf("header %q", top)
+	rows := layoutToolCard(&b, 60, 0)
+	plain := stripANSI(rows[0].Text)
+	if !strings.Contains(plain, "✗") {
+		t.Fatalf("header %q", plain)
+	}
+}
+
+func TestDiffToolAlwaysExpandedOnComplete(t *testing.T) {
+	s := newScrollback(1024)
+	s.appendToolCall(1, "", "write", toolInputJSON("write", map[string]any{
+		"path":    "hello.go",
+		"content": "package main\n",
+	}))
+	if !s.blocks[0].meta.Expanded {
+		t.Fatal("write should start expanded")
+	}
+	s.completeToolCall("", "wrote hello.go", "", 5)
+	if !s.blocks[0].meta.Expanded {
+		t.Fatal("write must stay expanded after complete")
+	}
+	// Toggle must be a no-op (nothing to expand — always open, needsExpand=false).
+	if s.toggleToolExpandInView(10, 60) {
+		t.Fatal("diff tools should not toggle expand")
 	}
 }

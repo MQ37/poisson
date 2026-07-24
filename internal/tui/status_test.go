@@ -22,6 +22,24 @@ func TestRenderHeader(t *testing.T) {
 	}
 }
 
+func TestRenderHeaderShowsAvgTokensPerSec(t *testing.T) {
+	s := StatusSnapshot{
+		Cwd:             "/home/mq/workdir/poisson",
+		Model:           "x",
+		AvgTokensPerSec: 62.5,
+	}
+	line := stripANSI(s.RenderHeader(80))
+	if !strings.Contains(line, "63 tok/s") && !strings.Contains(line, "62 tok/s") {
+		t.Fatalf("expected avg tok/s in header, got %q", line)
+	}
+	// Zero avg must not render a stray "0 tok/s".
+	s.AvgTokensPerSec = 0
+	line = stripANSI(s.RenderHeader(80))
+	if strings.Contains(line, "tok/s") {
+		t.Fatalf("zero avg must not render tok/s, got %q", line)
+	}
+}
+
 // TestRenderHeaderSpinsWhileCompacting is the reported gap: compacting gave
 // no live sign anything was happening — the header spinner only ever showed
 // while Thinking, never while Compacting.

@@ -40,12 +40,17 @@ func TestApprovalCommandLinesHaveBar(t *testing.T) {
 }
 
 func TestBashToolCardHighlight(t *testing.T) {
+	// Expanded view shows the command body with risk highlighting.
 	b := Block{
 		id:   1,
 		kind: blockToolCall,
 		meta: BlockMeta{
-			ToolName:  "bash",
-			ToolInput: toolInputJSON("bash", map[string]string{"command": "sudo rm -rf /"}),
+			ToolName: "bash",
+			Expanded: true,
+			ToolInput: toolInputJSON("bash", map[string]string{
+				"command":     "sudo rm -rf /",
+				"description": "wipe root",
+			}),
 		},
 	}
 	rows := layoutToolCard(&b, 50, 0)

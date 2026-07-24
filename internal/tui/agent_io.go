@@ -293,7 +293,11 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		// (start + recovery), never once per backoff attempt.
 		t.scroll.appendRaw(styleCompacting, "  "+ev.Text)
 	case agent.OutputInferenceSpeed:
-		t.scroll.applyInferenceSpeed(ev.TokensPerSec)
+		t.scroll.applyInferenceSpeed(ev.TokensPerSec, ev.OutputTokens)
+		if avg := t.scroll.avgTokensPerSec(); avg > 0 {
+			t.status.AvgTokensPerSec = avg
+			t.dirty.markStatus()
+		}
 	case agent.OutputCompacted:
 		t.appendCompactionNoticeLocked(ev.CompactionTokensBefore, ev.CompactionTokensAfter)
 		t.agent.UpdateStatus()

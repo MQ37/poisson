@@ -14,9 +14,9 @@ func TestEditDiffLines(t *testing.T) {
 	})
 	lines := editDiffLines(input)
 	want := []diffLine{
-		{sign: '-', text: "a"},
-		{sign: '-', text: "b"},
-		{sign: '+', text: "c"},
+		{sign: '-', text: "a", lineNo: 1},
+		{sign: '-', text: "b", lineNo: 2},
+		{sign: '+', text: "c", lineNo: 1},
 	}
 	if len(lines) != len(want) {
 		t.Fatalf("lines = %+v, want %+v", lines, want)
@@ -53,8 +53,8 @@ func TestWriteDiffLinesAllAdded(t *testing.T) {
 	})
 	lines := writeDiffLines(input)
 	want := []diffLine{
-		{sign: '+', text: "line1"},
-		{sign: '+', text: "line2"},
+		{sign: '+', text: "line1", lineNo: 1},
+		{sign: '+', text: "line2", lineNo: 2},
 	}
 	if len(lines) != len(want) {
 		t.Fatalf("lines = %+v, want %+v", lines, want)
@@ -79,14 +79,14 @@ func TestIsDiffTool(t *testing.T) {
 	}
 }
 
-func editCardBlock(expanded bool) Block {
+func editCardBlock() Block {
 	return Block{
 		id:   1,
 		kind: blockToolCall,
 		meta: BlockMeta{
 			ToolName: "edit",
 			ToolDone: true,
-			Expanded: expanded,
+			Expanded: true,
 			ToolInput: toolInputJSON("edit", map[string]any{
 				"path": "main.go",
 				"edits": []map[string]string{
@@ -98,55 +98,35 @@ func editCardBlock(expanded bool) Block {
 	}
 }
 
-func TestToolCardEditShowsColoredDiffCollapsed(t *testing.T) {
-	b := editCardBlock(false)
-	rows := layoutToolCard(&b, 60, 0)
-	var sawRed, sawGreen bool
+func TestToolCardEditShowsColoredDiffAlways(t *testing.T) {
+	b := editCardBlock()
+	rows := layoutToolCard(&b, 80, 0)
+	var sawRed, sawGreen, sawLineNo bool
 	for _, r := range rows {
-		if strings.Contains(r.Text, fgRed) && strings.Contains(stripANSI(r.Text), "- func old") {
+		plain := stripANSI(r.Text)
+		if strings.Contains(r.Text, bgDiffDel) && strings.Contains(plain, "func old") {
 			sawRed = true
 		}
-		if strings.Contains(r.Text, fgGreen) && strings.Contains(stripANSI(r.Text), "+ func new") {
+		if strings.Contains(r.Text, bgDiffAdd) && strings.Contains(plain, "func new") {
 			sawGreen = true
+		}
+		// Line numbers present (e.g. " 1 │").
+		if strings.Contains(plain, "│") && (strings.Contains(plain, "1 ") || strings.Contains(plain, " 1")) {
+			sawLineNo = true
+		}
+		// No yellow box borders.
+		if strings.Contains(plain, "╭") || strings.Contains(plain, "╰") {
+			t.Errorf("diff card must not have box borders: %q", plain)
 		}
 	}
 	if !sawRed {
-		t.Error("expected a red '-' line for the old text")
+		t.Error("expected a red-bg '-' line for the old text")
 	}
 	if !sawGreen {
-		// Collapsed view only shows the first 3 lines; the old text alone is
-		// 3 lines, so the added side isn't visible yet \u2014 assert the expand
-		// hint is offered instead so the user knows there's more.
-		found := false
-		for _, r := range rows {
-			if strings.Contains(stripANSI(r.Text), "click/Ctrl+E") {
-				found = true
-			}
-		}
-		if !found {
-			t.Error("collapsed diff hides the added side but offers no expand hint")
-		}
+		t.Error("expected a green-bg '+' line for the new text")
 	}
-}
-
-func TestToolCardEditShowsColoredDiffExpanded(t *testing.T) {
-	b := editCardBlock(true)
-	rows := layoutToolCard(&b, 60, 0)
-	var sawOldRed, sawNewGreen bool
-	for _, r := range rows {
-		plain := stripANSI(r.Text)
-		if strings.Contains(r.Text, fgRed) && strings.Contains(plain, "- func old") {
-			sawOldRed = true
-		}
-		if strings.Contains(r.Text, fgGreen) && strings.Contains(plain, "+ func new") {
-			sawNewGreen = true
-		}
-	}
-	if !sawOldRed {
-		t.Error("expanded diff missing red old-text line")
-	}
-	if !sawNewGreen {
-		t.Error("expanded diff missing green new-text line")
+	if !sawLineNo {
+		t.Error("expected line numbers in the diff")
 	}
 }
 
@@ -165,18 +145,19 @@ func TestToolCardWriteShowsColoredDiff(t *testing.T) {
 			ToolResult: "wrote hello.go",
 		},
 	}
-	rows := layoutToolCard(&b, 60, 0)
+	rows := layoutToolCard(&b, 80, 0)
 	var sawGreen bool
 	for _, r := range rows {
-		if strings.Contains(r.Text, fgGreen) && strings.Contains(stripANSI(r.Text), "+ package main") {
+		plain := stripANSI(r.Text)
+		if strings.Contains(r.Text, bgDiffAdd) && strings.Contains(plain, "package main") {
 			sawGreen = true
 		}
-		if strings.Contains(r.Text, fgRed) {
-			t.Errorf("write diff should never show red (removed) lines: %q", stripANSI(r.Text))
+		if strings.Contains(r.Text, bgDiffDel) {
+			t.Errorf("write diff should never show red (removed) lines: %q", plain)
 		}
 	}
 	if !sawGreen {
-		t.Error("expected a green '+' line for the written content")
+		t.Error("expected a green-bg '+' line for the written content")
 	}
 }
 
@@ -200,22 +181,28 @@ func TestToolCardDiffErrorFallsBackToPlainError(t *testing.T) {
 	var sawErrorText, sawDiffMarker bool
 	for _, r := range rows {
 		plain := stripANSI(r.Text)
-		if strings.Contains(plain, "oldText not found") {
+		if strings.Contains(plain, "oldText not found") || strings.Contains(plain, "edit 0") {
 			sawErrorText = true
 		}
+		// Failed edit falls through to compact/error path, not the full diff.
 		if strings.Contains(plain, "+ replacement") || strings.Contains(plain, "- nonexistent") {
 			sawDiffMarker = true
 		}
 	}
 	if !sawErrorText {
-		t.Error("expected the plain error message to be shown")
+		// Compact collapsed line uses the reason (path), not the error body —
+		// but the ✗ mark must appear.
+		plain := stripANSI(rows[0].Text)
+		if !strings.Contains(plain, "✗") {
+			t.Errorf("expected error indicator, got %q", plain)
+		}
 	}
 	if sawDiffMarker {
-		t.Error("a failed edit never touched the file \u2014 should not render a diff")
+		t.Error("a failed edit never touched the file — should not render a diff")
 	}
 }
 
-func TestToggleToolExpandDiffCard(t *testing.T) {
+func TestDiffToolNoExpandToggle(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendToolCall(1, "", "edit", toolInputJSON("edit", map[string]any{
 		"path": "main.go",
@@ -225,21 +212,22 @@ func TestToggleToolExpandDiffCard(t *testing.T) {
 	}))
 	s.completeToolCall("", "edited main.go (1 edit(s) applied)", "", 10)
 
-	if !s.toggleToolExpandInView(10, 60) {
-		t.Fatal("expected expand toggle to succeed for a multi-line diff")
-	}
+	// Always expanded; toggle is a no-op.
 	if !s.blocks[0].meta.Expanded {
-		t.Fatal("expected block to be expanded")
+		t.Fatal("edit must be expanded")
 	}
-	rows := layoutToolCard(&s.blocks[0], 60, 0)
+	if s.toggleToolExpandInView(10, 60) {
+		t.Fatal("diff tool expand toggle should fail (always open, nothing to expand)")
+	}
+	rows := layoutToolCard(&s.blocks[0], 80, 0)
 	var sawNewGreen bool
 	for _, r := range rows {
-		if strings.Contains(stripANSI(r.Text), "+ func new") {
+		if strings.Contains(stripANSI(r.Text), "func new") {
 			sawNewGreen = true
 		}
 	}
 	if !sawNewGreen {
-		t.Error("expanded card should show the full diff including the added side")
+		t.Error("card should show the full diff including the added side")
 	}
 }
 
@@ -257,9 +245,9 @@ func TestEditDiffLinesFlatShape(t *testing.T) {
 	})
 	lines := editDiffLines(input)
 	want := []diffLine{
-		{sign: '-', text: "a"},
-		{sign: '-', text: "b"},
-		{sign: '+', text: "c"},
+		{sign: '-', text: "a", lineNo: 1},
+		{sign: '-', text: "b", lineNo: 2},
+		{sign: '+', text: "c", lineNo: 1},
 	}
 	if len(lines) != len(want) {
 		t.Fatalf("lines = %+v, want %+v", lines, want)
@@ -281,8 +269,8 @@ func TestEditDiffLinesStringEncodedEdits(t *testing.T) {
 	})
 	lines := editDiffLines(input)
 	want := []diffLine{
-		{sign: '-', text: "a"},
-		{sign: '+', text: "b"},
+		{sign: '-', text: "a", lineNo: 1},
+		{sign: '+', text: "b", lineNo: 1},
 	}
 	if len(lines) != len(want) {
 		t.Fatalf("lines = %+v, want %+v", lines, want)
@@ -290,6 +278,70 @@ func TestEditDiffLinesStringEncodedEdits(t *testing.T) {
 	for i := range want {
 		if lines[i] != want[i] {
 			t.Errorf("line %d = %+v, want %+v", i, lines[i], want[i])
+		}
+	}
+}
+
+func TestRenderDiffLinesHaveLineNumbersAndBG(t *testing.T) {
+	if bgDiffAdd == "" || bgDiffDel == "" {
+		t.Fatal("bgDiffAdd/bgDiffDel must be non-empty under the active theme")
+	}
+	lines := []diffLine{
+		{sign: '-', text: "old", lineNo: 1},
+		{sign: '+', text: "new", lineNo: 1},
+	}
+	out := renderDiffLines(lines, 40, "go")
+	if len(out) < 2 {
+		t.Fatalf("rows = %d", len(out))
+	}
+	if !strings.Contains(out[0], bgDiffDel) {
+		t.Error("del line missing bgDiffDel")
+	}
+	if !strings.Contains(out[1], bgDiffAdd) {
+		t.Error("add line missing bgDiffAdd")
+	}
+	plain0 := stripANSI(out[0])
+	if !strings.Contains(plain0, "1") || !strings.Contains(plain0, "│") {
+		t.Errorf("expected line number + bar in %q", plain0)
+	}
+	// Highlight resets must not kill the bg: every reset in the body is
+	// followed by a re-apply of the row's background.
+	body := out[1]
+	// Count occurrences of reset not immediately followed by bgDiffAdd —
+	// the final trailing reset is OK (ends the row).
+	idx := 0
+	for {
+		i := strings.Index(body[idx:], reset)
+		if i < 0 {
+			break
+		}
+		i += idx
+		after := i + len(reset)
+		if after >= len(body) {
+			break // trailing reset at end of row — fine
+		}
+		if !strings.HasPrefix(body[after:], bgDiffAdd) {
+			t.Fatalf("reset at %d not followed by bgDiffAdd — bg would drop mid-line", i)
+		}
+		idx = after
+	}
+}
+
+func TestLangFromPath(t *testing.T) {
+	cases := map[string]string{
+		"main.go":      "go",
+		"x.py":         "python",
+		"a.ts":         "typescript",
+		"b.js":         "javascript",
+		"c.json":       "json",
+		"d.yml":        "yaml",
+		"e.sh":         "bash",
+		"noext":        "",
+		"README.md":    "text",
+	}
+	for path, want := range cases {
+		if got := langFromPath(path); got != want {
+			t.Errorf("langFromPath(%q) = %q, want %q", path, got, want)
 		}
 	}
 }

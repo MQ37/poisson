@@ -51,6 +51,12 @@ type scrollback struct {
 	// applyInferenceSpeed tags all of them with the round's tok/s once the
 	// agent reports it (see agent.OutputInferenceSpeed) and then clears this.
 	pendingSpeedBlocks map[int64]bool
+
+	// Session-wide weighted average output tokens/sec. Each completed round
+	// with a real reading contributes (tokens, tokens/sec) and the header
+	// shows the running average. Zero until the first measurable round.
+	speedTokenSum float64 // Σ output_tokens across measured rounds
+	speedRateSum  float64 // Σ (tokens_per_sec * output_tokens) — for weighted avg
 }
 
 // markRoundBlock records id as belonging to the round currently in flight, so
@@ -66,7 +72,9 @@ func (s *scrollback) markRoundBlock(id int64) {
 // applyInferenceSpeed tags every block the in-flight round produced with its
 // average output tokens/sec, then clears the pending set — see
 // agent.OutputInferenceSpeed for why one figure applies to the whole round.
-func (s *scrollback) applyInferenceSpeed(tokPerSec float64) {
+// When outputTokens > 0 and tokPerSec > 0 the session-wide weighted average
+// is updated so the header can show a running "N tok/s" for the conversation.
+func (s *scrollback) applyInferenceSpeed(tokPerSec float64, outputTokens int) {
 	if len(s.pendingSpeedBlocks) == 0 {
 		return
 	}
@@ -77,6 +85,20 @@ func (s *scrollback) applyInferenceSpeed(tokPerSec float64) {
 		}
 	}
 	s.pendingSpeedBlocks = nil
+	if tokPerSec > 0 && outputTokens > 0 {
+		w := float64(outputTokens)
+		s.speedTokenSum += w
+		s.speedRateSum += tokPerSec * w
+	}
+}
+
+// avgTokensPerSec is the session-wide weighted average output tokens/sec
+// (0 when no measurable round has completed yet).
+func (s *scrollback) avgTokensPerSec() float64 {
+	if s.speedTokenSum <= 0 {
+		return 0
+	}
+	return s.speedRateSum / s.speedTokenSum
 }
 
 func newScrollback(max int) *scrollback {
@@ -462,6 +484,8 @@ func (s *scrollback) appendToolCallReplay(id int64, providerCallID, name string,
 		ProviderCallID: providerCallID,
 		ToolInput:      append([]byte(nil), input...),
 		Streaming:      false,
+		// edit/write always fully visible on resume too.
+		Expanded: isDiffTool(name),
 	}
 	s.blocks = append(s.blocks, b)
 	s.totalAdded++
