@@ -52,7 +52,7 @@ func (p *AnthropicProvider) ID() string { return "anthropic" }
 // Models returns the known Anthropic models with their context windows.
 func (p *AnthropicProvider) Models() ([]Model, error) {
 	return []Model{
-		{ID: "claude-opus-4-8", Name: "Claude Opus 4.8", ContextWindow: 1000000},
+		{ID: "claude-opus-5", Name: "Claude Opus 5", ContextWindow: 1000000},
 	}, nil
 }
 

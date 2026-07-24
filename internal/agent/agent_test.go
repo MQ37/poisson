@@ -1249,7 +1249,7 @@ func TestEffectiveEffort(t *testing.T) {
 		{"high", "ollama", "glm-5.2:cloud", "high"},
 		{"max", "ollama", "glm-5.2:cloud", "max"},
 		// claude-opus supports medium.
-		{"medium", "anthropic", "claude-opus-4-8", "medium"},
+		{"medium", "anthropic", "claude-opus-5", "medium"},
 		// xAI grok-build supports only high/max.
 		{"medium", "xai", "grok-build", ""}, // SupportsEffort=false
 		// Unknown model keeps the effort.

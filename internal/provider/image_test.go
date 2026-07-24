@@ -42,7 +42,7 @@ func TestAnthropicSerializesImageBlock(t *testing.T) {
 	path := writeTestPNG(t)
 	p := &AnthropicProvider{}
 	ar := p.buildAnthropicRequest(&Request{
-		Model: "claude-opus-4-8", MaxTokens: 100, Messages: []Message{imageUserMsg(path)},
+		Model: "claude-opus-5", MaxTokens: 100, Messages: []Message{imageUserMsg(path)},
 	}, false)
 	last := ar.Messages[len(ar.Messages)-1]
 	var img *anthropicContentBlock

@@ -82,7 +82,7 @@ func DefaultModel(provName string, cfg *config.Config) string {
 		if m := cfg.Anthropic.Model; m != "" {
 			return m
 		}
-		return "claude-opus-4-8"
+		return "claude-opus-5"
 	case "xai":
 		if m := cfg.XAI.Model; m != "" {
 			return m

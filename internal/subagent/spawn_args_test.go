@@ -77,7 +77,7 @@ func envValue(env []string, key string) (string, bool) {
 func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
 	env := buildSpawnEnv(SpawnInput{
 		Provider: "anthropic",
-		Model:    "claude-opus-4-8",
+		Model:    "claude-opus-5",
 		Effort:   "high",
 		Name:     "scout",
 		DBPath:   "/tmp/child.db",
@@ -87,7 +87,7 @@ func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
 	cases := map[string]string{
 		"POISSON_SUBAGENT_CHILD":    "1",
 		"POISSON_SUBAGENT_PROVIDER": "anthropic",
-		"POISSON_SUBAGENT_MODEL":    "claude-opus-4-8",
+		"POISSON_SUBAGENT_MODEL":    "claude-opus-5",
 		"POISSON_SUBAGENT_EFFORT":   "high",
 		"POISSON_SUBAGENT_NAME":     "scout",
 		"POISSON_SUBAGENT_DB":       "/tmp/child.db",
@@ -194,7 +194,7 @@ func TestSpawnEndToEndWithFakeChildProcess(t *testing.T) {
 		Cwd:       ".",
 		SessionID: "sess-1",
 		Provider:  "anthropic",
-		Model:     "claude-opus-4-8",
+		Model:     "claude-opus-5",
 	})
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -210,8 +210,8 @@ func TestSpawnEndToEndWithFakeChildProcess(t *testing.T) {
 	if ev == nil || ev.Tool != "echo-env" {
 		t.Fatalf("event = %+v, want tool=echo-env", ev)
 	}
-	if ev.Command != "anthropic" || ev.Description != "claude-opus-4-8" {
-		t.Fatalf("child saw provider=%q model=%q via env, want anthropic/claude-opus-4-8", ev.Command, ev.Description)
+	if ev.Command != "anthropic" || ev.Description != "claude-opus-5" {
+		t.Fatalf("child saw provider=%q model=%q via env, want anthropic/claude-opus-5", ev.Command, ev.Description)
 	}
 
 	ev, err = child.ReadEvent()

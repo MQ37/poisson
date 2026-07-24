@@ -148,12 +148,13 @@ px version
 
 | Provider | Model | Auth | Vision |
 |---|---|---|---|
-| `anthropic` | `claude-opus-4-8` | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
+| `anthropic` | `claude-opus-5` | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
 | `openai` | `gpt-5.5` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `openai` | `gpt-5.6-sol` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `openai` | `gpt-5.6-terra` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `openai` | `gpt-5.6-luna` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `xai` | `grok-build` | OAuth (SuperGrok) | ✅ |
+| `xai` | `grok-4.5` | OAuth (SuperGrok) | ✅ |
 | `ollama` | `glm-5.2:cloud` *(default)* | local daemon / Ollama cloud | ❌ |
 | `ollama` | `minimax-m3:cloud` | local daemon / Ollama cloud | ✅ |
 | `ollama` | `kimi-k2.7-code:cloud` | local daemon / Ollama cloud | ✅ |
@@ -195,7 +196,7 @@ via `/providers` without naming a model):
 # default = "ollama"                 # anthropic | ollama | xai | openai
 
 [anthropic]
-# model = "claude-opus-4-8"          # or claude-sonnet-5 (both adaptive-reasoning)
+# model = "claude-opus-5"          # or claude-sonnet-5 (both adaptive-reasoning)
 # api_key = "sk-ant-..."             # optional; OAuth (auth.json) preferred
 
 [openai]
@@ -219,7 +220,7 @@ via `/providers` without naming a model):
 # show_cost = true                   # $ in the status bar
 
 # Pricing per 1M tokens (USD). Subscription/OAuth providers default to 0.
-# [pricing.anthropic.claude-opus-4-8]
+# [pricing.anthropic.claude-opus-5]
 # input = 5.0
 # output = 25.0
 # cache_read = 0.5
@@ -342,3 +343,4 @@ codebase one person can hold in their head.
 ---
 
 <p align="center"><sub>poisson · run <code>px</code> · <code>/help</code> for the tour</sub></p>
+� <code>/help</code> for the tour</sub></p>

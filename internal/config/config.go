@@ -128,7 +128,7 @@ func defaultConfig() *Config {
 			Default: "ollama",
 		},
 		Anthropic: AnthropicConfig{
-			Model: "claude-opus-4-8",
+			Model: "claude-opus-5",
 		},
 		XAI: XAIConfig{
 			Model: "grok-build",
@@ -154,7 +154,7 @@ func defaultConfig() *Config {
 		Effort: DefaultEffort,
 		Pricing: map[string]map[string]Pricing{
 			"anthropic": {
-				"claude-opus-4-8": {
+				"claude-opus-5": {
 					InputPerMTok:      5.0,
 					OutputPerMTok:     25.0,
 					CacheReadPerMTok:  0.5,
@@ -188,13 +188,13 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # default = "ollama"             # anthropic | ollama | xai | openai
 
 [anthropic]
-# model = "claude-opus-4-8"
+# model = "claude-opus-5"
 # If auth.json has OAuth tokens for anthropic, stealth mode is active.
 # Otherwise set an API key here or in auth.json.
 # api_key = "sk-ant-..."
 
 [xai]
-# model = "grok-build"
+# model = "grok-build"           # or grok-4.5 (500K ctx, low|medium|high effort)
 
 [openai]
 # GPT via the ChatGPT Codex subscription (run: px login openai).
@@ -223,7 +223,7 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # Pricing per 1M tokens (USD). OAuth/subscription providers default to 0.
 # Values here override the built-in defaults. Use nested tables, not inline tables.
 # Quote model names containing '.' (e.g. "glm-5.2:cloud") so they aren't split.
-# [pricing.anthropic.claude-opus-4-8]
+# [pricing.anthropic.claude-opus-5]
 # input = 5.0
 # output = 25.0
 # cache_read = 0.5
@@ -231,6 +231,9 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # [pricing.xai.grok-build]
 # input = 1.0
 # output = 2.0
+# [pricing.xai."grok-4.5"]
+# input = 2.0
+# output = 6.0
 # [pricing.ollama."glm-5.2:cloud"]
 # input = 0
 # output = 0

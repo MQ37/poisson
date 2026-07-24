@@ -22,8 +22,8 @@ type ModelSettings struct {
 
 // KnownModels is a registry of model metadata indexed by provider/model ID.
 var KnownModels = map[string]ModelSettings{
-	// Anthropic — claude-opus-4-8 and claude-sonnet-5, both adaptive-thinking.
-	"anthropic/claude-opus-4-8": {
+	// Anthropic — claude-opus-5 and claude-sonnet-5, both adaptive-thinking.
+	"anthropic/claude-opus-5": {
 		ContextWindow:    1000000,
 		SupportsEffort:   true,
 		EffortLevels:     []string{"low", "medium", "high", "xhigh", "max"},

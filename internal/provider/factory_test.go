@@ -35,7 +35,7 @@ func TestResolveDefaultProvider_ConfiguredAnthropic(t *testing.T) {
 
 func TestDefaultModel_Fallbacks(t *testing.T) {
 	cfg := config.DefaultConfig()
-	if got := DefaultModel("anthropic", cfg); got != "claude-opus-4-8" {
+	if got := DefaultModel("anthropic", cfg); got != "claude-opus-5" {
 		t.Fatalf("anthropic default = %q", got)
 	}
 	if got := DefaultModel("xai", cfg); got != "grok-build" {

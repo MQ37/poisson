@@ -7,7 +7,7 @@ import (
 )
 
 func TestLookupBuiltIn(t *testing.T) {
-	r, ok := Lookup(nil, "anthropic", "claude-opus-4-8")
+	r, ok := Lookup(nil, "anthropic", "claude-opus-5")
 	if !ok || r.InputPerMTok != 5.0 || r.OutputPerMTok != 25.0 {
 		t.Fatalf("opus = %+v ok=%v", r, ok)
 	}
@@ -41,10 +41,10 @@ func TestLookupBuiltIn(t *testing.T) {
 
 func TestLookupConfigOverride(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.Pricing["anthropic"]["claude-opus-4-8"] = config.Pricing{
+	cfg.Pricing["anthropic"]["claude-opus-5"] = config.Pricing{
 		InputPerMTok: 3.0, OutputPerMTok: 15.0,
 	}
-	r, ok := Lookup(cfg, "anthropic", "claude-opus-4-8")
+	r, ok := Lookup(cfg, "anthropic", "claude-opus-5")
 	if !ok || r.InputPerMTok != 3.0 {
 		t.Fatalf("override = %+v", r)
 	}
@@ -52,11 +52,11 @@ func TestLookupConfigOverride(t *testing.T) {
 
 func TestComputeCost(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cost := ComputeCost(cfg, "anthropic", "claude-opus-4-8", 1_000_000, 1_000_000, 0, 0)
+	cost := ComputeCost(cfg, "anthropic", "claude-opus-5", 1_000_000, 1_000_000, 0, 0)
 	if cost != 30.0 {
 		t.Fatalf("cost = %v, want 30", cost)
 	}
-	cost = ComputeCost(cfg, "anthropic", "claude-opus-4-8", 0, 0, 0, 1_000_000)
+	cost = ComputeCost(cfg, "anthropic", "claude-opus-5", 0, 0, 0, 1_000_000)
 	if cost != 10.0 {
 		t.Fatalf("opus cache-write cost = %v, want 10", cost)
 	}

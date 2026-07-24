@@ -67,7 +67,7 @@ func TestRenderHeaderSpinsWhileCompacting(t *testing.T) {
 func TestRenderHeaderShowsAnthropicUsage(t *testing.T) {
 	s := StatusSnapshot{
 		Cwd:   "/home/mq/workdir/poisson",
-		Model: "anthropic/claude-opus-4-8",
+		Model: "anthropic/claude-opus-5",
 		AnthropicUsage: &AnthropicUsageView{
 			FiveHourPct:   31,
 			SevenDayPct:   29,
@@ -90,7 +90,7 @@ func TestRenderHeaderShowsAnthropicUsage(t *testing.T) {
 func TestRenderHeaderHidesExtraUsageWhenDisabled(t *testing.T) {
 	s := StatusSnapshot{
 		Cwd:   "/home/mq/workdir/poisson",
-		Model: "anthropic/claude-opus-4-8",
+		Model: "anthropic/claude-opus-5",
 		AnthropicUsage: &AnthropicUsageView{
 			FiveHourPct: 31,
 			SevenDayPct: 29,

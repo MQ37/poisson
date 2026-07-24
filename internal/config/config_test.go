@@ -36,7 +36,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Provider.Default != "ollama" {
 		t.Errorf("Provider.Default = %q, want ollama", cfg.Provider.Default)
 	}
-	if cfg.Anthropic.Model != "claude-opus-4-8" {
+	if cfg.Anthropic.Model != "claude-opus-5" {
 		t.Errorf("Anthropic.Model = %q", cfg.Anthropic.Model)
 	}
 	if cfg.Ollama.BaseURL != "http://localhost:11434" {
@@ -88,9 +88,9 @@ func TestLoadDefaults(t *testing.T) {
 	if !ok {
 		t.Fatal("no anthropic pricing")
 	}
-	p, ok := ant["claude-opus-4-8"]
+	p, ok := ant["claude-opus-5"]
 	if !ok {
-		t.Fatal("no pricing for claude-opus-4-8")
+		t.Fatal("no pricing for claude-opus-5")
 	}
 	if p.InputPerMTok != 5.0 {
 		t.Errorf("InputPerMTok = %v, want 5.0", p.InputPerMTok)
@@ -340,10 +340,10 @@ effort = true
 }
 
 func TestLoadPricingPartialOverrideKeepsDefault(t *testing.T) {
-	// Override only output for claude-opus-4-8; other fields keep
+	// Override only output for claude-opus-5; other fields keep
 	// the built-in default.
 	in := `
-[pricing.anthropic.claude-opus-4-8]
+[pricing.anthropic.claude-opus-5]
 output = 99.0
 `
 	writeTempConfig(t, in)
@@ -351,7 +351,7 @@ output = 99.0
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	p := cfg.Pricing["anthropic"]["claude-opus-4-8"]
+	p := cfg.Pricing["anthropic"]["claude-opus-5"]
 	if p.InputPerMTok != 5.0 {
 		t.Errorf("Input = %v, want 5.0 (default)", p.InputPerMTok)
 	}

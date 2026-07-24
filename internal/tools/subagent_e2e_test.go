@@ -42,7 +42,7 @@ printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWind
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	tool.SetRuntime(
 		func() string { return "anthropic" },
-		func() string { return "claude-opus-4-8" },
+		func() string { return "claude-opus-5" },
 		func() string { return "" },
 	)
 
@@ -116,7 +116,7 @@ printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWind
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	tool.SetRuntime(
 		func() string { return "anthropic" },
-		func() string { return "claude-opus-4-8" },
+		func() string { return "claude-opus-5" },
 		func() string { return "" },
 	)
 
@@ -185,7 +185,7 @@ printf '{"type":"done","success":true}\n'
 			tool := NewSubagentTool(".", alwaysApproveSubagent)
 			tool.SetRuntime(
 				func() string { return "anthropic" },
-				func() string { return "claude-opus-4-8" },
+				func() string { return "claude-opus-5" },
 				func() string { return "" },
 			)
 			tool.SetSkillsEnabledFn(func() bool { return tc.skillsEnabled })
@@ -230,7 +230,7 @@ exit 1
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	tool.SetRuntime(
 		func() string { return "anthropic" },
-		func() string { return "claude-opus-4-8" },
+		func() string { return "claude-opus-5" },
 		func() string { return "" },
 	)
 
@@ -279,7 +279,7 @@ printf '{"type":"done","success":true,"turns":2,"usage":{"InputTokens":300,"Outp
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	tool.SetRuntime(
 		func() string { return "anthropic" },
-		func() string { return "claude-opus-4-8" },
+		func() string { return "claude-opus-5" },
 		func() string { return "" },
 	)
 
@@ -305,8 +305,8 @@ printf '{"type":"done","success":true,"turns":2,"usage":{"InputTokens":300,"Outp
 		t.Fatalf("usageFn called %d times, want exactly 1: %+v", len(calls), calls)
 	}
 	got := calls[0]
-	if got.providerID != "anthropic" || got.model != "claude-opus-4-8" {
-		t.Fatalf("usageFn provider/model = %s/%s, want anthropic/claude-opus-4-8", got.providerID, got.model)
+	if got.providerID != "anthropic" || got.model != "claude-opus-5" {
+		t.Fatalf("usageFn provider/model = %s/%s, want anthropic/claude-opus-5", got.providerID, got.model)
 	}
 	want := provider.Usage{InputTokens: 300, OutputTokens: 120, CacheReadTokens: 10, CacheWriteTokens: 5}
 	if got.usage != want {
@@ -344,7 +344,7 @@ sleep 30
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	tool.SetRuntime(
 		func() string { return "anthropic" },
-		func() string { return "claude-opus-4-8" },
+		func() string { return "claude-opus-5" },
 		func() string { return "" },
 	)
 
@@ -395,7 +395,7 @@ printf '{"type":"done","success":true,"usage":{"InputTokens":100,"OutputTokens":
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	tool.SetRuntime(
 		func() string { return "anthropic" },
-		func() string { return "claude-opus-4-8" },
+		func() string { return "claude-opus-5" },
 		func() string { return "" },
 	)
 	// No SetUsageFn call.

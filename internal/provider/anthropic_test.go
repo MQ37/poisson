@@ -494,7 +494,7 @@ func TestAnthropicStealthHeadersAdaptiveEffort(t *testing.T) {
 	p.baseURL = server.URL
 
 	_, err := p.Stream(context.Background(), &Request{
-		Model:     "claude-opus-4-8", // adaptive-capable, per TestAnthropicEffortMapsToThinking
+		Model:     "claude-opus-5", // adaptive-capable, per TestAnthropicEffortMapsToThinking
 		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "test"}}}},
 		MaxTokens: 1,
 		Effort:    "xhigh",
@@ -594,13 +594,13 @@ func TestAnthropicAPIKeyHeaders(t *testing.T) {
 func TestAnthropicMaxTokensGenerousAndDecoupled(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 	// No explicit max_tokens => generous ceiling, not the old tiny 4096.
-	r := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8"}, false)
+	r := p.buildAnthropicRequest(&Request{Model: "claude-opus-5"}, false)
 	if r.MaxTokens != anthropicMaxOutputTokens {
 		t.Fatalf("default max_tokens = %d, want %d", r.MaxTokens, anthropicMaxOutputTokens)
 	}
 	// Even at max effort, max_tokens must leave ample room over the thinking
 	// budget (the old budget+1024 cap is what starved the answer).
-	hi := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8", Effort: "max"}, false)
+	hi := p.buildAnthropicRequest(&Request{Model: "claude-opus-5", Effort: "max"}, false)
 	if hi.Thinking == nil {
 		t.Fatal("expected thinking enabled at max effort")
 	}
@@ -613,7 +613,7 @@ func TestAnthropicEffortMapsToThinking(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 
 	// No effort: no thinking block, no top-level effort field.
-	plain := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8", MaxTokens: 100}, false)
+	plain := p.buildAnthropicRequest(&Request{Model: "claude-opus-5", MaxTokens: 100}, false)
 	if plain.Thinking != nil {
 		t.Fatalf("expected no thinking block when effort empty")
 	}
@@ -624,7 +624,7 @@ func TestAnthropicEffortMapsToThinking(t *testing.T) {
 
 	// Adaptive model (opus) + xhigh: adaptive thinking + output_config.effort,
 	// no budget_tokens, generous max_tokens.
-	hi := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8", MaxTokens: 100, Effort: "xhigh"}, false)
+	hi := p.buildAnthropicRequest(&Request{Model: "claude-opus-5", MaxTokens: 100, Effort: "xhigh"}, false)
 	if hi.Thinking == nil || hi.Thinking.Type != "adaptive" {
 		t.Fatalf("expected adaptive thinking for xhigh, got %+v", hi.Thinking)
 	}
@@ -639,7 +639,7 @@ func TestAnthropicEffortMapsToThinking(t *testing.T) {
 	}
 
 	// "max" clamps to xhigh (the top value the real client sends).
-	mx := p.buildAnthropicRequest(&Request{Model: "claude-opus-4-8", Effort: "max"}, false)
+	mx := p.buildAnthropicRequest(&Request{Model: "claude-opus-5", Effort: "max"}, false)
 	if mx.OutputConfig == nil || mx.OutputConfig.Effort != "xhigh" {
 		t.Fatalf("max should clamp to xhigh, got %+v", mx.OutputConfig)
 	}
@@ -661,7 +661,7 @@ func TestAnthropicToolResultsBecomeUserMessage(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 
 	req := &Request{
-		Model: "claude-opus-4-8",
+		Model: "claude-opus-5",
 		Messages: []Message{
 			{Role: "user", Content: []ContentBlock{{Type: "text", Text: "do it"}}},
 			{Role: "assistant", Content: []ContentBlock{
@@ -750,7 +750,7 @@ func TestAnthropicSSEParsesRedactedThinking(t *testing.T) {
 func TestAnthropicReplaysThinkingFirstWhenEnabled(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 	req := &Request{
-		Model:  "claude-opus-4-8",
+		Model:  "claude-opus-5",
 		Effort: "high",
 		Messages: []Message{
 			{Role: "user", Content: []ContentBlock{{Type: "text", Text: "go"}}},
@@ -774,7 +774,7 @@ func TestAnthropicReplaysThinkingFirstWhenEnabled(t *testing.T) {
 func TestAnthropicOmitsThinkingWhenDisabled(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 	req := &Request{
-		Model: "claude-opus-4-8", // no effort → thinking disabled
+		Model: "claude-opus-5", // no effort → thinking disabled
 		Messages: []Message{
 			{Role: "assistant", Content: []ContentBlock{
 				{Type: "thinking", Thinking: "reason", ThinkingSignature: "SIG"},
@@ -801,7 +801,7 @@ func TestAnthropicOmitsThinkingWhenDisabled(t *testing.T) {
 func TestAnthropicThinkingOnlyMessageGetsPlaceholderWhenDisabled(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 	req := &Request{
-		Model: "claude-opus-4-8", // no effort → thinking disabled
+		Model: "claude-opus-5", // no effort → thinking disabled
 		Messages: []Message{
 			{Role: "assistant", Content: []ContentBlock{
 				{Type: "thinking", Thinking: "reason", ThinkingSignature: "SIG"},
@@ -820,7 +820,7 @@ func TestAnthropicThinkingOnlyMessageGetsPlaceholderWhenDisabled(t *testing.T) {
 func TestAnthropicUnsignedThinkingDegradesToText(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 	req := &Request{
-		Model:  "claude-opus-4-8",
+		Model:  "claude-opus-5",
 		Effort: "high",
 		Messages: []Message{
 			{Role: "assistant", Content: []ContentBlock{
@@ -856,7 +856,7 @@ func TestAnthropicStreamRetriesNetworkFailureThenSucceeds(t *testing.T) {
 	ctx := WithRetryTrace(context.Background(), trace)
 
 	ch, err := p.Stream(ctx, &Request{
-		Model:    "claude-opus-4-8",
+		Model:    "claude-opus-5",
 		Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
 	})
 	if err != nil {
@@ -881,7 +881,7 @@ func TestAnthropicStreamRetries503ThenSucceeds(t *testing.T) {
 	p.baseURL = srv.URL
 
 	ch, err := p.Stream(context.Background(), &Request{
-		Model:    "claude-opus-4-8",
+		Model:    "claude-opus-5",
 		Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
 	})
 	if err != nil {
@@ -904,7 +904,7 @@ func TestAnthropicStreamRetries529ThenSucceeds(t *testing.T) {
 	p.baseURL = srv.URL
 
 	ch, err := p.Stream(context.Background(), &Request{
-		Model:    "claude-opus-4-8",
+		Model:    "claude-opus-5",
 		Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
 	})
 	if err != nil {
@@ -930,7 +930,7 @@ func TestAnthropicStreamDoesNotRetry400(t *testing.T) {
 	p.baseURL = srv.URL
 
 	_, err := p.Stream(context.Background(), &Request{
-		Model:    "claude-opus-4-8",
+		Model:    "claude-opus-5",
 		Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
 	})
 	if err == nil {
@@ -964,7 +964,7 @@ func TestAnthropicStreamCancelledDuringRetryReturnsSilently(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		_, err := p.Stream(ctx, &Request{
-			Model:    "claude-opus-4-8",
+			Model:    "claude-opus-5",
 			Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
 		})
 		done <- err

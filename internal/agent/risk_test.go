@@ -206,12 +206,12 @@ func TestAssessBashRisk(t *testing.T) {
 // agent's configured effort and uses the model's LOWEST supported level, with
 // the answer cap dropped so the (minimal) thinking has headroom.
 func TestAssessBashRiskUsesLowestModelEffort(t *testing.T) {
-	fp := provider.NewFakeProvider("anthropic", []provider.Model{{ID: "claude-opus-4-8", ContextWindow: 1000000}})
+	fp := provider.NewFakeProvider("anthropic", []provider.Model{{ID: "claude-opus-5", ContextWindow: 1000000}})
 	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("low", nil)})
 	s := newTestStore(t)
-	sid := newTestSession(t, s, "claude-opus-4-8")
+	sid := newTestSession(t, s, "claude-opus-5")
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
-	a.SetModel("claude-opus-4-8")
+	a.SetModel("claude-opus-5")
 	a.SetEffort("max") // agent runs heavy; the classifier must NOT inherit this
 
 	a.AssessBashRisk(context.Background(), "git push origin main", "push", "/tmp")

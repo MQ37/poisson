@@ -23,8 +23,9 @@ provider's own downscale cap so token cost is predictable.
 
 | Model | Vision |
 |---|---|
-| anthropic/claude-opus-4-8 | ✅ |
+| anthropic/claude-opus-5 | ✅ |
 | xai/grok-build | ✅ |
+| xai/grok-4.5 | ✅ |
 | ollama/minimax-m3:cloud | ✅ |
 | ollama/kimi-k2.7-code:cloud | ✅ |
 | ollama/glm-5.2:cloud | ❌ |

@@ -65,7 +65,7 @@ func TestCuratedModelsIncludesGPT56Family(t *testing.T) {
 
 func TestMergedModelSettingsNoOverride(t *testing.T) {
 	cfg := config.DefaultConfig()
-	s, ok := MergedModelSettings(cfg, "anthropic", "claude-opus-4-8")
+	s, ok := MergedModelSettings(cfg, "anthropic", "claude-opus-5")
 	if !ok {
 		t.Fatal("expected known model to be found")
 	}
@@ -77,9 +77,9 @@ func TestMergedModelSettingsNoOverride(t *testing.T) {
 func TestMergedModelSettingsPartialOverride(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ModelOverrides["anthropic"] = map[string]config.ModelOverride{
-		"claude-opus-4-8": {ContextWindow: 500000},
+		"claude-opus-5": {ContextWindow: 500000},
 	}
-	s, ok := MergedModelSettings(cfg, "anthropic", "claude-opus-4-8")
+	s, ok := MergedModelSettings(cfg, "anthropic", "claude-opus-5")
 	if !ok {
 		t.Fatal("expected known model to be found")
 	}
@@ -132,7 +132,7 @@ func TestMergedModelSettingsUnknownWithoutOverride(t *testing.T) {
 }
 
 func TestMergedModelSettingsNilConfig(t *testing.T) {
-	s, ok := MergedModelSettings(nil, "anthropic", "claude-opus-4-8")
+	s, ok := MergedModelSettings(nil, "anthropic", "claude-opus-5")
 	if !ok || s.ContextWindow != 1000000 {
 		t.Errorf("nil cfg should fall back to the built-in entry: %+v ok=%v", s, ok)
 	}
@@ -174,11 +174,11 @@ func TestMergedCuratedModelsIncludesConfigOnlyModel(t *testing.T) {
 func TestMergedCuratedModelsOverridesKnownModelContextWindow(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.ModelOverrides["anthropic"] = map[string]config.ModelOverride{
-		"claude-opus-4-8": {ContextWindow: 42},
+		"claude-opus-5": {ContextWindow: 42},
 	}
 	models := MergedCuratedModels(cfg, "anthropic")
 	for _, m := range models {
-		if m.ID == "claude-opus-4-8" && m.ContextWindow != 42 {
+		if m.ID == "claude-opus-5" && m.ContextWindow != 42 {
 			t.Errorf("ContextWindow = %d, want 42 (overridden)", m.ContextWindow)
 		}
 	}
