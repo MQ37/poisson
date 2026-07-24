@@ -17,10 +17,17 @@ import (
 )
 
 // BashTool executes bash commands, gated by the LLM risk classifier via approvalFn.
+//
+// Within one agent session the tool keeps a RAM-only sticky cwd + environment
+// so `cd` / `export` survive across calls (Grok-style continuity without a
+// persistent shell process). Subagents get their own BashTool via
+// BuildRegistry, so sticky state is never shared with the parent. Nothing is
+// written to the session DB — restart/resume starts clean at session cwd.
 type BashTool struct {
-	cwd        string
+	cwd        string // session workspace root (fallback when sticky empty)
 	sandbox    bool
 	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)
+	sticky     bashSticky
 }
 
 // NewBashTool creates a bash tool. The approval function is called when a
@@ -33,7 +40,7 @@ func NewBashTool(cwd string, sandbox bool, approvalFn func(ctx context.Context, 
 func (t *BashTool) Name() string { return "bash" }
 
 func (t *BashTool) Description() string {
-	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n is refused — use read instead. For several independent tool ops in one step use batch (not a bash pipeline of the same)."
+	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n is refused — use read instead. For several independent tool ops in one step use batch (not a bash pipeline of the same). Cwd and environment stick across bash calls in this session only (RAM; lost on restart; subagents isolated) — cd/export once and later calls see them. Optional workdir overrides sticky cwd for one call and then updates sticky to the resulting pwd."
 }
 
 func (t *BashTool) Schema() json.RawMessage {
@@ -42,7 +49,7 @@ func (t *BashTool) Schema() json.RawMessage {
   "properties": {
     "command": { "type": "string" },
     "description": { "type": "string", "description": "Short description of what the command does" },
-    "workdir": { "type": "string", "description": "Working directory (default: cwd)" },
+    "workdir": { "type": "string", "description": "Working directory for this call (default: sticky cwd from prior bash in this session, else session cwd). Absolute or relative to session cwd. Updates sticky cwd after the call." },
     "timeout": { "type": "integer", "description": "Timeout in seconds (default: 120)" }
   },
   "required": ["command", "description"]
@@ -89,15 +96,13 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		}
 	}
 
-	// Resolve working directory before guard (sensitive cwd affects approval).
-	dir := t.cwd
-	if in.Workdir != "" {
-		if filepath.IsAbs(in.Workdir) {
-			dir = in.Workdir
-		} else {
-			dir = filepath.Join(t.cwd, in.Workdir)
-		}
-	}
+	// Serialize against sticky state for this session's BashTool. Parallel
+	// bash tool_uses would otherwise race cwd/env snapshots.
+	t.sticky.lock()
+	defer t.sticky.unlock()
+
+	stickyCwd, stickyEnv := t.sticky.cwd, t.sticky.env
+	dir := stickyStartDir(t.cwd, stickyCwd, in.Workdir)
 
 	// Every command is gated: approvalFn runs the LLM risk classifier, which
 	// auto-approves only an LLM "low" and routes everything else (including a
@@ -131,10 +136,28 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	childCtx, cancel := context.WithTimeout(ctx, timeoutDur)
 	defer cancel()
 
-	cmd := exec.CommandContext(childCtx, "bash", "-c", in.Command)
+	// State dump files: wrapper writes pwd + env -0 here after the user
+	// command so we can update sticky without scraping command output.
+	// User command lives in cmdFile and is eval'd in the same shell (nested
+	// bash -c would discard cd/export).
+	stateDir, err := os.MkdirTemp("", "poisson-bash-sticky-*")
+	if err != nil {
+		return ToolResult{Error: "cannot create sticky state dir: " + err.Error()}, nil
+	}
+	defer os.RemoveAll(stateDir)
+	cmdFile := filepath.Join(stateDir, "cmd")
+	cwdFile := filepath.Join(stateDir, "cwd")
+	envFile := filepath.Join(stateDir, "env")
+	if err := os.WriteFile(cmdFile, []byte(in.Command), 0o600); err != nil {
+		return ToolResult{Error: "cannot write sticky cmd file: " + err.Error()}, nil
+	}
+
+	wrapped := wrapBashForSticky(cmdFile, cwdFile, envFile)
+	cmd := exec.CommandContext(childCtx, "bash", "-c", wrapped)
 	if dir != "" {
 		cmd.Dir = dir
 	}
+	cmd.Env = envForCmd(stickyEnv)
 	// Run in its own process group and kill the whole group on timeout/cancel,
 	// otherwise only the bash shell dies and its spawned children are orphaned.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -150,7 +173,7 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	exitCode := 0
 	var hints []string
 	if err != nil {
@@ -175,6 +198,14 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		}
 	}
 
+	// Always try to refresh sticky from the dump when the wrapper got far
+	// enough to write it — including failed commands (cd good; false should
+	// still leave sticky in good). Missing dump (killed early) keeps prior.
+	if newCwd, newEnv, dumpErr := readStickyDump(cwdFile, envFile); dumpErr == nil {
+		t.sticky.cwd = newCwd
+		t.sticky.env = newEnv
+	}
+
 	if !t.sandbox {
 		if h := cdWorkdirHint(in.Command, in.Workdir); h != "" {
 			hints = append(hints, h)
@@ -191,6 +222,14 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	return ToolResult{Content: string(data)}, nil
 }
 
+// StickyCwd returns the current sticky working directory (empty if still at
+// the session default). Test/helper accessor; not part of the tool API.
+func (t *BashTool) StickyCwd() string {
+	t.sticky.lock()
+	defer t.sticky.unlock()
+	return t.sticky.cwd
+}
+
 // isCdSegment reports whether a command segment is just `cd <path>` (no
 // further flags/args).
 func isCdSegment(seg string) bool {
@@ -200,7 +239,9 @@ func isCdSegment(seg string) bool {
 
 // cdWorkdirHint nudges the model toward the workdir param when the command
 // is a plain `cd DIR && rest` chain — same effect, without repeating the
-// path (and re-paying its tokens) on every call.
+// path (and re-paying its tokens) on every call. With sticky cwd a plain
+// `cd DIR` (no &&) already persists; the hint still helps for one-liners
+// that prefix every command with cd.
 func cdWorkdirHint(command, workdir string) string {
 	if workdir != "" {
 		return ""
@@ -210,7 +251,7 @@ func cdWorkdirHint(command, workdir string) string {
 		return ""
 	}
 	dir := strings.Fields(strings.TrimSpace(segs[0]))[1]
-	return fmt.Sprintf("this command starts with 'cd %s \u0026\u0026' — pass workdir: %q instead next time (same effect, fewer tokens).", dir, dir)
+	return fmt.Sprintf("this command starts with 'cd %s \u0026\u0026' — pass workdir: %q instead next time (same effect, fewer tokens), or rely on sticky cwd after a plain cd.", dir, dir)
 }
 
 // dedicatedToolHint reports (and, in Execute, blocks) when a command is

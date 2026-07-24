@@ -60,6 +60,10 @@ px                                                   # launch the TUI
   [below](#-built-in-skills); also user-defined via `~/.poisson/skills/`).
   Prefer the dedicated file tools over packing the same job into `bash`;
   multi-tool turns or `batch` beat shell pipelines for independent steps.
+  Within one session, `bash` keeps **sticky cwd + environment in RAM**
+  (`cd` / `export` carry to the next bash call); optional `workdir` overrides
+  for one call. State is per agent (subagents isolated), never written to
+  SQLite — restart/resume starts clean at the session cwd.
 - **Bash safety guard, two speeds** — every shell command is checked before it
   runs. **Fast mode** (default): a deterministic guard auto-approves
   read-only, side-effect-free commands (`ls`, `cat`, `grep`/`rg`, `find`,
