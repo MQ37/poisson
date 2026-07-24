@@ -173,6 +173,12 @@ func TestBuildSystemPromptPrefersDedicatedTools(t *testing.T) {
 	if !strings.Contains(prompt, "batch") {
 		t.Errorf("missing batch guideline: %q", prompt)
 	}
+	if !strings.Contains(prompt, "Bash sticky cwd/env") {
+		t.Errorf("missing sticky-bash guideline: %q", prompt)
+	}
+	if !strings.Contains(prompt, "session cwd") {
+		t.Errorf("missing session-cwd file-tool guideline: %q", prompt)
+	}
 }
 
 func TestBuildSystemPromptNoContext(t *testing.T) {
