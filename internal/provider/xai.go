@@ -37,6 +37,7 @@ func (p *XAIProvider) ID() string { return "xai" }
 func (p *XAIProvider) Models() ([]Model, error) {
 	return []Model{
 		{ID: "grok-build", Name: "Grok Build", ContextWindow: 256000},
+		{ID: "grok-4.5", Name: "Grok 4.5", ContextWindow: 500000},
 	}, nil
 }
 

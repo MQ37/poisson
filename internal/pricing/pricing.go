@@ -27,6 +27,8 @@ var builtIn = map[string]map[string]Rates{
 	},
 	"xai": {
 		"grok-build": {1.0, 2.0, 0, 0},
+		// grok-4.5: $2/1M input, $6/1M output; no published prompt-cache rate.
+		"grok-4.5": {2.0, 6.0, 0, 0},
 	},
 	"openai": {
 		// input, output, cacheRead (0.1x), cacheWrite (0 — OpenAI's prompt

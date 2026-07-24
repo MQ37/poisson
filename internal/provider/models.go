@@ -69,10 +69,17 @@ var KnownModels = map[string]ModelSettings{
 		EffortLevels:   []string{"none", "low", "medium", "high", "xhigh", "max"},
 		Vision:         true,
 	},
-	// xAI — only grok-build
+	// xAI — grok-build, plus grok-4.5 (SpaceXAI's frontier coding/agentic
+	// model, 500K context, configurable low/medium/high reasoning effort).
 	"xai/grok-build": {
 		ContextWindow:  256000,
 		SupportsEffort: false,
+		Vision:         true,
+	},
+	"xai/grok-4.5": {
+		ContextWindow:  500000,
+		SupportsEffort: true,
+		EffortLevels:   []string{"low", "medium", "high"},
 		Vision:         true,
 	},
 	// Ollama — glm-5.2:cloud, minimax-m3:cloud, kimi-k2.7-code:cloud.
