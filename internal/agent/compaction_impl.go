@@ -15,30 +15,43 @@ import (
 // ErrNothingToCompact is returned when /compact has no messages to summarize.
 var ErrNothingToCompact = errors.New("nothing to compact")
 
-// compactionSystemPrompt is the handoff summarization prompt from SPEC §13.3.
-const compactionSystemPrompt = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
+// compactionSystemPrompt is the handoff summarization prompt (originally
+// SPEC §13.3, since rewritten for detail — a short, generic summary that
+// merely "covers the topics" loses far more than it should: the next agent
+// gets ONLY this text, never the original messages, so anything vague or
+// omitted here is permanently gone, not just compressed).
+const compactionSystemPrompt = `You are a context-handoff summarizer. A fresh AI agent with NO memory of this conversation will receive ONLY the summary you produce — never the original messages — and must resume the work seamlessly from it alone.
 
-Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.
+Do NOT continue the conversation. Do NOT respond to any questions in the conversation. Do NOT ask the user anything. ONLY output the structured summary below.
+
+Be thorough, not brief. Match the summary's length and density to the conversation's actual substance — a long, detailed session deserves a long, detailed summary; do not compress for brevity's own sake. When unsure whether a detail matters, include it: the next agent can skip something extra, but can never recover something missing.
+
+Preserve concrete specifics verbatim wherever they appear — never flattened into vague generalities:
+- Exact file paths touched (created/edited/read/deleted), each one, not "several files were updated".
+- Exact shell commands run and their outcome — exit status, key output lines, error text — not "ran the tests" but e.g. "ran go test ./..., all green" or "ran npm run build, failed with: <exact error>".
+- Exact function/variable/config names, error messages, stack traces, version numbers, URLs, IDs, ports, paths.
+- The user's own instructions, corrections, and stated preferences, quoted verbatim wherever possible — not paraphrased into your own words.
+- Bad: "Fixed a bug in the auth module." Good: "Fixed internal/auth/token.go:42 — expiry check used < instead of <=, so tokens were rejected exactly at their expiry instant."
 
 Produce a summary with these sections:
 
 ## Big Picture
-What is the overall goal of this conversation? What is the user trying to accomplish?
+The overall goal of this conversation — what the user is ultimately trying to accomplish, and why (the underlying problem or motivation), not just the immediate task.
 
 ## Key Decisions
-Important decisions made, approaches chosen, and why.
+Every non-obvious decision made and the reasoning behind it: approaches chosen over alternatives, trade-offs accepted, things explicitly rejected and why. Include enough of the "why" that the next agent doesn't undo or re-litigate something already settled.
 
 ## Current State
-What has been done so far. What files were created, modified, or examined. What commands were run and their outcomes.
+Exactly what has been done, in enough detail to avoid redoing or re-discovering it: every file created/modified/examined (with paths), every command run (with its outcome), every external effect (commits, deployments, API calls, config/data changes). Chronological order if that helps clarity.
 
 ## User Instructions
-Any specific instructions, constraints, or preferences the user has stated. Preserve these verbatim if possible.
+Every specific instruction, constraint, or preference the user stated, quoted verbatim. Don't drop one for seeming minor — an explicit "don't do X" or "always do Y this way" must survive compaction exactly, word for word.
 
 ## Pending Tasks
-What remains to be done. If the conversation was interrupted mid-task, describe exactly where things left off so the next agent can continue seamlessly.
+What remains to be done. If the conversation was interrupted mid-task, describe exactly where things left off: the specific file/line/command in progress, the specific error being debugged, the specific next step already decided — enough that the next agent continues from that exact point without re-reading anything.
 
 ## Important Details
-Any small but critical details: file paths, error messages, environment quirks, version numbers, or anything that would be hard to rediscover.`
+Anything else that would be hard or costly to rediscover: environment quirks, gotchas, version numbers, exact error message text, tricky edge cases already worked out, and things that were already tried and did NOT work (so they aren't retried).`
 
 // Compact triggers manual compaction (/compact). Does not emit UI events; the TUI
 // owns scrollback refresh for manual compaction.
