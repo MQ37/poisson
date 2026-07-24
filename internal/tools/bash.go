@@ -33,7 +33,7 @@ func NewBashTool(cwd string, sandbox bool, approvalFn func(ctx context.Context, 
 func (t *BashTool) Name() string { return "bash" }
 
 func (t *BashTool) Description() string {
-	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. A command that is just cat/head/tail/sed -n standing in for the read tool is refused — use that tool instead (offset/limit, image support, skips the gate too)."
+	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n is refused — use read instead. For several independent tool ops in one step use batch (not a bash pipeline of the same)."
 }
 
 func (t *BashTool) Schema() json.RawMessage {
@@ -214,15 +214,15 @@ func cdWorkdirHint(command, workdir string) string {
 }
 
 // dedicatedToolHint reports (and, in Execute, blocks) when a command is
-// plainly just a stand-in for read — the only tool left that still beats an
-// equivalent bash call (offset/limit line ranges, image decode, no shell
-// parsing) — skipping the approval gate entirely (see its description).
-// ls/grep/rg/find have no such dedicated tool anymore: they're plain bash,
-// gated by the deterministic guard fast path instead (see
-// agent.WrapRiskGatedApproval). Only fires when the command boils down to a
-// single segment (after stripping a leading `cd DIR &&`, see
-// cdWorkdirHint) with no redirects, so it won't fire on multi-step
-// pipelines that legitimately combine several commands.
+// plainly just a stand-in for read — that tool still beats an equivalent
+// bash call (offset/limit line ranges, image decode, no shell parsing) and
+// skips the approval gate entirely (see its description).
+//
+// grep/glob exist as dedicated tools too, but plain rg/grep/find/ls are
+// only soft-nudged via the tool description and system prompt — not hard-
+// blocked here — so multi-step shell pipelines stay legal. Only fires when
+// the command boils down to a single segment (after stripping a leading
+// `cd DIR &&`, see cdWorkdirHint) with no redirects.
 func dedicatedToolHint(command string) string {
 	segs := guard.Segments(command)
 	i := 0

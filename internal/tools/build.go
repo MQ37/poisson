@@ -59,6 +59,8 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	reg.Register(NewReadTool(opts.Cwd, opts.Sandbox, fileApproval))
 	reg.Register(NewWriteTool(opts.Cwd, opts.Sandbox, fileApproval))
 	reg.Register(NewEditTool(opts.Cwd, opts.Sandbox, fileApproval))
+	reg.Register(NewGrepTool(opts.Cwd))
+	reg.Register(NewGlobTool(opts.Cwd))
 	reg.Register(NewWebSearchTool())
 	reg.Register(NewWebAskTool(opts.Auth))
 	if opts.Store != nil {
@@ -69,6 +71,9 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	if !opts.Child && opts.SubApproval != nil {
 		reg.Register(NewSubagentTool(opts.Cwd, opts.SubApproval))
 	}
+	// batch last so it can dispatch into every tool already registered.
+	// Denied inside batch: bash, subagent, batch (see batch.go).
+	reg.Register(NewBatchTool(reg))
 	return reg
 }
 

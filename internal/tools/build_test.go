@@ -21,7 +21,7 @@ func TestBuildRegistry_Parent(t *testing.T) {
 	dir := testutil.TempDir(t)
 	reg := BuildRegistry(BuildOptions{Cwd: dir})
 	names := toolNames(reg)
-	want := []string{"bash", "edit", "web_ask", "web_search", "read", "write"}
+	want := []string{"bash", "batch", "edit", "glob", "grep", "web_ask", "web_search", "read", "write"}
 	for _, w := range want {
 		if _, ok := reg.Get(w); !ok {
 			t.Errorf("parent registry missing %q; have %v", w, names)
@@ -66,7 +66,7 @@ func TestBuildRegistry_Child(t *testing.T) {
 		Child:       true,
 		SubApproval: func(string, string, string, string, string) (bool, string) { return true, "" },
 	})
-	for _, w := range []string{"read", "write", "edit", "bash", "web_ask", "web_search", "recall"} {
+	for _, w := range []string{"read", "write", "edit", "bash", "batch", "grep", "glob", "web_ask", "web_search", "recall"} {
 		if _, ok := reg.Get(w); !ok {
 			t.Errorf("child registry missing %q; have %v", w, toolNames(reg))
 		}

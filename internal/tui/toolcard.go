@@ -230,6 +230,15 @@ func toolCollapsedReason(toolName string, input []byte) string {
 		}
 	case "write", "edit":
 		return toolInputPreview(toolName, input)
+	case "grep", "glob", "search":
+		var in struct {
+			Pattern string `json:"pattern"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Pattern != "" {
+			return previewText(in.Pattern, 100)
+		}
+	case "batch":
+		return toolInputPreview(toolName, input)
 	case "fetch":
 		var in struct {
 			URL string `json:"url"`

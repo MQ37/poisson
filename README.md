@@ -42,17 +42,24 @@ px                                                   # launch the TUI
   blocks (Ctrl+T to fold), tool cards you can expand (Ctrl+E) — including
   colored diffs for `edit`/`write` — a command palette (Ctrl+P), mouse scroll,
   and a status bar with live context % and exact cost.
-- **Real tools** — `bash`, `read`, `write`, `edit`,
-  `web_search` (plain DuckDuckGo link list, no account), `web_ask`
+- **Real tools** — file work is first-class, not a bash afterthought:
+  `read` (line-numbered, offset/limit, images), `write`, `edit`
+  (exact replace, multi-hunk `edits[]`, `replaceAll`, CRLF-safe, capped
+  success snippet + miss hints), `grep` (ripgrep wrapper with caps; skips
+  `.git`/`node_modules`/… even without a `.gitignore`), `glob` (e.g.
+  `**/*_test.go`), and `batch` (up to 20 independent tool calls in one step —
+  polyfill for models that only emit one `tool_use` per turn; no dataflow
+  between steps; denies `bash`/`subagent`/`batch`). Also `bash` (still the
+  full escape hatch; plain `cat`/`head`/`tail`/`sed -n` are refused in favor
+  of `read`), `web_search` (plain DuckDuckGo link list, no account), `web_ask`
   (AI-synthesized answer — xAI Grok via OAuth when logged in, exa.ai keyless
   fallback otherwise), `fetch` (works on every provider — Ollama's own
   web_fetch API when available, otherwise a built-in HTML→Markdown
   converter), `recall` (full-text search across past sessions), plus
   **subagents** (parallel child agents) and **skills** (8 built in, see
   [below](#-built-in-skills); also user-defined via `~/.poisson/skills/`).
-  Listing/searching/finding files (`ls`/`grep`/`rg`/`find`/`cat`/...) is plain
-  `bash` — no dedicated tool needed — see the safety guard below for why
-  that's fine.
+  Prefer the dedicated file tools over packing the same job into `bash`;
+  multi-tool turns or `batch` beat shell pipelines for independent steps.
 - **Bash safety guard, two speeds** — every shell command is checked before it
   runs. **Fast mode** (default): a deterministic guard auto-approves
   read-only, side-effect-free commands (`ls`, `cat`, `grep`/`rg`, `find`,

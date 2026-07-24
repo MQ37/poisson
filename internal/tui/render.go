@@ -77,12 +77,33 @@ func toolInputPreview(toolName string, input []byte) string {
 			}
 			return fmt.Sprintf("%s (%d %s)", previewText(in.Path, 80), n, unit)
 		}
-	case "search", "glob":
+	case "search", "grep", "glob":
 		var in struct {
 			Pattern string `json:"pattern"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Pattern != "" {
 			return previewText(in.Pattern, 100)
+		}
+	case "batch":
+		var in struct {
+			Calls json.RawMessage `json:"calls"`
+		}
+		if json.Unmarshal(input, &in) == nil && len(in.Calls) > 0 {
+			var calls []struct {
+				Tool string `json:"tool"`
+			}
+			if json.Unmarshal(in.Calls, &calls) == nil && len(calls) > 0 {
+				names := make([]string, 0, len(calls))
+				for _, c := range calls {
+					if c.Tool != "" {
+						names = append(names, c.Tool)
+					}
+				}
+				if len(names) > 0 {
+					return previewText(fmt.Sprintf("%d calls: %s", len(names), strings.Join(names, ", ")), 100)
+				}
+			}
+			return fmt.Sprintf("%d calls", len(calls))
 		}
 	case "fetch":
 		var in struct {

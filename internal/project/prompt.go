@@ -179,7 +179,8 @@ func BuildSystemPrompt(opts BuildSystemPromptOptions) string {
 	b.WriteString("- Be concise in your responses\n")
 	b.WriteString("- Show file paths clearly when working with files\n")
 	b.WriteString("- Read files in full before wide-ranging changes\n")
-	b.WriteString("- Use the read/search/glob/ls tools instead of bash cat/head/tail/grep/find/sed/ls for those operations — they skip the approval gate and are cheaper\n\n")
+	b.WriteString("- Prefer dedicated tools over bash: read (not cat/head/tail/sed -n), grep (not rg/grep), glob (not find -name), edit/write (not sed -i). They skip the approval gate and are cheaper.\n")
+	b.WriteString("- Emit multiple tool calls in one turn when the provider supports it. If the model only does one tool_use per turn, pack independent calls into batch (not bash pipelines). batch has no dataflow between steps.\n\n")
 
 	b.WriteString(cavemanStyle)
 	b.WriteString("\n\n")
