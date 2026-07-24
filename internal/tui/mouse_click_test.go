@@ -112,6 +112,51 @@ func TestApprovalMouseWheelScrollDirection(t *testing.T) {
 	}
 }
 
+// TestApprovalMouseWheelScrollsConversationAboveThePanel reproduces a
+// reported bug: every wheel tick during a pending approval was routed to the
+// approval panel's own (usually single-line) command scroll, even when the
+// mouse was over the conversation above it — so scrolling the mouse wheel
+// over the conversation while a prompt was pending silently did nothing,
+// forcing users to reach for PgUp/PgDn instead (which already worked, see
+// approvalRoutesToHandler). A wheel event whose row falls in the
+// conversation region (above the panel) must scroll the conversation; one
+// whose row falls on the panel itself must still scroll the panel.
+func TestApprovalMouseWheelScrollsConversationAboveThePanel(t *testing.T) {
+	tui := newTUI(nil, "s1", nil)
+	tui.headerRows = 1
+	tui.scrollRows = 5
+	tui.cols = 40
+	tui.scroll.appendRaw(styleAssistant, strings.Repeat("word ", 200))
+	tui.scroll.scrollToBottom()
+	tui.approving.Store(true)
+	ao := newApprovalOverlay("echo hi", "test", "", agent.ApprovalOriginMain)
+	tui.activeOverlay = ao
+
+	// Row 3 sits inside the conversation region (rows 2..6 = headerRows+1 ..
+	// headerRows+scrollRows here) — must scroll the conversation, not the panel.
+	if !tui.handleMouseInput([]byte("\x1b[<64;10;3M")) {
+		t.Fatal("wheel should be consumed")
+	}
+	if tui.scroll.scrollOffset != 3 {
+		t.Fatalf("conversation scrollOffset = %d, want 3", tui.scroll.scrollOffset)
+	}
+	if ao.scroll != 0 {
+		t.Fatalf("panel scroll should be untouched, got %d", ao.scroll)
+	}
+
+	// Row 7 sits on the panel (panelTop = headerRows+scrollRows+1 = 7) — must
+	// still scroll the panel, unaffected by the conversation scroll above.
+	if !tui.handleMouseInput([]byte("\x1b[<65;10;7M")) {
+		t.Fatal("wheel should be consumed")
+	}
+	if ao.scroll != 3 {
+		t.Fatalf("panel scroll = %d, want 3", ao.scroll)
+	}
+	if tui.scroll.scrollOffset != 3 {
+		t.Fatalf("conversation scrollOffset should stay 3, got %d", tui.scroll.scrollOffset)
+	}
+}
+
 func TestHandleMouseClickIgnoresHeader(t *testing.T) {
 	tui := newTUI(nil, "s1", nil)
 	tui.headerRows = 1

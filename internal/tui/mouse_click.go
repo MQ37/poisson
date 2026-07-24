@@ -62,13 +62,26 @@ func (t *TUI) handleOneMouseEvent(ev MouseEvent) {
 
 	if delta, ok := mouseWheelDelta(ev.Button); ok {
 		if t.approving.Load() {
-			if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
+			// The approval panel only occupies the bottom input region — the
+			// conversation stays visible above it (same as PgUp/PgDn, see
+			// approvalRoutesToHandler). A wheel event landing on the panel
+			// itself scrolls the (possibly long) command text; anywhere
+			// above that, in the still-visible conversation, it must scroll
+			// the conversation instead — previously every wheel tick during
+			// an approval was routed to the panel unconditionally, so
+			// scrolling the mouse over the conversation while a prompt was
+			// pending silently did nothing (users had to reach for PgUp/PgDn).
+			panelTop := t.headerRows + t.scrollRows + 1
+			if ao, ok := t.activeOverlay.(*approvalOverlay); ok && ev.Row >= panelTop {
 				// Wheel-up shows earlier command lines (opposite of scrollback delta).
 				ao.scrollBy(-delta)
 				t.dirty.markInput()
 				t.mu.Unlock()
 				return
 			}
+			t.mu.Unlock()
+			t.handleScrollDelta(delta)
+			return
 		}
 		if t.blocksBackgroundInput() {
 			if flo, ok := t.activeOverlay.(*filterableListOverlay); ok {
