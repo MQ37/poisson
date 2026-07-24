@@ -2,6 +2,8 @@ package tui
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -16,7 +18,7 @@ func isDiffTool(name string) bool {
 
 // diffLine is one row of a computed edit/write diff. sign is '+' (added,
 // green bg), '-' (removed, red bg), or ' ' (blank separator between edits).
-// lineNo is the 1-based line number within its side of the hunk (0 = none).
+// lineNo is the 1-based absolute line number in the target file (0 = none).
 type diffLine struct {
 	sign   byte
 	text   string
@@ -42,29 +44,28 @@ func writeDiffLines(input []byte) []diffLine {
 	if json.Unmarshal(input, &in) != nil {
 		return nil
 	}
-	lines := strings.Split(in.Content, "\n")
-	// Drop trailing empty line that Split leaves for a final "\n".
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
+	lines := splitContentLines(in.Content)
 	out := make([]diffLine, len(lines))
 	for i, ln := range lines {
-		out[i] = diffLine{sign: '+', text: ln, lineNo: i + 1}
+		out[i] = diffLine{sign: '+', text: expandTabs(ln), lineNo: i + 1}
 	}
 	return out
 }
 
 // editDiffLines re-parses the same input JSON already sent to the model, so
 // it must recognize every shape internal/tools/edit.go's parseEditInput
-// accepts: the documented edits: [{oldText, newText}, ...] array, the flat
-// top-level {oldText, newText} shorthand for a single edit, and edits sent
-// as a JSON-encoded string (some models double-encode the array).
+// accepts. Line numbers are absolute positions in the target file: each
+// oldText is located in the on-disk file (best-effort) and both the removed
+// and added sides of that hunk number from that start line. If the file
+// can't be read or oldText isn't found, falls back to 1-based hunk-local
+// numbers so something still shows.
 func editDiffLines(input []byte) []diffLine {
 	type edit struct {
 		OldText string `json:"oldText"`
 		NewText string `json:"newText"`
 	}
 	var in struct {
+		Path    string          `json:"path"`
 		Edits   json.RawMessage `json:"edits"`
 		OldText string          `json:"oldText"`
 		NewText string          `json:"newText"`
@@ -87,21 +88,65 @@ func editDiffLines(input []byte) []diffLine {
 	if len(edits) == 0 {
 		return nil
 	}
+
+	fileContent := readFileForDiff(in.Path)
+
 	var out []diffLine
 	for i, e := range edits {
 		if i > 0 {
 			out = append(out, diffLine{sign: ' ', text: "", lineNo: 0})
 		}
+		start := hunkStartLine(fileContent, e.OldText)
 		oldLines := splitContentLines(e.OldText)
 		for j, ln := range oldLines {
-			out = append(out, diffLine{sign: '-', text: ln, lineNo: j + 1})
+			out = append(out, diffLine{sign: '-', text: expandTabs(ln), lineNo: start + j})
 		}
 		newLines := splitContentLines(e.NewText)
 		for j, ln := range newLines {
-			out = append(out, diffLine{sign: '+', text: ln, lineNo: j + 1})
+			out = append(out, diffLine{sign: '+', text: expandTabs(ln), lineNo: start + j})
 		}
 	}
 	return out
+}
+
+// hunkStartLine returns the 1-based absolute line of oldText in fileContent.
+// Falls back to 1 when the file is unknown or the match isn't found (the
+// edit tool itself would have failed in that case for a live call; for a
+// resumed/orphan card we still want some numbering).
+func hunkStartLine(fileContent, oldText string) int {
+	if fileContent == "" || oldText == "" {
+		return 1
+	}
+	idx := strings.Index(fileContent, oldText)
+	if idx < 0 {
+		return 1
+	}
+	return 1 + strings.Count(fileContent[:idx], "\n")
+}
+
+// readFileForDiff best-effort loads the target file so edit diffs can show
+// absolute line numbers. Returns "" on any failure (missing path, unreadable,
+// etc.) — callers fall back to hunk-local numbering.
+func readFileForDiff(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if !filepath.IsAbs(path) {
+		if cwd, err := os.Getwd(); err == nil {
+			path = filepath.Join(cwd, path)
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	// Cap at 8 MiB — bigger files aren't useful for a line-number lookup and
+	// would stall the layout path if the model somehow pointed at one.
+	if len(data) > 8<<20 {
+		return ""
+	}
+	return string(data)
 }
 
 func splitContentLines(s string) []string {
@@ -113,6 +158,16 @@ func splitContentLines(s string) []string {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
+}
+
+// expandTabs turns each '\t' into 4 spaces. Terminals advance the cursor on a
+// raw tab without painting the active background, so a tab mid-line leaves a
+// hole in the green/red fill; spaces paint cleanly. Matches sanitizeControls.
+func expandTabs(s string) string {
+	if !strings.Contains(s, "\t") {
+		return s
+	}
+	return strings.ReplaceAll(s, "\t", "    ")
 }
 
 // diffBG returns the background style for a diff sign.
@@ -193,15 +248,22 @@ func renderDiffLines(lines []diffLine, width int, lang string) []string {
 			signCh = " "
 		}
 
+		// Tabs already expanded in toolDiffLines; belt-and-suspenders here so
+		// any direct caller of renderDiffLines still paints a solid bg.
+		text := expandTabs(dl.text)
+
 		// Highlight the code (per logical line), then wrap. keepBG so each
 		// token's reset doesn't kill the row's green/red fill.
-		hi := keepBG(highlightLine(lang, dl.text), bg)
+		hi := keepBG(highlightLine(lang, text), bg)
 		wrapped := wrapANSI(hi, codeW)
 		if len(wrapped) == 0 {
 			wrapped = []string{""}
 		}
 		for i, chunk := range wrapped {
 			var b strings.Builder
+			// Open the row under bg and never leave it until the final reset.
+			// Every style change is reset+bg (via keepBG on the code) so the
+			// green/red fill is continuous across number, bar, sign, code, pad.
 			b.WriteString(bg)
 			if i == 0 {
 				b.WriteString(dim)
@@ -225,6 +287,8 @@ func renderDiffLines(lines []diffLine, width int, lang string) []string {
 			// Pad under bg so the fill spans the full terminal width.
 			used := prefixW + visibleWidth(chunk)
 			if used < width {
+				// chunk may end mid-token-style; force bg for the pad.
+				b.WriteString(reset)
 				b.WriteString(bg)
 				b.WriteString(strings.Repeat(" ", width-used))
 			}

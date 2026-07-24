@@ -1,13 +1,16 @@
 package tui
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestEditDiffLines(t *testing.T) {
+	// No readable file → hunk-local fallback starting at 1.
 	input := toolInputJSON("edit", map[string]any{
-		"path": "main.go",
+		"path": filepath.Join(t.TempDir(), "nope.go"),
 		"edits": []map[string]string{
 			{"oldText": "a\nb", "newText": "c"},
 		},
@@ -28,9 +31,68 @@ func TestEditDiffLines(t *testing.T) {
 	}
 }
 
+func TestEditDiffLinesAbsoluteFilePosition(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.go")
+	// 5 preamble lines, then the oldText block starting at line 6.
+	body := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\told := 1\n\tfmt.Println(old)\n}\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	input := toolInputJSON("edit", map[string]any{
+		"path": path,
+		"edits": []map[string]string{
+			{
+				"oldText": "\told := 1\n\tfmt.Println(old)",
+				"newText": "\tnew := 2\n\tfmt.Println(new)",
+			},
+		},
+	})
+	lines := editDiffLines(input)
+	// oldText starts at line 6 of the file; tabs expand to 4 spaces.
+	want := []diffLine{
+		{sign: '-', text: "    old := 1", lineNo: 6},
+		{sign: '-', text: "    fmt.Println(old)", lineNo: 7},
+		{sign: '+', text: "    new := 2", lineNo: 6},
+		{sign: '+', text: "    fmt.Println(new)", lineNo: 7},
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("lines = %+v, want %+v", lines, want)
+	}
+	for i := range want {
+		if lines[i] != want[i] {
+			t.Errorf("line %d = %+v, want %+v", i, lines[i], want[i])
+		}
+	}
+}
+
+func TestExpandTabsForDiffBG(t *testing.T) {
+	// Tabs must become spaces before paint — a raw tab advances the cursor
+	// without filling the active background, leaving a hole in the green/red.
+	got := expandTabs("\treturn 1")
+	if got != "    return 1" {
+		t.Fatalf("expandTabs = %q", got)
+	}
+	lines := []diffLine{{sign: '+', text: "\treturn 1", lineNo: 10}}
+	out := renderDiffLines(lines, 40, "go")
+	if len(out) != 1 {
+		t.Fatalf("rows = %d", len(out))
+	}
+	plain := stripANSI(out[0])
+	if strings.Contains(plain, "\t") {
+		t.Fatalf("rendered row still contains a raw tab: %q", plain)
+	}
+	if !strings.Contains(plain, "    return 1") {
+		t.Fatalf("expected expanded spaces in %q", plain)
+	}
+	if bgDiffAdd == "" || !strings.Contains(out[0], bgDiffAdd) {
+		t.Fatalf("missing bgDiffAdd in rendered row")
+	}
+}
+
 func TestEditDiffLinesMultipleEditsSeparated(t *testing.T) {
 	input := toolInputJSON("edit", map[string]any{
-		"path": "main.go",
+		"path": filepath.Join(t.TempDir(), "nope.go"),
 		"edits": []map[string]string{
 			{"oldText": "a", "newText": "b"},
 			{"oldText": "x", "newText": "y"},
@@ -88,7 +150,7 @@ func editCardBlock() Block {
 			ToolDone: true,
 			Expanded: true,
 			ToolInput: toolInputJSON("edit", map[string]any{
-				"path": "main.go",
+				"path": filepath.Join(os.TempDir(), "poisson-edit-card-missing.go"),
 				"edits": []map[string]string{
 					{"oldText": "func old() {\n\treturn 1\n}", "newText": "func new() {\n\treturn 2\n}"},
 				},
@@ -110,11 +172,9 @@ func TestToolCardEditShowsColoredDiffAlways(t *testing.T) {
 		if strings.Contains(r.Text, bgDiffAdd) && strings.Contains(plain, "func new") {
 			sawGreen = true
 		}
-		// Line numbers present (e.g. " 1 │").
 		if strings.Contains(plain, "│") && (strings.Contains(plain, "1 ") || strings.Contains(plain, " 1")) {
 			sawLineNo = true
 		}
-		// No yellow box borders.
 		if strings.Contains(plain, "╭") || strings.Contains(plain, "╰") {
 			t.Errorf("diff card must not have box borders: %q", plain)
 		}
@@ -184,14 +244,11 @@ func TestToolCardDiffErrorFallsBackToPlainError(t *testing.T) {
 		if strings.Contains(plain, "oldText not found") || strings.Contains(plain, "edit 0") {
 			sawErrorText = true
 		}
-		// Failed edit falls through to compact/error path, not the full diff.
 		if strings.Contains(plain, "+ replacement") || strings.Contains(plain, "- nonexistent") {
 			sawDiffMarker = true
 		}
 	}
 	if !sawErrorText {
-		// Compact collapsed line uses the reason (path), not the error body —
-		// but the ✗ mark must appear.
 		plain := stripANSI(rows[0].Text)
 		if !strings.Contains(plain, "✗") {
 			t.Errorf("expected error indicator, got %q", plain)
@@ -212,7 +269,6 @@ func TestDiffToolNoExpandToggle(t *testing.T) {
 	}))
 	s.completeToolCall("", "edited main.go (1 edit(s) applied)", "", 10)
 
-	// Always expanded; toggle is a no-op.
 	if !s.blocks[0].meta.Expanded {
 		t.Fatal("edit must be expanded")
 	}
@@ -231,15 +287,9 @@ func TestDiffToolNoExpandToggle(t *testing.T) {
 	}
 }
 
-// TestEditDiffLinesFlatShape reproduces a reported regression: after
-// internal/tools/edit.go's Execute started accepting a flat top-level
-// {path, oldText, newText} shape (d3b6ffd), this package's own independent
-// re-parse of the same input JSON (for the colored diff card) was never
-// updated to match — it only ever recognized edits: [{...}]. A tool card
-// using the flat shape rendered as an empty diff ("0 edits").
 func TestEditDiffLinesFlatShape(t *testing.T) {
 	input := toolInputJSON("edit", map[string]any{
-		"path":    "main.go",
+		"path":    filepath.Join(t.TempDir(), "missing.go"),
 		"oldText": "a\nb",
 		"newText": "c",
 	})
@@ -259,12 +309,9 @@ func TestEditDiffLinesFlatShape(t *testing.T) {
 	}
 }
 
-// TestEditDiffLinesStringEncodedEdits mirrors the tool's own recovery for a
-// double-encoded edits array (edits sent as a JSON string instead of an
-// array) — the diff card must recover it the same way Execute does.
 func TestEditDiffLinesStringEncodedEdits(t *testing.T) {
 	input := toolInputJSON("edit", map[string]any{
-		"path":  "main.go",
+		"path":  filepath.Join(t.TempDir(), "missing.go"),
 		"edits": `[{"oldText":"a","newText":"b"}]`,
 	})
 	lines := editDiffLines(input)
@@ -307,8 +354,6 @@ func TestRenderDiffLinesHaveLineNumbersAndBG(t *testing.T) {
 	// Highlight resets must not kill the bg: every reset in the body is
 	// followed by a re-apply of the row's background.
 	body := out[1]
-	// Count occurrences of reset not immediately followed by bgDiffAdd —
-	// the final trailing reset is OK (ends the row).
 	idx := 0
 	for {
 		i := strings.Index(body[idx:], reset)
@@ -329,15 +374,15 @@ func TestRenderDiffLinesHaveLineNumbersAndBG(t *testing.T) {
 
 func TestLangFromPath(t *testing.T) {
 	cases := map[string]string{
-		"main.go":      "go",
-		"x.py":         "python",
-		"a.ts":         "typescript",
-		"b.js":         "javascript",
-		"c.json":       "json",
-		"d.yml":        "yaml",
-		"e.sh":         "bash",
-		"noext":        "",
-		"README.md":    "text",
+		"main.go":   "go",
+		"x.py":      "python",
+		"a.ts":      "typescript",
+		"b.js":      "javascript",
+		"c.json":    "json",
+		"d.yml":     "yaml",
+		"e.sh":      "bash",
+		"noext":     "",
+		"README.md": "text",
 	}
 	for path, want := range cases {
 		if got := langFromPath(path); got != want {
