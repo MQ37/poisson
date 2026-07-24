@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -71,7 +72,7 @@ func LoginOpenAI() (*AuthEntry, error) {
 					desc = e
 				}
 				w.WriteHeader(http.StatusBadRequest)
-				fmt.Fprintf(w, "<html><body><h1>Authorization Failed</h1><p>%s</p></body></html>", desc)
+				fmt.Fprintf(w, "<html><body><h1>Authorization Failed</h1><p>%s</p></body></html>", html.EscapeString(desc))
 				errCh <- fmt.Errorf("oauth error: %s", desc)
 				return
 			}

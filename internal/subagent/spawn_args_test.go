@@ -81,7 +81,6 @@ func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
 		Effort:   "high",
 		Name:     "scout",
 		DBPath:   "/tmp/child.db",
-		Sandbox:  true,
 	})
 
 	cases := map[string]string{
@@ -91,7 +90,6 @@ func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
 		"POISSON_SUBAGENT_EFFORT":   "high",
 		"POISSON_SUBAGENT_NAME":     "scout",
 		"POISSON_SUBAGENT_DB":       "/tmp/child.db",
-		"POISSON_SANDBOX":           "1",
 	}
 	for key, want := range cases {
 		got, ok := envValue(env, key)
@@ -102,6 +100,11 @@ func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
 		if got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
+	}
+	// Ambient sandbox flags must never be injected: they used to short-circuit
+	// the bash guard to always-safe.
+	if _, ok := envValue(env, "POISSON_SANDBOX"); ok {
+		t.Error("POISSON_SANDBOX must not be set on child env")
 	}
 }
 

@@ -366,3 +366,117 @@ func TestTouchesSensitivePath(t *testing.T) {
 		t.Error("expected README.md to not be sensitive")
 	}
 }
+
+func TestClassify_CdThenRelativeSecret(t *testing.T) {
+	// The hole: basename-only sensitivity let `cd <secret-dir> && cat <bare>`
+	// auto-approve because the bare name never matched a dir pattern.
+	mustUnsafe := []string{
+		"cd ~/.poisson && cat auth.json",
+		"cd /home/mq/.poisson && cat auth.json",
+		"cd ~/.aws && cat credentials",
+		"cd /etc && cat passwd",
+		"cd /etc && head shadow",
+		"cd /var/run/secrets/kubernetes.io/serviceaccount && cat token",
+		"cat /proc/self/environ",
+		"cat /proc/1/environ",
+		"cat /proc/42/environ",
+		"ls ~/.ssh",
+		"ls /home/mq/.ssh",
+		"ls ~/.aws",
+		"du -sh ~/.gnupg",
+		"ls -la ~/.poisson",
+		"cat secrets.env",
+		"cat id_ed25519_sk",
+	}
+	for _, cmd := range mustUnsafe {
+		if safe, reason := Classify(cmd); safe {
+			t.Errorf("Classify(%q) = safe, want unsafe", cmd)
+		} else if reason == "" {
+			t.Errorf("Classify(%q) unsafe but empty reason", cmd)
+		}
+	}
+	// Bare context-sensitive names in a normal project workdir stay safe —
+	// only the cd/workdir-resolved form is blocked.
+	for _, cmd := range []string{"cat credentials", "cat auth.json", "echo token"} {
+		if safe, reason := Classify(cmd); !safe {
+			t.Errorf("Classify(%q) = unsafe (%s), want safe in default workdir", cmd, reason)
+		}
+	}
+}
+
+func TestClassifyInDir_RelativeSecretAgainstWorkdir(t *testing.T) {
+	// workdir already inside a secret dir — bare basename must still trip.
+	if safe, _ := ClassifyInDir("cat auth.json", "/home/mq/.poisson"); safe {
+		t.Error("ClassifyInDir(cat auth.json, ~/.poisson) = safe, want unsafe")
+	}
+	if safe, _ := ClassifyInDir("cat credentials", "/home/mq/.aws"); safe {
+		t.Error("ClassifyInDir(cat credentials, ~/.aws) = safe, want unsafe")
+	}
+	// Harmless relative file in a normal workdir stays safe.
+	if safe, reason := ClassifyInDir("cat README.md", "/tmp"); !safe {
+		t.Errorf("ClassifyInDir(cat README.md, /tmp) = unsafe (%s), want safe", reason)
+	}
+	// Bare credentials in a normal workdir stays safe.
+	if safe, reason := ClassifyInDir("cat credentials", "/tmp/project"); !safe {
+		t.Errorf("ClassifyInDir(cat credentials, /tmp/project) = unsafe (%s), want safe", reason)
+	}
+}
+
+func TestSensitivePathReason_ExpandedNames(t *testing.T) {
+	cases := map[string]bool{
+		"secrets.env":                true,
+		"id_ed25519_sk":              true,
+		"credentials":                false, // bare: only sensitive inside a secret dir
+		"auth.json":                  false,
+		"passwd":                     false,
+		"/home/x/.aws/credentials":   true,
+		"/home/x/.poisson/auth.json": true,
+		"/etc/passwd":                true,
+		"/proc/self/environ":         true,
+		"/proc/99/environ":           true,
+		"/var/run/secrets/kubernetes.io/serviceaccount/token": true,
+		"README.md": false,
+		"/tmp/foo":  false,
+	}
+	for path, want := range cases {
+		got := SensitivePathReason(path) != ""
+		if got != want {
+			t.Errorf("SensitivePathReason(%q) sensitive=%v, want %v (reason=%q)", path, got, want, SensitivePathReason(path))
+		}
+	}
+}
+
+func TestClassify_QuoteSmuggledSensitivePath(t *testing.T) {
+	// Mid-token quotes are real bash (ls ~/".ssh" lists ~/.ssh) and used to
+	// defeat pathTextIsSensitive because expandPathToken only Trim'd end
+	// quotes, leaving /home/x/".ssh" which matched no dir pattern.
+	mustUnsafe := []string{
+		`ls ~/".ssh"`,
+		`ls ~/'.ssh'`,
+		`du -sh ~/".gnupg"`,
+		`cd ~/".aws" && cat credentials`,
+		`cd ~/".poisson" && cat auth.json`,
+		`cat ~/".ssh"/id_rsa`,
+		`cat /home/mq/".aws"/credentials`,
+	}
+	for _, cmd := range mustUnsafe {
+		if safe, reason := Classify(cmd); safe {
+			t.Errorf("Classify(%q) = safe, want unsafe (quote-smuggle)", cmd)
+		} else if reason == "" {
+			t.Errorf("Classify(%q) unsafe but empty reason", cmd)
+		}
+	}
+}
+
+func TestClassify_SandboxEnvDoesNotAutoApprove(t *testing.T) {
+	// Regression: ambient POISSON_SANDBOX/IS_SANDBOX used to make Classify
+	// return safe for everything, including rm -rf /.
+	t.Setenv("POISSON_SANDBOX", "1")
+	t.Setenv("IS_SANDBOX", "1")
+	if safe, _ := Classify("rm -rf /"); safe {
+		t.Error("Classify(rm -rf /) = safe under POISSON_SANDBOX=1; env must not short-circuit the guard")
+	}
+	if safe, _ := Classify("cd ~/.aws && cat credentials"); safe {
+		t.Error("Classify(secret read) = safe under sandbox env; env must not short-circuit the guard")
+	}
+}

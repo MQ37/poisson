@@ -166,13 +166,15 @@ var destructiveCommands = map[string]bool{
 }
 
 // sensitiveExactBasenames is the set of basenames that are always sensitive
-// (SPEC §7.5).
+// (SPEC §7.5), even as a bare relative token with no directory component —
+// their name alone is enough (private keys, shell history, dotenv files).
 var sensitiveExactBasenames = map[string]bool{
 	".bash_history":    true,
 	".zsh_history":     true,
 	".bashrc":          true,
 	".zshrc":           true,
 	".profile":         true,
+	".bash_profile":    true,
 	".npmrc":           true,
 	".yarnrc":          true,
 	".git-credentials": true,
@@ -187,10 +189,37 @@ var sensitiveExactBasenames = map[string]bool{
 	"id_ecdsa":         true,
 	"id_ed25519":       true,
 	"id_dsa":           true,
+	// Common secret-looking basenames outside the exact ".env*" set.
+	"secrets.env":                          true,
+	"secret.env":                           true,
+	"secrets.yml":                          true,
+	"secrets.yaml":                         true,
+	"secrets.json":                         true,
+	"serviceaccount.json":                  true,
+	"application_default_credentials.json": true,
+}
+
+// contextSensitiveBasenames are only sensitive when the resolved path sits
+// inside a sensitive directory (or the token itself carries a sensitive
+// dir component). Bare `cat credentials` in a normal project workdir is
+// fine; `cd ~/.aws && cat credentials` / workdir=~/.aws is not. Keeping
+// these out of sensitiveExactBasenames avoids flagging every `echo
+// credentials` / project file coincidentally named "token".
+var contextSensitiveBasenames = map[string]bool{
+	"credentials":      true,
+	"credentials.db":   true,
+	"auth.json":        true,
+	"passwd":           true,
+	"shadow":           true,
+	"sudoers":          true,
+	"token":            true,
+	"access-tokens.db": true,
+	"hosts.yml":        true,
+	"config":           true, // ~/.ssh/config, ~/.kube/config
 }
 
 // sensitiveDirPatterns is the set of directory patterns that are sensitive
-// (SPEC §7.5).
+// (SPEC §7.5). Matched as substrings against a slash-normalized path.
 var sensitiveDirPatterns = []string{
 	"/.ssh/",
 	"/.aws/",
@@ -203,10 +232,15 @@ var sensitiveDirPatterns = []string{
 	"/.docker/",
 	"/.kube/",
 	"/.poisson/", // px's own config, OAuth tokens (auth.json), and session DB
+	"/proc/self/environ",
+	"/proc/1/environ",
+	"/var/run/secrets/",
+	"/run/secrets/",
 }
 
-// sshPrivKeyRe matches SSH private key filenames.
+// sshPrivKeyRe matches SSH private key filenames, including FIDO/sk variants
+// (id_ed25519_sk, id_ecdsa_sk) whose trailing "_sk" the older `$` anchor missed.
 // ansiEscapeRe matches ANSI escape sequences.
 var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
-var sshPrivKeyRe = regexp.MustCompile(`_(rsa|ecdsa|ed25519|dsa)$`)
+var sshPrivKeyRe = regexp.MustCompile(`_(rsa|ecdsa|ed25519|dsa)(_sk)?$`)

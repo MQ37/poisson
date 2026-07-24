@@ -645,7 +645,6 @@ func runChildMode() {
 		}
 	}
 
-	sandbox := os.Getenv("POISSON_SANDBOX") == "1"
 	var approvalBroker childApprovalBroker
 
 	var childAgentRef *agent.Agent
@@ -654,9 +653,6 @@ func runChildMode() {
 	// below and read back into agent.SubagentOrigin by subApprovalFn in the
 	// parent's own main().
 	humanChildApproval := func(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
-		if sandbox {
-			return true, ""
-		}
 		return approvalBroker.emitAndWait(map[string]interface{}{
 			"type":        "approval_request",
 			"command":     command,
@@ -667,29 +663,24 @@ func runChildMode() {
 		})
 	}
 	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
-		if sandbox {
-			return true, ""
-		}
 		if childAgentRef != nil {
 			return agent.WrapRiskGatedApproval(childAgentRef, humanChildApproval)(ctx, command, description, workdir)
 		}
 		return humanChildApproval(command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginMain)
 	}
 	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
-		if sandbox {
-			return true, ""
-		}
 		return humanChildApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginMain)
 	}
 
 	// Child:true grants every tool except subagent, so a subagent gets the full
 	// tool set (read/write/edit/bash/web_search/web_ask/recall)
 	// but cannot spawn further subagents — recursion is bounded to one level.
+	// Sandbox is never set from ambient env: a POISSON_SANDBOX short-circuit
+	// used to auto-approve every bash command, which is the opposite of safe.
 	reg := tools.BuildRegistry(tools.BuildOptions{
 		Cwd:            cwd,
 		Store:          st,
 		Auth:           authStore,
-		Sandbox:        sandbox,
 		ApprovalFn:     approvalFn,
 		FileApprovalFn: fileApprovalFn,
 		Child:          true,

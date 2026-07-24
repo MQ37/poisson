@@ -1115,3 +1115,34 @@ func TestReadTool_TrimsLongLine(t *testing.T) {
 		t.Fatalf("missing truncation marker")
 	}
 }
+
+func TestBashTool_BlocksPoissonYolo(t *testing.T) {
+	dir := testutil.TempDir(t)
+	// sandbox=true would normally skip the approval gate; the yolo block
+	// must still fire so an agent can't nest `px --yolo` under itself.
+	b := NewBashTool(dir, true, nil)
+	for _, cmd := range []string{
+		"px --yolo -p 'do stuff'",
+		"px -p --yolo hi",
+		"./px --yolo",
+		"/usr/local/bin/px --yolo -p x",
+		"poisson --yolo",
+		"sh -c 'px --yolo -p hi'",
+		"env px --yolo -p x",
+	} {
+		res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+			"command":     cmd,
+			"description": "nested yolo",
+		}))
+		if res.Error == "" || !strings.Contains(res.Error, "--yolo") {
+			t.Errorf("command %q: error = %q, want blocked --yolo", cmd, res.Error)
+		}
+	}
+	// Bare px without --yolo is not this check's job (may still need approval).
+	if invokesPoissonYolo("px -p hello") {
+		t.Error("px -p without --yolo must not match")
+	}
+	if invokesPoissonYolo("echo --yolo") {
+		t.Error("echo --yolo must not match (no px binary)")
+	}
+}

@@ -68,13 +68,18 @@ px                                                   # launch the TUI
   runs. **Fast mode** (default): a deterministic guard auto-approves
   read-only, side-effect-free commands (`ls`, `cat`, `grep`/`rg`, `find`,
   `git status`/`diff`/`log`, ...) with zero LLM calls and no prompt at all —
-  it also follows symlinks, so a sensitive file can't hide behind an
-  innocent-looking name. Anything else is risk-classified by the LLM; low
-  risk runs automatically, medium/high/unknown pops an approval prompt (you
-  decide — it never auto-allows installs, destructive, or `npx`/`dlx`
-  commands). **Paranoid mode** (**Shift+Tab** to toggle, shown bottom-right
-  of the input): both the guard and the LLM classifier are skipped —
-  literally every command asks you first.
+  it also follows symlinks **and resolves relative paths against `cd` /
+  workdir**, so a sensitive file can't hide behind an innocent-looking name
+  or a `cd ~/.aws && cat credentials` chain. Listing a secrets directory
+  (`ls ~/.ssh`, `du ~/.gnupg`, …) is gated the same way as reading a file
+  inside it. Anything else is risk-classified by the LLM; low risk runs
+  automatically, medium/high/unknown pops an approval prompt (you decide —
+  it never auto-allows installs, destructive, or `npx`/`dlx` commands).
+  **Paranoid mode** (**Shift+Tab** to toggle, shown bottom-right of the
+  input): both the guard and the LLM classifier are skipped — literally
+  every command asks you first. The agent cannot nest `px --yolo` under
+  itself (the bash tool refuses it); `--yolo` stays a human-only headless
+  flag.
 - **Sessions in SQLite** — every message, tool call, and API call is persisted.
   **Full-text search** (FTS5) across your history, resume any session, and
   auto-compaction that summarizes old turns when context fills up.
@@ -151,6 +156,11 @@ px                  # interactive TUI
 px sessions         # list past sessions
 px cost             # total spend
 px version
+
+# Headless one-shot (no TUI). Risky bash is denied unless --yolo.
+# --yolo is for *you* in a real shell — the agent cannot nest it via the bash tool.
+px -p "summarize this repo"
+px -p --yolo "run the test suite and fix failures"
 ```
 
 ---

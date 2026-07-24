@@ -2,6 +2,24 @@
 
 Deferred cleanups and follow-ups. Keep entries terse and actionable.
 
+## Security
+
+### Residual trust in LLM bash-risk "low" auto-approve
+
+`WrapRiskGatedApproval` still auto-runs commands the deterministic guard does
+not clear when the LLM risk classifier returns a single-word `low`
+(`internal/agent/approval_gate.go`, `risk.go`). Hard escalations (rm, npx/dlx,
+package installs, dangerous git) are deterministic; everything else is one
+model shot at temp 0.
+
+- Expand deterministic medium/high lists (network binaries, `scp`/`rsync`,
+  `docker`, `sqlite3` against sensitive paths, …) so fewer commands ever reach
+  the LLM.
+- Optional: default to paranoid mode, or never auto-approve on LLM-only low
+  without a second confirming signal.
+- Prompt-injection in the agent-supplied `description` is already called out
+  in the risk system prompt; models still mis-rate.
+
 ## Tech debt
 
 ### Remove the duplicate byte-level input parser (`editor.feed` / `editor.handleEscape`)

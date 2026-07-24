@@ -24,7 +24,6 @@ type SpawnInput struct {
 	Provider  string
 	Model     string
 	Effort    string
-	Sandbox   bool
 	NoSkills  bool // mirrors the parent's SkillsEnabled(): true disables skills in the child too
 	ExtraEnv  []string
 	DBPath    string // ephemeral DB path for the child (empty = parent's DB)
@@ -109,8 +108,13 @@ func buildSpawnArgs(input SpawnInput) []string {
 // buildSpawnEnv returns the full environment for the child process: the
 // current process's environment (so PATH/HOME/etc. are available) plus
 // input.ExtraEnv, plus the POISSON_SUBAGENT_* variables runChildMode reads
-// to learn its provider/model/effort/name/db/sandbox settings. Pulled out of
-// Spawn as a pure function for the same reason as buildSpawnArgs.
+// to learn its provider/model/effort/name/db settings. Pulled out of Spawn
+// as a pure function for the same reason as buildSpawnArgs.
+//
+// Deliberately does NOT set any "sandbox" env flag: an ambient
+// POISSON_SANDBOX=/IS_SANDBOX= used to short-circuit the bash guard to
+// always-safe, which is the opposite of isolation. Child approvals still
+// go through the parent broker.
 func buildSpawnEnv(input SpawnInput) []string {
 	env := append(os.Environ(), input.ExtraEnv...)
 	env = append(env, "POISSON_SUBAGENT_CHILD=1")
@@ -128,9 +132,6 @@ func buildSpawnEnv(input SpawnInput) []string {
 	}
 	if input.DBPath != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_DB=%s", input.DBPath))
-	}
-	if input.Sandbox {
-		env = append(env, "POISSON_SANDBOX=1")
 	}
 	return env
 }

@@ -85,6 +85,15 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		return ToolResult{Error: "command is required"}, nil
 	}
 
+	// Refuse spawning poisson itself with --yolo / -p --yolo. --yolo is a
+	// human footgun for headless scripting; an agent that shells out to
+	// `px -p --yolo ...` would silently auto-approve every nested command
+	// and defeat this process's own approval gate. Checked before the
+	// sandbox short-circuit so even test/sandbox callers can't smuggle it.
+	if invokesPoissonYolo(in.Command) {
+		return ToolResult{Error: "blocked: refusing to run poisson/px with --yolo (nested auto-approve). Run --yolo yourself from a real shell if you need it."}, nil
+	}
+
 	// A command that is plainly just a stand-in for read is refused
 	// outright, before approval or execution: that tool does the same job
 	// for less (no approval round trip, offset/limit, image decode) and
@@ -235,6 +244,69 @@ func (t *BashTool) StickyCwd() string {
 func isCdSegment(seg string) bool {
 	fields := strings.Fields(strings.TrimSpace(seg))
 	return len(fields) == 2 && fields[0] == "cd"
+}
+
+// poissonBinNames are argv0 forms that mean "this process's own binary"
+// (or a common install name). Matched after filepath.Base so
+// /usr/local/bin/px and ./px both count.
+var poissonBinNames = map[string]bool{
+	"px": true, "poisson": true,
+}
+
+// invokesPoissonYolo reports whether any segment of command runs poisson/px
+// with a --yolo flag. Used to stop the agent from nesting a headless
+// auto-approve child under itself (`px -p --yolo "rm -rf /"` etc.).
+//
+// Not a full shell parse: looks at tokens the same way the guard does
+// (quotes honored via guard.Tokenize) and flags any segment whose command
+// name is px/poisson and that carries a --yolo token anywhere in argv.
+// Wrapper prefixes (sudo, env, timeout, sh -c 'px --yolo ...') are walked
+// the same way agent risk detectors walk them — via a second pass over
+// shell-script arguments.
+func invokesPoissonYolo(command string) bool {
+	for _, seg := range guard.Segments(command) {
+		if segmentInvokesPoissonYolo(seg) {
+			return true
+		}
+	}
+	return false
+}
+
+func segmentInvokesPoissonYolo(seg string) bool {
+	tokens := guard.Tokenize(seg)
+	if segmentTokensHavePoissonYolo(tokens) {
+		return true
+	}
+	// One level into a shell wrapper: sh -c 'px --yolo ...'
+	for i, tok := range tokens {
+		if !guard.IsShellInterpreter(guard.NormalizeToken(tok)) {
+			continue
+		}
+		for _, arg := range tokens[i+1:] {
+			script := strings.Trim(arg, `'"`)
+			if invokesPoissonYolo(script) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func segmentTokensHavePoissonYolo(tokens []string) bool {
+	hasBin, hasYolo := false, false
+	for _, tok := range tokens {
+		// Strip a leading "./" or path so "./px" / "/usr/bin/px" match.
+		base := strings.ToLower(filepath.Base(strings.Trim(tok, "'\"")))
+		if poissonBinNames[base] {
+			hasBin = true
+		}
+		// Exact --yolo only (not --yolo-something): the flag is a bare
+		// boolean in cmd/px/main.go with no =value form.
+		if strings.Trim(tok, "'\"") == "--yolo" {
+			hasYolo = true
+		}
+	}
+	return hasBin && hasYolo
 }
 
 // cdWorkdirHint nudges the model toward the workdir param when the command

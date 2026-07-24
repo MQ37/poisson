@@ -172,38 +172,82 @@ func touchesEnv(tokens []string) bool {
 	return false
 }
 
+// expandPathToken quote-strips (including mid-token quotes like ~/".ssh")
+// and tilde-expands a single path-shaped token. Uses stripEmbeddedQuotes —
+// not strings.Trim — so quote-smuggling can't hide a sensitive path from
+// the dir-pattern tables (ls ~/".ssh" is the same real path as ls ~/.ssh).
+func expandPathToken(token string) string {
+	t := stripEmbeddedQuotes(strings.TrimSpace(token))
+	if t == "" {
+		return ""
+	}
+	if strings.HasPrefix(t, "~") {
+		t = os.ExpandEnv(strings.Replace(t, "~", "$HOME", 1))
+	}
+	return t
+}
+
+// resolveAgainst joins a possibly-relative path against base (when base is
+// non-empty and path is relative). base itself may be "" — then path is
+// returned unchanged (absolute paths always pass through).
+func resolveAgainst(base, path string) string {
+	if path == "" {
+		return ""
+	}
+	if filepath.IsAbs(path) || base == "" {
+		return path
+	}
+	return filepath.Join(base, path)
+}
+
+// tokenLooksLikePath reports whether a token is worth checking as a path.
+// Flags (`-la`, `--json`) and pure env-assignment prefixes are skipped.
+func tokenLooksLikePath(token string) bool {
+	if token == "" || strings.HasPrefix(token, "-") {
+		return false
+	}
+	if isEnvAssignment(token) {
+		return false
+	}
+	return true
+}
+
 // touchesSensitivePath reports whether any token references a sensitive
-// path, either directly or through a symlink that resolves into one. workdir
-// (may be "") resolves relative tokens for symlink lookup only — the plain
-// literal-path checks below are workdir-independent, matching prior
-// behavior exactly when workdir is empty.
+// path, either directly or through a symlink that resolves into one.
+// workdir (may be "") resolves relative tokens — both for the literal
+// basename/dir-pattern check AND for symlink lookup — so a bare
+// `credentials` after `cd ~/.aws` (or with workdir already in that dir) is
+// caught the same way an absolute `~/.aws/credentials` is. Callers that
+// only have the raw command string should prefer touchesSensitiveCommand,
+// which also walks leading `cd` segments to update the effective workdir.
 func touchesSensitivePath(tokens []string, workdir string) bool {
-	for _, t := range tokens {
-		orig := t
-		t = strings.Trim(t, "'\"")
-		if pathTextIsSensitive(t) {
-			return true
-		}
-		expanded := t
-		// Check expanded home-dir form.
-		if strings.HasPrefix(orig, "~") {
-			expanded = os.ExpandEnv(strings.Replace(orig, "~", "$HOME", 1))
-			if pathTextIsSensitive(expanded) {
-				return true
-			}
-		}
-		// Resolve symlinks: a token that looks harmless by name (including a
-		// bare relative filename with no "/", e.g. "notes.txt") can still
-		// point at a sensitive file. Only flags are skipped — everything
-		// else gets a cheap stat attempt; a token that isn't really a path
-		// (a grep pattern, a hostname, ...) just fails fast (ENOENT) and
-		// falls through unchanged, same as the literal check already does.
-		if expanded == "" || strings.HasPrefix(expanded, "-") {
+	for _, raw := range tokens {
+		if !tokenLooksLikePath(raw) {
 			continue
 		}
-		candidate := expanded
-		if !filepath.IsAbs(candidate) && workdir != "" {
-			candidate = filepath.Join(workdir, candidate)
+		expanded := expandPathToken(raw)
+		if expanded == "" {
+			continue
+		}
+		// Literal form first (absolute, tilde-expanded, or a sensitive
+		// basename like "credentials" / "id_rsa" with no directory).
+		if pathTextIsSensitive(expanded) {
+			return true
+		}
+		// Join relative tokens against workdir so `cat auth.json` inside
+		// ~/.poisson (workdir already there, or set by a prior cd) is
+		// judged as ~/.poisson/auth.json, not as a free-floating name.
+		candidate := resolveAgainst(workdir, expanded)
+		if candidate != expanded && pathTextIsSensitive(candidate) {
+			return true
+		}
+		// Symlink follow on the resolved candidate: a token that looks
+		// harmless by name (including a bare relative filename) can still
+		// point at a sensitive file. A token that isn't really a path
+		// (grep pattern, hostname, ...) just fails the stat (ENOENT) and
+		// falls through unchanged.
+		if candidate == "" {
+			continue
 		}
 		if resolved := ResolveSymlinkTarget(candidate); resolved != candidate {
 			if pathTextIsSensitive(resolved) {
@@ -214,23 +258,58 @@ func touchesSensitivePath(tokens []string, workdir string) bool {
 	return false
 }
 
+// touchesSensitiveCommand walks every segment of command, tracking a
+// leading `cd <dir>` chain so relative path tokens in later segments are
+// resolved against the directory the shell would be in — the hole that
+// let `cd ~/.poisson && cat auth.json` auto-approve when only the bare
+// basename was checked. workdir is the bash tool's starting directory
+// (sticky/session cwd); may be "".
+func touchesSensitiveCommand(command, workdir string) bool {
+	cwd := workdir
+	for _, seg := range Segments(command) {
+		tokens := tokenize(seg)
+		if len(tokens) == 0 {
+			continue
+		}
+		if touchesSensitivePath(tokens, cwd) {
+			return true
+		}
+		// Advance cwd past a plain `cd <dir>` so the next segment's
+		// relative tokens resolve correctly. Only the single-arg form:
+		// flags (`cd -P`), bare `cd`, and multi-arg forms leave cwd alone
+		// (fails closed for the next segment only if its own tokens are
+		// already sensitive; we don't try to simulate every cd variant).
+		if dir, ok := plainCdTarget(tokens); ok {
+			expanded := expandPathToken(dir)
+			if expanded != "" {
+				cwd = resolveAgainst(cwd, expanded)
+			}
+		}
+	}
+	return false
+}
+
+// plainCdTarget reports whether tokens is exactly `cd <dir>` (no flags)
+// and returns that directory token. Used only to advance the effective
+// workdir while scanning a multi-segment command for sensitive paths.
+func plainCdTarget(tokens []string) (dir string, ok bool) {
+	if len(tokens) != 2 {
+		return "", false
+	}
+	if normalizeToken(tokens[0]) != "cd" {
+		return "", false
+	}
+	if strings.HasPrefix(tokens[1], "-") {
+		return "", false
+	}
+	return tokens[1], true
+}
+
 // pathTextIsSensitive checks a path string (already quote-trimmed and
 // tilde-expanded by the caller) against the basename/directory-pattern
 // tables, without touching the filesystem.
 func pathTextIsSensitive(t string) bool {
-	base := filepath.Base(t)
-	if sensitiveExactBasenames[base] {
-		return true
-	}
-	if sshPrivKeyRe.MatchString(base) {
-		return true
-	}
-	for _, pat := range sensitiveDirPatterns {
-		if strings.Contains(t, pat) {
-			return true
-		}
-	}
-	return false
+	return sensitivePathReasonLiteral(t) != ""
 }
 
 // SensitivePathReason reports why a file path is a secret/credential file
@@ -255,6 +334,9 @@ func SensitivePathReason(path string) string {
 }
 
 func sensitivePathReasonLiteral(path string) string {
+	if path == "" {
+		return ""
+	}
 	base := filepath.Base(path)
 	switch {
 	case sensitiveExactBasenames[base]:
@@ -263,14 +345,69 @@ func sensitivePathReasonLiteral(path string) string {
 		return "SSH private key: " + base
 	case base == ".env" || strings.HasPrefix(base, ".env."):
 		return "environment secrets file: " + base
+	case strings.HasSuffix(base, ".env") && len(base) > 4:
+		// secrets.env, prod.env, … — not covered by the ".env." prefix rule.
+		return "environment secrets file: " + base
 	}
 	slashed := filepath.ToSlash(path)
+	// /proc/<pid>/environ holds the process environment (often secrets).
+	// The static dir-pattern table only lists self/1; any other pid still
+	// counts.
+	if strings.HasPrefix(slashed, "/proc/") && strings.HasSuffix(slashed, "/environ") {
+		return "sensitive path: /proc/*/environ"
+	}
 	for _, pat := range sensitiveDirPatterns {
-		if strings.Contains(slashed, pat) {
+		if pathMatchesSensitiveDir(slashed, pat) {
 			return "sensitive path: " + pat
 		}
 	}
+	// Context-sensitive basenames (credentials, auth.json, passwd, …) only
+	// count when the path has a directory component that already matched
+	// above, OR when the parent directory itself is a sensitive dir.
+	// Bare `credentials` in a normal project workdir is intentionally not
+	// flagged — see contextSensitiveBasenames.
+	if contextSensitiveBasenames[base] && pathHasDirComponent(path) {
+		parent := filepath.ToSlash(filepath.Dir(path))
+		for _, pat := range sensitiveDirPatterns {
+			if pathMatchesSensitiveDir(parent, pat) || pathMatchesSensitiveDir(parent+"/", pat) {
+				return "sensitive file: " + base
+			}
+		}
+		// /etc/passwd pattern is a file pattern; parent /etc should still
+		// count for passwd/shadow/sudoers.
+		if base == "passwd" || base == "shadow" || base == "sudoers" {
+			if parent == "/etc" || strings.HasSuffix(parent, "/etc") {
+				return "sensitive file: " + base
+			}
+		}
+	}
 	return ""
+}
+
+func pathHasDirComponent(path string) bool {
+	// Absolute paths, or any relative path containing a separator.
+	return filepath.IsAbs(path) || strings.ContainsRune(path, '/') || strings.ContainsRune(path, filepath.Separator)
+}
+
+// pathMatchesSensitiveDir reports whether slashed path hits a sensitive
+// directory pattern. Patterns that look like files (/etc/passwd) stay
+// exact-substring matches; directory patterns (/.ssh/, /.aws/, …) also
+// match the directory itself (path ends in "/.ssh") so `ls ~/.ssh` is
+// blocked the same way `cat ~/.ssh/id_rsa` is — without this, listing a
+// secret dir auto-approved while reading a file inside it did not.
+func pathMatchesSensitiveDir(slashed, pat string) bool {
+	if strings.Contains(slashed, pat) {
+		return true
+	}
+	// Directory patterns end in "/". Also match the directory bare
+	// (no trailing slash) and a trailing-slash form of the path itself.
+	if strings.HasSuffix(pat, "/") {
+		dir := strings.TrimSuffix(pat, "/")
+		if slashed == dir || strings.HasSuffix(slashed, dir) || strings.HasSuffix(slashed, dir+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

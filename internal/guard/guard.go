@@ -1,7 +1,6 @@
 package guard
 
 import (
-	"os"
 	"strings"
 )
 
@@ -30,10 +29,6 @@ func Classify(command string) (safe bool, reason string) {
 // sensitive-path check — a bash tool call carries its own workdir, which
 // may differ from px's process cwd.
 func ClassifyInDir(command, workdir string) (safe bool, reason string) {
-	if os.Getenv("POISSON_SANDBOX") == "1" || os.Getenv("IS_SANDBOX") == "1" {
-		return true, ""
-	}
-
 	raw := command
 
 	// 1. Dangerous patterns: redirects, pipes into dangerous shells, substitution.
@@ -139,14 +134,17 @@ func ClassifyInDir(command, workdir string) (safe bool, reason string) {
 		}
 	}
 
-	// 4. Sensitive path / env checks across all tokens.
+	// 4. Sensitive path / env checks. Dotenv/shell-rc basenames are
+	// token-local (no workdir join needed). Everything else walks the
+	// command with cd-aware workdir tracking so `cd ~/.aws && cat
+	// credentials` is judged against the directory the shell would be in.
 	if touchesDotEnv(allTokens) {
 		return false, "touches .env file"
 	}
 	if touchesEnv(allTokens) {
 		return false, "touches environment/shell config file"
 	}
-	if touchesSensitivePath(allTokens, workdir) {
+	if touchesSensitiveCommand(raw, workdir) {
 		return false, "touches sensitive path"
 	}
 
@@ -229,9 +227,7 @@ func gitSubcommandAfter(tokens []string, gitIdx int) string {
 // shell-wrapped invocation ("sh -c 'git commit -m foo'"). Committing changes
 // the repository's permanent history, so callers use this for a hard rule:
 // always ask a human, never let an LLM risk classifier auto-approve it — see
-// agent.WrapRiskGatedApproval. Unlike Classify, this never consults
-// POISSON_SANDBOX: a sandboxed commit still needs the same hard stop as an
-// unsandboxed one.
+// agent.WrapRiskGatedApproval.
 func IsGitCommit(command string) bool {
 	return anyGitInvocationMatches(command, func(sub string, _ []string) bool {
 		return sub == "commit"
