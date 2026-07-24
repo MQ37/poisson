@@ -15,7 +15,7 @@ func TestEditDiffLines(t *testing.T) {
 			{"oldText": "a\nb", "newText": "c"},
 		},
 	})
-	lines := editDiffLines(input)
+	lines := editDiffLines(input, "")
 	want := []diffLine{
 		{sign: '-', text: "a", lineNo: 1},
 		{sign: '-', text: "b", lineNo: 2},
@@ -48,8 +48,8 @@ func TestEditDiffLinesAbsoluteFilePosition(t *testing.T) {
 			},
 		},
 	})
-	lines := editDiffLines(input)
-	// oldText starts at line 6 of the file; tabs expand to 4 spaces.
+	// Prefer the pre-edit snapshot (what appendToolCall stores as DiffBase).
+	lines := editDiffLines(input, body)
 	want := []diffLine{
 		{sign: '-', text: "    old := 1", lineNo: 6},
 		{sign: '-', text: "    fmt.Println(old)", lineNo: 7},
@@ -63,6 +63,63 @@ func TestEditDiffLinesAbsoluteFilePosition(t *testing.T) {
 		if lines[i] != want[i] {
 			t.Errorf("line %d = %+v, want %+v", i, lines[i], want[i])
 		}
+	}
+}
+
+// TestEditDiffLinesAbsoluteAfterFileAlreadyEdited is the steady-state path:
+// the edit tool has already written newText to disk, so looking up oldText
+// would miss. With a DiffBase snapshot we still get the right absolute lines;
+// without one we fall back to locating newText in the post-edit file.
+func TestEditDiffLinesAbsoluteAfterFileAlreadyEdited(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sample.go")
+	pre := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\told := 1\n\tfmt.Println(old)\n}\n"
+	post := "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tnew := 2\n\tfmt.Println(new)\n}\n"
+	if err := os.WriteFile(path, []byte(post), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	input := toolInputJSON("edit", map[string]any{
+		"path": path,
+		"edits": []map[string]string{
+			{
+				"oldText": "\told := 1\n\tfmt.Println(old)",
+				"newText": "\tnew := 2\n\tfmt.Println(new)",
+			},
+		},
+	})
+
+	withBase := editDiffLines(input, pre)
+	if withBase[0].lineNo != 6 {
+		t.Fatalf("with DiffBase: first lineNo = %d, want 6", withBase[0].lineNo)
+	}
+
+	noBase := editDiffLines(input, "")
+	if noBase[0].lineNo != 6 {
+		t.Fatalf("newText fallback: first lineNo = %d, want 6", noBase[0].lineNo)
+	}
+}
+
+func TestAppendToolCallSnapshotsDiffBase(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "f.go")
+	body := "one\ntwo\nthree\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := newScrollback(1024)
+	s.appendToolCall(1, "", "edit", toolInputJSON("edit", map[string]any{
+		"path":    path,
+		"oldText": "two",
+		"newText": "TWO",
+	}))
+	if s.blocks[0].meta.DiffBase != body {
+		t.Fatalf("DiffBase = %q, want pre-edit body", s.blocks[0].meta.DiffBase)
+	}
+	if err := os.WriteFile(path, []byte("one\nTWO\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if s.blocks[0].meta.DiffBase != body {
+		t.Fatal("DiffBase must not change after disk mutation")
 	}
 }
 
@@ -98,7 +155,7 @@ func TestEditDiffLinesMultipleEditsSeparated(t *testing.T) {
 			{"oldText": "x", "newText": "y"},
 		},
 	})
-	lines := editDiffLines(input)
+	lines := editDiffLines(input, "")
 	// -a +b <blank separator> -x +y
 	if len(lines) != 5 {
 		t.Fatalf("lines = %+v, want 5 (2 + separator + 2)", lines)
@@ -293,7 +350,7 @@ func TestEditDiffLinesFlatShape(t *testing.T) {
 		"oldText": "a\nb",
 		"newText": "c",
 	})
-	lines := editDiffLines(input)
+	lines := editDiffLines(input, "")
 	want := []diffLine{
 		{sign: '-', text: "a", lineNo: 1},
 		{sign: '-', text: "b", lineNo: 2},
@@ -314,7 +371,7 @@ func TestEditDiffLinesStringEncodedEdits(t *testing.T) {
 		"path":  filepath.Join(t.TempDir(), "missing.go"),
 		"edits": `[{"oldText":"a","newText":"b"}]`,
 	})
-	lines := editDiffLines(input)
+	lines := editDiffLines(input, "")
 	want := []diffLine{
 		{sign: '-', text: "a", lineNo: 1},
 		{sign: '+', text: "b", lineNo: 1},

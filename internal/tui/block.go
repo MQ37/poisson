@@ -53,6 +53,12 @@ type BlockMeta struct {
 	// was reconstructed from a resumed session, which never replays the
 	// original round's timing.
 	TokensPerSec float64
+	// DiffBase is a best-effort snapshot of the target file's contents taken
+	// when an edit tool card is first appended (before the tool mutates the
+	// file). Absolute line numbers for the red side need the pre-edit image;
+	// after the tool finishes, re-reading disk only sees newText. Empty when
+	// unknown (write tools, resume without a snapshot, unreadable path).
+	DiffBase string
 }
 
 // Block is one logical document unit in the scrollback.

@@ -66,7 +66,7 @@ func layoutDiffTool(b *Block, width int) []ScreenRow {
 	chunks = append(chunks, formatDiffToolHeader(b))
 
 	lang := toolLangFromInput(b.meta.ToolName, b.meta.ToolInput)
-	diff := toolDiffLines(b.meta.ToolName, b.meta.ToolInput)
+	diff := toolDiffLines(b.meta.ToolName, b.meta.ToolInput, b.meta.DiffBase)
 	for _, ln := range renderDiffLines(diff, width, lang) {
 		chunks = append(chunks, ln)
 	}
@@ -330,6 +330,11 @@ func (s *scrollback) appendToolCall(id int64, providerCallID, name string, input
 		Streaming:      true,
 		StartedAt:      time.Now(),
 		Expanded:       alwaysOpen,
+	}
+	// Snapshot the target file BEFORE the tool mutates it so edit diffs can
+	// keep absolute line numbers after oldText is gone from disk.
+	if name == "edit" {
+		b.meta.DiffBase = readFileForDiff(toolPathFromInput(input))
 	}
 	s.blocks = append(s.blocks, b)
 	s.markRoundBlock(b.id)

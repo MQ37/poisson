@@ -26,15 +26,29 @@ type diffLine struct {
 }
 
 // toolDiffLines computes diff lines for an edit/write tool call from its
-// input JSON. Returns nil if name isn't a diff tool or the input can't be parsed.
-func toolDiffLines(name string, input []byte) []diffLine {
+// input JSON. base is an optional pre-edit file snapshot (BlockMeta.DiffBase);
+// when empty, editDiffLines falls back to a best-effort disk read and then to
+// locating newText in the post-edit file. Returns nil if name isn't a diff
+// tool or the input can't be parsed.
+func toolDiffLines(name string, input []byte, base string) []diffLine {
 	switch name {
 	case "write":
 		return writeDiffLines(input)
 	case "edit":
-		return editDiffLines(input)
+		return editDiffLines(input, base)
 	}
 	return nil
+}
+
+// toolPathFromInput pulls the "path" field out of a tool's JSON input.
+func toolPathFromInput(input []byte) string {
+	var in struct {
+		Path string `json:"path"`
+	}
+	if json.Unmarshal(input, &in) != nil {
+		return ""
+	}
+	return in.Path
 }
 
 func writeDiffLines(input []byte) []diffLine {
@@ -54,12 +68,15 @@ func writeDiffLines(input []byte) []diffLine {
 
 // editDiffLines re-parses the same input JSON already sent to the model, so
 // it must recognize every shape internal/tools/edit.go's parseEditInput
-// accepts. Line numbers are absolute positions in the target file: each
-// oldText is located in the on-disk file (best-effort) and both the removed
-// and added sides of that hunk number from that start line. If the file
-// can't be read or oldText isn't found, falls back to 1-based hunk-local
-// numbers so something still shows.
-func editDiffLines(input []byte) []diffLine {
+// accepts. Line numbers are absolute positions in the target file.
+//
+// base is the preferred pre-edit file image (snapshotted at ToolStart). When
+// empty we try a live disk read (still pre-edit only if the tool hasn't run
+// yet). Per hunk, start line is found by locating oldText in the pre-image;
+// if that fails (post-edit disk, resume), we locate newText in the current
+// on-disk file instead — after a successful edit that's the same absolute
+// start line. Final fallback is hunk-local 1.
+func editDiffLines(input []byte, base string) []diffLine {
 	type edit struct {
 		OldText string `json:"oldText"`
 		NewText string `json:"newText"`
@@ -89,14 +106,37 @@ func editDiffLines(input []byte) []diffLine {
 		return nil
 	}
 
-	fileContent := readFileForDiff(in.Path)
+	preImage := base
+	if preImage == "" {
+		preImage = readFileForDiff(in.Path)
+	}
+	// Post-edit disk (for newText fallback when pre-image can't place a hunk).
+	// Only read once, and only if at least one hunk might need it.
+	var postImage string
+	var postLoaded bool
 
 	var out []diffLine
 	for i, e := range edits {
 		if i > 0 {
 			out = append(out, diffLine{sign: ' ', text: "", lineNo: 0})
 		}
-		start := hunkStartLine(fileContent, e.OldText)
+		start := lineOf(preImage, e.OldText)
+		if start == 0 {
+			if !postLoaded {
+				// If preImage came from a live read of the same path, it's
+				// already post-edit; reuse it. Otherwise re-read disk.
+				if base == "" && preImage != "" {
+					postImage = preImage
+				} else {
+					postImage = readFileForDiff(in.Path)
+				}
+				postLoaded = true
+			}
+			start = lineOf(postImage, e.NewText)
+		}
+		if start == 0 {
+			start = 1
+		}
 		oldLines := splitContentLines(e.OldText)
 		for j, ln := range oldLines {
 			out = append(out, diffLine{sign: '-', text: expandTabs(ln), lineNo: start + j})
@@ -109,19 +149,17 @@ func editDiffLines(input []byte) []diffLine {
 	return out
 }
 
-// hunkStartLine returns the 1-based absolute line of oldText in fileContent.
-// Falls back to 1 when the file is unknown or the match isn't found (the
-// edit tool itself would have failed in that case for a live call; for a
-// resumed/orphan card we still want some numbering).
-func hunkStartLine(fileContent, oldText string) int {
-	if fileContent == "" || oldText == "" {
-		return 1
+// lineOf returns the 1-based absolute line of needle in content, or 0 if
+// content is empty or needle isn't found.
+func lineOf(content, needle string) int {
+	if content == "" || needle == "" {
+		return 0
 	}
-	idx := strings.Index(fileContent, oldText)
+	idx := strings.Index(content, needle)
 	if idx < 0 {
-		return 1
+		return 0
 	}
-	return 1 + strings.Count(fileContent[:idx], "\n")
+	return 1 + strings.Count(content[:idx], "\n")
 }
 
 // readFileForDiff best-effort loads the target file so edit diffs can show
@@ -306,7 +344,7 @@ func toolExpandLineCount(b *Block, width int) int {
 	if isDiffTool(b.meta.ToolName) && b.meta.ToolError == "" {
 		// Full diff is always shown; no internal scroll window.
 		lang := toolLangFromInput(b.meta.ToolName, b.meta.ToolInput)
-		return len(renderDiffLines(toolDiffLines(b.meta.ToolName, b.meta.ToolInput), width, lang))
+		return len(renderDiffLines(toolDiffLines(b.meta.ToolName, b.meta.ToolInput, b.meta.DiffBase), width, lang))
 	}
 	inner := width
 	if inner < 1 {
