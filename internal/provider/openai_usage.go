@@ -73,6 +73,17 @@ func (p *OpenAIProvider) CachedUsageLimits() *CodexUsage {
 	return p.usageCache
 }
 
+// ForceUsageRefresh drops the cached snapshot and fetches fresh data right
+// now, ignoring usageTTL — see AnthropicProvider.ForceUsageRefresh for the
+// reasoning (same idiom ResetUsage below already uses for its own cache
+// invalidation after spending a reset credit).
+func (p *OpenAIProvider) ForceUsageRefresh(ctx context.Context) (*CodexUsage, error) {
+	p.usageMu.Lock()
+	p.usageCache = nil
+	p.usageMu.Unlock()
+	return p.UsageLimits(ctx)
+}
+
 // oauthCreds resolves the current OpenAI OAuth entry (refreshing if near
 // expiry) and its chatgpt-account-id claim — the same two pieces
 // streamWithRetry resolves for the main Codex chat endpoint, duplicated here

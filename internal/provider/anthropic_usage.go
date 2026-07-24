@@ -84,6 +84,18 @@ func (p *AnthropicProvider) CachedUsageLimits() *AnthropicUsageLimits {
 	return p.usageCache
 }
 
+// ForceUsageRefresh drops the cached snapshot and fetches fresh data right
+// now, ignoring usageTTL — used when the caller needs guaranteed current
+// data (a provider/session switch just handed this account a brand-new,
+// empty cache anyway, but forcing here makes that guarantee explicit rather
+// than relying on the cache incidentally being empty).
+func (p *AnthropicProvider) ForceUsageRefresh(ctx context.Context) (*AnthropicUsageLimits, error) {
+	p.usageMu.Lock()
+	p.usageCache = nil
+	p.usageMu.Unlock()
+	return p.UsageLimits(ctx)
+}
+
 func (p *AnthropicProvider) fetchUsage(ctx context.Context) (*AnthropicUsageLimits, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

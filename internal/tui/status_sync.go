@@ -2,14 +2,12 @@ package tui
 
 import "context"
 
-// refreshProviderUsageLimits fetches fresh usage-limit data for whichever
-// provider is currently active (both Refresh* calls are no-ops for the
-// "other" provider) and re-syncs the header. Called by the background
-// ticker in lifecycle.go on its own 5-minute schedule, and eagerly (via
-// triggerUsageRefreshLocked, in a fresh goroutine) right after a provider
-// switch — a freshly constructed provider's usage cache always starts
-// empty, so without this the header would show nothing until the next
-// scheduled tick, up to 5 minutes later.
+// refreshProviderUsageLimits fetches usage-limit data for whichever provider
+// is currently active (both Refresh* calls are no-ops for the "other"
+// provider), respecting each provider's own 5-minute TTL, and re-syncs the
+// header. Called by the background ticker in lifecycle.go on its own
+// 5-minute schedule — by then any existing cache is stale anyway, so there's
+// no need to force past the TTL.
 func (t *TUI) refreshProviderUsageLimits(ctx context.Context) {
 	if t.agent == nil {
 		return
@@ -22,13 +20,36 @@ func (t *TUI) refreshProviderUsageLimits(ctx context.Context) {
 	t.dirty.markStatus()
 }
 
-// triggerUsageRefreshLocked kicks off refreshProviderUsageLimits in the
-// background, without waiting for the ticker's own schedule. Caller must
-// hold t.mu (the network call itself runs outside the lock, in a new
-// goroutine); safe to call whether or not the provider actually changed — a
-// same-provider call is just a normal TTL-gated cache hit.
+// refreshProviderUsageLimitsForce is refreshProviderUsageLimits but bypasses
+// each provider's TTL — used for an explicit, caller-requested refresh (see
+// triggerUsageRefreshLocked) where the header must show guaranteed-current
+// data right now, not whatever happens to already be cached.
+func (t *TUI) refreshProviderUsageLimitsForce(ctx context.Context) {
+	if t.agent == nil {
+		return
+	}
+	t.agent.RefreshAnthropicUsageLimitsForce(ctx)
+	t.agent.RefreshOpenAIUsageLimitsForce(ctx)
+	t.mu.Lock()
+	t.syncHeaderFromAgentLocked()
+	t.mu.Unlock()
+	t.dirty.markStatus()
+}
+
+// triggerUsageRefreshLocked kicks off a forced refreshProviderUsageLimitsForce
+// in the background, without waiting for the ticker's own schedule, and — if
+// the background ticker in lifecycle.go is running — resets its 5-minute
+// schedule to start counting from now, so it doesn't also fire a redundant,
+// near-duplicate refresh moments later on its own unrelated timeline. Caller
+// must hold t.mu (the network call itself runs outside the lock, in a new
+// goroutine); safe to call whether or not the provider actually changed —
+// ForceUsageRefresh always hits the network regardless.
 func (t *TUI) triggerUsageRefreshLocked() {
-	go t.refreshProviderUsageLimits(context.Background())
+	go t.refreshProviderUsageLimitsForce(context.Background())
+	select {
+	case t.usageTickerReset <- struct{}{}:
+	default:
+	}
 }
 
 // syncHeaderFromAgentLocked refreshes the compact header from agent + store.

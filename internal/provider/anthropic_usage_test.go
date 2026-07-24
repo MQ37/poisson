@@ -153,6 +153,32 @@ func TestAnthropicUsageLimits_StaleCacheOnFetchError(t *testing.T) {
 	}
 }
 
+// TestAnthropicUsageLimits_ForceRefreshBypassesTTL confirms ForceUsageRefresh
+// always hits the network, even with a fresh (well within TTL) cache
+// already in place — the explicit-refresh path (provider/session switch)
+// must never be satisfied by a stale-relative-to-the-switch cache hit.
+func TestAnthropicUsageLimits_ForceRefreshBypassesTTL(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Write([]byte(realUsageResponseShape))
+	}))
+	defer srv.Close()
+
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "oauth", Access: "t"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+	p.baseURL = srv.URL
+	// A cache fetched moments ago — well within usageTTL, so a plain
+	// UsageLimits call would be a pure cache hit with zero network calls.
+	p.usageCache = &AnthropicUsageLimits{FiveHour: usageWindow{UtilizationPct: 1}, FetchedAt: time.Now()}
+
+	if _, err := p.ForceUsageRefresh(context.Background()); err != nil {
+		t.Fatalf("ForceUsageRefresh: %v", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("server hits = %d, want 1 (ForceUsageRefresh must bypass the TTL)", got)
+	}
+}
+
 func TestAnthropicUsageLimits_CachedUsageLimitsNoNetworkCall(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "oauth", Access: "t"}}, &config.Config{})
 	if got := p.CachedUsageLimits(); got != nil {

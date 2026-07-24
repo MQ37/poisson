@@ -428,6 +428,18 @@ func (a *Agent) RefreshAnthropicUsageLimits(ctx context.Context) {
 	_, _ = ap.UsageLimits(ctx)
 }
 
+// RefreshAnthropicUsageLimitsForce is RefreshAnthropicUsageLimits but bypasses
+// the TTL — used right after a provider/session switch, where the header
+// should show guaranteed-current data immediately rather than whatever
+// happens to already be cached (or nothing, until the next scheduled tick).
+func (a *Agent) RefreshAnthropicUsageLimitsForce(ctx context.Context) {
+	ap, ok := a.provider.(*provider.AnthropicProvider)
+	if !ok {
+		return
+	}
+	_, _ = ap.ForceUsageRefresh(ctx)
+}
+
 // OpenAIUsageLimits returns the last cached Codex usage snapshot, or nil if
 // the current provider isn't OpenAI or nothing has been fetched yet. Never
 // makes a network call — safe to call from a render/status-sync path.
@@ -448,6 +460,16 @@ func (a *Agent) RefreshOpenAIUsageLimits(ctx context.Context) {
 		return
 	}
 	_, _ = op.UsageLimits(ctx)
+}
+
+// RefreshOpenAIUsageLimitsForce is RefreshOpenAIUsageLimits but bypasses the
+// TTL — see RefreshAnthropicUsageLimitsForce for the reasoning.
+func (a *Agent) RefreshOpenAIUsageLimitsForce(ctx context.Context) {
+	op, ok := a.provider.(*provider.OpenAIProvider)
+	if !ok {
+		return
+	}
+	_, _ = op.ForceUsageRefresh(ctx)
 }
 
 // ResetOpenAIUsage spends one of the account's free Codex "reset this usage

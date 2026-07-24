@@ -148,6 +148,16 @@ type TUI struct {
 	// (including complete events already in the same read) would silently
 	// fall through to the keyboard decoder and be dropped.
 	mouseBuf []byte
+
+	// usageTickerReset signals lifecycle.go's background usage-refresh
+	// ticker (if running — Run() owns it, so it's a no-op in tests that
+	// never call Run) to restart its 5-minute schedule from now, so an
+	// explicit refresh (triggerUsageRefreshLocked, e.g. after a provider or
+	// session switch) doesn't leave a near-duplicate fetch due moments
+	// later on the ticker's own unrelated schedule. Buffered 1 and always
+	// sent non-blocking — multiple resets before the ticker goroutine gets
+	// to read collapse into one.
+	usageTickerReset chan struct{}
 }
 
 // startupIntroMeta holds the welcome chart text source for re-painting after resets.
@@ -193,13 +203,14 @@ func newTUI(a *agent.Agent, sessionID string, outputChan chan agent.OutputEvent)
 			ShowTokens: showTokens,
 			ShowCost:   showCost,
 		},
-		dirty:          newDirtyTracker(),
-		inputRows:      3,
-		headerRows:     1,
-		lastInputRows:  3,
-		done:           make(chan struct{}),
-		approvalAnswer: make(chan approvalReply, 1),
-		grabImage:      grabClipboardImage,
+		dirty:            newDirtyTracker(),
+		inputRows:        3,
+		headerRows:       1,
+		lastInputRows:    3,
+		done:             make(chan struct{}),
+		approvalAnswer:   make(chan approvalReply, 1),
+		grabImage:        grabClipboardImage,
+		usageTickerReset: make(chan struct{}, 1),
 	}
 }
 

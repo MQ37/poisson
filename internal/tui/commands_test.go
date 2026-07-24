@@ -473,11 +473,13 @@ func TestCmdEffortNoArg(t *testing.T) {
 }
 
 // TestRefreshProviderUsageLimitsMarksHeaderDirty confirms
-// refreshProviderUsageLimits (the function both the lifecycle ticker and
-// triggerUsageRefreshLocked call) runs to completion and marks the header
-// dirty, even for a provider (the default FakeProvider) with no usage-limit
-// data at all — RefreshAnthropicUsageLimits/RefreshOpenAIUsageLimits must be
-// harmless no-ops rather than panicking or hanging.
+// refreshProviderUsageLimits (called by the lifecycle ticker on its regular
+// 5-minute schedule; triggerUsageRefreshLocked calls the sibling
+// refreshProviderUsageLimitsForce instead — see
+// TestTriggerUsageRefreshLocked_ResetsTicker) runs to completion and marks
+// the header dirty, even for a provider (the default FakeProvider) with no
+// usage-limit data at all — RefreshAnthropicUsageLimits/RefreshOpenAIUsage
+// Limits must be harmless no-ops rather than panicking or hanging.
 func TestRefreshProviderUsageLimitsMarksHeaderDirty(t *testing.T) {
 	_, a, sessionID := newTestStoreAndAgent(t)
 	tui := newTUIWithAgent(a, sessionID)
@@ -490,6 +492,29 @@ func TestRefreshProviderUsageLimitsMarksHeaderDirty(t *testing.T) {
 	tui.mu.Unlock()
 	if !snap.status {
 		t.Fatal("refreshProviderUsageLimits should have marked the header dirty")
+	}
+}
+
+// TestTriggerUsageRefreshLocked_ResetsTicker confirms triggerUsageRefreshLocked
+// sends a non-blocking reset signal on usageTickerReset, in addition to
+// spawning the eager background refresh — this is what lets lifecycle.go's
+// periodic ticker (when Run() is active) restart its 5-minute schedule from
+// the moment of an explicit refresh instead of firing a redundant
+// near-duplicate one shortly after on its own unrelated timeline. Calling it
+// twice in a row must never block, even with nobody draining the channel.
+func TestTriggerUsageRefreshLocked_ResetsTicker(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+
+	tui.mu.Lock()
+	tui.triggerUsageRefreshLocked()
+	tui.triggerUsageRefreshLocked() // must not block despite the buffer being size 1
+	tui.mu.Unlock()
+
+	select {
+	case <-tui.usageTickerReset:
+	default:
+		t.Fatal("triggerUsageRefreshLocked did not signal usageTickerReset")
 	}
 }
 
@@ -513,7 +538,7 @@ func TestProviderSwitchTriggersEagerUsageRefresh(t *testing.T) {
 	// consume (and discard) that first so a false positive from markFull
 	// can't masquerade as the eager refresh actually having happened. The
 	// signal under test is a *second*, later markStatus() call, which only
-	// refreshProviderUsageLimits's own goroutine can produce.
+	// refreshProviderUsageLimitsForce's own goroutine can produce.
 	tui.mu.Lock()
 	tui.dirty.consume()
 	tui.mu.Unlock()

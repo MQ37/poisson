@@ -90,6 +90,28 @@ func TestCodexUsageLimits_TTLSkipsSecondFetch(t *testing.T) {
 	}
 }
 
+// TestCodexUsageLimits_ForceRefreshBypassesTTL mirrors
+// TestAnthropicUsageLimits_ForceRefreshBypassesTTL — confirms ForceUsageRefresh
+// bypasses the TTL for the OpenAI/Codex path too.
+func TestCodexUsageLimits_ForceRefreshBypassesTTL(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Write([]byte(realCodexUsageResponseShape))
+	}))
+	defer srv.Close()
+
+	p := newTestOpenAIProvider(t, srv)
+	p.usageCache = &CodexUsage{UsedPercent: 1, FetchedAt: time.Now()}
+
+	if _, err := p.ForceUsageRefresh(context.Background()); err != nil {
+		t.Fatalf("ForceUsageRefresh: %v", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("server hits = %d, want 1 (ForceUsageRefresh must bypass the TTL)", got)
+	}
+}
+
 func TestCodexUsageLimits_ExpiredTTLRefetches(t *testing.T) {
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

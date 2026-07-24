@@ -94,15 +94,19 @@ func (t *TUI) Run() error {
 		}
 	}()
 
-	// Background Anthropic usage-limit refresh: a no-op for every other
-	// provider (RefreshAnthropicUsageLimits checks internally). Ticks at the
-	// same cadence as the provider's own 5-minute cache TTL (anthropic_usage.go)
-	// — an eager fetch would just return the cache anyway, so there is no
-	// reason to poll more often than the value can actually change.
+	// Background Anthropic/OpenAI usage-limit refresh: a no-op for whichever
+	// provider isn't active (RefreshAnthropicUsageLimits/RefreshOpenAIUsage
+	// Limits check internally). Ticks at the same cadence as each provider's
+	// own 5-minute cache TTL (anthropic_usage.go/openai_usage.go) — a poll
+	// would just return the cache anyway, so there's no reason to poll more
+	// often than the value can actually change. triggerUsageRefreshLocked
+	// (provider/session switches) resets this ticker's schedule via
+	// usageTickerReset so an explicit refresh and the next scheduled one
+	// don't land moments apart.
 	usageCtx, cancelUsage := context.WithCancel(context.Background())
 	go func() {
 		defer cancelUsage()
-		t.refreshProviderUsageLimits(usageCtx)
+		t.refreshProviderUsageLimitsForce(usageCtx)
 		tick := time.NewTicker(5 * time.Minute)
 		defer tick.Stop()
 		for {
@@ -111,6 +115,8 @@ func (t *TUI) Run() error {
 				return
 			case <-tick.C:
 				t.refreshProviderUsageLimits(usageCtx)
+			case <-t.usageTickerReset:
+				tick.Reset(5 * time.Minute)
 			}
 		}
 	}()
