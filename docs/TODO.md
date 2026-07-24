@@ -38,3 +38,45 @@ whether a stale read is still trustworthy, so it re-fetches defensively.
   manifest of recently-read file paths (+ mtime/hash) carried in the compaction
   summary so the agent trusts recent reads instead of re-fetching.
 - Not scoped yet — flagging only.
+
+## Notes (current behavior)
+
+### Edit/write tool cards: how the colored diff is built
+
+The TUI does **not** store a unified diff, and the DB does **not** store one
+either. Diff rows are reconstructed at paint time from the tool call's own
+input JSON (already on the assistant `tool_use` message):
+
+| Source | Role |
+|---|---|
+| `tool_input` (`path`, `oldText`/`newText`, or `content` for write) | The only durable content — red = `oldText` lines, green = `newText` / write body |
+| `BlockMeta.DiffBase` (RAM only) | Pre-edit file bytes snapshotted at live `ToolStart` (`appendToolCall`), used to place absolute line numbers |
+| Live disk read of `path` | Fallback when `DiffBase` is empty: locate `newText` in the current file |
+
+What **is** in SQLite (`messages.content`): the normal agent transcript —
+`tool_use` with `tool_input`, and a short `tool_result` string like
+`edited main.go (1 edit(s) applied)`. No `DiffBase`, no computed lines, no
+tok/s/duration.
+
+What that means on resume / after the file moves on:
+
+- **Historical red/green text** always comes back correctly (it's the stored
+  `oldText`/`newText`).
+- **Absolute line numbers are best-effort**, not durable:
+  - Live session: good — `DiffBase` still holds the pre-edit image.
+  - Resume, file unchanged since that edit: usually OK via `newText` lookup
+    on disk.
+  - Resume, file edited further / moved / deleted: numbers often fall back
+    to hunk-local `1`. The text is still the historical edit; the gutter
+    may no longer match the current file.
+- Write cards number `1..N` of the written blob, not “line N of whatever is
+  on disk now.”
+- `appendToolCallReplay` (hydrate) never sets `DiffBase`.
+- Path resolution for the disk fallback uses process `Getwd()`, not session
+  cwd — relative paths can miss if those diverge.
+
+Possible later upgrades (not scoped): persist a small
+`{path, startLine, endLine}` (or a hash + start line) next to the tool_use;
+or reverse-apply `oldText`/`newText` against a post-image to recover the
+pre-edit start without storing the whole file. Until then the current
+behavior is intentional and acceptable.
