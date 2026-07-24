@@ -22,6 +22,8 @@ var SAFE = []string{
 	"git ls-files",
 	"git ls-tree",
 	"git tag",
+	"git grep",
+	"git worktree list",
 	// file utilities
 	"cat",
 	"head",
@@ -86,6 +88,7 @@ var SAFE = []string{
 	"gh pr diff",
 	"gh issue list",
 	"gh issue view",
+	"gh pr checks",
 	"gh api",
 	"gh repo view",
 	// system info
@@ -95,6 +98,7 @@ var SAFE = []string{
 	"id",
 	"hostname",
 	"uptime",
+	"ps",
 	// misc
 	"echo",
 }
