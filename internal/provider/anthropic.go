@@ -419,11 +419,12 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 // applyPromptCache places ephemeral cache_control breakpoints so Anthropic
 // caches the stable prefix (tools + system) and the conversation across turns.
 // Caching is prefix-based: each breakpoint caches everything up to and
-// including it (max 4 allowed; we use at most 3). Cache reads bill at ~0.1x
-// input price, so in an agentic loop — which resends the full system, tools,
-// and growing history every turn — this slashes input token cost. The stealth
-// billing block (system[0]) is derived from the first user message, so it is
-// stable per session and safe inside the cached prefix.
+// including it (max 4 allowed; we use up to 4: 1 tools + up to 2 system + 1
+// messages). Cache reads bill at ~0.1x input price, so in an agentic loop —
+// which resends the full system, tools, and growing history every turn —
+// this slashes input token cost. The stealth billing block (system[0]) is
+// derived from the first user message, so it is stable per session and safe
+// inside the cached prefix.
 //
 // TTL is "1h" (matches Claude Code): the default 5-minute cache expires
 // between interactive turns whenever the user pauses >5 min, turning every
@@ -436,8 +437,24 @@ func applyPromptCache(ar *anthropicRequest) {
 	if n := len(ar.Tools); n > 0 {
 		ar.Tools[n-1].CacheControl = cc // caches all tool definitions
 	}
+	// System gets up to two breakpoints: one on the second-to-last block and
+	// one on the last. Compaction appends the summary as the FINAL system
+	// block, after the billing/identity/system-prompt blocks that never
+	// change for the life of the session. A single breakpoint at the end
+	// would bundle that stable prefix and the summary into one cached unit —
+	// every compaction changes the summary bytes, so every compaction would
+	// force a full-price cache WRITE of the whole bundle, stable prefix
+	// included, instead of a cheap read. Marking the second-to-last block too
+	// keeps the stable prefix (up to and including the system prompt) its
+	// own cache hit, confining the write to just the summary block. Before
+	// the first compaction (no summary block yet) this just double-marks the
+	// stable prefix, which is harmless. Total breakpoints used: tools(1) +
+	// system(<=2) + messages(1) <= 4, Anthropic's hard cap.
 	if n := len(ar.System); n > 0 {
-		ar.System[n-1].CacheControl = cc // caches tools + system
+		if n >= 2 {
+			ar.System[n-2].CacheControl = cc
+		}
+		ar.System[n-1].CacheControl = cc
 	}
 	// Rolling breakpoint: cache the conversation prefix. The final request
 	// message is always a user turn (a prompt or coalesced tool results).

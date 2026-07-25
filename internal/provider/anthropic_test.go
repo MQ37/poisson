@@ -79,12 +79,14 @@ func TestAnthropicPromptCacheBreakpoints(t *testing.T) {
 	}
 	ar := p.buildAnthropicRequest(req, false)
 
-	// Exactly one breakpoint each on: last tool, last system block, last message.
+	// One breakpoint on the last tool; two on system (second-to-last + last,
+	// since there are >=2 system blocks) — see applyPromptCache; one on the
+	// last message.
 	if ar.Tools[0].CacheControl != nil || ar.Tools[1].CacheControl == nil {
 		t.Errorf("cache breakpoint must be on the LAST tool only")
 	}
-	if ar.System[0].CacheControl != nil || ar.System[1].CacheControl == nil {
-		t.Errorf("cache breakpoint must be on the LAST system block only")
+	if ar.System[0].CacheControl == nil || ar.System[1].CacheControl == nil {
+		t.Errorf("cache breakpoints must be on the last TWO system blocks")
 	}
 	last := ar.Messages[len(ar.Messages)-1]
 	if last.Content[len(last.Content)-1].CacheControl == nil {
@@ -101,6 +103,57 @@ func TestAnthropicPromptCacheBreakpoints(t *testing.T) {
 	}
 	if strings.Contains(string(blob), `"cache_control":"`) {
 		t.Fatalf("cache_control serialized as a bare string (invalid): %s", blob)
+	}
+}
+
+// TestAnthropicPromptCacheSplitsSummaryFromStableSystemPrefix reproduces the
+// pre/post-compaction shape: 3 stable system blocks (billing, identity,
+// system prompt) with no summary yet, then the same 3 blocks plus a 4th
+// (compaction summary) appended. The breakpoint over the stable prefix must
+// land on the SAME block (the system prompt, index 2) in both cases, so that
+// block's cached prefix survives a compaction instead of being invalidated
+// along with the summary that changes underneath it.
+func TestAnthropicPromptCacheSplitsSummaryFromStableSystemPrefix(t *testing.T) {
+	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "oauth", Access: "t"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
+	base := func(withSummary bool) *Request {
+		sys := []SystemBlock{{Text: "billing"}, {Text: "identity"}, {Text: "system prompt"}}
+		if withSummary {
+			sys = append(sys, SystemBlock{Text: "compaction summary"})
+		}
+		return &Request{
+			Model:    "claude-x",
+			System:   sys,
+			Messages: []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "hi"}}}},
+		}
+	}
+
+	before := p.buildAnthropicRequest(base(false), false)
+	after := p.buildAnthropicRequest(base(true), false)
+
+	// Pre-compaction: breakpoints on identity (n-2) and system prompt (n-1).
+	if before.System[0].CacheControl != nil {
+		t.Errorf("billing block must not carry a breakpoint pre-compaction")
+	}
+	if before.System[1].CacheControl == nil || before.System[2].CacheControl == nil {
+		t.Errorf("pre-compaction breakpoints must be on identity and system prompt")
+	}
+
+	// Post-compaction: the system-prompt breakpoint (index 2) must still be
+	// there — same block, same position — so its cached prefix isn't
+	// disturbed by the new summary block appended after it.
+	if after.System[2].CacheControl == nil {
+		t.Errorf("system prompt breakpoint must survive compaction (stable prefix)")
+	}
+	if after.System[2].Text != "system prompt" {
+		t.Fatalf("expected breakpoint on system prompt block, got block with text %q", after.System[2].Text)
+	}
+	// The new summary block (index 3) gets its own breakpoint; the now-
+	// interior identity block (index 1) does not need one anymore.
+	if after.System[3].CacheControl == nil {
+		t.Errorf("summary block must carry its own breakpoint")
+	}
+	if after.System[0].CacheControl != nil {
+		t.Errorf("billing block must not carry a breakpoint post-compaction")
 	}
 }
 
