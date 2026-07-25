@@ -177,6 +177,7 @@ func (a *Agent) runQuickAnswerLoop(ctx context.Context, req *provider.Request, t
 
 		for _, tc := range toolCalls {
 			block := provider.ContentBlock{Type: "tool_result", ToolCallID: tc.ID}
+			var imageBlock *provider.ContentBlock
 			if !btwAllowedTools[tc.Name] {
 				block.ToolIsError = true
 				block.ToolResult = "tool not available for /btw side questions (read-only tools only)"
@@ -198,9 +199,25 @@ func (a *Agent) runQuickAnswerLoop(ctx context.Context, req *provider.Request, t
 					block.ToolResult = res.Error
 				} else {
 					block.ToolResult = res.Content
+					// A tool that loaded an image (currently only `read` on
+					// an image file — see ToolResult's doc comment) carries
+					// it as a sibling content block, same as the main turn
+					// loop (agent.go) — every provider already knows how to
+					// turn that into real vision input for a "tool"-role
+					// message.
+					if res.ImagePath != "" {
+						imageBlock = &provider.ContentBlock{
+							Type: "image", MediaType: res.MediaType,
+							ImagePath: res.ImagePath, ImageName: res.ImageName,
+						}
+					}
 				}
 			}
-			req.Messages = append(req.Messages, provider.Message{Role: "tool", Content: []provider.ContentBlock{block}})
+			blocks := []provider.ContentBlock{block}
+			if imageBlock != nil {
+				blocks = append(blocks, *imageBlock)
+			}
+			req.Messages = append(req.Messages, provider.Message{Role: "tool", Content: blocks})
 		}
 	}
 }

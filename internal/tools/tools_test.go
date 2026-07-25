@@ -166,8 +166,28 @@ func TestRead_ImageBase64(t *testing.T) {
 	if res.Error != "" {
 		t.Fatalf("read error: %s", res.Error)
 	}
-	if !strings.Contains(res.Content, "image/png") || !strings.Contains(res.Content, "base64:") {
-		t.Fatalf("expected image metadata and base64, got %q", res.Content)
+	// Content is a short description only — the actual image is never
+	// inlined as base64 text (it used to be, and silently corrupted past
+	// maxToolOutputBytes; see ToolResult's doc comment). Real image data
+	// travels via ImagePath/MediaType instead, the same convention as a
+	// user-attached image, loaded by the provider at request-build time.
+	if !strings.Contains(res.Content, "image/png") {
+		t.Fatalf("expected image metadata in Content, got %q", res.Content)
+	}
+	if strings.Contains(res.Content, "base64:") {
+		t.Fatalf("Content must not inline base64 data anymore, got %q", res.Content)
+	}
+	if res.ImagePath == "" {
+		t.Fatalf("expected ImagePath set for an image read")
+	}
+	if res.MediaType != "image/png" {
+		t.Fatalf("MediaType = %q, want image/png", res.MediaType)
+	}
+	if res.ImageName != "pixel.png" {
+		t.Fatalf("ImageName = %q, want pixel.png", res.ImageName)
+	}
+	if _, err := os.Stat(res.ImagePath); err != nil {
+		t.Fatalf("ImagePath %q must point at a real, readable file: %v", res.ImagePath, err)
 	}
 }
 

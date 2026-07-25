@@ -197,16 +197,7 @@ func (p *OllamaProvider) buildOllamaRequest(req *Request) ollamaChatRequest {
 
 	for _, m := range req.Messages {
 		if m.Role == "tool" {
-			for _, cb := range m.Content {
-				if cb.Type != "tool_result" {
-					continue
-				}
-				out.Messages = append(out.Messages, ollamaOpenAIMessage{
-					Role:       "tool",
-					Content:    cb.ToolResult,
-					ToolCallID: cb.ToolCallID,
-				})
-			}
+			out.Messages = append(out.Messages, ollamaToolResultMessages(m.Content)...)
 			continue
 		}
 
@@ -272,6 +263,36 @@ func (p *OllamaProvider) buildOllamaRequest(req *Request) ollamaChatRequest {
 		})
 	}
 
+	return out
+}
+
+// ollamaToolResultMessages converts a genuine "tool"-role message's content
+// blocks into OpenAI-compatible chat messages: one role:"tool" message per
+// tool_result, plus a following role:"user" message carrying the image when
+// that tool_result has a sibling "image" block (a tool that loaded an image
+// for the model, currently only `read` on an image file — see ContentBlock's
+// ImagePath doc comment). Tool-role image content isn't reliably supported
+// across chat-completions-compatible servers, but an ordinary user-role
+// image message always is, and this format has no role-alternation
+// constraint (unlike Anthropic), so inserting one costs nothing.
+func ollamaToolResultMessages(blocks []ContentBlock) []ollamaOpenAIMessage {
+	var out []ollamaOpenAIMessage
+	pendingImage := false
+	for _, cb := range blocks {
+		switch cb.Type {
+		case "tool_result":
+			out = append(out, ollamaOpenAIMessage{
+				Role: "tool", Content: cb.ToolResult, ToolCallID: cb.ToolCallID,
+			})
+			pendingImage = true
+		case "image":
+			if !pendingImage {
+				continue
+			}
+			out = append(out, ollamaOpenAIMessage{Role: "user", Content: openAIUserContent("", []ContentBlock{cb})})
+			pendingImage = false
+		}
+	}
 	return out
 }
 

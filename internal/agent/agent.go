@@ -1303,7 +1303,24 @@ roundLoop:
 				}
 			}
 
-			toolContent, err := contentBlocksToJSON([]provider.ContentBlock{toolBlock})
+			// A tool that loaded an image for the model to see (currently
+			// only `read` on an image file) carries it here rather than
+			// inlined in ToolResult.Content — see ToolResult's doc comment.
+			// Append it as a sibling content block in this SAME tool-role
+			// message: every provider already knows how to load + encode an
+			// "image" block, since that's exactly how a user-attached image
+			// reaches them (see anthropic.go/openai.go/ollama.go/xai.go's
+			// own "image" cases).
+			blocks := []provider.ContentBlock{toolBlock}
+			if result.ImagePath != "" {
+				blocks = append(blocks, provider.ContentBlock{
+					Type:      "image",
+					MediaType: result.MediaType,
+					ImagePath: result.ImagePath,
+					ImageName: result.ImageName,
+				})
+			}
+			toolContent, err := contentBlocksToJSON(blocks)
 			if err != nil {
 				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})
 				a.sendEvent(OutputEvent{Type: OutputDone})

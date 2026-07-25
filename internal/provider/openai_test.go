@@ -143,7 +143,7 @@ func TestBuildRequestResponsesFormat(t *testing.T) {
 		t.Errorf("function_call item wrong: %+v", body.Input[2])
 	}
 	if body.Input[3].Type != "function_call_output" || body.Input[3].CallID != "call_1" ||
-		body.Input[3].Output == nil || *body.Input[3].Output != "a.txt" {
+		string(body.Input[3].Output) != `"a.txt"` {
 		t.Errorf("function_call_output item wrong: %+v", body.Input[3])
 	}
 	if len(body.Tools) != 1 || body.Tools[0].Type != "function" || body.Tools[0].Name != "bash" {

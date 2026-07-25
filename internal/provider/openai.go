@@ -192,14 +192,88 @@ type openaiRespItem struct {
 	CallID    string           `json:"call_id,omitempty"`
 	Name      string           `json:"name,omitempty"`
 	Arguments string           `json:"arguments,omitempty"`
-	// Output is a *string, not string+omitempty: the Responses API requires
-	// "output" present on every function_call_output item, even when the
-	// tool legitimately produced no content (e.g. `ls` on an empty dir,
-	// `read` on an empty file) — a plain string+omitempty drops the field
-	// entirely for "", and the API then rejects the request with
-	// "Missing required parameter: 'input[N].output'". Left nil (omitted)
-	// for message/function_call items, where "output" doesn't apply.
-	Output *string `json:"output,omitempty"`
+	// Output is pre-marshaled JSON (see openaiFunctionCallOutput), not
+	// string+omitempty: the Responses API requires "output" present on
+	// every function_call_output item, even when the tool legitimately
+	// produced no content (e.g. `ls` on an empty dir, `read` on an empty
+	// file) — a plain string+omitempty drops the field entirely for "",
+	// and the API then rejects the request with "Missing required
+	// parameter: 'input[N].output'". json.RawMessage's omitempty only
+	// triggers on a genuinely empty/nil slice, so always marshaling a real
+	// value (even `""`) keeps the field present. Output can be either a
+	// plain JSON string or an array of input_text/input_image parts (a
+	// tool that loaded an image, e.g. `read` on an image file, needs the
+	// latter — see ContentBlock's ImagePath doc comment). Left nil
+	// (omitted) for message/function_call items, where "output" doesn't
+	// apply.
+	Output json.RawMessage `json:"output,omitempty"`
+}
+
+// openaiFunctionCallOutput builds a function_call_output item's "output"
+// value: a plain JSON string when image is nil, or an array of
+// input_text/input_image parts when the tool result carries an image (the
+// Responses API accepts both shapes for function_call_output.output).
+// Always returns non-empty bytes, even for text == "" — see Output's doc
+// comment for why that matters.
+func openaiFunctionCallOutput(text string, image *ContentBlock) json.RawMessage {
+	if image != nil {
+		if url, ok := imageBlockDataURL(*image); ok {
+			raw, err := json.Marshal([]openaiRespPart{
+				{Type: "input_text", Text: text},
+				{Type: "input_image", ImageURL: url},
+			})
+			if err == nil {
+				return raw
+			}
+		}
+	}
+	raw, _ := json.Marshal(text)
+	return raw
+}
+
+// openaiFunctionCallOutputItems converts tool_result blocks into
+// function_call_output items, pairing each with an immediately-following
+// sibling "image" block (see ContentBlock's ImagePath doc comment) into one
+// item's Output. Adjacency is strict — ANY other block type in between
+// (e.g. a real text/image block belonging to the user's own message, which
+// shares this same blocks slice when /btw folds tool_result placeholders
+// into a user turn) clears the pending tool_result, so only a genuine
+// image sibling produced right after its own tool_result (agent.go's
+// ordering) is ever paired — never a user's own attached image mistaken
+// for one.
+func openaiFunctionCallOutputItems(blocks []ContentBlock) []openaiRespItem {
+	var items []openaiRespItem
+	var pending *openaiRespItem
+	var pendingText string
+	flush := func() {
+		if pending != nil {
+			items = append(items, *pending)
+			pending = nil
+		}
+	}
+	for _, cb := range blocks {
+		switch cb.Type {
+		case "tool_result":
+			flush()
+			pendingText = cb.ToolResult
+			pending = &openaiRespItem{
+				Type:   "function_call_output",
+				CallID: cb.ToolCallID,
+				Output: openaiFunctionCallOutput(pendingText, nil),
+			}
+		case "image":
+			if pending == nil {
+				continue
+			}
+			img := cb
+			pending.Output = openaiFunctionCallOutput(pendingText, &img)
+			flush()
+		default:
+			flush()
+		}
+	}
+	flush()
+	return items
 }
 
 // openaiRespPart is one content part. Text parts use input_text/output_text;
@@ -249,16 +323,7 @@ func (p *OpenAIProvider) buildRequest(req *Request) openaiRespRequest {
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case "tool":
-			for _, cb := range msg.Content {
-				if cb.Type == "tool_result" {
-					output := cb.ToolResult
-					body.Input = append(body.Input, openaiRespItem{
-						Type:   "function_call_output",
-						CallID: cb.ToolCallID,
-						Output: &output,
-					})
-				}
-			}
+			body.Input = append(body.Input, openaiFunctionCallOutputItems(msg.Content)...)
 		case "assistant":
 			var parts []openaiRespPart
 			var calls []openaiRespItem
@@ -291,17 +356,7 @@ func (p *OpenAIProvider) buildRequest(req *Request) openaiRespRequest {
 			// constraint (input is a flat, order-based item list), so
 			// those blocks are just emitted as their own
 			// function_call_output items ahead of the user message.
-			for _, cb := range msg.Content {
-				if cb.Type != "tool_result" {
-					continue
-				}
-				output := cb.ToolResult
-				body.Input = append(body.Input, openaiRespItem{
-					Type:   "function_call_output",
-					CallID: cb.ToolCallID,
-					Output: &output,
-				})
-			}
+			body.Input = append(body.Input, openaiFunctionCallOutputItems(msg.Content)...)
 			parts := openaiUserParts(msg.Content)
 			if len(parts) > 0 {
 				body.Input = append(body.Input, openaiRespItem{Type: "message", Role: "user", Content: parts})

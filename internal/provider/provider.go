@@ -191,9 +191,25 @@ type Tool interface {
 
 // ToolResult is the outcome of a tool execution. Exactly one of Content or
 // Error is meaningful: Error is the empty string on success.
+//
+// ImagePath/MediaType/ImageName let a tool (currently only `read` on an
+// image file) hand back an image for the model to actually see. The image
+// is never inlined as base64 text in Content — a provider's own vision
+// input needs a real image content block, and raw base64 dumped as text is
+// inert to every provider (plus it silently corrupted past
+// maxToolOutputBytes, see tools.TrimToolResult) and burns far more tokens
+// than a proper vision block. Only ImagePath (a file on disk, the same
+// convention as ContentBlock.ImagePath for a pasted/attached image) is
+// carried here; the agent turns it into a sibling "image" content block
+// next to the tool_result, and each provider loads + encodes it exactly
+// the way it already does for a user-attached image.
 type ToolResult struct {
 	Content string
 	Error   string // empty if success
+
+	ImagePath string // set together with MediaType/ImageName; never with Error
+	MediaType string
+	ImageName string
 }
 
 // ToolDef is a tool definition serialized into the provider request. It is

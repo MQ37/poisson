@@ -3,7 +3,6 @@ package tools
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mq37/poisson/internal/guard"
+	"github.com/mq37/poisson/internal/imaging"
 )
 
 // ReadTool reads the contents of a file.
@@ -189,6 +189,14 @@ func imageMIME(path string) string {
 	}
 }
 
+// readImage loads an image file for the model to actually see. It never
+// inlines base64 into Content (see ToolResult's doc comment for why) —
+// instead it downscales/re-encodes via imaging.ProcessFile (the same
+// pipeline a pasted/attached image goes through: capped at 1024px long
+// edge, re-encoded as PNG) and returns the resulting temp path. The agent
+// turns that into a sibling "image" content block next to the tool_result;
+// every provider already knows how to load + encode one, since that's
+// exactly how a user-attached image reaches them.
 func (t *ReadTool) readImage(path string) (ToolResult, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -197,12 +205,15 @@ func (t *ReadTool) readImage(path string) (ToolResult, error) {
 	if info.Size() > maxImageBytes {
 		return ToolResult{Error: fmt.Sprintf("image too large (%d bytes, max %d)", info.Size(), maxImageBytes)}, nil
 	}
-	data, err := os.ReadFile(path)
+	outPath, mediaType, err := imaging.ProcessFile(path)
 	if err != nil {
 		return ToolResult{Error: "cannot read image: " + err.Error()}, nil
 	}
-	mime := imageMIME(path)
-	b64 := base64.StdEncoding.EncodeToString(data)
-	content := fmt.Sprintf("Image: %s (%s, %d bytes)\nbase64:\n%s", path, mime, len(data), b64)
-	return ToolResult{Content: content}, nil
+	content := fmt.Sprintf("Image: %s (%s, %d bytes) — see attached image.", path, imageMIME(path), info.Size())
+	return ToolResult{
+		Content:   content,
+		ImagePath: outPath,
+		MediaType: mediaType,
+		ImageName: filepath.Base(path),
+	}, nil
 }

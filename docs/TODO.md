@@ -57,6 +57,17 @@ whether a stale read is still trustworthy, so it re-fetches defensively.
   summary so the agent trusts recent reads instead of re-fetching.
 - Not scoped yet — flagging only.
 
+## Environment / infra
+
+### Bash tool glitch: `fork/exec /usr/bin/bash: no such file or directory`
+
+Observed once in a live session, alongside a subagent auth failure at the same
+time. Both infra-side (host environment), not a code issue in this repo —
+`/usr/bin/bash` momentarily missing/unresolvable from the process's exec path,
+and a separate subagent auth outage in the same window. Not reproduced or
+root-caused yet; investigate if it recurs (check whether it's a transient
+mount/PATH issue, container restart, or something else host-side).
+
 ## Notes (current behavior)
 
 ### Edit/write tool cards: how the colored diff is built

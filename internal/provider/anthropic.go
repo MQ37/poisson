@@ -315,16 +315,50 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 		if msg.Role == "tool" {
 			var blocks []anthropicContentBlock
 			for j := i; j < len(req.Messages) && req.Messages[j].Role == "tool"; j++ {
-				for _, cb := range req.Messages[j].Content {
-					if cb.Type != "tool_result" {
-						continue
+				// A tool that loaded an image (currently only `read` on an
+				// image file) carries it as a sibling "image" content block
+				// right after its "tool_result" block in the SAME store
+				// message (see agent.go) — never inlined as base64 text.
+				// Anthropic's own documented shape for a tool_result that
+				// includes an image nests it INSIDE that tool_result's own
+				// "content" array (a well-known pattern from Anthropic's
+				// computer-use tool), so pair each image with the
+				// tool_result immediately preceding it here, rather than
+				// appending it as an unrelated top-level block.
+				var pending *anthropicContentBlock
+				var pendingText string
+				flush := func() {
+					if pending == nil {
+						return
 					}
-					resultContent, _ := json.Marshal(cb.ToolResult)
-					blocks = append(blocks, anthropicContentBlock{
-						Type: "tool_result", ToolUseID: cb.ToolCallID, Content: resultContent,
-						IsError: cb.ToolIsError,
-					})
+					blocks = append(blocks, *pending)
+					pending = nil
 				}
+				for _, cb := range req.Messages[j].Content {
+					switch cb.Type {
+					case "tool_result":
+						flush()
+						tr := anthropicContentBlock{Type: "tool_result", ToolUseID: cb.ToolCallID, IsError: cb.ToolIsError}
+						raw, _ := json.Marshal(cb.ToolResult)
+						tr.Content = raw
+						pendingText = cb.ToolResult
+						pending = &tr
+					case "image":
+						if pending == nil {
+							continue
+						}
+						data, mt, ok := imageBlockBase64(cb)
+						if !ok {
+							continue
+						}
+						nested, _ := json.Marshal([]anthropicContentBlock{
+							{Type: "text", Text: pendingText},
+							{Type: "image", Source: &anthropicImageSource{Type: "base64", MediaType: mt, Data: data}},
+						})
+						pending.Content = nested
+					}
+				}
+				flush()
 				i = j
 			}
 			// blocks is nil if every grouped tool message's content failed the

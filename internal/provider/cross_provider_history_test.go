@@ -52,7 +52,7 @@ func TestOpenAIBuildRequestDropsThinkingBlocksFromOtherProviderHistory(t *testin
 	// message's thinking blocks).
 	foundOutput := false
 	for _, item := range body.Input {
-		if item.Type == "function_call_output" && item.Output != nil && *item.Output == "a.txt" {
+		if item.Type == "function_call_output" && string(item.Output) == `"a.txt"` {
 			foundOutput = true
 		}
 	}

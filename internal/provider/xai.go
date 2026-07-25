@@ -184,16 +184,7 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 	// Messages.
 	for _, msg := range req.Messages {
 		if msg.Role == "tool" {
-			for _, cb := range msg.Content {
-				if cb.Type != "tool_result" {
-					continue
-				}
-				ar.Messages = append(ar.Messages, xaiMessage{
-					Role:       "tool",
-					Content:    cb.ToolResult,
-					ToolCallID: cb.ToolCallID,
-				})
-			}
+			ar.Messages = append(ar.Messages, xaiToolResultMessages(msg.Content)...)
 			continue
 		}
 
@@ -263,6 +254,36 @@ func (p *XAIProvider) buildRequest(req *Request) xaiRequest {
 	}
 
 	return ar
+}
+
+// xaiToolResultMessages converts a genuine "tool"-role message's content
+// blocks into OpenAI-compatible chat messages: one role:"tool" message per
+// tool_result, plus a following role:"user" message carrying the image when
+// that tool_result has a sibling "image" block (a tool that loaded an image
+// for the model, currently only `read` on an image file — see ContentBlock's
+// ImagePath doc comment). Tool-role image content isn't reliably supported
+// across chat-completions-compatible servers, but an ordinary user-role
+// image message always is, and this format has no role-alternation
+// constraint (unlike Anthropic), so inserting one costs nothing.
+func xaiToolResultMessages(blocks []ContentBlock) []xaiMessage {
+	var out []xaiMessage
+	pendingImage := false
+	for _, cb := range blocks {
+		switch cb.Type {
+		case "tool_result":
+			out = append(out, xaiMessage{
+				Role: "tool", Content: cb.ToolResult, ToolCallID: cb.ToolCallID,
+			})
+			pendingImage = true
+		case "image":
+			if !pendingImage {
+				continue
+			}
+			out = append(out, xaiMessage{Role: "user", Content: openAIUserContent("", []ContentBlock{cb})})
+			pendingImage = false
+		}
+	}
+	return out
 }
 
 func convertXAIUsage(u *openaiSSEUsage) *Usage {
