@@ -364,4 +364,3 @@ codebase one person can hold in their head.
 ---
 
 <p align="center"><sub>poisson · run <code>px</code> · <code>/help</code> for the tour</sub></p>
-� <code>/help</code> for the tour</sub></p>
