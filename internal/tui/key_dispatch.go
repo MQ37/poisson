@@ -19,15 +19,24 @@ func (t *TUI) feed(data []byte) (bool, error) {
 
 // approvalRoutesToHandler reports whether a key pressed while a bash approval is
 // pending should flow to the normal handler (feedKey) rather than being treated
-// as an approval answer. This lets the user Tab into conversation focus and
-// scroll the conversation while the approval stays pending. Answer keys
-// (a/y/d/n/Enter/Esc in input focus) and command-panel arrows are handled by
-// the caller.
+// as an approval answer. This lets the user Tab into conversation focus,
+// scroll the conversation, and expand/collapse thinking or tool-card blocks
+// while the approval stays pending. Answer keys (a/y/d/n/Enter/Esc in input
+// focus) and command-panel arrows are handled by the caller.
 func approvalRoutesToHandler(k Key, convFocus bool, scrollRows int) bool {
 	if k.Kind == KeyTab || k.Kind == KeyShiftTab {
 		return true
 	}
 	if _, ok := scrollDeltaForKey(k, scrollRows); ok {
+		return true
+	}
+	// Ctrl+T (toggle thinking) and Ctrl+E (expand/collapse tool card) are
+	// pure display toggles, harmless regardless of focus — neither collides
+	// with an approval answer key (keyApprovalAnswer only recognizes
+	// Escape/Enter/a/y/d/n), so route them unconditionally like scroll keys
+	// instead of swallowing them into "not a valid answer" while a prompt
+	// is pending.
+	if k.Kind == KeyCtrl && (k.Byte == 5 || k.Byte == 20) {
 		return true
 	}
 	if convFocus && (k.isNavUp() || k.isNavDown() || k.Kind == KeyEscape) {

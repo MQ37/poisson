@@ -12,6 +12,17 @@ import (
 	"github.com/mq37/poisson/internal/store"
 )
 
+// padSummary pads body with filler text so it clears minSummaryChars — tests
+// that don't assert on the summary's exact content use a short literal for
+// readability; this keeps that literal from tripping compact()'s degenerate-
+// summary floor.
+func padSummary(body string) string {
+	for len(body) < minSummaryChars {
+		body += " filler"
+	}
+	return body
+}
+
 // seedMessages appends messages with the given roles to a session.
 func seedMessages(t *testing.T, s *store.Store, sid string, roles []string) {
 	t.Helper()
@@ -109,7 +120,7 @@ func TestCompactManualKeepsUserFirst(t *testing.T) {
 		}
 	}
 	fp := newFakeProvider()
-	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("summary", nil)})
+	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse(padSummary("summary"), nil)})
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
 	if err := a.Compact(); err != nil {
 		t.Fatalf("Compact: %v", err)
@@ -120,6 +131,61 @@ func TestCompactManualKeepsUserFirst(t *testing.T) {
 	}
 	if len(msgs) > 0 && msgs[0].Role != "user" {
 		t.Fatalf("kept tail starts with %q, want user (valid request start); kept %d of %d", msgs[0].Role, len(msgs), len(roles))
+	}
+}
+
+// TestChooseSummarizeCountBudgetsAgainstCompactionModelWindow guards the
+// context-window budgeting fix: chooseSummarizeCount must size its budget
+// against the model that actually RECEIVES the summarization request
+// (config.Compaction.Model's model, here "small-model" — same "fake"
+// provider as the main model, so compactionRuntime resolves it without
+// needing a second real provider), not a.ContextWindow() (the main
+// conversation model, "big-model", whose enormous window would make every
+// message fit and never split). Regressing to the old behavior would leave
+// nothing active after compaction; the fix must still leave some tail active.
+func TestChooseSummarizeCountBudgetsAgainstCompactionModelWindow(t *testing.T) {
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "big-model")
+	cfg := newTestConfig()
+	cfg.Compaction.Model = "fake/small-model"
+
+	// Same sizing as TestCompactManualKeepsUserFirst: ~1200 tokens/message, so
+	// 6 exceed a 0.65*8192 budget but fewer don't — proven to force a real
+	// split against an 8192-token window.
+	big := strings.Repeat("x ", 2400)
+	roles := []string{"user", "assistant", "user", "assistant", "user", "assistant"}
+	now := time.Now().Unix()
+	for i, role := range roles {
+		content, _ := json.Marshal([]map[string]string{{"type": "text", "text": role + " " + big}})
+		if err := s.AppendMessage(&store.Message{
+			SessionID: sid, Role: role, Content: string(content), CreatedAt: now + int64(i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fp := provider.NewFakeProvider("fake", []provider.Model{
+		{ID: "big-model", ContextWindow: 10_000_000},
+		{ID: "small-model", ContextWindow: 8192},
+	})
+	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse(padSummary("## Big Picture\nsplit"), nil)})
+	a := NewAgent(s, fp, newTestRegistry("."), cfg, sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+
+	reqs := fp.Requests()
+	if len(reqs) != 1 || reqs[0].Model != "small-model" {
+		t.Fatalf("compaction request model = %+v, want a single request against small-model", reqs)
+	}
+	msgs, err := s.GetMessages(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("all 6 messages were summarized in one pass — budget used big-model's huge window " +
+			"instead of the compaction model's (small-model, 8192 tokens); expected a split leaving some active")
 	}
 }
 
@@ -142,7 +208,7 @@ func TestCompactionRequestAlwaysEndsWithUserMessage(t *testing.T) {
 
 	fp := newFakeProvider()
 	fp.SetResponses([][]provider.StreamEvent{
-		provider.FakeTextResponse("## Big Picture\nsummary", nil),
+		provider.FakeTextResponse(padSummary("## Big Picture\nsummary"), nil),
 	})
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
 
@@ -166,7 +232,7 @@ func TestCompactSummarizesAllMessages(t *testing.T) {
 
 	fp := newFakeProvider()
 	fp.SetResponses([][]provider.StreamEvent{
-		provider.FakeTextResponse("## Big Picture\nAll compacted", nil),
+		provider.FakeTextResponse(padSummary("## Big Picture\nAll compacted"), nil),
 	})
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
 
@@ -234,8 +300,8 @@ func TestSecondCompactionIncorporatesPreviousSummary(t *testing.T) {
 	sid := newTestSession(t, s, "test-model")
 	seedMessages(t, s, sid, []string{"user", "assistant"})
 
-	firstSummary := "## Big Picture\nfirst summary content"
-	secondSummary := "## Big Picture\nsecond summary content"
+	firstSummary := padSummary("## Big Picture\nfirst summary content")
+	secondSummary := padSummary("## Big Picture\nsecond summary content")
 	fp := newFakeProvider()
 	fp.SetResponses([][]provider.StreamEvent{
 		provider.FakeTextResponse(firstSummary, nil),
@@ -309,7 +375,7 @@ func TestCompactAutoKeepsActiveTail(t *testing.T) {
 
 	fp := newFakeProvider()
 	fp.SetResponses([][]provider.StreamEvent{
-		provider.FakeTextResponse("## Big Picture\nolder turns", nil),
+		provider.FakeTextResponse(padSummary("## Big Picture\nolder turns"), nil),
 	})
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
 
@@ -343,7 +409,7 @@ func TestCompactAutoAppendsContinuationOnSingleTurn(t *testing.T) {
 	seedMessages(t, s, sid, []string{"user", "assistant", "tool"})
 
 	fp := newFakeProvider()
-	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("## Big Picture\nDid stuff.", nil)})
+	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse(padSummary("## Big Picture\nDid stuff."), nil)})
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
 
 	if err := a.compact(context.Background(), false, true); err != nil {

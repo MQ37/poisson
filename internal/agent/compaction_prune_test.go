@@ -258,7 +258,7 @@ func TestCompactPrunesStaleReadInKeptTail(t *testing.T) {
 	appendToolResult(t, s, sid, "c2", "edited f.go")
 
 	fp := newFakeProvider()
-	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("## Big Picture\nsummary", nil)})
+	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse(padSummary("## Big Picture\nsummary"), nil)})
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8),
 		func(context.Context, string, string, string) (bool, string) { return true, "" })
 

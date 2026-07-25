@@ -157,6 +157,28 @@ func TestApprovalMouseWheelScrollsConversationAboveThePanel(t *testing.T) {
 	}
 }
 
+// TestApprovalMouseClickExpandsBlockAboveThePanel reproduces a reported bug:
+// dispatchOverlayClickLocked blanket-blocked every click while ANY non-search
+// overlay was active, including the approval overlay — so a click on a
+// thinking/tool-card block in the still-visible conversation above the
+// pending approval panel did nothing (same class of bug as the wheel-scroll
+// one fixed above, see TestApprovalMouseWheelScrollsConversationAboveThePanel).
+func TestApprovalMouseClickExpandsBlockAboveThePanel(t *testing.T) {
+	tui := newTUI(nil, "s1", nil)
+	tui.headerRows = 1
+	tui.scrollRows = 8
+	tui.cols = 80
+	tui.scroll.appendBlock(blockThinking, "thought")
+	tui.scroll.finalizeThinking()
+	tui.approving.Store(true)
+	tui.activeOverlay = newApprovalOverlay("echo hi", "test", "", agent.ApprovalOriginMain)
+
+	tui.handleMouseClick(2) // row 2 = first scroll row when headerRows=1
+	if tui.scroll.blocks[0].meta.Collapsed {
+		t.Fatal("click on the conversation should expand the block even while approval is pending")
+	}
+}
+
 func TestHandleMouseClickIgnoresHeader(t *testing.T) {
 	tui := newTUI(nil, "s1", nil)
 	tui.headerRows = 1

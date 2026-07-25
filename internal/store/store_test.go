@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/mq37/poisson/internal/testutil"
 )
@@ -325,6 +326,37 @@ func TestApplyCompaction(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Seq != 3 {
 		t.Fatalf("active messages = %v, want seq 3 only", got)
+	}
+}
+
+// TestGetLastCompactionBreaksCreatedAtTies reproduces a real bug: created_at
+// is unix-second resolution, so two compactions recorded within the same
+// second (routine — a session can legitimately auto-compact twice in a busy
+// second) tied on ORDER BY created_at DESC alone, and the tie could resolve
+// to either row. GetLastCompaction must always return the most recently
+// RecordCompaction-ed row regardless of the created_at tie.
+func TestGetLastCompactionBreaksCreatedAtTies(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "cc")
+
+	now := time.Now().Unix()
+	if err := s.RecordCompaction(&Compaction{
+		ID: "first", SessionID: "cc", Summary: "first summary", TokensBefore: 10, CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("RecordCompaction (first): %v", err)
+	}
+	if err := s.RecordCompaction(&Compaction{
+		ID: "second", SessionID: "cc", Summary: "second summary", TokensBefore: 20, CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("RecordCompaction (second): %v", err)
+	}
+
+	got, err := s.GetLastCompaction("cc")
+	if err != nil {
+		t.Fatalf("GetLastCompaction: %v", err)
+	}
+	if got == nil || got.ID != "second" {
+		t.Fatalf("GetLastCompaction = %+v, want the second (most recently inserted) row", got)
 	}
 }
 

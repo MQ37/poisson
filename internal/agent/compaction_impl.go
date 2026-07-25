@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/store"
@@ -14,6 +15,11 @@ import (
 
 // ErrNothingToCompact is returned when /compact has no messages to summarize.
 var ErrNothingToCompact = errors.New("nothing to compact")
+
+// minSummaryChars is the floor a cleaned summary must clear to be accepted.
+// Below this it's treated the same as an empty response — refused rather
+// than committed as the sole surviving memory of the summarized messages.
+const minSummaryChars = 200
 
 // compactionSystemPrompt is the handoff summarization prompt (originally
 // SPEC §13.3, since rewritten for detail — a short, generic summary that
@@ -119,7 +125,18 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		estimatedTokens += a.EstimateTokens(m.Content)
 	}
 
-	summarizeCount, err := a.chooseSummarizeCount(msgs, keepActiveTail)
+	// Resolve which provider/model actually receives the summarization
+	// request BEFORE budgeting the summarize count against it — the
+	// compaction model (config.Compaction.Model) can have a smaller context
+	// window than the conversation's main model, and budgeting against the
+	// wrong (larger) window can hand the compaction call itself more
+	// messages than it can fit.
+	compactionProvider, compactionModel, err := a.compactionRuntime()
+	if err != nil {
+		return err
+	}
+
+	summarizeCount, err := a.chooseSummarizeCount(msgs, keepActiveTail, compactionProvider, compactionModel)
 	if err != nil {
 		return err
 	}
@@ -184,11 +201,6 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		}},
 	})
 
-	compactionProvider, compactionModel, err := a.compactionRuntime()
-	if err != nil {
-		return err
-	}
-
 	req := &provider.Request{
 		Model:    compactionModel,
 		System:   []provider.SystemBlock{{Text: compactionSystemPrompt}},
@@ -220,6 +232,16 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 	summaryText := strings.TrimSpace(summary.String())
 	if summaryText == "" {
 		return fmt.Errorf("compaction produced empty summary")
+	}
+	// A non-empty but suspiciously short summary is just as dangerous as an
+	// empty one: it becomes the ONLY surviving memory of everything in
+	// toSummarize, and a truncated/malformed response (stream cut off, model
+	// error, provider hiccup) can pass the empty check while still losing
+	// nearly everything. minSummaryChars is a coarse floor, not a quality
+	// bar — legitimate summaries of even a small conversation clear it
+	// easily given the prompt's mandatory section headers.
+	if n := utf8.RuneCountInString(summaryText); n < minSummaryChars {
+		return fmt.Errorf("compaction produced a suspiciously short summary (%d chars, want >= %d) — refusing to apply; likely a truncated or malformed model response", n, minSummaryChars)
 	}
 
 	// 5–6. Atomically store summary and mark messages compacted.
@@ -296,7 +318,7 @@ func (a *Agent) shouldCompact() bool {
 // must be a user turn and the in-flight tool results must stay visible. Without
 // it (manual /compact) it summarizes as much as fits the summarization budget,
 // which may empty the active set — the next user message then starts fresh.
-func (a *Agent) chooseSummarizeCount(msgs []store.Message, keepActiveTail bool) (int, error) {
+func (a *Agent) chooseSummarizeCount(msgs []store.Message, keepActiveTail bool, compactionProvider provider.Provider, compactionModel string) (int, error) {
 	if keepActiveTail {
 		count := lastUserIndex(msgs)
 		if count <= 0 {
@@ -312,7 +334,11 @@ func (a *Agent) chooseSummarizeCount(msgs []store.Message, keepActiveTail bool) 
 	}
 
 	count := adjustCompactionCount(msgs, len(msgs))
-	budget := int(float64(a.ContextWindow()) * 0.65)
+	// Budget against the model that actually RECEIVES the summarization
+	// request (compactionProvider/compactionModel), not a.ContextWindow()
+	// (the main conversation model) — those differ whenever
+	// config.Compaction.Model is set to a smaller-window model.
+	budget := int(float64(a.contextWindowFor(compactionProvider, compactionModel)) * 0.65)
 	var summary string
 	if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil &&
 		sess.CompactionSummary != nil {

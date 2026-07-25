@@ -165,6 +165,10 @@ func TestApprovalRoutesToHandler(t *testing.T) {
 		{"Esc in input focus stays (deny)", Key{Kind: KeyEscape}, false, false},
 		{"answer letter stays (input)", Key{Kind: KeyRune, Rune: 'a'}, false, false},
 		{"answer letter stays (conv)", Key{Kind: KeyRune, Rune: 'n'}, true, false},
+		{"Ctrl+E always routes (expand tool card)", Key{Kind: KeyCtrl, Byte: 5}, false, true},
+		{"Ctrl+E always routes even in conv focus", Key{Kind: KeyCtrl, Byte: 5}, true, true},
+		{"Ctrl+T always routes (toggle thinking)", Key{Kind: KeyCtrl, Byte: 20}, false, true},
+		{"other Ctrl byte stays (not a toggle)", Key{Kind: KeyCtrl, Byte: 3}, false, false},
 	}
 	for _, c := range cases {
 		if got := approvalRoutesToHandler(c.k, c.convFocus, 24); got != c.want {

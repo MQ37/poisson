@@ -308,7 +308,7 @@ func TestSubagentSessionAutoCompacts(t *testing.T) {
 
 	prov := newFakeProvider()
 	first, second := provider.FakeToolCallResponse("bash", map[string]string{"command": "ls", "description": "look around"}, "done exploring")
-	summary := provider.FakeTextResponse("## Big Picture\nExplored the dir.", nil)
+	summary := provider.FakeTextResponse(padSummary("## Big Picture\nExplored the dir."), nil)
 	prov.SetResponses([][]provider.StreamEvent{first, summary, second})
 
 	reg := newTestRegistry(".")

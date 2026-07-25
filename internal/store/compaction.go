@@ -34,8 +34,12 @@ func (s *Store) RecordCompaction(c *Compaction) error {
 func (s *Store) GetLastCompaction(sessionID string) (*Compaction, error) {
 	var c Compaction
 	var messageID sql.NullString
+	// created_at has only whole-second resolution, so two compactions in the
+	// same second (routine in tests, possible in practice) tie; break the tie
+	// with rowid DESC so this always returns the most recently INSERTed row,
+	// not whichever the tie happens to resolve to.
 	err := s.db.QueryRow(`SELECT id, session_id, message_id, summary, tokens_before, tokens_after, cost, created_at
-		FROM compactions WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`, sessionID).
+		FROM compactions WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`, sessionID).
 		Scan(&c.ID, &c.SessionID, &messageID, &c.Summary,
 			&c.TokensBefore, &c.TokensAfter, &c.Cost, &c.CreatedAt)
 	if err == sql.ErrNoRows {

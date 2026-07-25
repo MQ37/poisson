@@ -159,8 +159,21 @@ func (a *Agent) EstimateTokens(text string) int {
 
 // ContextWindow returns the context window size for the current model.
 func (a *Agent) ContextWindow() int {
-	model := a.currentModel()
-	provID := a.providerID()
+	return a.contextWindowFor(a.provider, a.currentModel())
+}
+
+// contextWindowFor returns the context window size for an arbitrary
+// provider+model pair. Factored out of ContextWindow so callers that budget
+// against a DIFFERENT model than the one driving the conversation — e.g.
+// compact() when config.Compaction.Model names a smaller-window model — size
+// their budget against the model that will actually receive the request,
+// not the main conversation model. p may be nil (guard-only mode never
+// touches the LLM); mirrors providerID()'s nil handling.
+func (a *Agent) contextWindowFor(p provider.Provider, model string) int {
+	provID := ""
+	if p != nil {
+		provID = p.ID()
+	}
 
 	if s, ok := provider.MergedModelSettings(a.config, provID, model); ok {
 		if s.ContextWindow > 0 {
@@ -168,11 +181,13 @@ func (a *Agent) ContextWindow() int {
 		}
 	}
 
-	if models, err := a.provider.Models(); err == nil {
-		for _, m := range models {
-			if m.ID == model || m.Name == model {
-				if m.ContextWindow > 0 {
-					return m.ContextWindow
+	if p != nil {
+		if models, err := p.Models(); err == nil {
+			for _, m := range models {
+				if m.ID == model || m.Name == model {
+					if m.ContextWindow > 0 {
+						return m.ContextWindow
+					}
 				}
 			}
 		}

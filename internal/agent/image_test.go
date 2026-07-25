@@ -114,7 +114,7 @@ func TestCompactionReplacesImagesWithPlaceholder(t *testing.T) {
 		}
 	}
 	fp := newFakeProvider()
-	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse("summary", nil)})
+	fp.SetResponses([][]provider.StreamEvent{provider.FakeTextResponse(padSummary("summary"), nil)})
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
 
 	if err := a.Compact(); err != nil {

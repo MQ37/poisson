@@ -168,7 +168,16 @@ func (t *TUI) dispatchOverlayClickLocked(row int) bool {
 	}
 
 	if t.activeOverlay != nil {
-		if _, ok := t.activeOverlay.(*searchOverlay); !ok {
+		_, isSearch := t.activeOverlay.(*searchOverlay)
+		_, isApproval := t.activeOverlay.(*approvalOverlay)
+		// The approval panel only occupies the bottom input region — same as
+		// the wheel-scroll exemption above — so a click landing in the still-
+		// visible conversation above it must reach the normal handler (to
+		// toggle a thinking/tool-card block) instead of being swallowed as
+		// "click blocked by overlay". handleMouseClickLocked's own row bounds
+		// check already confines this to the conversation area; a click on
+		// the panel itself still falls through to no-op there.
+		if !isSearch && !isApproval {
 			return true
 		}
 	}
