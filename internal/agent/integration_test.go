@@ -131,6 +131,71 @@ func TestInteg_ParallelToolsRunConcurrently(t *testing.T) {
 	}
 }
 
+// TestInteg_PanickingToolDoesNotCrashTurn covers the crash traced back from a
+// subagent session that died with a bare "EOF" reaching its parent, with zero
+// information about why — one tool call panicked (registry.Execute, agent.go's
+// dispatch goroutine, and the child process all had no recover anywhere on
+// this path). A single tool panicking must not crash the whole turn, let
+// alone the process: the panicking call becomes an ordinary error tool_result,
+// its sibling in the same round still completes normally, and the agent
+// keeps running to get the model's next response — exactly like any other
+// tool returning an error, not a special/degraded path.
+func TestInteg_PanickingToolDoesNotCrashTurn(t *testing.T) {
+	st := newTestStore(t)
+	sid := "itest-panic"
+	if err := st.CreateSession(&store.Session{ID: sid, Cwd: testutil.TempDir(t), Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	prov := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	prov.SetResponses(twoToolTurn("panicky", "normal", "done"))
+
+	reg := tools.NewRegistry()
+	reg.Register(barrierTool{name: "panicky", run: func(ctx context.Context) (tools.ToolResult, error) {
+		panic("simulated tool bug: nil pointer somewhere deep in a real tool")
+	}})
+	reg.Register(barrierTool{name: "normal", run: func(ctx context.Context) (tools.ToolResult, error) {
+		return tools.ToolResult{Content: "NORMAL_DONE"}, nil
+	}})
+
+	cfg := config.DefaultConfig()
+	cfg.Provider.Default = "fake"
+	a := NewAgent(st, prov, reg, cfg, sid, make(chan OutputEvent, 256), nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// The panic must never reach here as an actual Go panic — if recovery
+	// failed anywhere on the path, this call itself would crash the test
+	// process (an unrecovered panic in any goroutine kills the whole program,
+	// not just the goroutine it started in).
+	if err := a.PromptWithContext(ctx, "run both"); err != nil {
+		t.Fatalf("PromptWithContext: %v (turn must complete despite the panicking tool)", err)
+	}
+
+	msgs, err := st.GetMessages(sid)
+	if err != nil {
+		t.Fatalf("get messages: %v", err)
+	}
+	// user, assistant(tool_use x2), tool_result(panicky), tool_result(normal), assistant(text)
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages, got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[2].Role != "tool" || !strings.Contains(msgs[2].Content, "panicked") ||
+		!strings.Contains(msgs[2].Content, "simulated tool bug") {
+		t.Errorf("msg[2] should be panicky's error result naming the panic, got %q", msgs[2].Content)
+	}
+	if !strings.Contains(msgs[2].Content, `"tool_is_error":true`) {
+		t.Errorf("msg[2] must be flagged as an error tool_result, got %q", msgs[2].Content)
+	}
+	if msgs[3].Role != "tool" || !strings.Contains(msgs[3].Content, "NORMAL_DONE") {
+		t.Errorf("msg[3] should be normal's successful result (sibling call in the same round must still complete), got %q", msgs[3].Content)
+	}
+	if msgs[4].Role != "assistant" || !strings.Contains(msgs[4].Content, "done") {
+		t.Errorf("msg[4] should be the model's final answer after the tool round — proves the agent kept running, got %q", msgs[4].Content)
+	}
+}
+
 // =============================================================================
 // Integration test framework
 //

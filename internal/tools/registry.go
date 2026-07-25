@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"runtime/debug"
 	"sort"
 	"sync"
 )
@@ -66,18 +68,33 @@ func (r *Registry) Definitions() []ToolDef {
 	return defs
 }
 
-// Execute dispatches a single tool call by name.
-func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (ToolResult, error) {
+// Execute dispatches a single tool call by name. A panic inside the tool's
+// own Execute (nil pointer, index out of range, etc.) is recovered here and
+// turned into an ordinary ToolResult error instead of propagating — every
+// caller (the main turn loop, /btw, a subagent child) already handles a
+// failed tool call gracefully and keeps going; an unrecovered panic would
+// instead crash whichever process is running it (interactive session or
+// subagent alike), abandoning the whole conversation over one bad tool call.
+// The full stack trace goes to the log; callers only need the short message.
+func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessage) (res ToolResult, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("tool %q panicked: %v\n%s", name, rec, debug.Stack())
+			res = TrimToolResult(ToolResult{Error: fmt.Sprintf("tool %q panicked: %v", name, rec)})
+			err = nil
+		}
+	}()
+
 	r.mu.RLock()
 	t, ok := r.tools[name]
 	r.mu.RUnlock()
 	if !ok {
-		res := TrimToolResult(ToolResult{Error: "tool not registered: " + name})
+		res = TrimToolResult(ToolResult{Error: "tool not registered: " + name})
 		return res, fmt.Errorf("tool not registered: %s", name)
 	}
-	if err := validateToolInput(t.Schema(), input); err != nil {
-		return TrimToolResult(ToolResult{Error: err.Error()}), nil
+	if verr := validateToolInput(t.Schema(), input); verr != nil {
+		return TrimToolResult(ToolResult{Error: verr.Error()}), nil
 	}
-	res, err := t.Execute(ctx, input)
+	res, err = t.Execute(ctx, input)
 	return TrimToolResult(res), err
 }

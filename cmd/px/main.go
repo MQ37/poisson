@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -549,6 +550,22 @@ func cmdLogout(args []string) {
 const subagentNetworkRetryBudget = 3 * time.Minute
 
 func runChildMode() {
+	// A panic anywhere below (agent loop, a tool, provider parsing, etc.)
+	// would otherwise crash this process bare: the parent's ReadEvent()
+	// only sees its stdout pipe close and reports a bare "EOF" with zero
+	// diagnostic value (the panic's actual value/stack print to os.Stderr,
+	// which is inherited from the PARENT's terminal — never captured, gone
+	// the moment it happens). The interactive TUI already recovers panics
+	// the same way (internal/tui/agent_io.go, lifecycle.go); child mode
+	// never got the same treatment. Recovering here and reporting a real
+	// "error" event turns the next occurrence into something diagnosable.
+	defer func() {
+		if r := recover(); r != nil {
+			recoverChildPanic(writeChildEvent, "run", r)
+			os.Exit(1)
+		}
+	}()
+
 	// Parse args: --json [--no-skills] --session <id> [-- task]
 	var sessionID, task string
 	var noSkills bool
@@ -727,6 +744,14 @@ func runChildMode() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		// This goroutine runs concurrently with the recover() deferred at
+		// the top of runChildMode, in a DIFFERENT goroutine — that recover
+		// cannot catch a panic here, so it needs its own.
+		defer func() {
+			if r := recover(); r != nil {
+				recoverChildPanic(writeChildEvent, "event-forwarding", r)
+			}
+		}()
 		toolCount = forwardChildEvents(outputChan, a, writeChildEvent)
 	}()
 
@@ -821,6 +846,21 @@ func writeChildEvent(event map[string]interface{}) {
 	defer childEventMu.Unlock()
 	data, _ := json.Marshal(event)
 	fmt.Println(string(data))
+}
+
+// recoverChildPanic emits a structured "error" event carrying the recovered
+// panic value and a stack trace, for use from a `defer func() { if r :=
+// recover(); ... }()` site. label identifies which goroutine panicked (the
+// main run vs the event-forwarding goroutine both need their own recover,
+// since a panic in one is invisible to a recover() in the other) — without
+// this, the parent only ever sees its pipe close and reports a bare "EOF".
+// write is a param (not always the package-level writeChildEvent) so this is
+// unit-testable without capturing stdout, matching forwardChildEvents' shape.
+func recoverChildPanic(write func(map[string]interface{}), label string, r interface{}) {
+	write(map[string]interface{}{
+		"type":  "error",
+		"error": fmt.Sprintf("subagent %s panicked: %v\n%s", label, r, debug.Stack()),
+	})
 }
 
 // bufioNewScanner wraps bufio.Scanner for stdin reading.

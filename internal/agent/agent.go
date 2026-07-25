@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -1214,6 +1215,25 @@ roundLoop:
 						ToolError:         res.Error,
 					})
 				}
+				// A panic anywhere below (inside a.tools.Execute, a memo
+				// lookup, etc.) would otherwise kill this goroutine
+				// unrecovered — which kills the ENTIRE process (interactive
+				// session or subagent child alike), abandoning every other
+				// tool call still in flight this round and losing the
+				// conversation. Recovering here turns it into an ordinary
+				// failed tool_result instead: the model sees a real error
+				// for THIS call and the turn, and the agent, continue
+				// normally — exactly like any other tool returning an error.
+				// The full stack trace goes to the log (a developer concern);
+				// the model only needs the short message.
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("tool %q panicked: %v\n%s", call.Name, r, debug.Stack())
+						emit(tools.TrimToolResult(tools.ToolResult{
+							Error: fmt.Sprintf("tool %q panicked: %v", call.Name, r),
+						}))
+					}
+				}()
 				// A `read` at the same (or a narrower) range as an earlier,
 				// still-unchanged read in this session doesn't need to hit
 				// the filesystem again — see read_memo.go.

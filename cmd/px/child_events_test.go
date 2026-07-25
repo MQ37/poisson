@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mq37/poisson/internal/agent"
@@ -207,6 +208,61 @@ func TestForwardChildEvents_ToolStartCarriesRealCumulativeUsage(t *testing.T) {
 	}
 	if usage != wantUsage {
 		t.Fatalf("tool event usage = %+v, want the agent's real CumulativeUsage() %+v", usage, wantUsage)
+	}
+}
+
+// TestRecoverChildPanicEmitsErrorEventWithLabelAndStack covers the panic-
+// recovery wiring added to runChildMode (both the main-run and the
+// event-forwarding goroutine each install their own `defer recover()` that
+// calls this): before it existed, any panic in a subagent's own run crashed
+// the child process bare — the parent's ReadEvent() only ever saw its
+// stdout pipe close and reported an opaque "EOF" with no way to tell a
+// panic from a network blip from anything else. This verifies the emitted
+// event actually carries the label, the panic value, and a real stack trace
+// (not just the bare message) so a future crash is diagnosable.
+func TestRecoverChildPanicEmitsErrorEventWithLabelAndStack(t *testing.T) {
+	var got []map[string]interface{}
+	write := func(ev map[string]interface{}) { got = append(got, ev) }
+
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				recoverChildPanic(write, "run", r)
+			}
+		}()
+		panic("boom: nil pointer somewhere deep in a tool")
+	}()
+
+	if len(got) != 1 {
+		t.Fatalf("events = %+v, want exactly one error event", got)
+	}
+	if got[0]["type"] != "error" {
+		t.Fatalf("type = %v, want error", got[0]["type"])
+	}
+	errText, _ := got[0]["error"].(string)
+	if !strings.Contains(errText, "subagent run panicked: boom: nil pointer somewhere deep in a tool") {
+		t.Fatalf("error text missing label/panic value: %q", errText)
+	}
+	// debug.Stack() output always starts with "goroutine " — confirms a real
+	// stack trace is attached, not just the bare panic message.
+	if !strings.Contains(errText, "goroutine ") {
+		t.Fatalf("error text missing a stack trace: %q", errText)
+	}
+}
+
+// TestRecoverChildPanicDistinguishesLabels verifies the main-run and
+// event-forwarding goroutines are distinguishable in the emitted error —
+// they panic independently and each installs its own recover, so the label
+// is the only way to tell which one actually crashed.
+func TestRecoverChildPanicDistinguishesLabels(t *testing.T) {
+	var got map[string]interface{}
+	write := func(ev map[string]interface{}) { got = ev }
+
+	recoverChildPanic(write, "event-forwarding", "boom")
+
+	errText, _ := got["error"].(string)
+	if !strings.Contains(errText, "subagent event-forwarding panicked: boom") {
+		t.Fatalf("error text missing event-forwarding label: %q", errText)
 	}
 }
 
