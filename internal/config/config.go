@@ -44,6 +44,14 @@ type OllamaConfig struct {
 	Model   string
 }
 
+// LlamaCppConfig holds llama.cpp (llama-server) provider settings. Talks the
+// same OpenAI-compatible wire format as Ollama, just against a local
+// llama-server instance (see alpaca, workdir/alpaca, which manages those).
+type LlamaCppConfig struct {
+	BaseURL string
+	Model   string
+}
+
 // CompactionConfig controls auto-compaction.
 type CompactionConfig struct {
 	Threshold     float64 // fraction of context window (0.0–1.0)
@@ -96,6 +104,7 @@ type Config struct {
 	XAI        XAIConfig
 	OpenAI     OpenAIConfig
 	Ollama     OllamaConfig
+	LlamaCpp   LlamaCppConfig
 	Compaction CompactionConfig
 	Stealth    StealthConfig
 	TUI        TUIConfig
@@ -140,6 +149,10 @@ func defaultConfig() *Config {
 			BaseURL: "http://localhost:11434",
 			Model:   "glm-5.2:cloud",
 		},
+		LlamaCpp: LlamaCppConfig{
+			BaseURL: "http://localhost:11212",
+			Model:   "unsloth/Laguna-S-2.1-GGUF",
+		},
 		Compaction: CompactionConfig{
 			Threshold:     0.85,
 			ReserveTokens: 16384,
@@ -167,6 +180,9 @@ func defaultConfig() *Config {
 			"ollama": {
 				"*": {},
 			},
+			"llamacpp": {
+				"*": {},
+			},
 		},
 		ModelOverrides: map[string]map[string]ModelOverride{},
 	}
@@ -185,7 +201,7 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 
 # Default provider + model
 [provider]
-# default = "ollama"             # anthropic | ollama | xai | openai
+# default = "ollama"             # anthropic | ollama | xai | openai | llamacpp
 
 [anthropic]
 # model = "claude-opus-5"
@@ -203,6 +219,11 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 [ollama]
 # base_url = "http://localhost:11434"
 # model = "glm-5.2:cloud"
+
+[llamacpp]
+# Local llama-server (see workdir/alpaca), OpenAI-compatible wire format.
+# base_url = "http://localhost:11212"
+# model = "unsloth/Laguna-S-2.1-GGUF"
 
 [compaction]
 # threshold = 0.85               # fraction of context window (0.0–1.0)
@@ -241,6 +262,9 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # input = 0
 # output = 0
 # [pricing.ollama."kimi-k2.7-code:cloud"]
+# input = 0
+# output = 0
+# [pricing.llamacpp."unsloth/Laguna-S-2.1-GGUF"]
 # input = 0
 # output = 0
 
@@ -373,6 +397,21 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 			return nil, fmt.Errorf("ollama.model: %w", err)
 		}
 		cfg.Ollama.Model = s
+	}
+
+	if v, ok := lookup(m, "llamacpp", "base_url"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("llamacpp.base_url: %w", err)
+		}
+		cfg.LlamaCpp.BaseURL = s
+	}
+	if v, ok := lookup(m, "llamacpp", "model"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("llamacpp.model: %w", err)
+		}
+		cfg.LlamaCpp.Model = s
 	}
 
 	// Top-level `model = "<provider>/<model>"` is the one-liner default: it sets
@@ -611,8 +650,10 @@ func setProviderModel(cfg *Config, prov, model string) error {
 		cfg.XAI.Model = model
 	case "ollama":
 		cfg.Ollama.Model = model
+	case "llamacpp":
+		cfg.LlamaCpp.Model = model
 	default:
-		return fmt.Errorf("unknown provider %q (want anthropic|openai|xai|ollama)", prov)
+		return fmt.Errorf("unknown provider %q (want anthropic|openai|xai|ollama|llamacpp)", prov)
 	}
 	return nil
 }

@@ -104,6 +104,18 @@ var KnownModels = map[string]ModelSettings{
 		SupportsEffort: false,
 		Vision:         true,
 	},
+	// llamacpp — local llama-server instances (see workdir/alpaca), served
+	// straight from the HF-cached GGUF. Context windows match model card
+	// metadata; neither exposes a reasoning-effort knob over the wire.
+	"llamacpp/unsloth/Laguna-S-2.1-GGUF": {
+		ContextWindow:  262144,
+		SupportsEffort: false,
+	},
+	"llamacpp/unsloth/Qwen3.6-27B-MTP-GGUF": {
+		ContextWindow:  262144,
+		SupportsEffort: false,
+		Vision:         true,
+	},
 }
 
 // GetModelSettings looks up model metadata by provider/model ID in the

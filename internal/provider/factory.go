@@ -26,7 +26,7 @@ func ResolveDefaultProvider(a auth.AuthStore, cfg *config.Config) (name string, 
 // locally and needs none; the others need an OAuth session or an API key.
 func IsConfigured(name string, a auth.AuthStore, cfg *config.Config) bool {
 	switch name {
-	case "ollama":
+	case "ollama", "llamacpp":
 		return true
 	case "anthropic":
 		return auth.IsOAuth(a, "anthropic") || auth.GetAPIKey(a, "anthropic") != "" ||
@@ -56,6 +56,12 @@ func NewProvider(name string, a auth.AuthStore, cfg *config.Config) Provider {
 			baseURL = "http://localhost:11434"
 		}
 		return NewOllamaProvider(baseURL, cfg.Ollama.Model)
+	case "llamacpp":
+		baseURL := cfg.LlamaCpp.BaseURL
+		if baseURL == "" {
+			baseURL = "http://localhost:11212"
+		}
+		return NewLlamaCppProvider(baseURL, cfg.LlamaCpp.Model)
 	case "xai":
 		return NewXAIProvider(a, cfg)
 	case "openai":
@@ -98,6 +104,11 @@ func DefaultModel(provName string, cfg *config.Config) string {
 			return m
 		}
 		return "glm-5.2:cloud"
+	case "llamacpp":
+		if m := cfg.LlamaCpp.Model; m != "" {
+			return m
+		}
+		return "unsloth/Laguna-S-2.1-GGUF"
 	default:
 		return ""
 	}
