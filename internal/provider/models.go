@@ -111,6 +111,10 @@ var KnownModels = map[string]ModelSettings{
 		ContextWindow:  262144,
 		SupportsEffort: false,
 	},
+	"llamacpp/poolside/Laguna-XS-2.1-GGUF": {
+		ContextWindow:  262144,
+		SupportsEffort: false,
+	},
 	"llamacpp/unsloth/Qwen3.6-27B-MTP-GGUF": {
 		ContextWindow:  262144,
 		SupportsEffort: false,

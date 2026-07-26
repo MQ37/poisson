@@ -182,6 +182,7 @@ px -p --yolo "run the test suite and fix failures"
 | `ollama` | `kimi-k2.7-code:cloud` | local daemon / Ollama cloud | ✅ |
 | `llamacpp` | `unsloth/Laguna-S-2.1-GGUF` *(default)* | local `llama-server`, no auth | ❌ |
 | `llamacpp` | `unsloth/Qwen3.6-27B-MTP-GGUF` | local `llama-server`, no auth | ✅ |
+| `llamacpp` | `poolside/Laguna-XS-2.1-GGUF` | local `llama-server`, no auth | ❌ |
 
 Provider notes: OpenAI/Codex ([details](docs/openai.md)) and Ollama caching /
 `keep_alive` ([details](docs/ollama.md)). `llamacpp` talks to the same

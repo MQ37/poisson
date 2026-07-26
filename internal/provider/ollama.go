@@ -17,6 +17,13 @@ import (
 // it.
 const defaultOllamaContextWindow = 8192
 
+// defaultOllamaMaxTokens caps a turn when the caller leaves MaxTokens unset
+// (0). Anthropic fills in its own ceiling in this case (anthropicMaxOutputTokens);
+// Ollama/llama-server otherwise falls back to n_predict=-1 (unbounded, capped
+// only by the context window), which lets a misbehaving or slow local model
+// run for tens of minutes on a single turn.
+const defaultOllamaMaxTokens = 32000
+
 // OllamaProvider talks to a local (or remote) Ollama instance using the
 // OpenAI-compatible /v1/chat/completions endpoint (for accurate token usage on
 // cloud models) and /api/tags for model listing.
@@ -183,6 +190,9 @@ func (p *OllamaProvider) buildOllamaRequest(req *Request) ollamaChatRequest {
 	}
 	if out.Model == "" {
 		out.Model = p.model
+	}
+	if out.MaxTokens == 0 {
+		out.MaxTokens = defaultOllamaMaxTokens
 	}
 	if re := mapOllamaReasoningEffort(req.Effort); re != "" {
 		out.ReasoningEffort = re
