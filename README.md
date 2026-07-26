@@ -186,7 +186,11 @@ px -p --yolo "run the test suite and fix failures"
 Provider notes: OpenAI/Codex ([details](docs/openai.md)) and Ollama caching /
 `keep_alive` ([details](docs/ollama.md)). `llamacpp` talks to the same
 OpenAI-compatible `/v1/chat/completions` endpoint as Ollama — point it at any
-local `llama-server` instance (default port `11212`).
+local `llama-server` instance (default port `11212`). To discover cached GGUF
+models and launch `llama-server`/`llama-cli` with sane defaults (GPU offload,
+context size, MTP speculative decoding), use
+[**alpaca**](https://github.com/MQ37/alpaca) — a small standalone session
+launcher built for this.
 
 Switch anytime: `/model`, `/effort`, `/providers` (or the Ctrl+P palette).
 Reasoning effort levels: `low · medium · high · xhigh · max` (default `medium`;
