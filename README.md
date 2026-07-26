@@ -23,8 +23,8 @@ database you own. No cloud account for the app itself, no telemetry, no
 Electron — just one static binary and your terminal.
 
 It talks to **Anthropic** (Claude, via your Pro/Max subscription), **OpenAI**
-(GPT-5.5, via your ChatGPT Plus/Pro subscription), **xAI** (Grok, via SuperGrok)
-and **Ollama** (local + cloud models). You can paste
+(GPT-5.5, via your ChatGPT Plus/Pro subscription), **xAI** (Grok, via SuperGrok),
+**Ollama** (local + cloud models) and **llama.cpp** (local `llama-server`). You can paste
 images, search past sessions full-text, compact context, and approve risky
 shell commands from a popup.
 
@@ -95,8 +95,8 @@ px                                                   # launch the TUI
 - **Image input** — paste an image with **Ctrl+V** or attach `@screenshot.png`.
   Images are downscaled to 1024px and sent to vision-capable models. ([details](docs/images.md))
 - **Multi-provider** — Anthropic (subscription OAuth), OpenAI (ChatGPT
-  subscription OAuth), xAI (OAuth), Ollama (local daemon or Ollama cloud).
-  Switch model/effort live.
+  subscription OAuth), xAI (OAuth), Ollama (local daemon or Ollama cloud),
+  llama.cpp (local `llama-server`). Switch model/effort live.
 - **Message queueing** — type while the agent is working (or while `/compact`
   is running); your message is spliced into the model's very next request —
   after the current tool round, or right before the turn would otherwise end —
@@ -147,6 +147,7 @@ px login anthropic  # Claude Pro/Max — browser OAuth (subscription billing)
 px login openai     # ChatGPT Plus/Pro — browser OAuth (Codex subscription)
 px login xai        # SuperGrok — browser OAuth
 px login ollama     # local Ollama at http://localhost:11434 (no auth needed)
+# llamacpp: local llama-server at http://localhost:11212, no auth needed either
 ```
 
 Then just:
@@ -179,9 +180,13 @@ px -p --yolo "run the test suite and fix failures"
 | `ollama` | `glm-5.2:cloud` *(default)* | local daemon / Ollama cloud | ❌ |
 | `ollama` | `minimax-m3:cloud` | local daemon / Ollama cloud | ✅ |
 | `ollama` | `kimi-k2.7-code:cloud` | local daemon / Ollama cloud | ✅ |
+| `llamacpp` | `unsloth/Laguna-S-2.1-GGUF` *(default)* | local `llama-server`, no auth | ❌ |
+| `llamacpp` | `unsloth/Qwen3.6-27B-MTP-GGUF` | local `llama-server`, no auth | ✅ |
 
 Provider notes: OpenAI/Codex ([details](docs/openai.md)) and Ollama caching /
-`keep_alive` ([details](docs/ollama.md)).
+`keep_alive` ([details](docs/ollama.md)). `llamacpp` talks to the same
+OpenAI-compatible `/v1/chat/completions` endpoint as Ollama — point it at any
+local `llama-server` instance (default port `11212`).
 
 Switch anytime: `/model`, `/effort`, `/providers` (or the Ctrl+P palette).
 Reasoning effort levels: `low · medium · high · xhigh · max` (default `medium`;
@@ -214,7 +219,7 @@ via `/providers` without naming a model):
 # effort = "medium"
 
 [provider]
-# default = "ollama"                 # anthropic | ollama | xai | openai
+# default = "ollama"                 # anthropic | ollama | xai | openai | llamacpp
 
 [anthropic]
 # model = "claude-opus-5"          # or claude-sonnet-5 (both adaptive-reasoning)
@@ -229,6 +234,10 @@ via `/providers` without naming a model):
 [ollama]
 # base_url = "http://localhost:11434"
 # model = "glm-5.2:cloud"
+
+[llamacpp]
+# base_url = "http://localhost:11212"     # local llama-server instance
+# model = "unsloth/Laguna-S-2.1-GGUF"
 
 [compaction]
 # threshold = 0.85                   # compact when context passes this fraction
