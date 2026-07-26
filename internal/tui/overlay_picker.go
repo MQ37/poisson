@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/store"
 )
@@ -47,35 +48,23 @@ func newPickerOverlay(title string, items []pickerItem, current string, onPick f
 
 func pickerProviderItems(h commandHost) []pickerItem {
 	store, _ := auth.Load()
-	providers := []struct {
-		id, desc string
-	}{
-		{"anthropic", "Claude API/OAuth"},
-		{"ollama", "local models"},
-		{"llamacpp", "local llama-server"},
-		{"xai", "Grok OAuth"},
-		{"openai", "GPT ChatGPT subscription"},
-	}
 	cfg := h.Agent().Config()
-	var items []pickerItem
-	for _, p := range providers {
-		var status string
-		switch {
-		case p.id == "ollama" || p.id == "llamacpp":
-			// Both run locally and need no credentials.
-			status = "✓ no auth needed"
-		case provider.IsConfigured(p.id, store, cfg):
-			status = "✓ configured"
-		default:
-			status = "✗ not configured"
+	items := make([]pickerItem, 0, len(config.Providers))
+	for _, p := range config.Providers {
+		status := "✓ no auth needed"
+		if p.NeedsAuth {
+			if provider.IsConfigured(p.ID, store, cfg) {
+				status = "✓ configured"
+			} else {
+				status = "✗ not configured"
+			}
 		}
 		items = append(items, pickerItem{
-			id:    p.id,
-			label: p.id,
-			hint:  status + " · " + p.desc,
+			id:    p.ID,
+			label: p.ID,
+			hint:  status + " · " + p.Desc,
 		})
 	}
-	_ = h.Agent().Provider().ID()
 	return items
 }
 

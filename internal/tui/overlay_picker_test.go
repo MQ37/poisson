@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/store"
 	"github.com/mq37/poisson/internal/testutil"
@@ -105,6 +106,48 @@ func TestPickerProviderItemsOllamaNoAuth(t *testing.T) {
 	if anthropic == nil || !strings.Contains(anthropic.hint, "not configured") {
 		t.Errorf("anthropic (no creds) should be 'not configured', got %v", anthropic)
 	}
+}
+
+// TestPickerProviderItemsMatchesRegistry checks the /providers picker shows
+// exactly the providers in config.Providers, in registry order — this is
+// the regression test for the "llamacpp missing from /providers" bug where
+// the picker kept its own hardcoded provider list that fell out of sync.
+func TestPickerProviderItemsMatchesRegistry(t *testing.T) {
+	testutil.TempHome(t)
+	_, a, sessionID := newTestStoreAndAgent(t)
+	items := pickerProviderItems(cmdHost(newTUIWithAgent(a, sessionID)))
+	if len(items) != len(config.Providers) {
+		t.Fatalf("got %d picker items, want %d (config.Providers)", len(items), len(config.Providers))
+	}
+	for i, p := range config.Providers {
+		if items[i].id != p.ID {
+			t.Errorf("items[%d].id = %q, want %q", i, items[i].id, p.ID)
+		}
+		if !strings.Contains(items[i].hint, p.Desc) {
+			t.Errorf("items[%d].hint = %q, want to contain desc %q", i, items[i].hint, p.Desc)
+		}
+	}
+}
+
+// TestPickerProviderItemsLlamaCppNoAuth checks a second NeedsAuth=false
+// provider (not just ollama) is never shown as "not configured".
+func TestPickerProviderItemsLlamaCppNoAuth(t *testing.T) {
+	testutil.TempHome(t)
+	_, a, sessionID := newTestStoreAndAgent(t)
+	items := pickerProviderItems(cmdHost(newTUIWithAgent(a, sessionID)))
+	for _, it := range items {
+		if it.id != "llamacpp" {
+			continue
+		}
+		if strings.Contains(it.hint, "not configured") {
+			t.Errorf("llamacpp should not be 'not configured': %q", it.hint)
+		}
+		if !strings.Contains(it.hint, "no auth needed") {
+			t.Errorf("llamacpp hint = %q, want 'no auth needed'", it.hint)
+		}
+		return
+	}
+	t.Fatal("llamacpp not in provider picker")
 }
 
 func TestPaletteOverlayFilter(t *testing.T) {

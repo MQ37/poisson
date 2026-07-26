@@ -602,23 +602,14 @@ func (a *Agent) Model() string {
 	return defaultModel(a.provider, a.config)
 }
 
-// defaultModel returns the configured default for a given provider.
+// defaultModel returns the configured default for a given provider, reading
+// from the single config.Providers registry so a new provider (e.g.
+// llamacpp) doesn't need a second hand-copied switch here.
 func defaultModel(p provider.Provider, cfg *config.Config) string {
 	if cfg == nil || p == nil {
 		return ""
 	}
-	switch p.ID() {
-	case "ollama":
-		return cfg.Ollama.Model
-	case "anthropic":
-		return cfg.Anthropic.Model
-	case "xai":
-		return cfg.XAI.Model
-	case "openai":
-		return cfg.OpenAI.Model
-	default:
-		return ""
-	}
+	return provider.DefaultModel(p.ID(), cfg)
 }
 
 // Effort returns the current thinking effort level.
@@ -1878,21 +1869,12 @@ func (a *Agent) nextAPICallSeq() int {
 	return ms + 1
 }
 
-// currentModel returns the model from the session, falling back to config.
+// currentModel returns the model from the session, falling back to config
+// (via the same config.Providers registry defaultModel uses above).
 func (a *Agent) currentModel() string {
 	sess, err := a.store.GetSession(a.sessionID)
 	if err != nil || sess == nil {
-		switch a.providerID() {
-		case "ollama":
-			return a.config.Ollama.Model
-		case "anthropic":
-			return a.config.Anthropic.Model
-		case "xai":
-			return a.config.XAI.Model
-		case "openai":
-			return a.config.OpenAI.Model
-		}
-		return ""
+		return provider.DefaultModel(a.providerID(), a.config)
 	}
 	return sess.Model
 }

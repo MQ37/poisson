@@ -73,6 +73,8 @@ func TestDefaultModelUsesProviderModelConfig(t *testing.T) {
 		Anthropic: config.AnthropicConfig{Model: "claude-test"},
 		XAI:       config.XAIConfig{Model: "grok-test"},
 		Ollama:    config.OllamaConfig{Model: "ollama-test"},
+		OpenAI:    config.OpenAIConfig{Model: "gpt-test"},
+		LlamaCpp:  config.LlamaCppConfig{Model: "llama-test"},
 	}
 
 	cases := []struct {
@@ -82,6 +84,11 @@ func TestDefaultModelUsesProviderModelConfig(t *testing.T) {
 		{providerID: "anthropic", want: "claude-test"},
 		{providerID: "xai", want: "grok-test"},
 		{providerID: "ollama", want: "ollama-test"},
+		{providerID: "openai", want: "gpt-test"},
+		// Regression: defaultModel used to be a hand-copied switch missing
+		// llamacpp entirely (fell through to ""), diverging from
+		// provider.DefaultModel — see config.Providers single source of truth.
+		{providerID: "llamacpp", want: "llama-test"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.providerID, func(t *testing.T) {
@@ -90,6 +97,28 @@ func TestDefaultModelUsesProviderModelConfig(t *testing.T) {
 				t.Fatalf("defaultModel(%s) = %q, want %q", tc.providerID, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestEnsureSessionPersistsLlamaCppDefaultModel is the end-to-end regression
+// for the same bug: a fresh llamacpp session used to persist Model: "".
+func TestEnsureSessionPersistsLlamaCppDefaultModel(t *testing.T) {
+	s := newTestStore(t)
+	id := store.NewSessionID()
+	cfg := config.DefaultConfig()
+	cfg.Provider.Default = "llamacpp"
+	p := provider.NewFakeProvider("llamacpp", nil)
+	a := NewAgent(s, p, newTestRegistry(testutil.TempDir(t)), cfg, id, nil, nil)
+
+	if err := a.EnsureSession(); err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+	sess, err := s.GetSession(id)
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+	if sess.Model != cfg.LlamaCpp.Model || sess.Model == "" {
+		t.Fatalf("session model = %q, want %q (non-empty)", sess.Model, cfg.LlamaCpp.Model)
 	}
 }
 

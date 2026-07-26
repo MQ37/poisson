@@ -132,26 +132,15 @@ func DefaultConfig() *Config {
 }
 
 func defaultConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		Provider: ProviderConfig{
 			Default: "ollama",
 		},
-		Anthropic: AnthropicConfig{
-			Model: "claude-opus-5",
-		},
-		XAI: XAIConfig{
-			Model: "grok-build",
-		},
-		OpenAI: OpenAIConfig{
-			Model: "gpt-5.5",
-		},
 		Ollama: OllamaConfig{
 			BaseURL: "http://localhost:11434",
-			Model:   "glm-5.2:cloud",
 		},
 		LlamaCpp: LlamaCppConfig{
 			BaseURL: "http://localhost:11212",
-			Model:   "unsloth/Laguna-S-2.1-GGUF",
 		},
 		Compaction: CompactionConfig{
 			Threshold:     0.85,
@@ -164,34 +153,58 @@ func defaultConfig() *Config {
 			ShowTokens: true,
 			ShowCost:   true,
 		},
-		Effort: DefaultEffort,
-		Pricing: map[string]map[string]Pricing{
-			"anthropic": {
-				"claude-opus-5": {
-					InputPerMTok:      5.0,
-					OutputPerMTok:     25.0,
-					CacheReadPerMTok:  0.5,
-					CacheWritePerMTok: 10.0,
-				},
-			},
-			"xai": {
-				"grok-build": {InputPerMTok: 1.0, OutputPerMTok: 2.0},
-			},
-			"ollama": {
-				"*": {},
-			},
-			"llamacpp": {
-				"*": {},
-			},
-		},
+		Effort:         DefaultEffort,
+		Pricing:        defaultPricing(),
 		ModelOverrides: map[string]map[string]ModelOverride{},
+	}
+	// Each provider's default model comes from the single Providers registry
+	// (providers.go) instead of being repeated here per provider.
+	for _, p := range Providers {
+		*p.Model(cfg) = p.DefaultModel
+	}
+	return cfg
+}
+
+// defaultPricing is the built-in per-1M-token USD rate table. It is the one
+// place these numbers live — internal/pricing falls back to it (via
+// DefaultConfig) instead of keeping its own duplicate table.
+func defaultPricing() map[string]map[string]Pricing {
+	return map[string]map[string]Pricing{
+		"anthropic": {
+			// cacheRead 0.1x input, cacheWrite 2x input — Poisson's 1h cache pool.
+			"claude-opus-5":   {InputPerMTok: 5.0, OutputPerMTok: 25.0, CacheReadPerMTok: 0.5, CacheWritePerMTok: 10.0},
+			"claude-sonnet-5": {InputPerMTok: 3.0, OutputPerMTok: 15.0, CacheReadPerMTok: 0.3, CacheWritePerMTok: 6.0},
+		},
+		"xai": {
+			"grok-build": {InputPerMTok: 1.0, OutputPerMTok: 2.0},
+			// grok-4.5: no published prompt-cache rate.
+			"grok-4.5": {InputPerMTok: 2.0, OutputPerMTok: 6.0},
+		},
+		"openai": {
+			// Short-context (<=272K input) standard API rate; poisson talks to
+			// the Codex subscription endpoint, so this is informational shadow
+			// pricing, not a real bill. cacheWrite 0 — OpenAI's prompt cache is
+			// automatic with no separate write charge.
+			"gpt-5.5":       {InputPerMTok: 5.0, OutputPerMTok: 30.0, CacheReadPerMTok: 0.5},
+			"gpt-5.6-sol":   {InputPerMTok: 5.0, OutputPerMTok: 30.0, CacheReadPerMTok: 0.5},
+			"gpt-5.6-terra": {InputPerMTok: 2.5, OutputPerMTok: 15.0, CacheReadPerMTok: 0.25},
+			"gpt-5.6-luna":  {InputPerMTok: 1.0, OutputPerMTok: 6.0, CacheReadPerMTok: 0.1},
+		},
+		"ollama": {
+			"*": {},
+		},
+		"llamacpp": {
+			"*": {},
+		},
 	}
 }
 
-// defaultConfigToml is written to ~/.poisson/config.toml when it doesn't exist.
-// It's a commented-out template of every option so the user can uncomment
-// to override.
-const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
+// defaultConfigTomlTemplate is written to ~/.poisson/config.toml when it
+// doesn't exist. It's a commented-out template of every option so the user
+// can uncomment to override. "{{PROVIDERS}}" is filled in at use from the
+// Providers registry (providers.go) so the doc text can't drift from the
+// actual provider list.
+const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config.toml
 # All options are commented out; Poisson uses built-in defaults.
 # Uncomment and edit to override.
 
@@ -201,7 +214,7 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 
 # Default provider + model
 [provider]
-# default = "ollama"             # anthropic | ollama | xai | openai | llamacpp
+# default = "ollama"             # {{PROVIDERS}}
 
 [anthropic]
 # model = "claude-opus-5"
@@ -286,6 +299,12 @@ const defaultConfigToml = `# Poisson configuration — ~/.poisson/config.toml
 # vision = false
 `
 
+// defaultConfigToml renders defaultConfigTomlTemplate with the current
+// provider list.
+func defaultConfigToml() string {
+	return strings.ReplaceAll(defaultConfigTomlTemplate, "{{PROVIDERS}}", strings.Join(ProviderIDs(), " | "))
+}
+
 // ConfigDir returns the path to ~/.poisson/, creating it (mode 0700) if missing.
 func ConfigDir() string {
 	home, err := os.UserHomeDir()
@@ -314,7 +333,7 @@ func Load() (*Config, error) {
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// Create the default config file for discoverability.
-			if werr := os.WriteFile(path, []byte(defaultConfigToml), 0o600); werr != nil {
+			if werr := os.WriteFile(path, []byte(defaultConfigToml()), 0o600); werr != nil {
 				return nil, fmt.Errorf("create default config: %w", werr)
 			}
 			return defaultConfig(), nil
@@ -637,26 +656,18 @@ func lookup(m map[string]interface{}, path ...string) (interface{}, bool) {
 	return nil, false
 }
 
-// asString coerces a TOML value to string, rejecting non-string types.
 // setProviderModel points a provider's Model field at model. Used by the
 // top-level `model = "<provider>/<model>"` config knob.
 func setProviderModel(cfg *Config, prov, model string) error {
-	switch prov {
-	case "anthropic":
-		cfg.Anthropic.Model = model
-	case "openai":
-		cfg.OpenAI.Model = model
-	case "xai":
-		cfg.XAI.Model = model
-	case "ollama":
-		cfg.Ollama.Model = model
-	case "llamacpp":
-		cfg.LlamaCpp.Model = model
-	default:
-		return fmt.Errorf("unknown provider %q (want anthropic|openai|xai|ollama|llamacpp)", prov)
+	meta, ok := ProviderMetaByID(prov)
+	if !ok {
+		return fmt.Errorf("unknown provider %q (want %s)", prov, strings.Join(ProviderIDs(), "|"))
 	}
+	*meta.Model(cfg) = model
 	return nil
 }
+
+// asString coerces a TOML value to string, rejecting non-string types.
 
 func asString(v interface{}) (string, error) {
 	if s, ok := v.(string); ok {

@@ -22,20 +22,22 @@ func ResolveDefaultProvider(a auth.AuthStore, cfg *config.Config) (name string, 
 	return name, warn
 }
 
-// IsConfigured reports whether a provider has usable credentials. Ollama runs
-// locally and needs none; the others need an OAuth session or an API key.
+// IsConfigured reports whether a provider has usable credentials. Providers
+// that run locally (NeedsAuth false, e.g. ollama, llamacpp) need none; the
+// rest need an OAuth session, an auth.json API key, or (anthropic only) a
+// config.toml api_key.
 func IsConfigured(name string, a auth.AuthStore, cfg *config.Config) bool {
-	switch name {
-	case "ollama", "llamacpp":
-		return true
-	case "anthropic":
-		return auth.IsOAuth(a, "anthropic") || auth.GetAPIKey(a, "anthropic") != "" ||
-			(cfg != nil && cfg.Anthropic.APIKey != "")
-	case "xai", "openai":
-		return auth.IsOAuth(a, name) || auth.GetAPIKey(a, name) != ""
-	default:
+	meta, ok := config.ProviderMetaByID(name)
+	if !ok {
 		return false
 	}
+	if !meta.NeedsAuth {
+		return true
+	}
+	if auth.IsOAuth(a, name) || auth.GetAPIKey(a, name) != "" {
+		return true
+	}
+	return meta.APIKey != nil && cfg != nil && meta.APIKey(cfg) != ""
 }
 
 // IsConfiguredFromDisk loads auth from disk and reports whether the named
@@ -45,30 +47,43 @@ func IsConfiguredFromDisk(name string, cfg *config.Config) bool {
 	return IsConfigured(name, a, cfg)
 }
 
-// NewProvider constructs a provider by name. Returns nil for unknown names.
-func NewProvider(name string, a auth.AuthStore, cfg *config.Config) Provider {
-	switch name {
-	case "anthropic":
+// providerConstructors maps provider ID to its constructor. Every ID in
+// config.Providers must have one here — TestProviderRegistryParity in
+// factory_test.go fails loudly if a provider is added to the config
+// registry without a matching constructor.
+var providerConstructors = map[string]func(auth.AuthStore, *config.Config) Provider{
+	"anthropic": func(a auth.AuthStore, cfg *config.Config) Provider {
 		return NewAnthropicProvider(a, cfg)
-	case "ollama":
+	},
+	"ollama": func(_ auth.AuthStore, cfg *config.Config) Provider {
 		baseURL := cfg.Ollama.BaseURL
 		if baseURL == "" {
 			baseURL = "http://localhost:11434"
 		}
 		return NewOllamaProvider(baseURL, cfg.Ollama.Model)
-	case "llamacpp":
+	},
+	"llamacpp": func(_ auth.AuthStore, cfg *config.Config) Provider {
 		baseURL := cfg.LlamaCpp.BaseURL
 		if baseURL == "" {
 			baseURL = "http://localhost:11212"
 		}
 		return NewLlamaCppProvider(baseURL, cfg.LlamaCpp.Model)
-	case "xai":
+	},
+	"xai": func(a auth.AuthStore, cfg *config.Config) Provider {
 		return NewXAIProvider(a, cfg)
-	case "openai":
+	},
+	"openai": func(a auth.AuthStore, cfg *config.Config) Provider {
 		return NewOpenAIProvider(a, cfg)
-	default:
+	},
+}
+
+// NewProvider constructs a provider by name. Returns nil for unknown names.
+func NewProvider(name string, a auth.AuthStore, cfg *config.Config) Provider {
+	ctor, ok := providerConstructors[name]
+	if !ok {
 		return nil
 	}
+	return ctor(a, cfg)
 }
 
 // NewProviderFromDisk loads auth from disk and constructs a provider by name.
@@ -78,40 +93,19 @@ func NewProviderFromDisk(name string, cfg *config.Config) Provider {
 }
 
 // DefaultModel returns the configured model for a provider, with built-in
-// fallbacks when the config field is empty.
+// fallbacks (config.Providers) when the config field is empty.
 func DefaultModel(provName string, cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
-	switch provName {
-	case "anthropic":
-		if m := cfg.Anthropic.Model; m != "" {
-			return m
-		}
-		return "claude-opus-5"
-	case "xai":
-		if m := cfg.XAI.Model; m != "" {
-			return m
-		}
-		return "grok-build"
-	case "openai":
-		if m := cfg.OpenAI.Model; m != "" {
-			return m
-		}
-		return "gpt-5.5"
-	case "ollama":
-		if m := cfg.Ollama.Model; m != "" {
-			return m
-		}
-		return "glm-5.2:cloud"
-	case "llamacpp":
-		if m := cfg.LlamaCpp.Model; m != "" {
-			return m
-		}
-		return "unsloth/Laguna-S-2.1-GGUF"
-	default:
+	meta, ok := config.ProviderMetaByID(provName)
+	if !ok {
 		return ""
 	}
+	if m := *meta.Model(cfg); m != "" {
+		return m
+	}
+	return meta.DefaultModel
 }
 
 // BootstrapFromConfig resolves the default provider, constructs it, and
