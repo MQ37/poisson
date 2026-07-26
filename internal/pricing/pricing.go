@@ -47,6 +47,9 @@ var builtIn = map[string]map[string]Rates{
 	"ollama": {
 		"*": {0, 0, 0, 0},
 	},
+	"llamacpp": {
+		"*": {0, 0, 0, 0},
+	},
 }
 
 // Lookup returns pricing for (provider, model). Config overrides beat built-ins.

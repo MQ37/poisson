@@ -52,6 +52,7 @@ func pickerProviderItems(h commandHost) []pickerItem {
 	}{
 		{"anthropic", "Claude API/OAuth"},
 		{"ollama", "local models"},
+		{"llamacpp", "local llama-server"},
 		{"xai", "Grok OAuth"},
 		{"openai", "GPT ChatGPT subscription"},
 	}
@@ -60,8 +61,8 @@ func pickerProviderItems(h commandHost) []pickerItem {
 	for _, p := range providers {
 		var status string
 		switch {
-		case p.id == "ollama":
-			// Ollama runs locally and needs no credentials.
+		case p.id == "ollama" || p.id == "llamacpp":
+			// Both run locally and need no credentials.
 			status = "✓ no auth needed"
 		case provider.IsConfigured(p.id, store, cfg):
 			status = "✓ configured"
