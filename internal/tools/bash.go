@@ -113,6 +113,31 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	stickyCwd, stickyEnv := t.sticky.cwd, t.sticky.env
 	dir := stickyStartDir(t.cwd, stickyCwd, in.Workdir)
 
+	// A stale dir (sticky cwd's directory got deleted/unmounted since the
+	// last call, or an explicit workdir that doesn't exist) must not reach
+	// exec.Cmd: Cmd.SysProcAttr is set below (needed for process-group
+	// kill), which disables Go's own friendly chdir-existence pre-check
+	// (os/exec_posix.go only stats Dir when Sys == nil). Without this check
+	// a missing dir fails deep inside the forked child's chdir(), and Go
+	// can only report it as "fork/exec <bash path>: no such file or
+	// directory" -- blaming the bash binary instead of the real cause.
+	// Worse, since the wrapper script never starts, readStickyDump never
+	// runs and t.sticky.cwd is never corrected -- every later call would
+	// repeat the same failure forever. Catch it here and self-heal instead.
+	var hints []string
+	if dir != "" {
+		if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
+			bad := dir
+			dir = t.cwd
+			if in.Workdir != "" {
+				hints = append(hints, fmt.Sprintf("workdir %q does not exist; ran in session root %q instead.", bad, t.cwd))
+			} else {
+				t.sticky.cwd = ""
+				hints = append(hints, fmt.Sprintf("sticky working directory %q no longer exists (deleted/unmounted); reset to session root %q.", bad, t.cwd))
+			}
+		}
+	}
+
 	// Every command is gated: approvalFn runs the LLM risk classifier, which
 	// auto-approves only an LLM "low" and routes everything else (including a
 	// failed classification) to the human. Sandbox mode skips the gate.
@@ -184,7 +209,6 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 
 	err = cmd.Run()
 	exitCode := 0
-	var hints []string
 	if err != nil {
 		switch {
 		case errors.Is(err, exec.ErrWaitDelay):

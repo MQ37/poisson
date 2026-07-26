@@ -214,6 +214,82 @@ func TestBashSticky_SerializesParallelCalls(t *testing.T) {
 	}
 }
 
+// TestBashSticky_StaleCwdSelfHeals covers the "fork/exec /usr/bin/bash: no
+// such file or directory" bug: if the directory a prior sticky `cd` landed
+// in gets deleted before the next call, Execute must not hand a dead Dir to
+// exec.Cmd (Go's own friendly chdir-existence check is disabled once
+// SysProcAttr is set) — it should self-heal to the session root instead of
+// wedging the session in a permanent exec failure.
+func TestBashSticky_StaleCwdSelfHeals(t *testing.T) {
+	dir := testutil.TempDir(t)
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := NewBashTool(dir, true, nil)
+
+	bashOut(t, mustExec(t, b, "cd sub", "enter sub"))
+	root, _ := filepath.EvalSymlinks(dir)
+	sticky, _ := filepath.EvalSymlinks(b.StickyCwd())
+	want, _ := filepath.EvalSymlinks(sub)
+	if sticky != want {
+		t.Fatalf("sticky cwd = %q, want %q", b.StickyCwd(), sub)
+	}
+
+	// The directory sticky cwd points at vanishes out from under it.
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command": "pwd", "description": "pwd after dir vanished",
+	}))
+	if err != nil {
+		t.Fatalf("Execute returned Go error (should self-heal, not crash): %v", err)
+	}
+	out := bashOut(t, res)
+	if out.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0 (self-heal should still run the command)", out.ExitCode)
+	}
+	if !strings.Contains(out.Hint, "no longer exists") {
+		t.Fatalf("hint = %q, want mention of the stale directory", out.Hint)
+	}
+	pwd, _ := filepath.EvalSymlinks(strings.TrimSpace(out.Stdout))
+	if pwd != root {
+		t.Fatalf("pwd = %q, want session root %q", pwd, root)
+	}
+	// Sticky cwd must be corrected too, or every later call repeats the bug.
+	if sc, _ := filepath.EvalSymlinks(b.StickyCwd()); sc != root {
+		t.Fatalf("sticky cwd after self-heal = %q, want session root %q", b.StickyCwd(), root)
+	}
+}
+
+// TestBashSticky_BadWorkdirSelfHeals covers the same underlying bug for an
+// explicit workdir param that doesn't exist (typo, deleted path).
+func TestBashSticky_BadWorkdirSelfHeals(t *testing.T) {
+	dir := testutil.TempDir(t)
+	b := NewBashTool(dir, true, nil)
+
+	res, err := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command": "pwd", "description": "bad workdir", "workdir": "does-not-exist",
+	}))
+	if err != nil {
+		t.Fatalf("Execute returned Go error (should self-heal, not crash): %v", err)
+	}
+	out := bashOut(t, res)
+	if out.ExitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", out.ExitCode)
+	}
+	if !strings.Contains(out.Hint, "does not exist") {
+		t.Fatalf("hint = %q, want mention of the missing workdir", out.Hint)
+	}
+	root, _ := filepath.EvalSymlinks(dir)
+	pwd, _ := filepath.EvalSymlinks(strings.TrimSpace(out.Stdout))
+	if pwd != root {
+		t.Fatalf("pwd = %q, want session root %q", pwd, root)
+	}
+}
+
 func TestBashSticky_StdoutNotPollutedByDump(t *testing.T) {
 	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, true, nil)

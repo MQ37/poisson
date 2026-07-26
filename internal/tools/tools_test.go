@@ -689,6 +689,10 @@ func TestBashTool_SanitizesOutput(t *testing.T) {
 	}
 }
 
+// Missing workdir self-heals to the session root instead of handing exec.Cmd
+// a dead Dir (see TestBashSticky_BadWorkdirSelfHeals for the full story: a
+// missing Dir with SysProcAttr set fails as an opaque "fork/exec bash: no
+// such file or directory", not a chdir error, so it's caught explicitly).
 func TestBashTool_WorkdirErrorInStderr(t *testing.T) {
 	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, true, nil)
@@ -704,8 +708,11 @@ func TestBashTool_WorkdirErrorInStderr(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if out.ExitCode != -1 || out.Stderr == "" {
-		t.Fatalf("output = %+v, want exit -1 with stderr", out)
+	if out.ExitCode != 0 {
+		t.Fatalf("output = %+v, want exit 0 (self-heal to session root)", out)
+	}
+	if !strings.Contains(out.Hint, "does not exist") {
+		t.Fatalf("output = %+v, want hint about missing workdir", out)
 	}
 }
 
