@@ -44,6 +44,7 @@ func renderHelp() string {
   /model <m>   Switch provider/model (no args: picker)
   /providers   Provider picker
   /effort [l]  Effort picker (or set level incl. max)
+  /classifier-model [m]  Model rating bash-command risk (no args: picker)
   /reload      Reload config and skills
   /cost        Show session cost
   /openai-reset-usage  Spend a free Codex reset credit to reset usage now

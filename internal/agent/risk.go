@@ -124,6 +124,76 @@ func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdi
 	return a.AssessBashRiskEval(ctx, command, description, workdir, BashRiskEvalLLM).Risk
 }
 
+// ClassifierModel returns the model that rates bash-command risk for the
+// active provider: an explicit /classifier-model choice for that provider,
+// else config.Classifier.Model (honored when it names no provider, or names
+// this one), else the session's own model. The classifier always runs on the
+// active provider — only the model name is configurable, so a pinned model
+// travels with whichever provider it was chosen under.
+//
+// A subagent runs in its own process with its own Agent, so it sees only the
+// config default, not a pin made in the parent session. Use
+// [classifier] model in config.toml when children should classify with the
+// same model.
+func (a *Agent) ClassifierModel() string {
+	if a == nil {
+		return ""
+	}
+	if m := a.pinnedClassifierModel(); m != "" {
+		return m
+	}
+	if a.config != nil {
+		if target := strings.TrimSpace(a.config.Classifier.Model); target != "" {
+			providerID, model, qualified := strings.Cut(target, "/")
+			if !qualified {
+				return target
+			}
+			if strings.TrimSpace(providerID) == a.providerID() {
+				if model = strings.TrimSpace(model); model != "" {
+					return model
+				}
+			}
+		}
+	}
+	return a.currentModel()
+}
+
+// SetClassifierModel pins the risk-classifier model for the active provider
+// for the rest of this session (never persisted — config.Classifier.Model is
+// the durable knob). An empty model clears the override.
+func (a *Agent) SetClassifierModel(model string) {
+	model = strings.TrimSpace(model)
+	a.classifierMu.Lock()
+	defer a.classifierMu.Unlock()
+	if model == "" {
+		delete(a.classifierModels, a.providerID())
+		return
+	}
+	if a.classifierModels == nil {
+		a.classifierModels = map[string]string{}
+	}
+	a.classifierModels[a.providerID()] = model
+}
+
+// pinnedClassifierModel returns the active provider's pinned classifier
+// model ("" when none). Sole reader of classifierModels — see the field's
+// doc comment for why the lock is not optional here.
+func (a *Agent) pinnedClassifierModel() string {
+	a.classifierMu.Lock()
+	defer a.classifierMu.Unlock()
+	return strings.TrimSpace(a.classifierModels[a.providerID()])
+}
+
+// ClassifierModelPinned reports whether the active provider has an explicit
+// /classifier-model override, as opposed to inheriting the config default or
+// the session model.
+func (a *Agent) ClassifierModelPinned() bool {
+	if a == nil {
+		return false
+	}
+	return a.pinnedClassifierModel() != ""
+}
+
 // lowestEffort returns the cheapest reasoning effort the current model supports
 // (the first EffortLevels entry), or "" when the model has no configurable
 // effort. The bash-risk classifier uses this so a one-word answer never
@@ -556,9 +626,10 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 	// before the one-word answer — a tiny cap makes the reply come back empty and
 	// the classification silently fail. The model stops on its own after one
 	// word, so the uncapped default costs nothing extra for non-thinking models.
-	effort := lowestEffort(a.config, a.providerID(), a.currentModel())
+	model := a.ClassifierModel()
+	effort := lowestEffort(a.config, a.providerID(), model)
 	req := &provider.Request{
-		Model: a.currentModel(),
+		Model: model,
 		System: []provider.SystemBlock{{
 			Text: bashRiskSystem,
 		}},
@@ -589,7 +660,10 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 			return BashRiskUnknown, strings.TrimSpace(text.String() + thinking.String())
 		case provider.EventDone:
 			if ev.Usage != nil {
-				_ = a.recordAuxiliaryAPICall("risk", ev.Usage)
+				// Priced against the classifier model, not the session
+				// model — /classifier-model can point this call at a
+				// cheaper (or pricier) model than the conversation's.
+				_, _ = a.recordAPICallFor(ev.Usage, "risk", a.providerID(), model)
 			}
 		}
 	}

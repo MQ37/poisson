@@ -472,6 +472,146 @@ func TestCmdEffortNoArg(t *testing.T) {
 	}
 }
 
+// --- /classifier-model ---
+
+func TestCmdClassifierModelPinsAndClears(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+
+	if a.ClassifierModel() != a.Model() {
+		t.Fatalf("classifier model should default to the session model, got %q vs %q", a.ClassifierModel(), a.Model())
+	}
+
+	cmdClassifierModel(cmdHost(tui), []string{"tiny-classifier"})
+	if got := a.ClassifierModel(); got != "tiny-classifier" {
+		t.Errorf("classifier model = %q, want tiny-classifier", got)
+	}
+	if !a.ClassifierModelPinned() {
+		t.Error("classifier model should report as pinned")
+	}
+	if a.Model() == "tiny-classifier" {
+		t.Error("session model must not change")
+	}
+	if out := testScrollOutput(tui); !strings.Contains(out, "tiny-classifier") {
+		t.Errorf("expected confirmation naming the model, got %q", out)
+	}
+
+	cmdClassifierModel(cmdHost(tui), []string{"default"})
+	if a.ClassifierModelPinned() {
+		t.Error("default should clear the pin")
+	}
+	if got := a.ClassifierModel(); got != a.Model() {
+		t.Errorf("after reset classifier model = %q, want session model %q", got, a.Model())
+	}
+}
+
+func TestCmdClassifierModelRejectsOtherProvider(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+
+	cmdClassifierModel(cmdHost(tui), []string{"some-other-provider/m"})
+	if a.ClassifierModelPinned() {
+		t.Error("a foreign provider argument must not pin anything")
+	}
+	if out := testScrollOutput(tui); !strings.Contains(out, "current provider") {
+		t.Errorf("expected a rejection explaining the provider, got %q", out)
+	}
+}
+
+func TestCmdClassifierModelAcceptsOwnProviderPrefix(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+
+	cmdClassifierModel(cmdHost(tui), []string{a.Provider().ID() + "/pinned-model"})
+	if got := a.ClassifierModel(); got != "pinned-model" {
+		t.Errorf("classifier model = %q, want pinned-model", got)
+	}
+}
+
+func TestCmdClassifierModelNoArgReportsCurrent(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+
+	cmdClassifierModel(cmdHost(tui), nil)
+	out := testScrollOutput(tui)
+	if !strings.Contains(out, a.ClassifierModel()) || !strings.Contains(out, "inherited") {
+		t.Errorf("expected the inherited classifier model to be reported, got %q", out)
+	}
+}
+
+// TestSlashClassifierModelRouting verifies /classifier-model with no argument
+// opens the picker overlay, and with an argument pins the model directly —
+// both while a turn could be running (no busy guard, unlike /model).
+func TestSlashClassifierModelRouting(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+
+	if err := tui.handleSlash("/classifier-model pinned-by-slash"); err != nil {
+		t.Fatalf("handleSlash with arg: %v", err)
+	}
+	if got := a.ClassifierModel(); got != "pinned-by-slash" {
+		t.Errorf("classifier model = %q, want pinned-by-slash", got)
+	}
+
+	if err := tui.handleSlash("/classifier-model"); err != nil {
+		t.Fatalf("handleSlash no arg: %v", err)
+	}
+	if _, ok := tui.activeOverlay.(*pickerOverlay); !ok {
+		t.Errorf("expected a picker overlay, got %T", tui.activeOverlay)
+	}
+}
+
+// TestPaletteOpensClassifierModelPicker drives the whole Ctrl+P path: the
+// palette lists /classifier-model, selecting it opens the classifier picker,
+// and picking a row pins that model without touching the session model.
+func TestPaletteOpensClassifierModelPicker(t *testing.T) {
+	_, a, sid := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sid)
+
+	tui.openCommandPalette()
+	po, ok := tui.activeOverlay.(*paletteOverlay)
+	if !ok {
+		t.Fatalf("Ctrl+P did not open the palette, got %T", tui.activeOverlay)
+	}
+	po.filter = "classifier"
+	po.idx = 0
+	items := po.filtered()
+	if len(items) != 1 || items[0].id != "/classifier-model" {
+		t.Fatalf("palette filter matched %+v, want just /classifier-model", items)
+	}
+	if handled, _, cancel := po.feedKey(Key{Kind: KeyEnter}); !handled || cancel {
+		t.Fatalf("palette Enter: handled=%v cancel=%v", handled, cancel)
+	}
+	picker, ok := tui.activeOverlay.(*pickerOverlay)
+	if !ok {
+		t.Fatalf("palette pick did not open the classifier picker, got %T", tui.activeOverlay)
+	}
+	if title := picker.titleForRender(); !strings.Contains(title, "classifier") {
+		t.Errorf("picker title = %q, want it to mention the classifier", title)
+	}
+
+	// First row is the synthetic "default" (inherit) entry; a later row is a
+	// real model. Picking a real model must pin exactly that model.
+	rows := picker.filtered()
+	if len(rows) < 2 || rows[0].id != "default" {
+		t.Fatalf("picker rows = %+v, want a leading default row plus models", rows)
+	}
+	picker.idx = 1
+	sessionModelBefore := a.Model()
+	if handled, _, cancel := picker.feedKey(Key{Kind: KeyEnter}); !handled || cancel {
+		t.Fatalf("picker Enter: handled=%v cancel=%v", handled, cancel)
+	}
+	if got := a.ClassifierModel(); got != rows[1].id {
+		t.Errorf("classifier model = %q, want the picked row %q", got, rows[1].id)
+	}
+	if !a.ClassifierModelPinned() {
+		t.Error("picking a model row should pin it")
+	}
+	if a.Model() != sessionModelBefore {
+		t.Errorf("session model changed to %q, must stay %q", a.Model(), sessionModelBefore)
+	}
+}
+
 // TestRefreshProviderUsageLimitsMarksHeaderDirty confirms
 // refreshProviderUsageLimits (called by the lifecycle ticker on its regular
 // 5-minute schedule; triggerUsageRefreshLocked calls the sibling

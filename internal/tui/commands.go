@@ -398,6 +398,51 @@ func humanBytes(n int) string {
 	}
 }
 
+// classifierModelResetIDs are the arguments that clear a pinned classifier
+// model (back to config.Classifier.Model, then the session model). "default"
+// is also the picker's synthetic first row.
+var classifierModelResetIDs = map[string]bool{"default": true, "reset": true, "clear": true, "-": true}
+
+// cmdClassifierModel pins (or clears) the model that rates bash-command risk
+// for the approval gate, for the currently selected provider. The classifier
+// always runs on that provider — only the model changes.
+func cmdClassifierModel(h commandHost, args []string) error {
+	a := h.Agent()
+	prov := a.Provider().ID()
+	if len(args) == 0 {
+		origin := "inherited (session model or config)"
+		if a.ClassifierModelPinned() {
+			origin = "pinned for this session"
+		}
+		h.Out(styleSystem, fmt.Sprintf("bash-risk classifier model: %s/%s — %s", prov, a.ClassifierModel(), origin))
+		return nil
+	}
+	target := strings.TrimSpace(strings.Join(args, " "))
+	if classifierModelResetIDs[strings.ToLower(target)] {
+		a.SetClassifierModel("")
+		h.Out(styleSystem, fmt.Sprintf("bash-risk classifier model: %s/%s (default)", prov, a.ClassifierModel()))
+		return nil
+	}
+	// A provider-qualified argument is rejected rather than silently ignored:
+	// the classifier runs on the session's provider, so "other/model" would
+	// not do what it says.
+	if p, m, qualified := strings.Cut(target, "/"); qualified && strings.TrimSpace(p) != prov {
+		h.Out(styleError, fmt.Sprintf(
+			"classifier runs on the current provider (%s) — use /classifier-model %s, or switch provider first",
+			prov, strings.TrimSpace(m)))
+		return nil
+	} else if qualified {
+		target = strings.TrimSpace(m)
+	}
+	if target == "" {
+		h.Out(styleSystem, "usage: /classifier-model <model> | default (no args: picker)")
+		return nil
+	}
+	a.SetClassifierModel(target)
+	h.Out(styleSystem, fmt.Sprintf("bash-risk classifier model: %s/%s", prov, target))
+	return nil
+}
+
 // cmdEffort sets the reasoning/effort level.
 func cmdEffort(h commandHost, args []string) error {
 	a := h.Agent()

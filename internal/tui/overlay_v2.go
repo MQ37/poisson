@@ -91,6 +91,27 @@ func (t *TUI) openProviderPicker() {
 	}))
 }
 
+// openClassifierModelPicker shows the bash-risk classifier model picker
+// (/classifier-model with no argument). Unlike the model picker this never
+// touches the session's own model, so it stays usable while a turn runs.
+func (t *TUI) openClassifierModelPicker() {
+	h := tuiCmdHost{t}
+	items, err := pickerClassifierModelItems(h)
+	if err != nil {
+		t.scroll.appendRaw(styleError, "error listing models: "+err.Error())
+		t.markScrollDirty()
+		return
+	}
+	cur := t.agent.ClassifierModel()
+	if !t.agent.ClassifierModelPinned() {
+		cur = "default"
+	}
+	title := "Bash-risk classifier model (" + t.agent.Provider().ID() + ")"
+	t.setActiveOverlay(newPickerOverlay(title, items, cur, func(id string) error {
+		return cmdClassifierModel(h, []string{id})
+	}))
+}
+
 // openEffortPicker shows thinking-effort level picker (Ctrl+L).
 func (t *TUI) openEffortPicker() {
 	if t.sessionBusyLocked() {

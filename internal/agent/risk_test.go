@@ -123,6 +123,107 @@ func TestAssessBashRiskUsesIsolatedContext(t *testing.T) {
 	}
 }
 
+// TestClassifierModelResolution covers the three layers behind
+// ClassifierModel: a per-provider pin (/classifier-model), the
+// config.Classifier.Model default, and the session model as fallback.
+func TestClassifierModelResolution(t *testing.T) {
+	s := newTestStore(t)
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	sid := newTestSession(t, s, "m")
+	cfg := newTestConfig()
+	a := NewAgent(s, fp, newTestRegistry("."), cfg, sid, nil, nil)
+	a.SetModel("m")
+
+	if got := a.ClassifierModel(); got != "m" {
+		t.Errorf("with no config or pin, classifier model = %q, want the session model m", got)
+	}
+	if a.ClassifierModelPinned() {
+		t.Error("nothing pinned yet")
+	}
+
+	cfg.Classifier.Model = "cfg-classifier"
+	if got := a.ClassifierModel(); got != "cfg-classifier" {
+		t.Errorf("classifier model = %q, want the config default", got)
+	}
+
+	// A config entry naming another provider must not apply here.
+	cfg.Classifier.Model = "other/cfg-classifier"
+	if got := a.ClassifierModel(); got != "m" {
+		t.Errorf("foreign-provider config entry should be ignored, got %q", got)
+	}
+	cfg.Classifier.Model = "fake/cfg-classifier"
+	if got := a.ClassifierModel(); got != "cfg-classifier" {
+		t.Errorf("own-provider config entry should apply, got %q", got)
+	}
+
+	a.SetClassifierModel("pinned")
+	if got := a.ClassifierModel(); got != "pinned" {
+		t.Errorf("pin should win over config, got %q", got)
+	}
+	if !a.ClassifierModelPinned() {
+		t.Error("pin should report as pinned")
+	}
+	if a.Model() != "m" {
+		t.Errorf("session model must be untouched, got %q", a.Model())
+	}
+
+	a.SetClassifierModel("")
+	if got := a.ClassifierModel(); got != "cfg-classifier" {
+		t.Errorf("clearing the pin should fall back to config, got %q", got)
+	}
+}
+
+// TestClassifierModelUsedInRiskRequest verifies the pinned classifier model
+// is what actually reaches the provider for a risk classification, while the
+// session model stays in charge of normal turns.
+func TestClassifierModelUsedInRiskRequest(t *testing.T) {
+	s := newTestStore(t)
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+	a.SetClassifierModel("tiny-classifier")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	a.AssessBashRisk(ctx, "./scripts/build.sh --release", "build release", "/tmp")
+
+	req := fp.LastRequest()
+	if req == nil {
+		t.Fatal("no risk request captured")
+	}
+	if req.Model != "tiny-classifier" {
+		t.Errorf("risk request model = %q, want tiny-classifier", req.Model)
+	}
+}
+
+// TestClassifierModelConcurrentAccess exercises the case /classifier-model
+// deliberately allows: the user pins a classifier model from the TUI
+// goroutine while the turn-loop goroutine is classifying commands. Without
+// the mutex around classifierModels this is a fatal "concurrent map read and
+// map write", not a soft race — run under -race to catch regressions.
+func TestClassifierModelConcurrentAccess(t *testing.T) {
+	s := newTestStore(t)
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 500; i++ {
+			a.SetClassifierModel("pinned")
+			a.SetClassifierModel("")
+		}
+	}()
+	for i := 0; i < 500; i++ {
+		_ = a.ClassifierModel()
+		_ = a.ClassifierModelPinned()
+	}
+	<-done
+}
+
 func TestParseBashRisk(t *testing.T) {
 	cases := []struct {
 		in   string

@@ -96,6 +96,15 @@ func (t *TUI) handleSlash(cmd string) error {
 			return nil
 		}
 		return cmdModel(h, parts[1:])
+	case "/classifier-model":
+		// No busy guard: this only picks the model for the bash-risk
+		// classifier, never the session's own model, so it's safe mid-turn
+		// (the next approval gate simply uses the new choice).
+		if len(parts) == 1 {
+			t.openClassifierModelPicker()
+			return nil
+		}
+		return cmdClassifierModel(h, parts[1:])
 	case "/providers":
 		if t.sessionBusyLocked() {
 			t.scroll.appendRaw(styleSystem, "cannot change provider while agent is running or compacting")

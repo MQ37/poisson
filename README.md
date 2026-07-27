@@ -324,10 +324,16 @@ Ctrl+<letter> is used instead of Ctrl+Shift+C because most terminals
 (including kitty's default `kitty_mod+c`) already bind Ctrl+Shift+C to their
 own native copy action and never forward it to the app.
 
-Slash commands: `/help` `/status` `/model` `/effort` `/providers` `/sessions`
-`/resume` `/search` `/new` `/clear` `/name` `/compact` `/cost` `/reload`
-`/btw` `/openai-reset-usage` `/quit`. Type `@` to fuzzy-attach a file (or
-`@image.png` for an image).
+Slash commands: `/help` `/status` `/model` `/effort` `/classifier-model`
+`/providers` `/sessions` `/resume` `/search` `/new` `/clear` `/name`
+`/compact` `/cost` `/reload` `/btw` `/openai-reset-usage` `/quit`. Type `@`
+to fuzzy-attach a file (or `@image.png` for an image).
+
+`/classifier-model` picks which model rates bash-command risk for the
+approval gate, for the currently selected provider — usually worth pointing
+at something small and fast, since the answer is one word. It never touches
+the model running the conversation, works mid-turn, and lasts for the
+session; set `[classifier] model` in `config.toml` to make it permanent.
 
 ---
 

@@ -93,6 +93,22 @@ func pickerModelItems(h commandHost) ([]pickerItem, error) {
 	return items, nil
 }
 
+// pickerClassifierModelItems lists the current provider's models for the
+// bash-risk classifier, prefixed by a synthetic "default" row that clears a
+// pinned choice (see cmdClassifierModel).
+func pickerClassifierModelItems(h commandHost) ([]pickerItem, error) {
+	items, err := pickerModelItems(h)
+	if err != nil {
+		return nil, err
+	}
+	a := h.Agent()
+	hint := "inherit session model (" + a.Model() + ")"
+	if !a.ClassifierModelPinned() {
+		hint = "current · " + hint
+	}
+	return append([]pickerItem{{id: "default", label: "default", hint: hint}}, items...), nil
+}
+
 func pickerEffortItems(h commandHost) []pickerItem {
 	a := h.Agent()
 	levels := effortPickerLevels

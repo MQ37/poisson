@@ -122,6 +122,9 @@ model = "grok-3"
 base_url = "http://my-host:1234"
 model = "llama3:8b"
 
+[classifier]
+model = "anthropic/claude-sonnet-5"
+
 [compaction]
 threshold = 0.5
 model = "gpt-4o"
@@ -159,6 +162,9 @@ show_cost = false
 	}
 	if cfg.Ollama.Model != "llama3:8b" {
 		t.Errorf("Ollama.Model = %q", cfg.Ollama.Model)
+	}
+	if cfg.Classifier.Model != "anthropic/claude-sonnet-5" {
+		t.Errorf("Classifier.Model = %q", cfg.Classifier.Model)
 	}
 	if cfg.Compaction.Threshold != 0.5 {
 		t.Errorf("Compaction.Threshold = %v", cfg.Compaction.Threshold)

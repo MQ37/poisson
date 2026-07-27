@@ -52,6 +52,14 @@ type LlamaCppConfig struct {
 	Model   string
 }
 
+// ClassifierConfig controls the bash-command risk classifier (the small LLM
+// call behind the approval gate). Model is "model" or "provider/model";
+// empty means "use the session's own model". The TUI's /classifier-model
+// command overrides it per provider for the running session.
+type ClassifierConfig struct {
+	Model string
+}
+
 // CompactionConfig controls auto-compaction.
 type CompactionConfig struct {
 	Threshold     float64 // fraction of context window (0.0–1.0)
@@ -105,6 +113,7 @@ type Config struct {
 	OpenAI     OpenAIConfig
 	Ollama     OllamaConfig
 	LlamaCpp   LlamaCppConfig
+	Classifier ClassifierConfig
 	Compaction CompactionConfig
 	Stealth    StealthConfig
 	TUI        TUIConfig
@@ -237,6 +246,13 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 # Local llama-server (see workdir/alpaca), OpenAI-compatible wire format.
 # base_url = "http://localhost:11212"
 # model = "unsloth/Laguna-S-2.1-GGUF"
+
+[classifier]
+# Model that rates bash-command risk for the approval gate. Runs on the
+# session's provider unless you qualify it as "provider/model". A small, fast
+# model is usually the right choice — the answer is one word.
+# Change it live with /classifier-model (per provider, current session only).
+# model = ""                     # model or provider/model (default: session model)
 
 [compaction]
 # threshold = 0.85               # fraction of context window (0.0–1.0)
@@ -450,6 +466,14 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 		} else if err := setProviderModel(cfg, cfg.Provider.Default, s); err != nil {
 			return nil, fmt.Errorf("model: %w", err)
 		}
+	}
+
+	if v, ok := lookup(m, "classifier", "model"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("classifier.model: %w", err)
+		}
+		cfg.Classifier.Model = s
 	}
 
 	if v, ok := lookup(m, "compaction", "threshold"); ok {

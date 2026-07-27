@@ -23,6 +23,7 @@ var paletteCommands = []paletteItem{
 	{"/name", "set session title (/name <title>)"},
 	{"/reload", "reload config"},
 	{"/effort", "set reasoning effort"},
+	{"/classifier-model", "model that rates bash-command risk"},
 	{"/btw", "side question (floating box; or Ctrl+B)"},
 	{"/quit", "exit"},
 }

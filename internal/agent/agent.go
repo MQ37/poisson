@@ -109,6 +109,20 @@ type Agent struct {
 	model      string
 	effort     string
 
+	// classifierModels overrides which model rates bash-command risk (see
+	// risk.go), keyed by provider ID so switching provider back and forth
+	// keeps each choice. Set from the TUI's /classifier-model; session-scoped
+	// (never persisted). Empty/missing entry falls back to
+	// config.Classifier.Model and then to the session's own model.
+	//
+	// classifierMu guards it because — unlike /effort and /model, which the
+	// TUI refuses mid-turn — /classifier-model is deliberately allowed while
+	// a turn runs, and the approval gate reads this map from the turn-loop
+	// goroutine on every gated bash command. An unguarded map read racing a
+	// write is a fatal runtime error, not a benign race.
+	classifierMu     sync.Mutex
+	classifierModels map[string]string
+
 	// session tool counters for the status bar (reset on SwitchSession).
 	sessionToolCalls  int
 	sessionToolErrors int
