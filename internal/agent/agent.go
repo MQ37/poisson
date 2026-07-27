@@ -1058,17 +1058,17 @@ roundLoop:
 				// thinking, or tool-call content has streamed out, retrying would
 				// re-send it from scratch and duplicate what's already visible;
 				// safer to fail like any other mid-stream error at that point.
+				// The decision itself is shared with the one-shot auxiliary-call
+				// path (streamAndCollect) — see stream_retry.go.
 				noContentYet := textBuilder.Len() == 0 && thinkingBuilder.Len() == 0 &&
 					len(toolCalls) == 0 && len(redactedThinking) == 0
-				if ev.Retryable && noContentYet && midStreamRetries < maxMidStreamErrorRetries {
+				if shouldRetryMidStream(ev, noContentYet, midStreamRetries) {
 					midStreamRetries++
 					a.sendEvent(OutputEvent{Type: OutputRetrying, Text: fmt.Sprintf(
 						"provider overloaded: %s — retrying (%d/%d)…", ev.Error, midStreamRetries, maxMidStreamErrorRetries)})
-					select {
-					case <-ctx.Done():
+					if err := sleepOrDone(ctx, midStreamRetryDelay(midStreamRetries)); err != nil {
 						a.sendEvent(OutputEvent{Type: OutputDone})
-						return ctx.Err()
-					case <-time.After(time.Duration(midStreamRetries) * midStreamErrorBackoff):
+						return err
 					}
 					continue roundLoop
 				}
@@ -1114,11 +1114,9 @@ roundLoop:
 				emptyAttempts++
 				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf(
 					"empty response from model — retrying (%d/%d)", emptyAttempts, maxEmptyResponseRetries)})
-				select {
-				case <-ctx.Done():
+				if err := sleepOrDone(ctx, emptyResponseRetryDelay(emptyAttempts)); err != nil {
 					a.sendEvent(OutputEvent{Type: OutputDone})
-					return ctx.Err()
-				case <-time.After(time.Duration(emptyAttempts) * emptyResponseBackoff):
+					return err
 				}
 				continue
 			}

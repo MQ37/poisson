@@ -30,6 +30,13 @@ var (
 	retryAttemptTimeout = 30 * time.Second
 )
 
+// AttemptTimeout returns the per-attempt ceiling DoWithRetry enforces on a
+// single call (see attemptWithTimeout). Callers that wrap a provider call in
+// their own deadline must keep it above this, or the transport retry loop
+// never gets a second attempt — their context dies first and the failure
+// looks like a plain timeout instead of a retried outage.
+func AttemptTimeout() time.Duration { return retryAttemptTimeout }
+
 // retrySleep waits for d, returning false immediately (without waiting) if
 // ctx is done first. A var so tests can replace it outright if shrinking
 // the backoff schedule isn't enough.

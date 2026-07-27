@@ -11,13 +11,20 @@ import (
 	"github.com/mq37/poisson/internal/provider"
 )
 
-const (
-	// A single classification round keeps the approval gate cheap; risk is a
-	// coarse low/medium/high label, so a second confirming call mostly just
-	// doubles quota.
-	bashRiskLLMRuns    = 1
-	bashRiskRunTimeout = 20 * time.Second
-)
+// A single classification round keeps the approval gate cheap; risk is a
+// coarse low/medium/high label, so a second confirming call mostly just
+// doubles quota.
+const bashRiskLLMRuns = 1
+
+// bashRiskRunTimeout caps one classification round. It must stay above
+// provider.AttemptTimeout() with room for a couple of backoff sleeps on top:
+// at the old flat 20s the round's own deadline expired before DoWithRetry's
+// first 30s attempt could even be abandoned, so a hung connection never got
+// a second attempt and the classifier reported "unknown" (silently sending
+// the user to a manual approval prompt) instead of reconnecting. The human is
+// waiting at the approval gate during this, so the headroom is deliberately
+// modest — and Esc still cancels the turn, which cancels this too.
+var bashRiskRunTimeout = provider.AttemptTimeout() + 45*time.Second
 
 // BashRisk is the assessed danger of running a bash command.
 type BashRisk string
@@ -644,37 +651,28 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 		Effort:      effort,
 	}
 
-	ch, err := a.provider.Stream(ctx, req)
+	// streamAndCollect gives this call the same resilience a real turn has:
+	// provider.DoWithRetry inside Stream already covers transport failures and
+	// retryable statuses (429/5xx/529), and streamAndCollect adds the layer
+	// DoWithRetry structurally cannot see — a retryable error or an empty
+	// response arriving mid-stream, after HTTP 200. Without it a provider
+	// overload made every gated command fall through to a manual prompt (risk
+	// "unknown") even though a one-second retry would have classified it.
+	//
+	// Usage is recorded per attempt and priced against the classifier model,
+	// not the session model — /classifier-model can point this call at a
+	// cheaper (or pricier) model than the conversation's.
+	out, err := streamAndCollect(ctx, a.provider, req, func(u *provider.Usage) {
+		_, _ = a.recordAPICallFor(u, "risk", a.providerID(), model)
+	})
+	raw := out.Any()
 	if err != nil {
-		return BashRiskUnknown, ""
+		return BashRiskUnknown, raw
 	}
-
-	var text, thinking strings.Builder
-	for ev := range ch {
-		switch ev.Type {
-		case provider.EventTextDelta:
-			text.WriteString(ev.Text)
-		case provider.EventThinkingDelta:
-			thinking.WriteString(ev.Text)
-		case provider.EventError:
-			return BashRiskUnknown, strings.TrimSpace(text.String() + thinking.String())
-		case provider.EventDone:
-			if ev.Usage != nil {
-				// Priced against the classifier model, not the session
-				// model — /classifier-model can point this call at a
-				// cheaper (or pricier) model than the conversation's.
-				_, _ = a.recordAPICallFor(ev.Usage, "risk", a.providerID(), model)
-			}
-		}
-	}
-	raw := strings.TrimSpace(text.String())
-	if raw == "" {
-		raw = strings.TrimSpace(thinking.String())
-	}
-	if r := ParseBashRisk(text.String()); r != BashRiskUnknown {
+	if r := ParseBashRisk(out.Text); r != BashRiskUnknown {
 		return r, raw
 	}
-	if r := ParseBashRisk(thinking.String()); r != BashRiskUnknown {
+	if r := ParseBashRisk(out.Thinking); r != BashRiskUnknown {
 		return r, raw
 	}
 	return BashRiskUnknown, raw

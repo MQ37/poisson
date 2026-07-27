@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +124,105 @@ func TestAssessBashRiskUsesIsolatedContext(t *testing.T) {
 	}
 }
 
+// shrinkRetryBackoffs makes the mid-stream and empty-response retry sleeps
+// negligible for the duration of a test, so a test that deliberately trips a
+// retry path doesn't pay the real (seconds-long) schedule.
+func shrinkRetryBackoffs(t *testing.T) {
+	t.Helper()
+	oldEmpty, oldMid := emptyResponseBackoff, midStreamErrorBackoff
+	emptyResponseBackoff, midStreamErrorBackoff = time.Millisecond, time.Millisecond
+	t.Cleanup(func() { emptyResponseBackoff, midStreamErrorBackoff = oldEmpty, oldMid })
+}
+
+// TestAssessBashRiskRetriesMidStreamOverload verifies the classifier gets the
+// same mid-stream resilience a real turn has: a retryable provider error
+// arriving after HTTP 200 (Anthropic's overloaded_error and friends, which
+// provider.DoWithRetry structurally cannot see) is retried instead of
+// collapsing to "unknown risk" and sending the user to a manual prompt.
+func TestAssessBashRiskRetriesMidStreamOverload(t *testing.T) {
+	shrinkRetryBackoffs(t)
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		{{Type: provider.EventError, Error: fmt.Errorf("overloaded_error"), Retryable: true}},
+		provider.FakeTextResponse("low", nil),
+	})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if got := a.AssessBashRisk(ctx, "./scripts/build.sh", "build", "/tmp"); got != BashRiskLow {
+		t.Fatalf("risk = %q, want low from the retried attempt", got)
+	}
+	if fp.CallCount() != 2 {
+		t.Errorf("provider calls = %d, want 2 (one overload + one retry)", fp.CallCount())
+	}
+}
+
+// TestAssessBashRiskGivesUpOnPersistentOverload verifies the retry budget is
+// bounded: a provider stuck in overload ends as unknown risk (the approval
+// gate then asks the human) rather than retrying forever while the user waits.
+func TestAssessBashRiskGivesUpOnPersistentOverload(t *testing.T) {
+	shrinkRetryBackoffs(t)
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	overload := []provider.StreamEvent{{Type: provider.EventError, Error: fmt.Errorf("overloaded_error"), Retryable: true}}
+	fp.SetResponses([][]provider.StreamEvent{overload, overload, overload, overload, overload})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if got := a.AssessBashRisk(ctx, "./scripts/build.sh", "build", "/tmp"); got != BashRiskUnknown {
+		t.Fatalf("risk = %q, want unknown after the retry budget runs out", got)
+	}
+	if want := maxMidStreamErrorRetries + 1; fp.CallCount() != want {
+		t.Errorf("provider calls = %d, want %d (initial + %d retries)", fp.CallCount(), want, maxMidStreamErrorRetries)
+	}
+}
+
+// TestAssessBashRiskRetriesEmptyResponse verifies an empty classifier reply
+// (a transient glitch, or a thinking-only model that produced nothing) is
+// retried rather than immediately reported as unknown risk.
+func TestAssessBashRiskRetriesEmptyResponse(t *testing.T) {
+	shrinkRetryBackoffs(t)
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		{{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 5, OutputTokens: 0}}},
+		provider.FakeTextResponse("high", nil),
+	})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if got := a.AssessBashRisk(ctx, "./scripts/build.sh", "build", "/tmp"); got != BashRiskHigh {
+		t.Fatalf("risk = %q, want high from the retried attempt", got)
+	}
+	if fp.CallCount() != 2 {
+		t.Errorf("provider calls = %d, want 2 (one empty + one retry)", fp.CallCount())
+	}
+}
+
+// TestBashRiskRunTimeoutExceedsTransportAttempt guards the interaction that
+// used to silently defeat provider.DoWithRetry inside the classifier: a
+// per-round deadline shorter than one transport attempt means the round dies
+// before a hung connection can ever be retried.
+func TestBashRiskRunTimeoutExceedsTransportAttempt(t *testing.T) {
+	if bashRiskRunTimeout <= provider.AttemptTimeout() {
+		t.Fatalf("bashRiskRunTimeout %s must exceed provider.AttemptTimeout() %s",
+			bashRiskRunTimeout, provider.AttemptTimeout())
+	}
+}
+
 // TestClassifierModelResolution covers the three layers behind
 // ClassifierModel: a per-provider pin (/classifier-model), the
 // config.Classifier.Model default, and the session model as fallback.
@@ -177,6 +277,9 @@ func TestClassifierModelResolution(t *testing.T) {
 // is what actually reaches the provider for a risk classification, while the
 // session model stays in charge of normal turns.
 func TestClassifierModelUsedInRiskRequest(t *testing.T) {
+	// The bare fake answers with no content, which now (correctly) trips the
+	// empty-response retry path — shrink its sleeps instead of paying them.
+	shrinkRetryBackoffs(t)
 	s := newTestStore(t)
 	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
 	sid := newTestSession(t, s, "m")
