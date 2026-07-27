@@ -10,18 +10,18 @@ import (
 
 // Tools that must never run inside batch.
 //
-// bash  — shell is the escape hatch; packing it into batch defeats the point
-// and reintroduces untyped pipelines under a "safe" name.
-//
 // batch — no recursion.
 //
-// subagent is allowed (see mutatingTools below for why it runs serial) — but
-// a subagent's own registry never registers the subagent tool in the first
-// place (BuildRegistry, opts.Child), so a spawned child dispatching subagent
-// through batch still fails with "tool not registered": recursion stays
-// bounded to one level regardless of the batch path.
+// bash and subagent are allowed (see mutatingTools below for why subagent
+// runs serial) but stay fully gated: bash dispatched through batch reaches
+// the same BashTool.Execute as a direct call, so the LLM risk classifier and
+// human-approval prompt (or sandbox skip) still apply per call — batch has
+// no side channel that bypasses ApprovalFn. A subagent's own registry never
+// registers the subagent tool in the first place (BuildRegistry,
+// opts.Child), so a spawned child dispatching subagent through batch still
+// fails with "tool not registered": recursion stays bounded to one level
+// regardless of the batch path.
 var batchDenied = map[string]bool{
-	"bash":  true,
 	"batch": true,
 }
 
@@ -47,7 +47,7 @@ func NewBatchTool(reg *Registry) *BatchTool {
 func (t *BatchTool) Name() string { return "batch" }
 
 func (t *BatchTool) Description() string {
-	return "Run multiple independent tool calls in one step (max 20). Polyfill for models that only emit one tool_use per turn — prefer native parallel tool calls when available. No dataflow between steps: each call needs fully-specified args. Allowed: every registered tool except bash and batch — subagent is allowed but always runs serially (never in parallel with other steps). Read-only steps may run in parallel; any edit/write/subagent makes the whole batch serial. Validation errors (unknown/denied tool, empty calls, over cap) reject the whole batch before any step runs; runtime errors (bad path, edit miss, …) are per-step — other steps still run, no rollback."
+	return "Run multiple independent tool calls in one step (max 20). Polyfill for models that only emit one tool_use per turn — prefer native parallel tool calls when available. No dataflow between steps: each call needs fully-specified args. Allowed: every registered tool except batch (no recursion) — bash is allowed and still fully gated (LLM risk classifier + human approval, same as calling it directly, no bypass); subagent is allowed but always runs serially (never in parallel with other steps). Read-only steps may run in parallel; any edit/write/subagent makes the whole batch serial. Validation errors (unknown/denied tool, empty calls, over cap) reject the whole batch before any step runs; runtime errors (bad path, edit miss, denied approval, …) are per-step — other steps still run, no rollback."
 }
 
 func (t *BatchTool) Schema() json.RawMessage {
@@ -115,7 +115,7 @@ func (t *BatchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 			return ToolResult{Error: fmt.Sprintf("call %d: tool is required", i+1)}, nil
 		}
 		if batchDenied[name] {
-			return ToolResult{Error: fmt.Sprintf("call %d: tool %q is not allowed inside batch (denied: bash, batch)", i+1, name)}, nil
+			return ToolResult{Error: fmt.Sprintf("call %d: tool %q is not allowed inside batch (denied: batch, no recursion)", i+1, name)}, nil
 		}
 		if t.reg == nil {
 			return ToolResult{Error: "batch has no registry"}, nil

@@ -92,22 +92,61 @@ func TestBatch_PartialFailure(t *testing.T) {
 	}
 }
 
-func TestBatch_DeniesBashAndNestedBatch(t *testing.T) {
+func TestBatch_DeniesNestedBatch(t *testing.T) {
 	dir := testutil.TempDir(t)
 	reg := BuildRegistry(BuildOptions{Cwd: dir, Sandbox: true})
 
-	for _, name := range []string{"bash", "batch"} {
-		res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
-			"calls": []map[string]interface{}{
-				{"tool": name, "input": map[string]string{"x": "y"}},
-			},
-		}))
-		if res.Error == "" {
-			t.Fatalf("tool %q: expected top-level error, got content=%q", name, res.Content)
-		}
-		if !strings.Contains(res.Error, "not allowed") {
-			t.Fatalf("tool %q: error = %q, want 'not allowed'", name, res.Error)
-		}
+	res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "batch", "input": map[string]string{"x": "y"}},
+		},
+	}))
+	if res.Error == "" {
+		t.Fatalf("expected top-level error, got content=%q", res.Content)
+	}
+	if !strings.Contains(res.Error, "not allowed") {
+		t.Fatalf("error = %q, want 'not allowed'", res.Error)
+	}
+}
+
+// TestBatch_AllowsBash verifies bash may run inside batch (sandbox mode, so
+// no approval gate) and its real output reaches the batch step body.
+func TestBatch_AllowsBash(t *testing.T) {
+	dir := testutil.TempDir(t)
+	reg := BuildRegistry(BuildOptions{Cwd: dir, Sandbox: true})
+
+	res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "bash", "input": map[string]string{"command": "echo from_batch", "description": "echo"}},
+		},
+	}))
+	if res.Error != "" {
+		t.Fatalf("batch error: %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "1 ok") || !strings.Contains(res.Content, "from_batch") {
+		t.Fatalf("content: %q", res.Content)
+	}
+}
+
+// TestBatch_BashApprovalGateStillApplies verifies dispatching bash through
+// batch does not bypass ApprovalFn — a denied command still surfaces as a
+// per-step error, same as calling bash directly.
+func TestBatch_BashApprovalGateStillApplies(t *testing.T) {
+	dir := testutil.TempDir(t)
+	reg := BuildRegistry(BuildOptions{
+		Cwd: dir,
+		ApprovalFn: func(context.Context, string, string, string) (bool, string) {
+			return false, "denied by test"
+		},
+	})
+
+	res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "bash", "input": map[string]string{"command": "echo nope", "description": "echo"}},
+		},
+	}))
+	if !strings.Contains(res.Content, "1 err") || !strings.Contains(res.Content, "denied by test") {
+		t.Fatalf("expected approval denial to surface through batch, got: %q", res.Content)
 	}
 }
 
@@ -206,7 +245,7 @@ func TestBatch_DeniedToolAbortsBeforeAnyStep(t *testing.T) {
 	res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
 		"calls": []map[string]interface{}{
 			{"tool": "edit", "input": map[string]interface{}{"path": "a.txt", "oldText": "foo", "newText": "bar"}},
-			{"tool": "bash", "input": map[string]string{"command": "true", "description": "noop"}},
+			{"tool": "batch", "input": map[string]string{"calls": "nope"}},
 		},
 	}))
 	if res.Error == "" || !strings.Contains(res.Error, "not allowed") {
