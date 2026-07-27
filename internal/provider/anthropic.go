@@ -49,11 +49,25 @@ func NewAnthropicProvider(a auth.AuthStore, cfg *config.Config) *AnthropicProvid
 // ID returns "anthropic".
 func (p *AnthropicProvider) ID() string { return "anthropic" }
 
-// Models returns the known Anthropic models with their context windows.
+// stealthUserAgent returns the "claude-cli/<version>" user-agent spoofed on
+// stealth OAuth requests, from cfg.Stealth.CCVersion or (cfg == nil)
+// config.DefaultCCVersion. Shared by anthropic.go and anthropic_usage.go so
+// the fallback version lives in one place, not two copy-pasted literals.
+func stealthUserAgent(cfg *config.Config) string {
+	if cfg != nil {
+		return "claude-cli/" + cfg.Stealth.CCVersion
+	}
+	return "claude-cli/" + config.DefaultCCVersion
+}
+
+// Models returns the curated Anthropic models (see KnownModels in models.go —
+// the single source of truth for IDs/context windows, so this list can't
+// drift out of sync with it).
 func (p *AnthropicProvider) Models() ([]Model, error) {
-	return []Model{
-		{ID: "claude-opus-5", Name: "Claude Opus 5", ContextWindow: 1000000},
-	}, nil
+	if m := CuratedModels("anthropic"); len(m) > 0 {
+		return m, nil
+	}
+	return []Model{{ID: "claude-opus-5", Name: "Claude Opus 5", ContextWindow: 1000000}}, nil
 }
 
 // Stream sends a request to the Anthropic Messages API and returns a channel
@@ -524,11 +538,7 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool, adaptive
 			beta += ",effort-2025-11-24"
 		}
 		req.Header.Set("anthropic-beta", beta)
-		if p.config != nil {
-			req.Header.Set("user-agent", "claude-cli/"+p.config.Stealth.CCVersion)
-		} else {
-			req.Header.Set("user-agent", "claude-cli/2.1.156")
-		}
+		req.Header.Set("user-agent", stealthUserAgent(p.config))
 		req.Header.Set("x-app", "cli")
 	} else {
 		if apiKey == "" && p.config != nil {

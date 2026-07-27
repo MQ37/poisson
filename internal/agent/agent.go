@@ -526,9 +526,7 @@ func (a *Agent) Config() *config.Config { return a.config }
 // otherwise only the file's own directory is. Files already carried by the
 // system prompt (sysPaths: global + cwd) are never re-injected.
 func (a *Agent) contextInjectionForFile(cwd, toolName string, input json.RawMessage, sysPaths map[string]bool) string {
-	switch toolName {
-	case "read", "edit", "write":
-	default:
+	if !isFileTool(toolName) {
 		return ""
 	}
 	var in struct {

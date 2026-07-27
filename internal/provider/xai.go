@@ -33,8 +33,13 @@ func NewXAIProvider(a auth.AuthStore, cfg *config.Config) *XAIProvider {
 // ID returns "xai".
 func (p *XAIProvider) ID() string { return "xai" }
 
-// Models returns the known xAI Grok models with accurate context windows.
+// Models returns the curated xAI models (see KnownModels in models.go — the
+// single source of truth for IDs/context windows, so this list can't drift
+// out of sync with it).
 func (p *XAIProvider) Models() ([]Model, error) {
+	if m := CuratedModels("xai"); len(m) > 0 {
+		return m, nil
+	}
 	return []Model{
 		{ID: "grok-build", Name: "Grok Build", ContextWindow: 256000},
 		{ID: "grok-4.5", Name: "Grok 4.5", ContextWindow: 500000},

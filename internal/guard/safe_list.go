@@ -103,18 +103,18 @@ var SAFE = []string{
 	"echo",
 }
 
+// shellInterpreterNames lists shell binaries: flagged as dangerousTokens
+// below, and reused as-is by guard.go's shellInterpreters (which looks one
+// level into a "sh -c '...'"-style wrapped command). Single source — these
+// used to be two hand-maintained copies that could silently drift apart.
+var shellInterpreterNames = []string{"bash", "sh", "zsh", "dash", "ksh", "fish"}
+
 // dangerousTokens is the set of tokens that red-flag a command (SPEC §7.3).
-var dangerousTokens = map[string]bool{
+var dangerousTokens = stringSet(shellInterpreterNames, map[string]bool{
 	"parallel": true,
 	"eval":     true,
 	"exec":     true,
 	"source":   true,
-	"bash":     true,
-	"sh":       true,
-	"zsh":      true,
-	"dash":     true,
-	"ksh":      true,
-	"fish":     true,
 	"python":   true,
 	"python2":  true,
 	"python3":  true,
@@ -145,6 +145,15 @@ var dangerousTokens = map[string]bool{
 	"base64":   true,
 	"uuencode": true,
 	"uudecode": true,
+})
+
+// stringSet builds a map[string]bool from names, merged into extra (extra is
+// mutated and returned — callers pass a fresh literal, never a shared map).
+func stringSet(names []string, extra map[string]bool) map[string]bool {
+	for _, n := range names {
+		extra[n] = true
+	}
+	return extra
 }
 
 // destructiveCommands is the set of commands that always require approval

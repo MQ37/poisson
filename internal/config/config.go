@@ -102,6 +102,12 @@ type ModelOverride struct {
 // so a level is always shown in the status bar.
 const DefaultEffort = "medium"
 
+// DefaultCCVersion is the spoofed Claude Code version used both as
+// StealthConfig's built-in default and as the provider package's fallback
+// user-agent when no *Config is available — one constant, not two literals
+// that could drift apart.
+const DefaultCCVersion = "2.1.156"
+
 // effortLevels are the accepted reasoning-effort levels.
 var effortLevels = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
 
@@ -128,7 +134,7 @@ type Config struct {
 // DefaultStealthConfig returns the built-in stealth constants.
 func DefaultStealthConfig() StealthConfig {
 	return StealthConfig{
-		CCVersion:    "2.1.156",
+		CCVersion:    DefaultCCVersion,
 		CCEntrypoint: "sdk-cli",
 		CCHSalt:      "59cf53e54c78",
 		CCHPositions: []int{4, 7, 20},

@@ -31,6 +31,19 @@ import (
 // below this, the bookkeeping isn't worth it.
 const pruneMinBytes = 500
 
+// isFileTool reports whether name is one of the three tools that operate on
+// a single file path (read/edit/write) — the shared filter used by
+// parseToolUseOp (stale-read pruning) and contextInjectionForFile
+// (AGENTS.md/CLAUDE.md injection). One place, not two hand-synced switches.
+func isFileTool(name string) bool {
+	switch name {
+	case "read", "edit", "write":
+		return true
+	default:
+		return false
+	}
+}
+
 // readOp is one read/edit/write call found in the kept tail, correlating a
 // tool_use call (from an assistant message) with the tool_result block that
 // answered it (from the following tool message).
@@ -133,9 +146,7 @@ func (a *Agent) pruneStaleToolResults(cwd string, kept []store.Message) {
 // tool_use call targets, resolving path the same way the tools themselves
 // (and read_memo.go) do. ok is false for any other tool or unparseable input.
 func parseToolUseOp(name string, input json.RawMessage, cwd string) (op readOp, ok bool) {
-	switch name {
-	case "read", "edit", "write":
-	default:
+	if !isFileTool(name) {
 		return readOp{}, false
 	}
 	reqPath, reqOffset, reqLimit, ok := tools.ParseReadCall(input)

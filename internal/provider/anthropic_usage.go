@@ -111,11 +111,7 @@ func (p *AnthropicProvider) fetchUsage(ctx context.Context) (*AnthropicUsageLimi
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("Authorization", "Bearer "+access)
 		req.Header.Set("anthropic-beta", "oauth-2025-04-20")
-		if p.config != nil {
-			req.Header.Set("user-agent", "claude-cli/"+p.config.Stealth.CCVersion)
-		} else {
-			req.Header.Set("user-agent", "claude-cli/2.1.156")
-		}
+		req.Header.Set("user-agent", stealthUserAgent(p.config))
 		return p.client.Do(req)
 	}
 

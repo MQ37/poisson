@@ -162,11 +162,9 @@ var gitGlobalOptsWithValue = map[string]bool{
 	"--namespace": true, "--exec-path": true, "--super-prefix": true,
 }
 
-// shellInterpreters mirrors dangerousTokens' shell subset — used by
-// IsGitCommit to look one level into a "sh -c '...'"-style wrapped command.
-var shellInterpreters = map[string]bool{
-	"bash": true, "sh": true, "zsh": true, "dash": true, "ksh": true, "fish": true,
-}
+// shellInterpreters is shellInterpreterNames (safe_list.go) as a set — used
+// by IsGitCommit to look one level into a "sh -c '...'"-style wrapped command.
+var shellInterpreters = stringSet(shellInterpreterNames, map[string]bool{})
 
 // isEnvAssignment reports whether token is a shell "NAME=value" prefix (e.g.
 // "GIT_AUTHOR_NAME=x" in "GIT_AUTHOR_NAME=x git commit ..."), which runs the
