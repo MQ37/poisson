@@ -16,17 +16,16 @@
 
 ---
 
-**poisson** is a small, fast coding agent you run in your terminal. It streams a
-real conversation, calls tools (bash, file read/write/edit, subagents),
+**poisson** is a small, fast coding agent you run in your terminal. It streams
+a real conversation, calls tools (bash, file read/write/edit, subagents),
 tracks every token and dollar, and keeps your whole history in a local SQLite
 database you own. No cloud account for the app itself, no telemetry, no
 Electron — just one static binary and your terminal.
 
-It talks to **Anthropic** (Claude, via your Pro/Max subscription), **OpenAI**
-(GPT-5.5, via your ChatGPT Plus/Pro subscription), **xAI** (Grok, via SuperGrok),
-**Ollama** (local + cloud models) and **llama.cpp** (local `llama-server`). You can paste
-images, search past sessions full-text, compact context, and approve risky
-shell commands from a popup.
+It talks to **Anthropic** (Claude), **OpenAI** (GPT-5.5, ChatGPT subscription),
+**xAI** (Grok, SuperGrok), **Ollama** (local + cloud), and **llama.cpp**
+(local `llama-server`) — paste images, search past sessions full-text,
+compact context, approve risky shell commands from a popup.
 
 ```bash
 go install github.com/mq37/poisson/cmd/px@latest   # needs Go 1.25+; installs to $(go env GOPATH)/bin
@@ -38,69 +37,29 @@ px                                                   # launch the TUI
 
 ## ✨ Features
 
-- **Streaming REPL TUI** — hand-rolled ANSI, no TUI framework. Live thinking
-  blocks (Ctrl+T to fold), tool cards you can expand (Ctrl+E) — including
-  colored diffs for `edit`/`write` — a command palette (Ctrl+P), mouse scroll,
-  and a status bar with live context % and exact cost.
-- **Real tools** — file work is first-class, not a bash afterthought:
-  `read` (line-numbered, offset/limit, images), `write`, `edit`
-  (exact replace, multi-hunk `edits[]`, `replaceAll`, CRLF-safe, capped
-  success snippet + miss hints), `grep` (ripgrep wrapper with caps; skips
-  `.git`/`node_modules`/… even without a `.gitignore`), `glob` (e.g.
-  `**/*_test.go`), and `batch` (up to 20 independent tool calls in one step —
-  polyfill for models that only emit one `tool_use` per turn; no dataflow
-  between steps; denies `bash`/`subagent`/`batch`). Also `bash` (still the
-  full escape hatch; plain `cat`/`head`/`tail`/`sed -n` are refused in favor
-  of `read`), `web_search` (plain DuckDuckGo link list, no account), `web_ask`
-  (AI-synthesized answer — xAI Grok via OAuth when logged in, exa.ai keyless
-  fallback otherwise), `fetch` (works on every provider — Ollama's own
-  web_fetch API when available, otherwise a built-in HTML→Markdown
-  converter), `recall` (full-text search across past sessions), plus
-  **subagents** (parallel child agents) and **skills** (8 built in, see
-  [below](#-built-in-skills); also user-defined via `~/.poisson/skills/`).
-  Prefer the dedicated file tools over packing the same job into `bash`;
-  multi-tool turns or `batch` beat shell pipelines for independent steps.
-  Within one session, `bash` keeps **sticky cwd + environment in RAM**
-  (`cd` / `export` carry to the next bash call); optional `workdir` overrides
-  for one call. State is per agent (subagents isolated), never written to
-  SQLite — restart/resume starts clean at the session cwd.
-- **Bash safety guard, two speeds** — every shell command is checked before it
-  runs. **Fast mode** (default): a deterministic guard auto-approves
-  read-only, side-effect-free commands (`ls`, `cat`, `grep`/`rg`, `find`,
-  `git status`/`diff`/`log`, ...) with zero LLM calls and no prompt at all —
-  it also follows symlinks **and resolves relative paths against `cd` /
-  workdir**, so a sensitive file can't hide behind an innocent-looking name
-  or a `cd ~/.aws && cat credentials` chain. Listing a secrets directory
-  (`ls ~/.ssh`, `du ~/.gnupg`, …) is gated the same way as reading a file
-  inside it. Anything else is risk-classified by the LLM; low risk runs
-  automatically, medium/high/unknown pops an approval prompt (you decide —
-  it never auto-allows installs, destructive, or `npx`/`dlx` commands).
-  **Paranoid mode** (**Shift+Tab** to toggle, shown bottom-right of the
-  input): both the guard and the LLM classifier are skipped — literally
-  every command asks you first. The agent cannot nest `px --yolo` under
-  itself (the bash tool refuses it); `--yolo` stays a human-only headless
-  flag.
-- **Sessions in SQLite** — every message, tool call, and API call is persisted.
-  **Full-text search** (FTS5) across your history, resume any session, and
-  auto-compaction that summarizes old turns when context fills up.
-- **Exact cost & tokens** — per-API-call token counts and USD cost, live in the
-  status bar and via `/cost`.
-- **Live usage-limit tracking** — Anthropic OAuth sessions show 5-hour and
-  7-day (weekly) rolling usage % plus any pay-as-you-go balance right in the
-  header; OpenAI/Codex sessions show weekly usage % and how many free
-  "reset this window early" credits your account has (spend one with
-  `/openai-reset-usage`). Refreshed at most every 5 minutes, straight from
-  each provider's own usage endpoint — no scraping, no guessing from token
-  counts.
-- **Image input** — paste an image with **Ctrl+V** or attach `@screenshot.png`.
-  Images are downscaled to 1024px and sent to vision-capable models. ([details](docs/images.md))
-- **Multi-provider** — Anthropic (subscription OAuth), OpenAI (ChatGPT
-  subscription OAuth), xAI (OAuth), Ollama (local daemon or Ollama cloud),
-  llama.cpp (local `llama-server`). Switch model/effort live.
-- **Message queueing** — type while the agent is working (or while `/compact`
-  is running); your message is spliced into the model's very next request —
-  after the current tool round, or right before the turn would otherwise end —
-  instead of waiting for the whole turn to finish.
+- **Streaming REPL TUI** — hand-rolled ANSI, no framework. Foldable thinking
+  blocks, expandable tool cards with colored diffs, command palette
+  (Ctrl+P), mouse scroll, status bar with live context % and cost.
+- **Real tools, not just bash** — `read`/`write`/`edit`/`grep`/`glob` for file
+  work, `batch` for independent calls in one step, plus `web_search`,
+  `web_ask`, `fetch`, `recall` (cross-session full-text search), subagents,
+  and 8 built-in skills ([below](#-built-in-skills)), user-extendable via
+  `~/.poisson/skills/`. `bash` keeps sticky cwd/env across calls in a
+  session.
+- **Bash safety guard, two speeds** — Fast mode (default): a deterministic
+  guard auto-approves read-only commands with zero LLM calls; anything else
+  is LLM risk-classified, medium/high/unknown asks you. Paranoid mode
+  (Shift+Tab) asks for every command. Installs, destructive ops, and
+  `npx`/`dlx`-style commands never auto-approve.
+- **Sessions in SQLite** — every message/tool/API call persisted, full-text
+  search (FTS5), resume any session, auto-compaction when context fills up.
+- **Exact cost & tokens**, live in the status bar and `/cost`, plus live
+  usage-limit tracking for Anthropic/OpenAI subscription accounts.
+- **Image input** — paste (Ctrl+V) or `@screenshot.png`. ([details](docs/images.md))
+- **Multi-provider** — Anthropic, OpenAI, xAI, Ollama, llama.cpp. Switch
+  model/effort live.
+- **Message queueing** — type while the agent works; sent at the next turn
+  boundary instead of waiting for the whole turn to finish.
 
 ---
 
@@ -317,12 +276,9 @@ Shift+Tab fast/paranoid approval mode
 Esc cancel running turn · Ctrl+C clear input (twice to exit)
 ```
 
-Click-drag over the conversation selects text — no Shift key needed — and
-auto-scrolls when you drag past the top/bottom edge. **Ctrl+Y** copies the
-selection to the system clipboard (via OSC 52, works over SSH). Plain
-Ctrl+<letter> is used instead of Ctrl+Shift+C because most terminals
-(including kitty's default `kitty_mod+c`) already bind Ctrl+Shift+C to their
-own native copy action and never forward it to the app.
+Click-drag selects text (auto-scrolls past the edge); **Ctrl+Y** copies to
+the system clipboard via OSC 52 (works over SSH) — plain Ctrl+<letter>
+because most terminals already claim Ctrl+Shift+C for their own copy action.
 
 Slash commands: `/help` `/status` `/model` `/effort` `/classifier-model`
 `/providers` `/sessions` `/resume` `/search` `/new` `/clear` `/name`
@@ -339,10 +295,9 @@ session; set `[classifier] model` in `config.toml` to make it permanent.
 
 ## 📦 Dependencies — deliberately tiny
 
-poisson has **3 direct dependencies**. Everything else you see below is a
-*transitive* dependency pulled in **only** by those three — never imported by
-our code. The rest of the agent is the Go standard library: hand-rolled ANSI
-TUI, `net/http` for providers, `encoding/json`, and a hand-written TOML parser.
+poisson has **3 direct dependencies**; everything else below is *transitive*,
+pulled in only by those three. The rest is stdlib: hand-rolled ANSI TUI,
+`net/http` for providers, `encoding/json`, a hand-written TOML parser.
 
 ### Direct (3)
 
