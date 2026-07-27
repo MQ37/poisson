@@ -1,5 +1,7 @@
 // Package store provides SQLite-backed persistence for Poisson sessions,
-// messages, API calls, FTS5 search, and model pricing.
+// messages, API calls, FTS5 search, and model pricing. Schema changes are
+// tracked via PRAGMA user_version (see migrations in store.go) so an
+// existing user's database migrates forward automatically on next open.
 package store
 
 import (
@@ -88,6 +90,44 @@ CREATE TABLE IF NOT EXISTS compactions (
 );
 `
 
+// migrations are schema changes applied in order, gated by SQLite's
+// PRAGMA user_version: migrations[i] takes a database from version i to
+// i+1. Append to this slice for future schema changes instead of growing
+// ensureAPICallsColumns's hand-rolled "seen[...]" column checks — this way
+// a user's existing db.sqlite is migrated automatically on next open, and
+// the code always knows exactly which changes a given file has and hasn't
+// seen yet.
+//
+// migrations[0] (v0 -> v1) is a no-op: schemaSQL's CREATE TABLE IF NOT
+// EXISTS and ensureAPICallsColumns's column checks already normalize both
+// a brand-new database and every pre-existing one (which all start at
+// user_version 0, since this mechanism didn't track a version before) to
+// the current shape before migrate runs. v1 is simply "caught up".
+var migrations = []func(*sql.DB) error{
+	func(*sql.DB) error { return nil },
+}
+
+// migrate reads db's PRAGMA user_version and applies any migrations not yet
+// run, bumping the stored version after each one so a later Open resumes
+// from wherever it left off (including after a crash mid-migration, since
+// each step's version bump is a separate statement from the step itself).
+func migrate(db *sql.DB) error {
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	for version < len(migrations) {
+		if err := migrations[version](db); err != nil {
+			return fmt.Errorf("migration %d->%d: %w", version, version+1, err)
+		}
+		version++
+		if _, err := db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, version)); err != nil {
+			return fmt.Errorf("bump schema version to %d: %w", version, err)
+		}
+	}
+	return nil
+}
+
 // Open opens (or creates) the SQLite database at path, sets the WAL
 // journal mode and busy_timeout pragmas, and runs idempotent schema
 // creation. The returned Store is ready for use.
@@ -115,6 +155,10 @@ func Open(path string) (*Store, error) {
 	if err := ensureAPICallsColumns(db); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 
 	st := &Store{db: db}

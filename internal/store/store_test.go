@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -779,5 +780,111 @@ func TestNewSessionIDUnique(t *testing.T) {
 	a, b := NewSessionID(), NewSessionID()
 	if a[:6] == b[:6] {
 		t.Fatalf("short prefixes collide: %q vs %q", a, b)
+	}
+}
+
+// ---------- Schema versioning ----------
+
+func TestSchemaVersionSetOnOpen(t *testing.T) {
+	s := newTestStore(t)
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != len(migrations) {
+		t.Fatalf("user_version = %d, want %d (len(migrations))", version, len(migrations))
+	}
+}
+
+func TestSchemaVersionResumesFromStaleVersion(t *testing.T) {
+	dir := testutil.TempDir(t)
+	path := filepath.Join(dir, "test.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	// Simulate a database last touched by an older binary that stopped
+	// applying migrations partway through.
+	if _, err := s.db.Exec(`PRAGMA user_version = 0`); err != nil {
+		t.Fatalf("force stale version: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != len(migrations) {
+		t.Fatalf("user_version after reopen = %d, want %d", version, len(migrations))
+	}
+}
+
+// TestMigrationActuallyRunsSQL proves migrate() executes each step's SQL,
+// not just bumps the counter: swaps in a real ALTER TABLE as a temporary
+// extra migration, runs it against a stale database, and checks the column
+// exists afterward.
+func TestMigrationActuallyRunsSQL(t *testing.T) {
+	dir := testutil.TempDir(t)
+	path := filepath.Join(dir, "test.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := s.db.Exec(`PRAGMA user_version = 0`); err != nil {
+		t.Fatalf("force stale version: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	orig := migrations
+	migrations = append(append([]func(*sql.DB) error{}, orig...), func(db *sql.DB) error {
+		_, err := db.Exec(`ALTER TABLE sessions ADD COLUMN _test_migration_marker TEXT`)
+		return err
+	})
+	defer func() { migrations = orig }()
+
+	s, err = Open(path)
+	if err != nil {
+		t.Fatalf("reopen with extra migration: %v", err)
+	}
+	defer s.Close()
+
+	rows, err := s.db.Query(`PRAGMA table_info(sessions)`)
+	if err != nil {
+		t.Fatalf("table_info: %v", err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var dflt any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if name == "_test_migration_marker" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("_test_migration_marker column missing — migration step did not run")
+	}
+
+	var version int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read user_version: %v", err)
+	}
+	if version != len(migrations) {
+		t.Fatalf("user_version = %d, want %d", version, len(migrations))
 	}
 }
