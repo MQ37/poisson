@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -128,6 +129,94 @@ func TestInteg_ParallelToolsRunConcurrently(t *testing.T) {
 	}
 	if msgs[3].Role != "tool" || !strings.Contains(msgs[3].Content, "SECOND_DONE") {
 		t.Errorf("msg[3] should be second's result, got %q", msgs[3].Content)
+	}
+}
+
+// TestInteg_ToolDispatchCapsConcurrency is the regression guard for
+// maxConcurrentToolCalls: a model response with more tool_use blocks than
+// the cap must never run them all at once — each one still forks a real
+// subprocess/connection for bash/grep/fetch, so an unbounded round is a
+// local resource-exhaustion risk, not just a theoretical one.
+func TestInteg_ToolDispatchCapsConcurrency(t *testing.T) {
+	st := newTestStore(t)
+	sid := "itest-cap"
+	if err := st.CreateSession(&store.Session{ID: sid, Cwd: testutil.TempDir(t), Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	const numCalls = maxConcurrentToolCalls + 4
+	arg := json.RawMessage(`{}`)
+	var turn []provider.StreamEvent
+	for i := 0; i < numCalls; i++ {
+		id := fmt.Sprintf("call_%d", i)
+		turn = append(turn,
+			provider.StreamEvent{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: id, Name: "capped", Input: arg}},
+			provider.StreamEvent{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: id, Name: "capped", Input: arg}},
+		)
+	}
+	turn = append(turn, provider.StreamEvent{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}})
+
+	prov := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	prov.SetResponses([][]provider.StreamEvent{turn, provider.FakeTextResponse("done", nil)})
+
+	release := make(chan struct{})
+	var inFlight, maxInFlight int32
+	reg := tools.NewRegistry()
+	reg.Register(barrierTool{name: "capped", run: func(ctx context.Context) (tools.ToolResult, error) {
+		n := atomic.AddInt32(&inFlight, 1)
+		defer atomic.AddInt32(&inFlight, -1)
+		for {
+			m := atomic.LoadInt32(&maxInFlight)
+			if n <= m || atomic.CompareAndSwapInt32(&maxInFlight, m, n) {
+				break
+			}
+		}
+		<-release
+		return tools.ToolResult{Content: "ok"}, nil
+	}})
+
+	cfg := config.DefaultConfig()
+	cfg.Provider.Default = "fake"
+	a := NewAgent(st, prov, reg, cfg, sid, make(chan OutputEvent, 256), nil)
+	a.SetModel("m")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- a.PromptWithContext(context.Background(), "run many")
+	}()
+
+	// Give every goroutine a chance to reach the barrier tool before
+	// asserting the high-water mark — polling instead of a fixed sleep
+	// since maxInFlight can still climb for a few more scheduler ticks.
+	deadline := time.After(2 * time.Second)
+	for {
+		if atomic.LoadInt32(&inFlight) >= maxConcurrentToolCalls {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("never reached the concurrency cap — dispatch may be stuck")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	// One more scheduling window to let any goroutine past the cap prove it
+	// can't also join in.
+	time.Sleep(20 * time.Millisecond)
+	if got := atomic.LoadInt32(&inFlight); got > maxConcurrentToolCalls {
+		t.Fatalf("in-flight tool calls = %d, want <= %d (cap not enforced)", got, maxConcurrentToolCalls)
+	}
+	close(release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("PromptWithContext: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn never completed after release")
+	}
+	if got := atomic.LoadInt32(&maxInFlight); got != maxConcurrentToolCalls {
+		t.Errorf("max concurrent tool executions = %d, want exactly %d", got, maxConcurrentToolCalls)
 	}
 }
 

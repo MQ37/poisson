@@ -97,12 +97,19 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		return ToolResult{Error: "blocked: refusing to run poisson/px with --yolo (nested auto-approve). Run --yolo yourself from a real shell if you need it."}, nil
 	}
 
-	// Serialize against sticky state for this session's BashTool. Parallel
-	// bash tool_uses would otherwise race cwd/env snapshots.
+	// Snapshot sticky state under lock — briefly, not for the rest of this
+	// call. The lock only needs to guard the actual read/write of
+	// t.sticky.cwd/env; holding it across the approval wait and the
+	// subprocess run would serialize every bash tool_use in a round even
+	// though they're otherwise independent (a human can be mid-approval on
+	// one while another is free to run). Concurrent callers may still race
+	// on what sticky ends up as (whichever finishes last wins) — same as
+	// two real concurrent `cd`s in one shell have no well-defined
+	// "correct" outcome — but that's a business-logic ambiguity, not the
+	// data race this lock exists to prevent.
 	t.sticky.lock()
-	defer t.sticky.unlock()
-
 	stickyCwd, stickyEnv := t.sticky.cwd, t.sticky.env
+	t.sticky.unlock()
 	dir := stickyStartDir(t.cwd, stickyCwd, in.Workdir)
 
 	// A stale dir (sticky cwd's directory got deleted/unmounted since the
@@ -124,7 +131,9 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 			if in.Workdir != "" {
 				hints = append(hints, fmt.Sprintf("workdir %q does not exist; ran in session root %q instead.", bad, t.cwd))
 			} else {
+				t.sticky.lock()
 				t.sticky.cwd = ""
+				t.sticky.unlock()
 				hints = append(hints, fmt.Sprintf("sticky working directory %q no longer exists (deleted/unmounted); reset to session root %q.", bad, t.cwd))
 			}
 		}
@@ -223,8 +232,10 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	// enough to write it — including failed commands (cd good; false should
 	// still leave sticky in good). Missing dump (killed early) keeps prior.
 	if newCwd, newEnv, dumpErr := readStickyDump(cwdFile, envFile); dumpErr == nil {
+		t.sticky.lock()
 		t.sticky.cwd = newCwd
 		t.sticky.env = newEnv
+		t.sticky.unlock()
 	}
 
 	if !t.sandbox {
@@ -434,6 +445,9 @@ func checkSensitivePath(ctx context.Context, cwd string, sandbox bool, verb, pat
 	reason := guard.SensitivePathReason(path)
 	if reason == "" {
 		return ToolResult{}, true
+	}
+	if approvalFn == nil {
+		return ToolResult{Error: sensitivePathDenyMsg(reason, "")}, false
 	}
 	allowed, denyReason := approvalFn(ctx, verb+" "+path, reason, cwd)
 	if !allowed {

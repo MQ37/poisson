@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -125,6 +126,32 @@ func TestDeleteSession(t *testing.T) {
 	}
 	if msgs, _ := s.GetMessages("keep-2"); len(msgs) != 1 {
 		t.Errorf("keep-2 should keep its 1 message, got %d", len(msgs))
+	}
+}
+
+// TestDeleteSessionRemovesImageFiles is the regression guard for the fix
+// that plugged the /tmp leak: an image content block's ImagePath used to
+// survive forever on disk even after the session referencing it was
+// deleted, since nothing ever unlinked it.
+func TestDeleteSessionRemovesImageFiles(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "del-img")
+
+	dir := testutil.TempDir(t)
+	imgPath := filepath.Join(dir, "pasted.png")
+	if err := os.WriteFile(imgPath, []byte("fake png bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	content, _ := json.Marshal([]map[string]string{{"type": "image", "image_path": imgPath}})
+	if err := s.AppendMessage(&Message{SessionID: "del-img", Role: "user", Content: string(content)}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.DeleteSession("del-img"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if _, err := os.Stat(imgPath); !os.IsNotExist(err) {
+		t.Errorf("image file should be removed after DeleteSession, stat err = %v", err)
 	}
 }
 

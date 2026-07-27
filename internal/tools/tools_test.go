@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1140,6 +1141,43 @@ func TestRegistry_ExecuteTrimsLargeOutput(t *testing.T) {
 	}
 	if len(full) != total {
 		t.Fatalf("spill file has %d bytes, want full %d", len(full), total)
+	}
+}
+
+// TestSweepStaleSpillFiles_RemovesOldOnly is the regression guard for the
+// fix that bounds spill-file accumulation in toolSpillDir: nothing else
+// ever cleans these up (a spill path only exists as text inside an
+// already-trimmed tool result, so there's no per-session record to delete
+// it by — see spillFileTTL's doc comment), so age is the only signal.
+func TestSweepStaleSpillFiles_RemovesOldOnly(t *testing.T) {
+	old := toolSpillDir
+	toolSpillDir = testutil.TempDir(t)
+	defer func() { toolSpillDir = old }()
+
+	stalePath := filepath.Join(toolSpillDir, "poisson-tool-stale.txt")
+	freshPath := filepath.Join(toolSpillDir, "poisson-tool-fresh.txt")
+	otherPath := filepath.Join(toolSpillDir, "unrelated.txt")
+	for _, p := range []string{stalePath, freshPath, otherPath} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	staleTime := time.Now().Add(-spillFileTTL - time.Hour)
+	if err := os.Chtimes(stalePath, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+
+	spillSweepOnce = sync.Once{}
+	sweepStaleSpillFiles()
+
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Errorf("stale spill file should be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(freshPath); err != nil {
+		t.Errorf("fresh spill file should survive: %v", err)
+	}
+	if _, err := os.Stat(otherPath); err != nil {
+		t.Errorf("non-spill file should be untouched: %v", err)
 	}
 }
 

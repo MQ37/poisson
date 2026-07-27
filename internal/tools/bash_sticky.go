@@ -13,17 +13,20 @@ import (
 // (one agent session). Subagents build their own registry → own BashTool →
 // isolated sticky. Nothing here is written to SQLite; process exit drops it.
 //
-// Concurrent bash tool_uses on the same instance are serialized so two
-// writers cannot race the snapshot.
+// The lock guards only the read/write of cwd/env themselves (see
+// BashTool.Execute) — it does not serialize whole bash calls against each
+// other. Two concurrent bash tool_uses can run their subprocesses (and wait
+// on human approval) in parallel; only the brief snapshot-read-at-start and
+// snapshot-write-at-end are mutually exclusive.
 type bashSticky struct {
 	mu  sync.Mutex
 	cwd string   // absolute; empty → fall back to BashTool.cwd (session root)
 	env []string // KEY=VAL entries for cmd.Env; nil → os.Environ()
 }
 
-// lock serializes a full bash Execute against this sticky state. Callers
-// read/write s.cwd and s.env only while holding the lock.
-func (s *bashSticky) lock() { s.mu.Lock() }
+// lock/unlock guard s.cwd/s.env access. Callers read/write them only while
+// holding the lock.
+func (s *bashSticky) lock()   { s.mu.Lock() }
 func (s *bashSticky) unlock() { s.mu.Unlock() }
 
 // stickyStartDir picks the directory for this call: explicit workdir wins

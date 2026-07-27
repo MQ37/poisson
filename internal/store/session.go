@@ -4,8 +4,11 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"time"
 )
@@ -111,6 +114,14 @@ func (s *Store) MessageCountsBySession() (map[string]int, error) {
 // Foreign keys are enforced with no cascade, so children must go first.
 // Irreversible.
 func (s *Store) DeleteSession(id string) error {
+	// Collect before the rows disappear: image blocks point at temp files
+	// that are never otherwise cleaned up (they must survive for as long as
+	// the session does, since every turn re-reads them to re-encode the
+	// image for the provider — see provider.ContentBlock's ImagePath doc).
+	// Once the session itself is deleted there's no future turn left to
+	// need them, so this is the one safe point to unlink them.
+	imagePaths := s.sessionImagePaths(id)
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin delete: %w", err)
@@ -127,7 +138,49 @@ func (s *Store) DeleteSession(id string) error {
 			return fmt.Errorf("delete session %s: %w", id, err)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	// Best-effort: a missing or unremovable file must not fail the delete
+	// the user already asked for and got (rows are already gone).
+	for _, path := range imagePaths {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			log.Printf("warning: remove image file for deleted session %s: %v", id, err)
+		}
+	}
+	return nil
+}
+
+// sessionImagePaths returns every ImagePath referenced by any message in
+// the session, including compacted/soft-deleted rows — DeleteSession is
+// purging the session outright, so every row's images qualify regardless of
+// the flags GetMessages normally filters on.
+func (s *Store) sessionImagePaths(id string) []string {
+	rows, err := s.db.Query(`SELECT content FROM messages WHERE session_id = ?`, id)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			continue
+		}
+		var blocks []struct {
+			ImagePath string `json:"image_path"`
+		}
+		if err := json.Unmarshal([]byte(content), &blocks); err != nil {
+			continue
+		}
+		for _, b := range blocks {
+			if b.ImagePath != "" {
+				paths = append(paths, b.ImagePath)
+			}
+		}
+	}
+	return paths
 }
 
 // GetSession returns the session with the given id, or ErrNotFound.

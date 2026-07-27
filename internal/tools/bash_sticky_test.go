@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mq37/poisson/internal/testutil"
 )
@@ -288,6 +289,47 @@ func TestBashSticky_BadWorkdirSelfHeals(t *testing.T) {
 	if pwd != root {
 		t.Fatalf("pwd = %q, want session root %q", pwd, root)
 	}
+}
+
+// TestBashTool_ApprovalWaitDoesNotSerializeOtherCalls is the regression
+// guard for narrowing the sticky mutex: it used to be held across the whole
+// Execute (including the human-approval wait and the subprocess run), so a
+// second bash call on the same BashTool instance couldn't even start while
+// the first was blocked waiting for approval. The lock now only guards the
+// brief cwd/env snapshot read/write.
+func TestBashTool_ApprovalWaitDoesNotSerializeOtherCalls(t *testing.T) {
+	dir := testutil.TempDir(t)
+	release := make(chan struct{})
+	started := make(chan struct{})
+	b := NewBashTool(dir, false, func(ctx context.Context, cmd, desc, workdir string) (bool, string) {
+		if strings.Contains(cmd, "slowmarker") {
+			close(started)
+			<-release
+		}
+		return true, ""
+	})
+
+	go b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command": "true # slowmarker", "description": "slow",
+	}))
+	<-started // slow call is now parked in its approval wait
+
+	fastDone := make(chan struct{})
+	go func() {
+		b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+			"command": "echo fast", "description": "fast",
+		}))
+		close(fastDone)
+	}()
+
+	select {
+	case <-fastDone:
+		// good: the fast call ran to completion while the slow one is
+		// still parked, proving the lock doesn't span the approval wait.
+	case <-time.After(3 * time.Second):
+		t.Fatal("second bash call blocked on the first's pending approval — sticky mutex over-scoped")
+	}
+	close(release)
 }
 
 func TestBashSticky_StdoutNotPollutedByDump(t *testing.T) {

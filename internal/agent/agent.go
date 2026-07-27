@@ -786,6 +786,10 @@ const maxEmptyResponseRetries = 3
 // after being cut off by the provider's output-token cap (stop_reason=max_tokens).
 const maxTurnContinuations = 8
 
+// maxConcurrentToolCalls bounds how many tool_use blocks from one model
+// response run at once — see the dispatch loop in runTurn.
+const maxConcurrentToolCalls = 8
+
 // emptyResponseBackoff is a var so tests can shorten it.
 var emptyResponseBackoff = 500 * time.Millisecond
 
@@ -1175,10 +1179,18 @@ roundLoop:
 		dispatchCwd := a.cwd()
 		results := make([]tools.ToolResult, len(toolCalls))
 		var wg sync.WaitGroup
+		// Bounds how many of this round's tool calls run at once — a model
+		// response with an unusually large number of parallel tool_use
+		// blocks (buggy, or steered by injected content) would otherwise
+		// spawn that many subprocesses/connections (bash, grep, fetch, ...)
+		// simultaneously with no ceiling.
+		sem := make(chan struct{}, maxConcurrentToolCalls)
 		for i, tc := range toolCalls {
 			wg.Add(1)
 			go func(idx int, call tools.ToolCall) {
 				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
 				emit := func(res tools.ToolResult) {
 					results[idx] = res
 					a.sendEvent(OutputEvent{

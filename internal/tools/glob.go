@@ -13,11 +13,13 @@ import (
 
 // GlobTool finds files by glob pattern under a root directory.
 type GlobTool struct {
-	cwd string
+	cwd        string
+	sandbox    bool
+	approvalFn ApprovalFn
 }
 
-func NewGlobTool(cwd string) *GlobTool {
-	return &GlobTool{cwd: cwd}
+func NewGlobTool(cwd string, sandbox bool, approvalFn ApprovalFn) *GlobTool {
+	return &GlobTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
 }
 
 func (t *GlobTool) Name() string { return "glob" }
@@ -79,6 +81,9 @@ func (t *GlobTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	root := t.cwd
 	if in.Path != "" {
 		root = resolvePath(t.cwd, in.Path)
+	}
+	if res, ok := checkSensitivePath(ctx, t.cwd, t.sandbox, "glob", root, t.approvalFn); !ok {
+		return res, nil
 	}
 	info, err := os.Stat(root)
 	if err != nil {

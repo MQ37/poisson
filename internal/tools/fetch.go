@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -16,7 +18,47 @@ const (
 	fetchMaxBytes    = 2 << 20 // 2 MiB: cap extracted page text (OOM guard)
 	fetchErrMaxBytes = 4 << 10 // 4 KiB: cap error bodies
 	fetchTimeout     = 30 * time.Second
+	fetchDialTimeout = 10 * time.Second
 )
+
+// blockedFetchIP reports whether ip must never be reached by fetchDirect: a
+// model-supplied URL (or one lifted from fetched page content via prompt
+// injection) could otherwise pull in cloud metadata endpoints
+// (169.254.169.254) or any service on the host's own loopback/private
+// network. A var (not a plain func) so tests can loosen it — see
+// allowLoopbackFetchForTest — since httptest.NewServer always listens on
+// 127.0.0.1.
+var blockedFetchIP = func(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
+}
+
+// safeFetchDialContext resolves addr itself and dials the checked IP
+// directly (rather than handing the hostname to net.Dialer, which would
+// re-resolve it) so a DNS response that changes between this check and the
+// actual connection can't slip an internal IP past blockedFetchIP.
+func safeFetchDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, err
+	}
+	for _, ip := range ips {
+		if blockedFetchIP(ip) {
+			return nil, fmt.Errorf("refusing to fetch internal address %s", ip)
+		}
+	}
+	dialer := &net.Dialer{Timeout: fetchDialTimeout}
+	return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+}
+
+// safeFetchClient is used only for fetchDirect's model-supplied URL — never
+// for the ollamaBaseURL proxy call above, which targets the locally
+// configured Ollama instance, not an untrusted URL.
+var safeFetchClient = &http.Client{Transport: &http.Transport{DialContext: safeFetchDialContext}}
 
 // FetchTool fetches a URL and returns its readable content. With a non-empty
 // ollamaBaseURL it proxies through the local Ollama instance's own web_fetch
@@ -97,17 +139,25 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 // fetchDirect fetches url itself (no Ollama) and converts HTML responses to
 // Markdown; non-HTML responses (plain text, JSON, existing Markdown, ...)
 // are returned as-is since there's nothing to convert.
-func (t *FetchTool) fetchDirect(ctx context.Context, url string) (ToolResult, error) {
+func (t *FetchTool) fetchDirect(ctx context.Context, rawURL string) (ToolResult, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ToolResult{Error: "invalid url: " + err.Error()}, nil
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ToolResult{Error: "url must be http or https"}, nil
+	}
+
 	fetchCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(fetchCtx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(fetchCtx, "GET", rawURL, nil)
 	if err != nil {
 		return ToolResult{Error: "create request: " + err.Error()}, nil
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; poisson-fetch/1.0)")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := safeFetchClient.Do(req)
 	if err != nil {
 		return ToolResult{Error: "fetch failed: " + err.Error()}, nil
 	}

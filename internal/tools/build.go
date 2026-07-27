@@ -44,6 +44,7 @@ type BuildOptions struct {
 // tool except subagent; the parent additionally gets subagent when a
 // SubApproval handler is supplied.
 func BuildRegistry(opts BuildOptions) *Registry {
+	sweepStaleSpillFiles()
 	reg := NewRegistry()
 
 	approval := opts.ApprovalFn
@@ -59,8 +60,8 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	reg.Register(NewReadTool(opts.Cwd, opts.Sandbox, fileApproval))
 	reg.Register(NewWriteTool(opts.Cwd, opts.Sandbox, fileApproval))
 	reg.Register(NewEditTool(opts.Cwd, opts.Sandbox, fileApproval))
-	reg.Register(NewGrepTool(opts.Cwd))
-	reg.Register(NewGlobTool(opts.Cwd))
+	reg.Register(NewGrepTool(opts.Cwd, opts.Sandbox, fileApproval))
+	reg.Register(NewGlobTool(opts.Cwd, opts.Sandbox, fileApproval))
 	reg.Register(NewWebSearchTool())
 	reg.Register(NewWebAskTool(opts.Auth))
 	if opts.Store != nil {

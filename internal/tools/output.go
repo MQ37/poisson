@@ -3,7 +3,10 @@ package tools
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -12,6 +15,39 @@ const maxToolOutputBytes = 50 * 1024
 // toolSpillDir is where oversized tool output is written in full so the model
 // can read it back on demand. Overridable in tests.
 var toolSpillDir = "/tmp"
+
+// spillFileTTL bounds how long a spilled tool-output file survives.
+// Nothing else ever cleans these up: unlike an image block's ImagePath
+// (a structured field DeleteSession can look up and unlink — see
+// Store.DeleteSession), a spill path only ever exists as text inside an
+// already-trimmed tool result, so there's no per-session record to delete
+// it by. Age is the only signal available.
+const spillFileTTL = 7 * 24 * time.Hour
+
+var spillSweepOnce sync.Once
+
+// sweepStaleSpillFiles removes spill files older than spillFileTTL. Safe to
+// call from every BuildRegistry invocation (including per-subagent) since
+// sync.Once bounds it to one sweep per process.
+func sweepStaleSpillFiles() {
+	spillSweepOnce.Do(func() {
+		entries, err := os.ReadDir(toolSpillDir)
+		if err != nil {
+			return
+		}
+		cutoff := time.Now().Add(-spillFileTTL)
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasPrefix(e.Name(), "poisson-tool-") {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil || info.ModTime().After(cutoff) {
+				continue
+			}
+			os.Remove(filepath.Join(toolSpillDir, e.Name()))
+		}
+	})
+}
 
 // TrimToolResult bounds tool output before it reaches the model, store, or UI.
 func TrimToolResult(result ToolResult) ToolResult {
