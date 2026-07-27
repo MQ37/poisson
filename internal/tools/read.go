@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/mq37/poisson/internal/guard"
@@ -49,6 +50,83 @@ type readInput struct {
 	Limit  FlexInt `json:"limit"`
 }
 
+// parseReadInput unmarshals input into readInput, tolerating a single
+// offset/limit field carrying a "START, END" (or "START-END") line-range
+// string instead of a plain integer — a common slip when the model means
+// "read lines 80 to 130" but only fills in one field. The schema still
+// declares offset/limit as separate integers; this only rescues that one
+// bad shape (FlexInt's own error) instead of hard-failing the whole call.
+func parseReadInput(data []byte) (readInput, error) {
+	var in readInput
+	unmarshalErr := json.Unmarshal(data, &in)
+	if unmarshalErr == nil {
+		return in, nil
+	}
+
+	var raw struct {
+		Path   string          `json:"path"`
+		Offset json.RawMessage `json:"offset"`
+		Limit  json.RawMessage `json:"limit"`
+	}
+	if json.Unmarshal(data, &raw) != nil {
+		return readInput{}, unmarshalErr
+	}
+	start, end, ok := rangeFromRaw(raw.Offset)
+	if !ok {
+		start, end, ok = rangeFromRaw(raw.Limit)
+	}
+	if !ok {
+		return readInput{}, unmarshalErr
+	}
+	in.Path = raw.Path
+	in.Offset = FlexInt(start)
+	if end > start {
+		in.Limit = FlexInt(end - start + 1)
+	}
+	return in, nil
+}
+
+// ParseReadCall parses a read tool_use input the same lenient way the read
+// tool itself does (parseReadInput), including a range-shaped offset/limit.
+// Callers outside this package that reason about which lines a read call
+// covers (agent read memoization, compaction pruning) must go through this
+// so their view matches what the tool actually read. ok is false for input
+// the tool would reject too.
+func ParseReadCall(input json.RawMessage) (path string, offset, limit int, ok bool) {
+	in, err := parseReadInput(input)
+	if err != nil {
+		return "", 0, 0, false
+	}
+	return in.Path, int(in.Offset), int(in.Limit), true
+}
+
+// rangeFromRaw extracts "START, END" / "START-END" from a raw JSON string
+// value. ok is false for anything else (plain number, absent field, or a
+// string that isn't a two-number range) — those already parse as FlexInt.
+func rangeFromRaw(raw json.RawMessage) (start, end int, ok bool) {
+	if len(raw) == 0 {
+		return 0, 0, false
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return 0, 0, false
+	}
+	sep := ","
+	if !strings.Contains(s, sep) {
+		sep = "-"
+	}
+	parts := strings.SplitN(s, sep, 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	lo, errLo := strconv.Atoi(strings.TrimSpace(parts[0]))
+	hi, errHi := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errLo != nil || errHi != nil || lo <= 0 || hi < lo {
+		return 0, 0, false
+	}
+	return lo, hi, true
+}
+
 const (
 	maxLines      = 2000
 	maxBytes      = 50 * 1024
@@ -58,8 +136,8 @@ const (
 )
 
 func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
-	var in readInput
-	if err := json.Unmarshal(input, &in); err != nil {
+	in, err := parseReadInput(input)
+	if err != nil {
 		return ToolResult{Error: "invalid input: " + err.Error()}, nil
 	}
 	if in.Path == "" {

@@ -169,6 +169,42 @@ func TestReadMemoizationNarrowerRangeCovered(t *testing.T) {
 	}
 }
 
+// TestReadMemoizationRangeShapedOffset verifies memoization still sees the
+// real line range when a call uses the lenient range-shaped offset the read
+// tool accepts ("2, 3" in the single offset field) — the memo layer must
+// parse it exactly like the tool does (tools.ParseReadCall), not skip it.
+func TestReadMemoizationRangeShapedOffset(t *testing.T) {
+	testutil.TempHome(t)
+	root := testutil.TempDir(t)
+	writeFile(t, filepath.Join(root, "f.go"), "one\ntwo\nthree\nfour\nfive\n")
+
+	st, err := store.Open(filepath.Join(root, "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	sid := "memo-rangeoffset-sess"
+
+	r1a, r1b := provider.FakeToolCallResponse("read", map[string]interface{}{"path": "f.go"}, "done")
+	r2a, r2b := provider.FakeToolCallResponse("read", map[string]interface{}{
+		"path": "f.go", "offset": "2, 3",
+	}, "done")
+	a := newRWAgent(t, root, st, sid, [][]provider.StreamEvent{r1a, r1b, r2a, r2b})
+	stop := drain(a)
+	defer close(stop)
+
+	if err := a.PromptWithContext(context.Background(), "read f.go"); err != nil {
+		t.Fatalf("prompt 1: %v", err)
+	}
+	if err := a.PromptWithContext(context.Background(), "read lines 2-3 of f.go"); err != nil {
+		t.Fatalf("prompt 2: %v", err)
+	}
+	second := lastToolResult(t, st, sid)
+	if !strings.Contains(second, "unchanged") {
+		t.Errorf("range-shaped offset re-read should be memoized, got: %s", second)
+	}
+}
+
 // TestReadMemoizationWiderRangeNotCovered verifies a request for a WIDER
 // range than a previously memoized narrow read does a real read.
 func TestReadMemoizationWiderRangeNotCovered(t *testing.T) {

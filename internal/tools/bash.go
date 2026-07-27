@@ -40,7 +40,7 @@ func NewBashTool(cwd string, sandbox bool, approvalFn func(ctx context.Context, 
 func (t *BashTool) Name() string { return "bash" }
 
 func (t *BashTool) Description() string {
-	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n is refused — use read instead. For several independent tool ops in one step use batch (not a bash pipeline of the same). Cwd and environment stick across bash calls in this session only (RAM; lost on restart; subagents isolated) — cd/export once and later calls see them. Optional workdir overrides sticky cwd for one call and then updates sticky to the resulting pwd."
+	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n still runs (not refused) but comes back with a hint nudging you to 'read' next time — skips the approval gate, supports offset/limit. For several independent tool ops in one step use batch (not a bash pipeline of the same). Cwd and environment stick across bash calls in this session only (RAM; lost on restart; subagents isolated) — cd/export once and later calls see them. Optional workdir overrides sticky cwd for one call and then updates sticky to the resulting pwd."
 }
 
 func (t *BashTool) Schema() json.RawMessage {
@@ -69,10 +69,10 @@ type bashOutput struct {
 	ExitCode int    `json:"exitCode"`
 	// Hint is poisson-injected advisory text (not part of the command's real
 	// output) nudging the model toward a cheaper pattern next time — e.g. the
-	// workdir param instead of a leading `cd DIR &&`. A command that is just
-	// a stand-in for a dedicated tool doesn't reach here at all — it's
-	// refused before execution (see dedicatedToolHint). Empty when nothing
-	// applies.
+	// workdir param instead of a leading `cd DIR &&`, or a dedicated tool
+	// (read) instead of cat/head/tail/sed -n (see dedicatedToolHint). The
+	// command still runs and its real output is returned either way — this
+	// is advisory only. Empty when nothing applies.
 	Hint string `json:"hint,omitempty"`
 }
 
@@ -84,6 +84,9 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	if in.Command == "" {
 		return ToolResult{Error: "command is required"}, nil
 	}
+	if strings.TrimSpace(in.Description) == "" {
+		return ToolResult{Error: "description is required — call bash again with a short one-line 'description' explaining what this command does (the user sees it in approval prompts)."}, nil
+	}
 
 	// Refuse spawning poisson itself with --yolo / -p --yolo. --yolo is a
 	// human footgun for headless scripting; an agent that shells out to
@@ -92,17 +95,6 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	// sandbox short-circuit so even test/sandbox callers can't smuggle it.
 	if invokesPoissonYolo(in.Command) {
 		return ToolResult{Error: "blocked: refusing to run poisson/px with --yolo (nested auto-approve). Run --yolo yourself from a real shell if you need it."}, nil
-	}
-
-	// A command that is plainly just a stand-in for read is refused
-	// outright, before approval or execution: that tool does the same job
-	// for less (no approval round trip, offset/limit, image decode) and
-	// returning real output here would only reward the wrong habit. Sandbox
-	// mode skips this too (see dedicatedToolHint).
-	if !t.sandbox {
-		if h := dedicatedToolHint(in.Command); h != "" {
-			return ToolResult{Error: "blocked: " + h}, nil
-		}
 	}
 
 	// Serialize against sticky state for this session's BashTool. Parallel
@@ -142,13 +134,9 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	// auto-approves only an LLM "low" and routes everything else (including a
 	// failed classification) to the human. Sandbox mode skips the gate.
 	if !t.sandbox {
-		purpose := in.Description
-		if purpose == "" {
-			purpose = "(no description provided)"
-		}
 		approved, reason := false, ""
 		if t.approvalFn != nil {
-			approved, reason = t.approvalFn(ctx, in.Command, purpose, dir)
+			approved, reason = t.approvalFn(ctx, in.Command, in.Description, dir)
 		}
 		if !approved {
 			msg := "command rejected by user"
@@ -241,6 +229,9 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 
 	if !t.sandbox {
 		if h := cdWorkdirHint(in.Command, in.Workdir); h != "" {
+			hints = append(hints, h)
+		}
+		if h := dedicatedToolHint(in.Command); h != "" {
 			hints = append(hints, h)
 		}
 	}
@@ -350,16 +341,18 @@ func cdWorkdirHint(command, workdir string) string {
 	return fmt.Sprintf("this command starts with 'cd %s \u0026\u0026' — pass workdir: %q instead next time (same effect, fewer tokens), or rely on sticky cwd after a plain cd.", dir, dir)
 }
 
-// dedicatedToolHint reports (and, in Execute, blocks) when a command is
-// plainly just a stand-in for read — that tool still beats an equivalent
-// bash call (offset/limit line ranges, image decode, no shell parsing) and
-// skips the approval gate entirely (see its description).
+// dedicatedToolHint reports (advisory only — the command still runs either
+// way) when a command is plainly just a stand-in for read — that tool still
+// beats an equivalent bash call (offset/limit line ranges, image decode, no
+// shell parsing, skips the approval gate entirely). Never blocks: a command
+// this fires on has already been approved and executed by the time the hint
+// is attached to the result, same as cdWorkdirHint.
 //
-// grep/glob exist as dedicated tools too, but plain rg/grep/find/ls are
-// only soft-nudged via the tool description and system prompt — not hard-
-// blocked here — so multi-step shell pipelines stay legal. Only fires when
-// the command boils down to a single segment (after stripping a leading
-// `cd DIR &&`, see cdWorkdirHint) with no redirects.
+// grep/glob exist as dedicated tools too, but plain rg/grep/find/ls get the
+// same soft nudge via the tool description and system prompt rather than a
+// dedicated check here — so multi-step shell pipelines stay legal. Only
+// fires when the command boils down to a single segment (after stripping a
+// leading `cd DIR &&`, see cdWorkdirHint) with no redirects.
 func dedicatedToolHint(command string) string {
 	segs := guard.Segments(command)
 	i := 0

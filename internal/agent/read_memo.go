@@ -30,21 +30,15 @@ type readMemo struct {
 	limit   int // lines requested from offset (0 = unbounded); see rangeCovers
 }
 
-type readCallInput struct {
-	Path   string        `json:"path"`
-	Offset tools.FlexInt `json:"offset"`
-	Limit  tools.FlexInt `json:"limit"`
-}
-
 // tryMemoizedRead reports whether input (a `read` tool call) is fully
 // covered by an unchanged prior read of the same path in this session,
 // returning a stub result if so.
 func (a *Agent) tryMemoizedRead(cwd string, input json.RawMessage) (string, bool) {
-	var in readCallInput
-	if json.Unmarshal(input, &in) != nil || in.Path == "" {
+	reqPath, reqOffset, reqLimit, ok := tools.ParseReadCall(input)
+	if !ok || reqPath == "" {
 		return "", false
 	}
-	path := resolveMemoPath(cwd, in.Path)
+	path := resolveMemoPath(cwd, reqPath)
 
 	a.contextMu.Lock()
 	prev, ok := a.readMemos[path]
@@ -57,12 +51,12 @@ func (a *Agent) tryMemoizedRead(cwd string, input json.RawMessage) (string, bool
 	if err != nil || !st.ModTime().Equal(prev.modTime) || st.Size() != prev.size {
 		return "", false // file changed (or is gone) since the memoized read
 	}
-	if !rangeCovers(prev.offset, prev.limit, int(in.Offset), int(in.Limit)) {
+	if !rangeCovers(prev.offset, prev.limit, reqOffset, reqLimit) {
 		return "", false // asking for lines outside what was memoized
 	}
 	return fmt.Sprintf(
 		"(unchanged since an earlier read of %s covering this range — reusing that content, no need to re-read)",
-		in.Path), true
+		reqPath), true
 }
 
 // recordRead remembers a successful, non-truncated, non-image real read so
@@ -73,11 +67,11 @@ func (a *Agent) recordRead(cwd string, input json.RawMessage, content string) {
 	if tools.ReadWasTruncated(content) || tools.ReadIsImage(content) {
 		return // don't know the true extent covered (or it's not line-ranged) — skip
 	}
-	var in readCallInput
-	if json.Unmarshal(input, &in) != nil || in.Path == "" {
+	reqPath, reqOffset, reqLimit, ok := tools.ParseReadCall(input)
+	if !ok || reqPath == "" {
 		return
 	}
-	path := resolveMemoPath(cwd, in.Path)
+	path := resolveMemoPath(cwd, reqPath)
 	st, err := os.Stat(path)
 	if err != nil {
 		return
@@ -89,8 +83,8 @@ func (a *Agent) recordRead(cwd string, input json.RawMessage, content string) {
 	a.readMemos[path] = readMemo{
 		modTime: st.ModTime(),
 		size:    st.Size(),
-		offset:  int(in.Offset),
-		limit:   int(in.Limit),
+		offset:  reqOffset,
+		limit:   reqLimit,
 	}
 	a.contextMu.Unlock()
 }

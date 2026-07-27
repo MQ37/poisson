@@ -138,11 +138,11 @@ func parseToolUseOp(name string, input json.RawMessage, cwd string) (op readOp, 
 	default:
 		return readOp{}, false
 	}
-	var in readCallInput
-	if json.Unmarshal(input, &in) != nil || in.Path == "" {
+	reqPath, reqOffset, reqLimit, ok := tools.ParseReadCall(input)
+	if !ok || reqPath == "" {
 		return readOp{}, false
 	}
-	return readOp{kind: name, path: resolveMemoPath(cwd, in.Path), offset: int(in.Offset), limit: int(in.Limit)}, true
+	return readOp{kind: name, path: resolveMemoPath(cwd, reqPath), offset: reqOffset, limit: reqLimit}, true
 }
 
 // rewriteToolResultBlock replaces one tool_result block's content with a

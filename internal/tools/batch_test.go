@@ -92,22 +92,11 @@ func TestBatch_PartialFailure(t *testing.T) {
 	}
 }
 
-func TestBatch_DeniesBashAndSubagentAndNestedBatch(t *testing.T) {
+func TestBatch_DeniesBashAndNestedBatch(t *testing.T) {
 	dir := testutil.TempDir(t)
-	// Include SubApproval so subagent is registered — otherwise the deny
-	// path is never hit (tool-not-registered wins first).
-	reg := BuildRegistry(BuildOptions{
-		Cwd:     dir,
-		Sandbox: true,
-		SubApproval: func(string, string, string, string, string) (bool, string) {
-			return false, "no"
-		},
-	})
-	if _, ok := reg.Get("subagent"); !ok {
-		t.Fatal("subagent should be registered for this test")
-	}
+	reg := BuildRegistry(BuildOptions{Cwd: dir, Sandbox: true})
 
-	for _, name := range []string{"bash", "subagent", "batch"} {
+	for _, name := range []string{"bash", "batch"} {
 		res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
 			"calls": []map[string]interface{}{
 				{"tool": name, "input": map[string]string{"x": "y"}},
@@ -119,6 +108,62 @@ func TestBatch_DeniesBashAndSubagentAndNestedBatch(t *testing.T) {
 		if !strings.Contains(res.Error, "not allowed") {
 			t.Fatalf("tool %q: error = %q, want 'not allowed'", name, res.Error)
 		}
+	}
+}
+
+// TestBatch_AllowsSubagentAtTopLevel verifies subagent may be dispatched
+// through batch when the registry has it (parent session) — batch's own
+// tool allowlist doesn't reject it. It still fails here because the test
+// registry has no runtime resolver wired (BindSubagentRuntime), same as
+// calling the subagent tool directly outside batch.
+func TestBatch_AllowsSubagentAtTopLevel(t *testing.T) {
+	dir := testutil.TempDir(t)
+	reg := BuildRegistry(BuildOptions{
+		Cwd:     dir,
+		Sandbox: true,
+		SubApproval: func(string, string, string, string, string) (bool, string) {
+			return true, ""
+		},
+	})
+
+	res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "subagent", "input": map[string]string{"task": "do something"}},
+		},
+	}))
+	if strings.Contains(res.Error, "not allowed") {
+		t.Fatalf("subagent should be allowed inside batch, got: %q", res.Error)
+	}
+	if !strings.Contains(res.Content, "1. subagent — error:") || !strings.Contains(res.Content, "runtime not configured") {
+		t.Fatalf("expected subagent step to reach the subagent tool itself, got: %q", res.Content)
+	}
+}
+
+// TestBatch_SubagentNotRegisteredInChild verifies a subagent's own registry
+// (BuildOptions.Child) never has the subagent tool, so dispatching it
+// through batch fails the same way a direct call would — recursion stays
+// bounded to one level regardless of the batch path.
+func TestBatch_SubagentNotRegisteredInChild(t *testing.T) {
+	dir := testutil.TempDir(t)
+	reg := BuildRegistry(BuildOptions{
+		Cwd:     dir,
+		Sandbox: true,
+		Child:   true,
+		SubApproval: func(string, string, string, string, string) (bool, string) {
+			return true, ""
+		},
+	})
+	if _, ok := reg.Get("subagent"); ok {
+		t.Fatal("child registry must not have the subagent tool registered")
+	}
+
+	res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "subagent", "input": map[string]string{"task": "do something"}},
+		},
+	}))
+	if !strings.Contains(res.Error, "not registered") {
+		t.Fatalf("expected 'not registered' error, got: error=%q content=%q", res.Error, res.Content)
 	}
 }
 

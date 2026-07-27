@@ -300,11 +300,42 @@ func TestRead_OffsetLimitAsStrings(t *testing.T) {
 	}
 }
 
-// TestRead_OffsetAsRangeStringRejectedClearly verifies a malformed offset
-// (a range like "80, 220" instead of a single integer — an easy mistake to
-// make calling this tool) fails with an actionable message, not Go's raw
+// TestRead_OffsetAsRangeStringParsed verifies a range-shaped offset (a
+// common slip: "80, 130" meaning "read lines 80 to 130" jammed into the
+// single offset field) is parsed instead of hard-rejected — schema keeps
+// offset/limit as separate integers, but this one bad shape is rescued.
+func TestRead_OffsetAsRangeStringParsed(t *testing.T) {
+	dir := testutil.TempDir(t)
+	w := NewWriteTool(dir, true, nil)
+	r := NewReadTool(dir, true, nil)
+	var content strings.Builder
+	for i := 1; i <= 200; i++ {
+		content.WriteString("line\n")
+	}
+	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": content.String()}))
+
+	for _, sep := range []string{"80, 90", "80-90"} {
+		res, err := r.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+			"path":   "f.txt",
+			"offset": sep,
+		}))
+		if err != nil || res.Error != "" {
+			t.Fatalf("offset %q: unexpected error: %v %q", sep, err, res.Error)
+		}
+		if !strings.HasPrefix(res.Content, "80: line") {
+			t.Errorf("offset %q: content should start at line 80, got: %q", sep, res.Content)
+		}
+		if strings.Contains(res.Content, "91: line") {
+			t.Errorf("offset %q: content should stop at line 90 (limit=11), got: %q", sep, res.Content)
+		}
+	}
+}
+
+// TestRead_OffsetGarbageStillRejectedClearly verifies an offset that is
+// neither a plain integer nor a two-number range still fails with an
+// actionable message, not Go's raw
 // "json: cannot unmarshal string into Go struct field ... of type int".
-func TestRead_OffsetAsRangeStringRejectedClearly(t *testing.T) {
+func TestRead_OffsetGarbageStillRejectedClearly(t *testing.T) {
 	dir := testutil.TempDir(t)
 	w := NewWriteTool(dir, true, nil)
 	r := NewReadTool(dir, true, nil)
@@ -312,10 +343,10 @@ func TestRead_OffsetAsRangeStringRejectedClearly(t *testing.T) {
 
 	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"path":   "f.txt",
-		"offset": "80, 220",
+		"offset": "not a number",
 	}))
 	if res.Error == "" {
-		t.Fatal("expected an error for a range-shaped offset")
+		t.Fatal("expected an error for a non-numeric offset")
 	}
 	if strings.Contains(res.Error, "cannot unmarshal string into Go struct field") {
 		t.Errorf("error leaks a raw Go type-mismatch message, want an actionable one: %s", res.Error)
@@ -820,31 +851,29 @@ func TestBashTool_DenialWithoutReason(t *testing.T) {
 	}
 }
 
-// TestBashTool_MissingDescFallback verifies a gated call without a description
-// still reaches approval with a placeholder purpose (the guard-reason fallback
-// was removed together with the deterministic allowlist).
-func TestBashTool_MissingDescFallback(t *testing.T) {
+// TestBashTool_MissingDescRejected verifies a call without a description is
+// rejected before approval/execution, nudging the model to retry with one —
+// rather than silently proceeding with a placeholder purpose.
+func TestBashTool_MissingDescRejected(t *testing.T) {
 	dir := testutil.TempDir(t)
-	var gotDesc string
 	called := false
 	approvalFn := func(_ context.Context, command, desc, wd string) (bool, string) {
 		called = true
-		gotDesc = desc
-		return false, ""
+		return true, ""
 	}
 	b := NewBashTool(dir, false, approvalFn)
 
-	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
-		"command": "rm -rf foo",
-	}))
-	if !called {
-		t.Fatal("approvalFn must be called even without a description")
-	}
-	if gotDesc != "(no description provided)" {
-		t.Errorf("approval got purpose %q, want placeholder", gotDesc)
-	}
-	if res.Error == "" {
-		t.Error("expected denial after approval returned false")
+	for _, desc := range []string{"", "   "} {
+		res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+			"command":     "rm -rf foo",
+			"description": desc,
+		}))
+		if called {
+			t.Fatal("approvalFn must not be called when description is missing")
+		}
+		if !strings.Contains(res.Error, "description is required") {
+			t.Errorf("desc %q: error = %q, want it to say description is required", desc, res.Error)
+		}
 	}
 }
 
@@ -866,22 +895,22 @@ func TestBashTool_Sandbox(t *testing.T) {
 	}
 }
 
-// TestBashTool_SandboxSkipsDedicatedToolBlock verifies sandbox mode bypasses
-// the dedicated-tool block too (not just the approval gate) — a stand-in
-// command like `cat` still runs and returns real content.
-func TestBashTool_SandboxSkipsDedicatedToolBlock(t *testing.T) {
+// TestBashTool_SandboxSkipsDedicatedToolHint verifies sandbox mode also
+// skips the dedicated-tool nudge (like the approval gate) — a stand-in
+// command like `cat` runs and returns real content with no hint attached.
+func TestBashTool_SandboxSkipsDedicatedToolHint(t *testing.T) {
 	dir := testutil.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	b := NewBashTool(dir, true, nil) // sandbox bypasses the dedicated-tool block
+	b := NewBashTool(dir, true, nil) // sandbox bypasses the approval gate and hints
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "cat f.txt",
 		"description": "cat in sandbox",
 	}))
 	if res.Error != "" {
-		t.Fatalf("bash error: %s, want no block in sandbox mode", res.Error)
+		t.Fatalf("bash error: %s, want no error in sandbox mode", res.Error)
 	}
 	var out bashOutput
 	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
@@ -889,6 +918,9 @@ func TestBashTool_SandboxSkipsDedicatedToolBlock(t *testing.T) {
 	}
 	if strings.TrimSpace(out.Stdout) != "hello" {
 		t.Errorf("stdout = %q, want 'hello' (sandbox must still execute)", out.Stdout)
+	}
+	if out.Hint != "" {
+		t.Errorf("hint = %q, want none in sandbox mode", out.Hint)
 	}
 }
 
@@ -928,14 +960,13 @@ func TestBashTool_BackgroundProcessReportsSuccess(t *testing.T) {
 	}
 }
 
-// TestBashTool_DedicatedToolBlocked verifies a command that is plainly just a
-// stand-in for read is refused outright — no execution, no approval round
-// trip, no real output returned — and stays silent (runs normally, hitting
-// the approval gate like anything else) for legitimate multi-step or
-// non-equivalent uses, and for grep/ls/find — which have no dedicated tool
-// of their own anymore (see the guard fast path in
-// agent.WrapRiskGatedApproval instead).
-func TestBashTool_DedicatedToolBlocked(t *testing.T) {
+// TestBashTool_DedicatedToolHinted verifies a command that is plainly just a
+// stand-in for read still runs to completion (approval, real output) and
+// gets a "prefer read" hint attached to the result instead of being
+// refused — and stays silent for legitimate multi-step/non-equivalent uses,
+// and for grep/ls/find, which have no dedicated-tool hint of their own
+// (see the guard fast path in agent.WrapRiskGatedApproval instead).
+func TestBashTool_DedicatedToolHinted(t *testing.T) {
 	dir := testutil.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -944,13 +975,13 @@ func TestBashTool_DedicatedToolBlocked(t *testing.T) {
 	cases := []struct {
 		name    string
 		command string
-		want    string // substring expected in the block error, or "" if it must run normally
+		want    string // substring expected in the hint, or "" if none expected
 	}{
 		{"cat", "cat f.txt", "read"},
-		{"grep_runs_normally", "grep hello f.txt", ""},
-		{"ls_runs_normally", "ls", ""},
-		{"find_name_runs_normally", "find . -name f.txt", ""},
-		{"sed_range", "sed -n '1,2p' f.txt", "read"},
+		{"grep_no_hint", "grep hello f.txt", ""},
+		{"ls_no_hint", "ls", ""},
+		{"find_name_no_hint", "find . -name f.txt", ""},
+		{"sed_range", "sed -n '1,1p' f.txt", "read"},
 		{"find_delete_no_hint", "find . -name f.txt -delete", ""},
 		{"multi_segment_no_hint", "cat f.txt && echo done", ""},
 		{"redirect_no_hint", "cat f.txt > out.txt", ""},
@@ -967,23 +998,24 @@ func TestBashTool_DedicatedToolBlocked(t *testing.T) {
 				"command":     c.command,
 				"description": "test",
 			}))
+			if res.Error != "" {
+				t.Fatalf("command %q: unexpected error: %q", c.command, res.Error)
+			}
+			if approvalCalls != 1 {
+				t.Errorf("command %q: approvalFn called %d times, want 1 (must always run)", c.command, approvalCalls)
+			}
+			var out bashOutput
+			if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+				t.Fatalf("command %q: unmarshal: %v (res=%+v)", c.command, err, res)
+			}
 			if c.want == "" {
-				if res.Error != "" {
-					t.Errorf("command %q: unexpectedly blocked: %q", c.command, res.Error)
-				}
-				if approvalCalls != 1 {
-					t.Errorf("command %q: approvalFn called %d times, want 1 (must still run normally)", c.command, approvalCalls)
+				if out.Hint != "" {
+					t.Errorf("command %q: unexpected hint: %q", c.command, out.Hint)
 				}
 				return
 			}
-			if !strings.HasPrefix(res.Error, "blocked: ") || !strings.Contains(res.Error, c.want) {
-				t.Errorf("command %q: error = %q, want a %q block message", c.command, res.Error, c.want)
-			}
-			if res.Content != "" {
-				t.Errorf("command %q: content = %q, want no output returned (blocked before execution)", c.command, res.Content)
-			}
-			if approvalCalls != 0 {
-				t.Errorf("command %q: approvalFn called %d times, want 0 (blocked before the approval gate)", c.command, approvalCalls)
+			if !strings.Contains(out.Hint, c.want) {
+				t.Errorf("command %q: hint = %q, want it to mention %q", c.command, out.Hint, c.want)
 			}
 		})
 	}
