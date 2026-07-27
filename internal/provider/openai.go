@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"runtime"
@@ -132,7 +131,7 @@ func (p *OpenAIProvider) streamWithRetry(ctx context.Context, req *Request, retr
 	}
 
 	if resp.StatusCode != 200 {
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		body, readErr := readCappedBody(resp)
 		resp.Body.Close()
 		detail := strings.TrimSpace(string(body))
 		if detail == "" {

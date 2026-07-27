@@ -64,7 +64,7 @@ func (a *Agent) StreamQuickAnswer(ctx context.Context, question string, onToolSt
 	if a == nil || a.provider == nil {
 		return nil, nil, fmt.Errorf("agent not configured")
 	}
-	question = trimSpace(question)
+	question = strings.TrimSpace(question)
 	if question == "" {
 		return nil, nil, fmt.Errorf("empty question")
 	}
@@ -345,15 +345,4 @@ func pendingToolResultBlocks(msgs []provider.Message) []provider.ContentBlock {
 		})
 	}
 	return blocks
-}
-
-func trimSpace(s string) string {
-	i, j := 0, len(s)
-	for i < j && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n') {
-		i++
-	}
-	for j > i && (s[j-1] == ' ' || s[j-1] == '\t' || s[j-1] == '\n') {
-		j--
-	}
-	return s[i:j]
 }

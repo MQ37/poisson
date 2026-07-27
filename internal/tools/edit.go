@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 	"unicode"
-
-	"github.com/mq37/poisson/internal/guard"
 )
 
 // EditTool edits a file using exact text replacement.
@@ -460,13 +458,8 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 
 	path := resolvePath(t.cwd, rawPath)
 
-	if !t.sandbox {
-		if reason := guard.SensitivePathReason(path); reason != "" {
-			allowed, denyReason := t.approvalFn(ctx, "edit "+path, reason, t.cwd)
-			if !allowed {
-				return ToolResult{Error: sensitivePathDenyMsg(reason, denyReason)}, nil
-			}
-		}
+	if res, ok := checkSensitivePath(ctx, t.cwd, t.sandbox, "edit", path, t.approvalFn); !ok {
+		return res, nil
 	}
 
 	info, err := os.Stat(path)

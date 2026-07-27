@@ -738,9 +738,7 @@ func (a *Agent) PromptSegments(segments []TextSegment, images ...ImageAttachment
 // segments (see TextSegment) instead of one flat string.
 func (a *Agent) PromptSegmentsWithContext(ctx context.Context, segments []TextSegment, images ...ImageAttachment) error {
 	if err := a.EnsureSession(); err != nil {
-		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Session error: %v", err)})
-		a.sendEvent(OutputEvent{Type: OutputDone})
-		return fmt.Errorf("ensure session: %w", err)
+		return a.failTurn(fmt.Sprintf("Session error: %v", err), fmt.Errorf("ensure session: %w", err))
 	}
 
 	// A prior process may have died mid tool-round (killed, crashed, machine
@@ -755,16 +753,12 @@ func (a *Agent) PromptSegmentsWithContext(ctx context.Context, segments []TextSe
 	// one (contrast quickanswer's buildRequest call mid-turn, which must
 	// NOT trigger this — see pendingToolResultBlocks).
 	if err := a.repairDanglingToolUse(); err != nil {
-		a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Session error: %v", err)})
-		a.sendEvent(OutputEvent{Type: OutputDone})
-		return fmt.Errorf("repair dangling tool_use: %w", err)
+		return a.failTurn(fmt.Sprintf("Session error: %v", err), fmt.Errorf("repair dangling tool_use: %w", err))
 	}
 
 	// INGEST: append user message (images first, then the text segments).
 	if err := a.appendUserMessage(segments, images); err != nil {
-		a.sendEvent(OutputEvent{Type: OutputError, Text: err.Error()})
-		a.sendEvent(OutputEvent{Type: OutputDone})
-		return err
+		return a.failTurn(err.Error(), err)
 	}
 
 	a.runTurns.Store(0)
@@ -947,8 +941,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 roundLoop:
 	for {
 		if err := ctx.Err(); err != nil {
-			a.sendEvent(OutputEvent{Type: OutputDone})
-			return err
+			return a.endTurn(err)
 		}
 
 		// Compact before building every request. A model switch can reduce the
@@ -967,9 +960,7 @@ roundLoop:
 		// BUILD
 		req, err := a.buildRequest()
 		if err != nil {
-			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Build error: %v", err)})
-			a.sendEvent(OutputEvent{Type: OutputDone})
-			return fmt.Errorf("build request: %w", err)
+			return a.failTurn(fmt.Sprintf("Build error: %v", err), fmt.Errorf("build request: %w", err))
 		}
 		if a.expediteForceNoTools.Swap(false) {
 			// Hard stop: no tools means no possible tool_use block, so this
@@ -993,12 +984,9 @@ roundLoop:
 				// Cancelled (e.g. user Ctrl+C) while connecting or mid-backoff
 				// retry — same silent shape as every other ctx-cancellation exit
 				// in this loop, not a user-facing error.
-				a.sendEvent(OutputEvent{Type: OutputDone})
-				return err
+				return a.endTurn(err)
 			}
-			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Provider error: %v", err)})
-			a.sendEvent(OutputEvent{Type: OutputDone})
-			return fmt.Errorf("stream: %w", err)
+			return a.failTurn(fmt.Sprintf("Provider error: %v", err), fmt.Errorf("stream: %w", err))
 		}
 
 		// Drain the stream channel.
@@ -1065,14 +1053,11 @@ roundLoop:
 					a.sendEvent(OutputEvent{Type: OutputRetrying, Text: fmt.Sprintf(
 						"provider overloaded: %s — retrying (%d/%d)…", ev.Error, midStreamRetries, maxMidStreamErrorRetries)})
 					if err := sleepOrDone(ctx, midStreamRetryDelay(midStreamRetries)); err != nil {
-						a.sendEvent(OutputEvent{Type: OutputDone})
-						return err
+						return a.endTurn(err)
 					}
 					continue roundLoop
 				}
-				a.sendEvent(OutputEvent{Type: OutputError, Text: ev.Error.Error()})
-				a.sendEvent(OutputEvent{Type: OutputDone})
-				return fmt.Errorf("stream error: %w", ev.Error)
+				return a.failTurn(ev.Error.Error(), fmt.Errorf("stream error: %w", ev.Error))
 			}
 		}
 		// Stream drained to completion (channel closed by the pump) — release
@@ -1082,8 +1067,7 @@ roundLoop:
 
 		if err := ctx.Err(); err != nil {
 			a.persistPartialTurnOnCancel(textBuilder.String(), thinkingBuilder.String(), thinkingSig.String(), redactedThinking, toolCalls)
-			a.sendEvent(OutputEvent{Type: OutputDone})
-			return err
+			return a.endTurn(err)
 		}
 
 		// COMMIT: record api_call (exact usage + cost).
@@ -1113,22 +1097,17 @@ roundLoop:
 				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf(
 					"empty response from model — retrying (%d/%d)", emptyAttempts, maxEmptyResponseRetries)})
 				if err := sleepOrDone(ctx, emptyResponseRetryDelay(emptyAttempts)); err != nil {
-					a.sendEvent(OutputEvent{Type: OutputDone})
-					return err
+					return a.endTurn(err)
 				}
 				continue
 			}
-			a.sendEvent(OutputEvent{Type: OutputError, Text: "model returned no content"})
-			a.sendEvent(OutputEvent{Type: OutputDone})
-			return fmt.Errorf("model returned empty response")
+			return a.failTurn("model returned no content", fmt.Errorf("model returned empty response"))
 		}
 		emptyAttempts = 0
 		midStreamRetries = 0
 		assistantContent, err := contentBlocksToJSON(assistantBlocks)
 		if err != nil {
-			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})
-			a.sendEvent(OutputEvent{Type: OutputDone})
-			return fmt.Errorf("marshal assistant content: %w", err)
+			return a.failTurn(fmt.Sprintf("Marshal error: %v", err), fmt.Errorf("marshal assistant content: %w", err))
 		}
 		msg := &store.Message{
 			SessionID: a.sessionID,
@@ -1139,9 +1118,7 @@ roundLoop:
 			msg.APICallID = &apiCallID
 		}
 		if err := a.store.AppendMessage(msg); err != nil {
-			a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Store error: %v", err)})
-			a.sendEvent(OutputEvent{Type: OutputDone})
-			return fmt.Errorf("append assistant message: %w", err)
+			return a.failTurn(fmt.Sprintf("Store error: %v", err), fmt.Errorf("append assistant message: %w", err))
 		}
 
 		// Update status bar.
@@ -1162,9 +1139,7 @@ roundLoop:
 				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf(
 					"response hit the output limit — continuing (%d/%d)", continuations, maxTurnContinuations)})
 				if err := a.appendContinueMessage(); err != nil {
-					a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Store error: %v", err)})
-					a.sendEvent(OutputEvent{Type: OutputDone})
-					return fmt.Errorf("append continue message: %w", err)
+					return a.failTurn(fmt.Sprintf("Store error: %v", err), fmt.Errorf("append continue message: %w", err))
 				}
 				continue
 			}
@@ -1173,9 +1148,7 @@ roundLoop:
 			// splice it in as the next user turn and keep going, so it's
 			// answered now instead of requiring a fresh prompt afterward.
 			if injected, err := a.injectPendingInput(); err != nil {
-				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Store error: %v", err)})
-				a.sendEvent(OutputEvent{Type: OutputDone})
-				return fmt.Errorf("append queued message: %w", err)
+				return a.failTurn(fmt.Sprintf("Store error: %v", err), fmt.Errorf("append queued message: %w", err))
 			} else if injected {
 				continue
 			}
@@ -1323,18 +1296,14 @@ roundLoop:
 			}
 			toolContent, err := contentBlocksToJSON(blocks)
 			if err != nil {
-				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Marshal error: %v", err)})
-				a.sendEvent(OutputEvent{Type: OutputDone})
-				return fmt.Errorf("marshal tool result: %w", err)
+				return a.failTurn(fmt.Sprintf("Marshal error: %v", err), fmt.Errorf("marshal tool result: %w", err))
 			}
 			if err := a.store.AppendMessage(&store.Message{
 				SessionID: a.sessionID,
 				Role:      "tool",
 				Content:   toolContent,
 			}); err != nil {
-				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf("Store error: %v", err)})
-				a.sendEvent(OutputEvent{Type: OutputDone})
-				return fmt.Errorf("append tool result message: %w", err)
+				return a.failTurn(fmt.Sprintf("Store error: %v", err), fmt.Errorf("append tool result message: %w", err))
 			}
 
 			a.sessionToolCalls++
@@ -1347,8 +1316,7 @@ roundLoop:
 		a.UpdateStatus()
 
 		if err := ctx.Err(); err != nil {
-			a.sendEvent(OutputEvent{Type: OutputDone})
-			return err
+			return a.endTurn(err)
 		}
 
 		// Loop: re-stream with updated context (tool results now in store).
@@ -1449,22 +1417,29 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 // --- Helpers ----------------------------------------------------------
 
 // contentBlockJSON is the JSON representation of a ContentBlock for store
-// persistence. Field names use snake_case to match the store's FTS extractor.
+// persistence. Field names use snake_case to match the store's FTS
+// extractor. Its fields are declared in exactly the same names/types/order
+// as provider.ContentBlock (tags aside) so contentBlocksToJSON and
+// messageToProvider below can convert between the two with a plain Go
+// struct conversion instead of a hand-copied field list per direction —
+// the compiler itself rejects the conversion if the two types ever drift.
 type contentBlockJSON struct {
-	Type              string          `json:"type"`
-	Text              string          `json:"text,omitempty"`
-	ToolCallID        string          `json:"tool_call_id,omitempty"`
-	ToolName          string          `json:"tool_name,omitempty"`
-	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
-	ToolResult        string          `json:"tool_result,omitempty"`
-	ToolIsError       bool            `json:"tool_is_error,omitempty"`
-	Thinking          string          `json:"thinking,omitempty"`
-	ThinkingSignature string          `json:"thinking_signature,omitempty"`
-	Redacted          bool            `json:"redacted,omitempty"`
-	MediaType         string          `json:"media_type,omitempty"`
-	ImagePath         string          `json:"image_path,omitempty"`
-	ImageName         string          `json:"image_name,omitempty"`
-	FileRef           string          `json:"file_ref,omitempty"`
+	Type        string          `json:"type"`
+	Text        string          `json:"text,omitempty"`
+	ToolCallID  string          `json:"tool_call_id,omitempty"`
+	ToolName    string          `json:"tool_name,omitempty"`
+	ToolInput   json.RawMessage `json:"tool_input,omitempty"`
+	ToolResult  string          `json:"tool_result,omitempty"`
+	ToolIsError bool            `json:"tool_is_error,omitempty"`
+	FileRef     string          `json:"file_ref,omitempty"`
+
+	MediaType string `json:"media_type,omitempty"`
+	ImagePath string `json:"image_path,omitempty"`
+	ImageName string `json:"image_name,omitempty"`
+
+	Thinking          string `json:"thinking,omitempty"`
+	ThinkingSignature string `json:"thinking_signature,omitempty"`
+	Redacted          bool   `json:"redacted,omitempty"`
 }
 
 // contentBlocksToJSON serializes a slice of ContentBlocks into a JSON string
@@ -1475,22 +1450,7 @@ func contentBlocksToJSON(blocks []provider.ContentBlock) (string, error) {
 	}
 	out := make([]contentBlockJSON, len(blocks))
 	for i, b := range blocks {
-		out[i] = contentBlockJSON{
-			Type:              b.Type,
-			Text:              b.Text,
-			ToolCallID:        b.ToolCallID,
-			ToolName:          b.ToolName,
-			ToolInput:         b.ToolInput,
-			ToolResult:        b.ToolResult,
-			ToolIsError:       b.ToolIsError,
-			Thinking:          b.Thinking,
-			ThinkingSignature: b.ThinkingSignature,
-			Redacted:          b.Redacted,
-			MediaType:         b.MediaType,
-			ImagePath:         b.ImagePath,
-			ImageName:         b.ImageName,
-			FileRef:           b.FileRef,
-		}
+		out[i] = contentBlockJSON(b)
 	}
 	data, err := json.Marshal(out)
 	if err != nil {
@@ -1512,22 +1472,7 @@ func messageToProvider(msg store.Message) (provider.Message, error) {
 	}
 	content := make([]provider.ContentBlock, len(blocks))
 	for i, b := range blocks {
-		content[i] = provider.ContentBlock{
-			Type:              b.Type,
-			Text:              b.Text,
-			ToolCallID:        b.ToolCallID,
-			ToolName:          b.ToolName,
-			ToolInput:         b.ToolInput,
-			ToolResult:        b.ToolResult,
-			ToolIsError:       b.ToolIsError,
-			Thinking:          b.Thinking,
-			ThinkingSignature: b.ThinkingSignature,
-			Redacted:          b.Redacted,
-			MediaType:         b.MediaType,
-			ImagePath:         b.ImagePath,
-			ImageName:         b.ImageName,
-			FileRef:           b.FileRef,
-		}
+		content[i] = provider.ContentBlock(b)
 	}
 	return provider.Message{
 		Role:    msg.Role,
@@ -1895,4 +1840,23 @@ func (a *Agent) sendEvent(ev OutputEvent) {
 	if a.outputChan != nil {
 		a.outputChan <- ev
 	}
+}
+
+// endTurn sends OutputDone (every turn-ending exit path must send exactly
+// one) and returns err unchanged. Used for the silent exits — ctx
+// cancellation, user Ctrl+C — that aren't user-facing failures worth an
+// OutputError.
+func (a *Agent) endTurn(err error) error {
+	a.sendEvent(OutputEvent{Type: OutputDone})
+	return err
+}
+
+// failTurn reports a user-facing turn failure: an OutputError with text,
+// then OutputDone, then returns err (normally fmt.Errorf-wrapped by the
+// caller) so every fatal abort in PromptSegmentsWithContext/runTurn reports
+// itself the same way to the TUI/CLI.
+func (a *Agent) failTurn(text string, err error) error {
+	a.sendEvent(OutputEvent{Type: OutputError, Text: text})
+	a.sendEvent(OutputEvent{Type: OutputDone})
+	return err
 }

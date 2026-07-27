@@ -421,3 +421,23 @@ func sensitivePathDenyMsg(reason, denyReason string) string {
 	}
 	return msg
 }
+
+// checkSensitivePath runs the shared sensitive-path approval gate used by
+// read/write/edit before they touch a resolved filesystem path. verb
+// ("read"/"write"/"edit") labels the approval prompt. ok is false only when
+// the path is sensitive and was denied approval; callers should return
+// res (populated with the deny error) immediately in that case.
+func checkSensitivePath(ctx context.Context, cwd string, sandbox bool, verb, path string, approvalFn ApprovalFn) (res ToolResult, ok bool) {
+	if sandbox {
+		return ToolResult{}, true
+	}
+	reason := guard.SensitivePathReason(path)
+	if reason == "" {
+		return ToolResult{}, true
+	}
+	allowed, denyReason := approvalFn(ctx, verb+" "+path, reason, cwd)
+	if !allowed {
+		return ToolResult{Error: sensitivePathDenyMsg(reason, denyReason)}, false
+	}
+	return ToolResult{}, true
+}

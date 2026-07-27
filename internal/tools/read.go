@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mq37/poisson/internal/guard"
 	"github.com/mq37/poisson/internal/imaging"
 )
 
@@ -146,13 +145,8 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 
 	path := resolvePath(t.cwd, in.Path)
 
-	if !t.sandbox {
-		if reason := guard.SensitivePathReason(path); reason != "" {
-			allowed, denyReason := t.approvalFn(ctx, "read "+path, reason, t.cwd)
-			if !allowed {
-				return ToolResult{Error: sensitivePathDenyMsg(reason, denyReason)}, nil
-			}
-		}
+	if res, ok := checkSensitivePath(ctx, t.cwd, t.sandbox, "read", path, t.approvalFn); !ok {
+		return res, nil
 	}
 
 	if isImagePath(path) {

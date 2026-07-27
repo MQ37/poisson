@@ -281,23 +281,7 @@ func cmdCost(h commandHost) {
 		h.Out(styleError, "error reading token breakdown: "+err.Error())
 		return
 	}
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Session %s:\n", sid))
-	if breakdown.InputUnknownCalls > 0 {
-		b.WriteString(fmt.Sprintf("  Input:  %d tokens + unknown (%d call(s))\n", breakdown.InputTokens, breakdown.InputUnknownCalls))
-	} else {
-		b.WriteString(fmt.Sprintf("  Input:  %d tokens\n", breakdown.InputTokens))
-	}
-	b.WriteString(fmt.Sprintf("  Output: %d tokens\n", breakdown.OutputTokens))
-	if breakdown.CacheReadTokens > 0 {
-		b.WriteString(fmt.Sprintf("  Cache read:  %d tokens\n", breakdown.CacheReadTokens))
-	}
-	if breakdown.CacheWriteTokens > 0 {
-		b.WriteString(fmt.Sprintf("  Cache write: %d tokens\n", breakdown.CacheWriteTokens))
-	}
-	b.WriteString(fmt.Sprintf("  Calls:  %d\n", breakdown.CallCount))
-	b.WriteString(fmt.Sprintf("  Cost:   $%.4f\n", cost))
-	h.Out(styleSystem, b.String())
+	h.Out(styleSystem, breakdown.FormatCost(sid, cost))
 }
 
 // cmdStatus prints basic session info plus the context files (AGENTS.md) and

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-
-	"github.com/mq37/poisson/internal/guard"
 )
 
 // WriteTool writes content to a file, creating parent directories.
@@ -53,13 +51,8 @@ func (t *WriteTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 
 	path := resolvePath(t.cwd, in.Path)
 
-	if !t.sandbox {
-		if reason := guard.SensitivePathReason(path); reason != "" {
-			allowed, denyReason := t.approvalFn(ctx, "write "+path, reason, t.cwd)
-			if !allowed {
-				return ToolResult{Error: sensitivePathDenyMsg(reason, denyReason)}, nil
-			}
-		}
+	if res, ok := checkSensitivePath(ctx, t.cwd, t.sandbox, "write", path, t.approvalFn); !ok {
+		return res, nil
 	}
 
 	// Create parent directories.

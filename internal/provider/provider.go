@@ -11,11 +11,22 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 )
 
 // maxErrorBodyBytes bounds how much of a non-200 response body is read for the
 // error message, so a huge or malformed error body can't exhaust memory.
 const maxErrorBodyBytes = 16 << 10 // 16 KiB
+
+// readCappedBody drains up to maxErrorBodyBytes from resp.Body for use in an
+// error message; the same one-liner every provider's non-200 handling needs.
+// Callers remain responsible for closing resp.Body themselves (some do it
+// inline right after, some via an earlier defer) since that varies with the
+// surrounding function and isn't part of what's duplicated here.
+func readCappedBody(resp *http.Response) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+}
 
 // Provider is the abstraction every LLM backend implements.
 type Provider interface {

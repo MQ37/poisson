@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -51,6 +52,30 @@ type TokenBreakdown struct {
 	CacheWriteTokens  int
 	TotalCost         float64
 	CallCount         int
+}
+
+// FormatCost renders a session's cost/token breakdown as the multi-line
+// report shared by the CLI `px cost` command and the TUI `/cost` command.
+// cost is passed separately (rather than using tb.TotalCost) because callers
+// may source it from Store.GetSessionCost.
+func (tb TokenBreakdown) FormatCost(sessionID string, cost float64) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Session %s:\n", sessionID)
+	if tb.InputUnknownCalls > 0 {
+		fmt.Fprintf(&b, "  Input:  %d tokens + unknown (%d call(s))\n", tb.InputTokens, tb.InputUnknownCalls)
+	} else {
+		fmt.Fprintf(&b, "  Input:  %d tokens\n", tb.InputTokens)
+	}
+	fmt.Fprintf(&b, "  Output: %d tokens\n", tb.OutputTokens)
+	if tb.CacheReadTokens > 0 {
+		fmt.Fprintf(&b, "  Cache read:  %d tokens\n", tb.CacheReadTokens)
+	}
+	if tb.CacheWriteTokens > 0 {
+		fmt.Fprintf(&b, "  Cache write: %d tokens\n", tb.CacheWriteTokens)
+	}
+	fmt.Fprintf(&b, "  Calls:  %d\n", tb.CallCount)
+	fmt.Fprintf(&b, "  Cost:   $%.4f\n", cost)
+	return b.String()
 }
 
 // RecordAPICall inserts an api_calls row. ID and CreatedAt are populated

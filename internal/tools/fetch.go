@@ -15,6 +15,7 @@ import (
 const (
 	fetchMaxBytes    = 2 << 20 // 2 MiB: cap extracted page text (OOM guard)
 	fetchErrMaxBytes = 4 << 10 // 4 KiB: cap error bodies
+	fetchTimeout     = 30 * time.Second
 )
 
 // FetchTool fetches a URL and returns its readable content. With a non-empty
@@ -66,7 +67,7 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 	}
 
 	body, _ := json.Marshal(map[string]string{"url": params.URL})
-	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(fetchCtx, "POST", t.ollamaBaseURL+"/api/fetch", bytesReader(body))
 	if err != nil {
@@ -97,7 +98,7 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 // Markdown; non-HTML responses (plain text, JSON, existing Markdown, ...)
 // are returned as-is since there's nothing to convert.
 func (t *FetchTool) fetchDirect(ctx context.Context, url string) (ToolResult, error) {
-	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	fetchCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(fetchCtx, "GET", url, nil)
 	if err != nil {

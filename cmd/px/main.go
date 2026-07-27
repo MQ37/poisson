@@ -433,15 +433,7 @@ func cmdCost(args []string) {
 			fmt.Fprintf(os.Stderr, "error reading token breakdown: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Session %s:\n", sid)
-		if breakdown.InputUnknownCalls > 0 {
-			fmt.Printf("  Input:  %d tokens + unknown (%d call(s))\n", breakdown.InputTokens, breakdown.InputUnknownCalls)
-		} else {
-			fmt.Printf("  Input:  %d tokens\n", breakdown.InputTokens)
-		}
-		fmt.Printf("  Output: %d tokens\n", breakdown.OutputTokens)
-		fmt.Printf("  Calls:  %d\n", breakdown.CallCount)
-		fmt.Printf("  Cost:   $%.4f\n", cost)
+		fmt.Print(breakdown.FormatCost(sid, cost))
 		return
 	}
 
@@ -625,16 +617,11 @@ func runChildMode() {
 	if childProv == "" {
 		childProv = cfg.Provider.Default
 	}
+	if _, ok := config.ProviderMetaByID(childProv); !ok {
+		childProv = "ollama"
+	}
 	if childModel == "" {
-		switch childProv {
-		case "anthropic":
-			childModel = cfg.Anthropic.Model
-		case "xai":
-			childModel = cfg.XAI.Model
-		default:
-			childProv = "ollama"
-			childModel = cfg.Ollama.Model
-		}
+		childModel = provider.DefaultModel(childProv, cfg)
 	}
 	if _, err := st.GetSession(sessionID); err != nil {
 		if err := st.CreateSession(&store.Session{
@@ -652,14 +639,7 @@ func runChildMode() {
 	authStore, _ := auth.Load()
 	prov, _, _, _ := provider.BootstrapFromConfig(authStore, cfg)
 	if prov == nil || prov.ID() != childProv {
-		switch childProv {
-		case "anthropic":
-			prov = provider.NewAnthropicProvider(authStore, cfg)
-		case "xai":
-			prov = provider.NewXAIProvider(authStore, cfg)
-		default:
-			prov = provider.NewOllamaProvider(cfg.Ollama.BaseURL, childModel)
-		}
+		prov = provider.NewProvider(childProv, authStore, cfg)
 	}
 
 	var approvalBroker childApprovalBroker

@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
@@ -151,7 +150,7 @@ func (p *OpenAIProvider) fetchUsage(ctx context.Context) (*CodexUsage, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		body, _ := readCappedBody(resp)
 		return nil, fmt.Errorf("usage API error (status %d): %s", resp.StatusCode, string(body))
 	}
 
@@ -202,7 +201,7 @@ func (p *OpenAIProvider) fetchResetCredits(ctx context.Context, access, accountI
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		body, _ := readCappedBody(resp)
 		return nil, 0, fmt.Errorf("list reset credits failed (status %d): %s", resp.StatusCode, string(body))
 	}
 	var raw struct {
@@ -261,7 +260,7 @@ func (p *OpenAIProvider) ResetUsage(ctx context.Context) (*CodexResetResult, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		respBody, _ := readCappedBody(resp)
 		return nil, fmt.Errorf("consume reset credit failed (status %d): %s", resp.StatusCode, string(respBody))
 	}
 	var raw struct {
