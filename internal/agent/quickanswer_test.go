@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -510,5 +511,177 @@ func TestStreamQuickAnswerCapsToolRounds(t *testing.T) {
 	// tool execution — but it still had to stream that round's response).
 	if got := fp.CallCount(); got > btwMaxToolRounds+1 {
 		t.Fatalf("provider called %d times, want at most %d (cap enforced)", got, btwMaxToolRounds+1)
+	}
+}
+
+// TestStreamQuickAnswerRetriesMidStreamOverload verifies /btw gets the same
+// mid-stream resilience a main turn has: a retryable provider error arriving
+// after HTTP 200 (which provider.DoWithRetry structurally cannot see) is
+// retried instead of ending the side question with an error.
+func TestStreamQuickAnswerRetriesMidStreamOverload(t *testing.T) {
+	shrinkRetryBackoffs(t)
+	fp := provider.NewFakeProvider("fake", nil)
+	fp.SetResponses([][]provider.StreamEvent{
+		{{Type: provider.EventError, Error: errOverloaded, Retryable: true}},
+		provider.FakeTextResponse("42", nil),
+	})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	textCh, errCh, err := a.StreamQuickAnswer(ctx, "what's the secret number?", nil)
+	if err != nil {
+		t.Fatalf("StreamQuickAnswer: %v", err)
+	}
+	var answer strings.Builder
+	for chunk := range textCh {
+		answer.WriteString(chunk)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+	if answer.String() != "42" {
+		t.Errorf("answer = %q, want 42 (from the retried attempt)", answer.String())
+	}
+	if fp.CallCount() != 2 {
+		t.Errorf("provider calls = %d, want 2 (one overload + one retry)", fp.CallCount())
+	}
+}
+
+// TestStreamQuickAnswerRetriesEmptyResponse verifies a complete-but-empty
+// reply (no text, thinking, or tool calls) is retried rather than silently
+// ending the side question with a blank answer.
+func TestStreamQuickAnswerRetriesEmptyResponse(t *testing.T) {
+	shrinkRetryBackoffs(t)
+	fp := provider.NewFakeProvider("fake", nil)
+	fp.SetResponses([][]provider.StreamEvent{
+		{{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 5, OutputTokens: 0}}},
+		provider.FakeTextResponse("42", nil),
+	})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	textCh, errCh, err := a.StreamQuickAnswer(ctx, "what's the secret number?", nil)
+	if err != nil {
+		t.Fatalf("StreamQuickAnswer: %v", err)
+	}
+	var answer strings.Builder
+	for chunk := range textCh {
+		answer.WriteString(chunk)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+	if answer.String() != "42" {
+		t.Errorf("answer = %q, want 42 (from the retried attempt)", answer.String())
+	}
+	if fp.CallCount() != 2 {
+		t.Errorf("provider calls = %d, want 2 (one empty response + one retry)", fp.CallCount())
+	}
+}
+
+// TestQuickAnswerReportableError is the deterministic counterpart to
+// TestStreamQuickAnswerCancel: it pins down the exact discriminator
+// StreamQuickAnswer's goroutine uses to decide whether an error reaches
+// errCh. A live "is ctx done right now" check would be racy and could
+// wrongly swallow a genuine unrelated error (e.g. a permanent auth failure)
+// that happens to return right as ctx is separately expiring — checking
+// errors.Is on the returned error itself, regardless of live ctx state,
+// avoids that.
+func TestQuickAnswerReportableError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"context canceled", context.Canceled, false},
+		{"context deadline exceeded", context.DeadlineExceeded, false},
+		{"wrapped context canceled", fmt.Errorf("stream: %w", context.Canceled), false},
+		{"real error", fmt.Errorf("permanent auth failure"), true},
+		{"real error mentioning context in its text", fmt.Errorf("bad request: unknown context param"), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := quickAnswerReportableError(c.err); got != c.want {
+				t.Errorf("quickAnswerReportableError(%v) = %v, want %v", c.err, got, c.want)
+			}
+		})
+	}
+}
+
+// TestStreamQuickAnswerRealErrorReachesErrCh confirms the wiring end to end:
+// a genuine, non-context error from the provider reaches errCh through the
+// real StreamQuickAnswer goroutine, not just the unit-level discriminator.
+func TestStreamQuickAnswerRealErrorReachesErrCh(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", nil)
+	fp.SetResponses([][]provider.StreamEvent{
+		{{Type: provider.EventError, Error: fmt.Errorf("permanent auth failure"), Retryable: false}},
+	})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	textCh, errCh, err := a.StreamQuickAnswer(ctx, "what's the secret number?", nil)
+	if err != nil {
+		t.Fatalf("StreamQuickAnswer: %v", err)
+	}
+	for range textCh {
+	}
+	got := <-errCh
+	if got == nil || !strings.Contains(got.Error(), "permanent auth failure") {
+		t.Fatalf("errCh = %v, want the permanent auth failure to surface", got)
+	}
+}
+
+// TestStreamQuickAnswerDoesNotRetryAfterTextAlreadyStreamed verifies a
+// retryable error is only retried while nothing has reached the user yet —
+// once text has streamed to textCh, retrying would re-emit it and duplicate
+// what's already visible, so a later error must end the round like any other
+// mid-stream error.
+func TestStreamQuickAnswerDoesNotRetryAfterTextAlreadyStreamed(t *testing.T) {
+	shrinkRetryBackoffs(t)
+	fp := provider.NewFakeProvider("fake", nil)
+	fp.SetResponses([][]provider.StreamEvent{{
+		{Type: provider.EventTextDelta, Text: "partial answer"},
+		{Type: provider.EventError, Error: errOverloaded, Retryable: true},
+	}})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	textCh, errCh, err := a.StreamQuickAnswer(ctx, "what's the secret number?", nil)
+	if err != nil {
+		t.Fatalf("StreamQuickAnswer: %v", err)
+	}
+	var answer strings.Builder
+	for chunk := range textCh {
+		answer.WriteString(chunk)
+	}
+	if err := <-errCh; err == nil {
+		t.Fatal("expected the error to surface once content already streamed")
+	}
+	if answer.String() != "partial answer" {
+		t.Errorf("answer = %q, want the partial text that already streamed", answer.String())
+	}
+	if fp.CallCount() != 1 {
+		t.Errorf("provider calls = %d, want 1 (no retry once content streamed)", fp.CallCount())
 	}
 }

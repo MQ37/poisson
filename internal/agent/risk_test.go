@@ -124,6 +124,11 @@ func TestAssessBashRiskUsesIsolatedContext(t *testing.T) {
 	}
 }
 
+// errOverloaded is a shared stand-in for a retryable mid-stream provider
+// error (Anthropic's overloaded_error and siblings) used across the
+// classifier, compaction, and /btw retry tests.
+var errOverloaded = fmt.Errorf("overloaded_error")
+
 // shrinkRetryBackoffs makes the mid-stream and empty-response retry sleeps
 // negligible for the duration of a test, so a test that deliberately trips a
 // retry path doesn't pay the real (seconds-long) schedule.
@@ -143,7 +148,7 @@ func TestAssessBashRiskRetriesMidStreamOverload(t *testing.T) {
 	shrinkRetryBackoffs(t)
 	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
 	fp.SetResponses([][]provider.StreamEvent{
-		{{Type: provider.EventError, Error: fmt.Errorf("overloaded_error"), Retryable: true}},
+		{{Type: provider.EventError, Error: errOverloaded, Retryable: true}},
 		provider.FakeTextResponse("low", nil),
 	})
 
@@ -168,7 +173,7 @@ func TestAssessBashRiskRetriesMidStreamOverload(t *testing.T) {
 func TestAssessBashRiskGivesUpOnPersistentOverload(t *testing.T) {
 	shrinkRetryBackoffs(t)
 	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
-	overload := []provider.StreamEvent{{Type: provider.EventError, Error: fmt.Errorf("overloaded_error"), Retryable: true}}
+	overload := []provider.StreamEvent{{Type: provider.EventError, Error: errOverloaded, Retryable: true}}
 	fp.SetResponses([][]provider.StreamEvent{overload, overload, overload, overload, overload})
 
 	s := newTestStore(t)

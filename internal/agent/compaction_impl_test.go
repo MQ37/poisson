@@ -37,6 +37,102 @@ func seedMessages(t *testing.T, s *store.Store, sid string, roles []string) {
 	}
 }
 
+// TestCompactRetriesMidStreamOverload verifies compaction gets the same
+// mid-stream resilience a turn has: a retryable provider error arriving
+// after HTTP 200 (which provider.DoWithRetry structurally cannot see) is
+// retried instead of failing the whole compaction, which would otherwise
+// leave the conversation over budget with nothing done about it.
+func TestCompactRetriesMidStreamOverload(t *testing.T) {
+	shrinkRetryBackoffs(t)
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	seedMessages(t, s, sid, []string{"user", "assistant", "user", "assistant"})
+
+	fp := newFakeProvider()
+	fp.SetResponses([][]provider.StreamEvent{
+		{{Type: provider.EventError, Error: errOverloaded, Retryable: true}},
+		provider.FakeTextResponse(padSummary("## Big Picture\nAll compacted"), nil),
+	})
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if fp.CallCount() != 2 {
+		t.Errorf("provider calls = %d, want 2 (one overload + one retry)", fp.CallCount())
+	}
+	msgs, err := s.GetMessages(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("active messages = %d, want 0 (whole conversation compacted despite the retry)", len(msgs))
+	}
+}
+
+// TestCompactRetriesEmptyResponse verifies an empty summarization reply (a
+// transient provider glitch) is retried rather than immediately failing
+// compaction with "compaction produced empty summary".
+func TestCompactRetriesEmptyResponse(t *testing.T) {
+	shrinkRetryBackoffs(t)
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	seedMessages(t, s, sid, []string{"user", "assistant", "user", "assistant"})
+
+	fp := newFakeProvider()
+	fp.SetResponses([][]provider.StreamEvent{
+		{{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 5, OutputTokens: 0}}},
+		provider.FakeTextResponse(padSummary("## Big Picture\nAll compacted"), nil),
+	})
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if fp.CallCount() != 2 {
+		t.Errorf("provider calls = %d, want 2 (one empty response + one retry)", fp.CallCount())
+	}
+}
+
+// TestCompactRecordsUsagePerRetriedAttempt verifies a retried compaction
+// attempt still gets its tokens recorded — not just the final successful
+// one — since a retried attempt spent real tokens against the provider too.
+func TestCompactRecordsUsagePerRetriedAttempt(t *testing.T) {
+	shrinkRetryBackoffs(t)
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	seedMessages(t, s, sid, []string{"user", "assistant", "user", "assistant"})
+
+	fp := newFakeProvider()
+	fp.SetResponses([][]provider.StreamEvent{
+		{
+			// Usage arrives (e.g. a final accounting event) before the
+			// stream ultimately errors out — the failed attempt still cost
+			// real tokens and must still be recorded.
+			{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 100, OutputTokens: 1}},
+			{Type: provider.EventError, Error: errOverloaded, Retryable: true},
+		},
+		provider.FakeTextResponse(padSummary("## Big Picture\nAll compacted"), nil),
+	})
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
+
+	if err := a.Compact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	// No main turns ran in this session, so every recorded api_calls row is
+	// this compaction — one per provider attempt.
+	tb, err := s.GetSessionTokenBreakdown(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tb.CallCount != 2 {
+		t.Errorf("recorded api_calls = %d, want 2 (failed attempt + successful retry)", tb.CallCount)
+	}
+	if tb.InputTokens != 110 { // 100 from the failed attempt + 10 from the (default-usage) retry
+		t.Errorf("recorded input tokens = %d, want 110 (both attempts counted)", tb.InputTokens)
+	}
+}
+
 func TestAdjustCompactionCount_IncludesTrailingTools(t *testing.T) {
 	msgs := []store.Message{
 		{Seq: 1, Role: "user"},

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -101,11 +102,24 @@ func (a *Agent) StreamQuickAnswer(ctx context.Context, question string, onToolSt
 	go func() {
 		defer close(textCh)
 		defer close(errCh)
-		if err := a.runQuickAnswerLoop(ctx, req, textCh, onToolStatus); err != nil {
+		if err := a.runQuickAnswerLoop(ctx, req, textCh, onToolStatus); quickAnswerReportableError(err) {
 			errCh <- err
 		}
 	}()
 	return textCh, errCh, nil
+}
+
+// quickAnswerReportableError decides whether an error from runQuickAnswerLoop
+// should reach /btw's errCh. A cancelled/expired ctx (from the retry
+// policy's own ctx.Err() checks inside streamQuickAnswerRound) is the user's
+// own Esc/close, not a failure to report — same policy PromptWithContext
+// applies to runTurn's return value (agent.go). Checked with errors.Is on
+// the returned error itself, not "is ctx done right now": that weaker,
+// live-state check would also swallow a genuine unrelated failure (e.g. a
+// permanent auth error) if it happened to be returned while ctx was — for
+// any unrelated reason — also done by that point.
+func quickAnswerReportableError(err error) bool {
+	return err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
 // runQuickAnswerLoop drives the /btw request through as many rounds as the
@@ -113,57 +127,12 @@ func (a *Agent) StreamQuickAnswer(ctx context.Context, question string, onToolSt
 // round onto textCh. Mirrors runTurn's stream-drain shape but scoped to an
 // ephemeral, unpersisted conversation copy — nothing here touches a.store.
 func (a *Agent) runQuickAnswerLoop(ctx context.Context, req *provider.Request, textCh chan<- string, onToolStatus func(string)) error {
-	for round := 0; ; round++ {
-		ch, err := a.provider.Stream(ctx, req)
+	for roundNum := 0; ; roundNum++ {
+		round, err := a.streamQuickAnswerRound(ctx, req, textCh)
 		if err != nil {
 			return err
 		}
-
-		var textBuilder strings.Builder
-		var thinkingBuilder, thinkingSig strings.Builder
-		var redactedThinking []provider.ContentBlock
-		var toolCalls []provider.ToolCall
-		var usage *provider.Usage
-		var streamErr error
-
-		for ev := range ch {
-			switch ev.Type {
-			case provider.EventTextDelta:
-				textBuilder.WriteString(ev.Text)
-				if ev.Text != "" {
-					textCh <- ev.Text
-				}
-			case provider.EventThinkingDelta:
-				thinkingBuilder.WriteString(ev.Text)
-			case provider.EventThinkingSignature:
-				thinkingSig.WriteString(ev.Text)
-			case provider.EventThinkingRedacted:
-				redactedThinking = append(redactedThinking, provider.ContentBlock{
-					Type: "thinking", Redacted: true, ThinkingSignature: ev.Text,
-				})
-			case provider.EventToolUseStart:
-				if ev.ToolCall != nil {
-					toolCalls = append(toolCalls, *ev.ToolCall)
-				}
-			case provider.EventToolUseDelta:
-				a.updateToolCall(toolCalls, ev.ToolCall, false)
-			case provider.EventToolUseStop:
-				a.updateToolCall(toolCalls, ev.ToolCall, true)
-			case provider.EventError:
-				streamErr = ev.Error
-			case provider.EventDone:
-				usage = ev.Usage
-			}
-		}
-		if usage != nil {
-			if err := a.recordAuxiliaryAPICall("btw", usage); err != nil {
-				return fmt.Errorf("record /btw API call: %w", err)
-			}
-		}
-		if streamErr != nil {
-			return streamErr
-		}
-		if len(toolCalls) == 0 || round >= btwMaxToolRounds {
+		if len(round.toolCalls) == 0 || roundNum >= btwMaxToolRounds {
 			// Done — either the model gave its final answer, or it's out of
 			// rounds and whatever text it already streamed this round (if
 			// any) has to stand as the answer.
@@ -171,11 +140,11 @@ func (a *Agent) runQuickAnswerLoop(ctx context.Context, req *provider.Request, t
 		}
 
 		assistantBlocks := buildAssistantBlocks(
-			thinkingBuilder.String(), thinkingSig.String(), redactedThinking,
-			textBuilder.String(), toolCalls)
+			round.thinking, round.thinkingSig, round.redactedThinking,
+			round.text, round.toolCalls)
 		req.Messages = append(req.Messages, provider.Message{Role: "assistant", Content: assistantBlocks})
 
-		for _, tc := range toolCalls {
+		for _, tc := range round.toolCalls {
 			block := provider.ContentBlock{Type: "tool_result", ToolCallID: tc.ID}
 			var imageBlock *provider.ContentBlock
 			if !btwAllowedTools[tc.Name] {
@@ -219,6 +188,121 @@ func (a *Agent) runQuickAnswerLoop(ctx context.Context, req *provider.Request, t
 			}
 			req.Messages = append(req.Messages, provider.Message{Role: "tool", Content: blocks})
 		}
+	}
+}
+
+// quickAnswerRoundResult holds one /btw round's collected output. Text has
+// already reached textCh as it streamed (see streamQuickAnswerRound); this
+// carries what runQuickAnswerLoop still needs to decide whether the round is
+// done and, if not, to build the next request.
+type quickAnswerRoundResult struct {
+	text             string
+	thinking         string
+	thinkingSig      string
+	redactedThinking []provider.ContentBlock
+	toolCalls        []provider.ToolCall
+}
+
+// streamQuickAnswerRound runs one /btw round under the same mid-stream-error
+// and empty-response retry policy runTurn applies to a real turn (see
+// stream_retry.go) — a retryable provider error or an empty response is
+// retried in place. Transport failures and retryable statuses (429/5xx/529)
+// are already retried inside a.provider.Stream by provider.DoWithRetry; this
+// adds the layer that structurally cannot see, since by the time either of
+// these arrives the response has already started with HTTP 200.
+//
+// Unlike streamAndCollect (the classifier/compaction driver), this round
+// streams text incrementally to textCh as it arrives — a retryable error is
+// only actually retried while nothing has reached textCh yet this attempt;
+// once any text (or thinking, or a tool call) has streamed out, retrying
+// would re-emit it from scratch and duplicate what the user already sees.
+func (a *Agent) streamQuickAnswerRound(ctx context.Context, req *provider.Request, textCh chan<- string) (quickAnswerRoundResult, error) {
+	midStreamRetries, emptyAttempts := 0, 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return quickAnswerRoundResult{}, err
+		}
+
+		ch, err := a.provider.Stream(ctx, req)
+		if err != nil {
+			return quickAnswerRoundResult{}, err
+		}
+
+		var textBuilder strings.Builder
+		var thinkingBuilder, thinkingSig strings.Builder
+		var redactedThinking []provider.ContentBlock
+		var toolCalls []provider.ToolCall
+		var usage *provider.Usage
+		var streamErr provider.StreamEvent
+		hadErr := false
+
+		for ev := range ch {
+			switch ev.Type {
+			case provider.EventTextDelta:
+				textBuilder.WriteString(ev.Text)
+				if ev.Text != "" {
+					textCh <- ev.Text
+				}
+			case provider.EventThinkingDelta:
+				thinkingBuilder.WriteString(ev.Text)
+			case provider.EventThinkingSignature:
+				thinkingSig.WriteString(ev.Text)
+			case provider.EventThinkingRedacted:
+				redactedThinking = append(redactedThinking, provider.ContentBlock{
+					Type: "thinking", Redacted: true, ThinkingSignature: ev.Text,
+				})
+			case provider.EventToolUseStart:
+				if ev.ToolCall != nil {
+					toolCalls = append(toolCalls, *ev.ToolCall)
+				}
+			case provider.EventToolUseDelta:
+				a.updateToolCall(toolCalls, ev.ToolCall, false)
+			case provider.EventToolUseStop:
+				a.updateToolCall(toolCalls, ev.ToolCall, true)
+			case provider.EventError:
+				streamErr = ev
+				hadErr = true
+			case provider.EventDone:
+				usage = ev.Usage
+			}
+		}
+		if usage != nil {
+			// Recorded per attempt — a retried attempt still spent real
+			// tokens against the provider.
+			if err := a.recordAuxiliaryAPICall("btw", usage); err != nil {
+				return quickAnswerRoundResult{}, fmt.Errorf("record /btw API call: %w", err)
+			}
+		}
+
+		noContentYet := textBuilder.Len() == 0 && thinkingBuilder.Len() == 0 &&
+			len(toolCalls) == 0 && len(redactedThinking) == 0
+
+		if hadErr {
+			if shouldRetryMidStream(streamErr, noContentYet, midStreamRetries) {
+				midStreamRetries++
+				if err := sleepOrDone(ctx, midStreamRetryDelay(midStreamRetries)); err != nil {
+					return quickAnswerRoundResult{}, err
+				}
+				continue
+			}
+			return quickAnswerRoundResult{}, streamErr.Error
+		}
+
+		if noContentYet {
+			if emptyAttempts >= maxEmptyResponseRetries {
+				return quickAnswerRoundResult{}, fmt.Errorf("model returned empty response")
+			}
+			emptyAttempts++
+			if err := sleepOrDone(ctx, emptyResponseRetryDelay(emptyAttempts)); err != nil {
+				return quickAnswerRoundResult{}, err
+			}
+			continue
+		}
+
+		return quickAnswerRoundResult{
+			text: textBuilder.String(), thinking: thinkingBuilder.String(), thinkingSig: thinkingSig.String(),
+			redactedThinking: redactedThinking, toolCalls: toolCalls,
+		}, nil
 	}
 }
 

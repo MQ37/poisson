@@ -207,29 +207,29 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		Messages: summarizationMsgs,
 	}
 
-	// 4. Stream the summary.
+	// 4. Stream the summary. streamAndCollect gives this the same mid-stream
+	// resilience a turn has — a retryable provider error or an empty
+	// response arriving after HTTP 200 (which provider.DoWithRetry
+	// structurally cannot see) is retried instead of losing the whole
+	// compaction attempt outright. Transport failures and retryable statuses
+	// are already retried inside Stream itself. usage is recorded per
+	// attempt (a retried attempt still spent real tokens) and the last
+	// attempt's usage is kept for the cost/audit fields below.
 	streamCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 
-	ch, err := compactionProvider.Stream(streamCtx, req)
+	var usage *provider.Usage
+	out, err := streamAndCollect(streamCtx, compactionProvider, req, func(u *provider.Usage) {
+		usage = u
+		if err := a.recordCompactionAPICall(compactionProvider.ID(), compactionModel, u); err != nil {
+			log.Printf("warning: record compaction API call: %v", err)
+		}
+	})
 	if err != nil {
 		return fmt.Errorf("compaction stream: %w", err)
 	}
 
-	var summary strings.Builder
-	var usage *provider.Usage
-	for ev := range ch {
-		switch ev.Type {
-		case provider.EventTextDelta:
-			summary.WriteString(ev.Text)
-		case provider.EventDone:
-			usage = ev.Usage
-		case provider.EventError:
-			return fmt.Errorf("compaction error: %w", ev.Error)
-		}
-	}
-
-	summaryText := strings.TrimSpace(summary.String())
+	summaryText := strings.TrimSpace(out.Text)
 	if summaryText == "" {
 		return fmt.Errorf("compaction produced empty summary")
 	}
@@ -261,10 +261,9 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 		}
 	}
 
-	// 7. Record api_call for summarization (exact tokens + cost).
-	if usage != nil {
-		_ = a.recordCompactionAPICall(compactionProvider.ID(), compactionModel, usage)
-	}
+	// 7. api_call already recorded per attempt inside streamAndCollect's
+	// onUsage callback above (step 4) — a retried attempt still spent real
+	// tokens, so recording only the final one would silently drop them.
 
 	// 8. Record compaction row (audit). The "after" figure must include the
 	// summary just applied, not just active messages — otherwise summarizing
