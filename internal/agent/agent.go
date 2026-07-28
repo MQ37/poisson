@@ -638,8 +638,9 @@ func (a *Agent) RunTurns() int { return int(a.runTurns.Load()) }
 // SendSubagentProgress emits a live turn-count + context-usage update for a
 // running subagent widget. toolCallID correlates to the OutputToolStart that
 // created it (see tools.WithToolCallID). tokensPerSec is the child's own
-// last-reported inference speed (0 if it hasn't reported one yet — see
-// agent.OutputInferenceSpeed and subagent.ChildEvent.TokensPerSec). status is
+// token-weighted average inference speed across the rounds it has completed
+// so far, accumulated by SubagentTool.Execute (0 if it hasn't reported one
+// yet — see agent.OutputInferenceSpeed and subagent.ChildEvent). status is
 // normally "" (ordinary progress); when the child is mid-network-retry it
 // carries a short human-readable status ("connection lost: ... —
 // reconnecting…" / "reconnected — resuming") for the widget to show in place

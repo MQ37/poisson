@@ -52,7 +52,8 @@ type SubagentTool struct {
 	// mid-network-retry it carries a short human-readable status ("connection
 	// lost: ... — reconnecting…" / "reconnected — resuming") for the widget
 	// to show in place of the turn/context line. tokensPerSec is the child's
-	// own last-reported inference speed (0 if none reported yet).
+	// own token-weighted average inference speed across every round it has
+	// completed so far (0 if none reported yet).
 	progressFn func(toolCallID string, turns, contextTokens, contextWindow int, tokensPerSec float64, status string)
 
 	// usageFn records a finished (or partially finished) subagent's
@@ -208,6 +209,15 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 
 	var output strings.Builder
 	var toolCount, turns, contextTokens, contextWindow int
+	// speedTokenSum/speedRateSum accumulate the child's rounds into a
+	// token-weighted average output tokens/sec — Σ(rate × tokens) / Σ(tokens),
+	// exactly what the main conversation's header shows for its own rounds
+	// (see tui.scrollback.avgTokensPerSec). A raw per-round figure swings
+	// wildly because its denominator includes connection setup, prefill/TTFT
+	// and any provider backoff, so a short tool-call-only round reads far
+	// lower than a long answer at the same real decode speed; weighting by
+	// output tokens lets the big rounds dominate and keeps the widget stable.
+	var speedTokenSum, speedRateSum float64
 	var tokensPerSec float64
 	var success bool
 	var childErr string
@@ -315,12 +325,25 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 				// Relayed from the child's own agent.OutputInferenceSpeed —
 				// only sent by the child when it has an actual reading (see
 				// forwardChildEvents), so this is always a real update.
-				tokensPerSec = ev.TokensPerSec
+				weight := float64(ev.OutputTokens)
+				if weight <= 0 {
+					weight = 1 // no weight reported: count the round once
+				}
+				speedTokenSum += weight
+				speedRateSum += ev.TokensPerSec * weight
+				tokensPerSec = speedRateSum / speedTokenSum
 				reportProgress("")
 
 			case "tool_result":
 
 			case "approval_request":
+				// Bank the child's spend so far before blocking on a human:
+				// this event carries the usage of the risk-classification call
+				// that produced the verdict being shown, and the wait below can
+				// end in cancellation with no further event ever arriving.
+				if ev.Usage != nil {
+					lastUsage, usageSeen = *ev.Usage, true
+				}
 				if ctx.Err() != nil {
 					goto done
 				}

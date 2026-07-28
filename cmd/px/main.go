@@ -651,14 +651,25 @@ func runChildMode() {
 	// below and read back into agent.SubagentOrigin by subApprovalFn in the
 	// parent's own main().
 	humanChildApproval := func(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
-		return approvalBroker.emitAndWait(map[string]interface{}{
+		event := map[string]interface{}{
 			"type":        "approval_request",
 			"command":     command,
 			"description": description,
 			"cwd":         workdir,
 			"risk":        string(risk),
 			"agent":       os.Getenv("POISSON_SUBAGENT_NAME"),
-		})
+		}
+		// Usage travels with the prompt so the risk-classification call that
+		// produced this very verdict is already banked on the parent side (see
+		// ChildEvent.Usage). Otherwise those tokens sit unreported until the
+		// next "tool"/"done" event — and a parent turn cancelled while the
+		// human is still deciding never sees either, silently dropping the
+		// classifier's spend.
+		if childAgentRef != nil {
+			usage := childAgentRef.CumulativeUsage()
+			event["usage"] = usage
+		}
+		return approvalBroker.emitAndWait(event)
 	}
 	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
 		if childAgentRef != nil {
@@ -803,7 +814,12 @@ func forwardChildEvents(outputChan <-chan agent.OutputEvent, a *agent.Agent, wri
 			// agent.OutputInferenceSpeed), and the parent widget already
 			// shows nothing until it sees a positive value.
 			if ev.TokensPerSec > 0 {
-				write(map[string]interface{}{"type": "speed", "tokensPerSec": ev.TokensPerSec})
+				// outputTokens is the round's weight for the parent's
+				// token-weighted running average (see ChildEvent.OutputTokens).
+				write(map[string]interface{}{
+					"type": "speed", "tokensPerSec": ev.TokensPerSec,
+					"outputTokens": ev.OutputTokens,
+				})
 			}
 		case agent.OutputToolResult:
 			payload := map[string]interface{}{

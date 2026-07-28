@@ -147,6 +147,66 @@ printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWind
 	}
 }
 
+// TestSubagentToolAveragesInferenceSpeedWeightedByTokens verifies the widget
+// gets a token-weighted running average across the child's rounds — the same
+// measure the main conversation's header shows for its own rounds (see
+// tui.scrollback.avgTokensPerSec) — rather than the raw last-round sample it
+// used to show. A raw sample swings wildly between a short tool-call-only
+// round and a long answer at the same real decode speed, which is exactly
+// what looked like a broken number.
+func TestSubagentToolAveragesInferenceSpeedWeightedByTokens(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-avg.sh"
+	// Round 1: 10 tokens @ 100 tok/s. Round 2: 30 tokens @ 50 tok/s.
+	// Weighted: (100*10 + 50*30) / (10+30) = 2500/40 = 62.5.
+	script := `#!/bin/sh
+printf '{"type":"speed","tokensPerSec":100,"outputTokens":10}\n'
+printf '{"type":"speed","tokensPerSec":50,"outputTokens":30}\n'
+printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWindow":200000}\n'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := NewSubagentTool(".", alwaysApproveSubagent)
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-opus-5" },
+		func() string { return "" },
+	)
+
+	var speeds []float64
+	tool.SetProgressFn(func(_ string, _, _, _ int, tokensPerSec float64, _ string) {
+		speeds = append(speeds, tokensPerSec)
+	})
+
+	ctx := WithToolCallID(context.Background(), "call-1")
+	res, err := tool.Execute(ctx, json.RawMessage(`{"task":"do something"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error: %q (content=%q)", res.Error, res.Content)
+	}
+
+	// Round 1 alone averages to itself; round 2 pulls it toward the heavier
+	// round; the final "done" tick keeps the running average.
+	want := []float64{100, 62.5, 62.5}
+	if len(speeds) != len(want) {
+		t.Fatalf("progressFn tokensPerSec calls = %v, want %v", speeds, want)
+	}
+	for i := range want {
+		if speeds[i] != want[i] {
+			t.Errorf("call %d tokensPerSec = %v, want %v (weighted average, not last round)", i, speeds[i], want[i])
+		}
+	}
+}
+
 // TestSubagentToolPropagatesSkillsEnabledFn verifies SetSkillsEnabledFn
 // actually reaches the spawned child's argv: when the resolver reports
 // skills disabled, the real child process (a fake script, not px) must see
@@ -371,6 +431,65 @@ sleep 30
 	want := provider.Usage{InputTokens: 1000, OutputTokens: 200}
 	if gotUsage != want {
 		t.Fatalf("usageFn usage = %+v, want the last reported tick's totals %+v", gotUsage, want)
+	}
+}
+
+// TestSubagentToolRecordsUsageFromApprovalRequestWhenCancelled covers the
+// bash-risk-classifier accounting gap: the classifier LLM call runs inside the
+// child, immediately before it raises an approval prompt, and the child's
+// usage snapshot rides along on the approval_request event. If the parent turn
+// is cancelled while the human is still deciding, no "tool" or "done" event
+// ever follows — so without banking the approval_request's usage the
+// classifier's tokens (and every earlier round's) would be dropped from the
+// parent's cost entirely.
+func TestSubagentToolRecordsUsageFromApprovalRequestWhenCancelled(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-approval-usage.sh"
+	// An approval prompt carrying usage (as the real child does), then a hang
+	// past the test's timeout — the parent cancels mid-decision.
+	script := `#!/bin/sh
+printf '{"type":"approval_request","command":"rm -rf /tmp/x","risk":"high","usage":{"InputTokens":1500,"OutputTokens":300}}\n'
+sleep 30
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	// Still deciding when the parent's ctx (300ms, below) expires.
+	tool := NewSubagentTool(".", func(command, description, cwd, agentName, risk string) (bool, string) {
+		time.Sleep(600 * time.Millisecond)
+		return false, ""
+	})
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-opus-5" },
+		func() string { return "" },
+	)
+
+	var calls int
+	var gotUsage provider.Usage
+	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage) (float64, error) {
+		calls++
+		gotUsage = *usage
+		return 0.02, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, err := tool.Execute(ctx, json.RawMessage(`{"task":"do something"}`)); err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("usageFn called %d times, want exactly 1 (the approval_request's usage, banked before the wait)", calls)
+	}
+	want := provider.Usage{InputTokens: 1500, OutputTokens: 300}
+	if gotUsage != want {
+		t.Fatalf("usageFn usage = %+v, want the approval_request's totals %+v", gotUsage, want)
 	}
 }
 

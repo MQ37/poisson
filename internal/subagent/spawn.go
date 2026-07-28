@@ -67,6 +67,13 @@ type ChildEvent struct {
 	// child's inference speed the same way the main conversation shows it
 	// for its own rounds. Zero/omitted means nothing measurable to report.
 	TokensPerSec float64 `json:"tokensPerSec,omitempty"`
+	// OutputTokens is that same round's exact output-token count, sent
+	// alongside TokensPerSec so the parent can keep a token-weighted running
+	// average across the child's rounds instead of showing one raw last-round
+	// sample (see SubagentTool.Execute). This is the weight the main
+	// conversation's header average already uses for its own rounds — see
+	// tui.scrollback.avgTokensPerSec. Only meaningful on a "speed" event.
+	OutputTokens int `json:"outputTokens,omitempty"`
 }
 
 // lookupExecutable resolves the binary Spawn execs as the child. A package

@@ -34,7 +34,7 @@ type BlockMeta struct {
 	SubagentContextTokens int     // subagent widget: live/final context tokens used, reported by the child
 	SubagentContextWindow int     // subagent widget: the child's own model context window
 	SubagentStatus        string  // subagent widget: non-empty while the child is retrying a network failure (see agent.OutputRetrying) — shown in place of the turn/context line
-	SubagentTokensPerSec  float64 // subagent widget: the child's own last-reported inference speed (0 = none reported yet)
+	SubagentTokensPerSec  float64 // subagent widget: the child's own token-weighted average inference speed so far, same measure as the header's (0 = none reported yet)
 	Expediting            bool    // subagent widget: user pressed Ctrl+G, child is wrapping up
 	ToolResult            string
 	ToolError             string
