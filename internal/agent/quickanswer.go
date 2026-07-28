@@ -253,7 +253,9 @@ func (a *Agent) streamQuickAnswerRound(ctx context.Context, req *provider.Reques
 				})
 			case provider.EventToolUseStart:
 				if ev.ToolCall != nil {
-					toolCalls = append(toolCalls, *ev.ToolCall)
+					tc := *ev.ToolCall
+					tc.Name = a.canonicalToolName(tc.Name)
+					toolCalls = append(toolCalls, tc)
 				}
 			case provider.EventToolUseDelta:
 				a.updateToolCall(toolCalls, ev.ToolCall, false)

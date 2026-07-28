@@ -7,8 +7,18 @@ import (
 	"log"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"sync"
 )
+
+// wireToolPrefix is the camouflage prefix the Anthropic stealth path puts on
+// every advertised tool name (bash -> mcp_Bash, see provider.prefixToolName).
+// The provider strips it off incoming tool_use blocks, but it cannot rewrite
+// tool names the model buries inside a tool's own arguments — batch's
+// calls[].tool is opaque JSON to that layer, so a model echoing the wire name
+// there ("mcp_Grep") used to fail with "tool not registered". Resolution
+// happens here instead, where every dispatch path passes through.
+const wireToolPrefix = "mcp_"
 
 // Registry holds all registered tools, keyed by tool name.
 type Registry struct {
@@ -35,12 +45,50 @@ func (r *Registry) Unregister(name string) {
 	delete(r.tools, name)
 }
 
-// Get returns the named tool, or (nil, false) if not registered.
+// Get returns the named tool, or (nil, false) if not registered. A wire name
+// ("mcp_Bash") resolves to the registered tool ("bash").
 func (r *Registry) Get(name string) (Tool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	t, ok := r.tools[name]
+	t, ok := r.tools[r.resolveName(name)]
 	return t, ok
+}
+
+// Canonical maps a model-emitted tool name to the registered name, so callers
+// that key their own tables off tool names (batch's deny list, its
+// mutating-tool set) match on one spelling instead of letting a wire-prefixed
+// name slip past. Unknown names pass through unchanged.
+func (r *Registry) Canonical(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.resolveName(name)
+}
+
+// resolveName maps a model-emitted tool name to a registered one. Exact
+// matches win; otherwise the wire prefix is stripped and the first letter
+// lowercased (mcp_Web_ask -> web_ask). Callers must hold r.mu.
+func (r *Registry) resolveName(name string) string {
+	if _, ok := r.tools[name]; ok {
+		return name
+	}
+	candidate := stripWireToolPrefix(name)
+	if candidate == name {
+		return name
+	}
+	if _, ok := r.tools[candidate]; ok {
+		return candidate
+	}
+	return name
+}
+
+// stripWireToolPrefix turns a wire tool name into the bare one
+// (mcp_Web_ask -> web_ask). Names without the prefix pass through unchanged.
+func stripWireToolPrefix(name string) string {
+	rest, ok := strings.CutPrefix(name, wireToolPrefix)
+	if !ok || rest == "" {
+		return name
+	}
+	return strings.ToLower(rest[:1]) + rest[1:]
 }
 
 // Definitions returns ToolDef entries for every registered tool, suitable
@@ -86,6 +134,7 @@ func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessa
 	}()
 
 	r.mu.RLock()
+	name = r.resolveName(name)
 	t, ok := r.tools[name]
 	r.mu.RUnlock()
 	if !ok {

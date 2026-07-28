@@ -1043,7 +1043,9 @@ roundLoop:
 
 			case provider.EventToolUseStart:
 				if ev.ToolCall != nil {
-					toolCalls = append(toolCalls, *ev.ToolCall)
+					tc := *ev.ToolCall
+					tc.Name = a.canonicalToolName(tc.Name)
+					toolCalls = append(toolCalls, tc)
 				}
 
 			case provider.EventToolUseDelta:
@@ -1746,6 +1748,9 @@ func (a *Agent) updateToolCall(toolCalls []provider.ToolCall, updated *provider.
 	if updated == nil || len(toolCalls) == 0 {
 		return
 	}
+	// A later event replaces the whole struct, so the name has to be
+	// canonicalized here as well or the Start event's mapping is undone.
+	updated.Name = a.canonicalToolName(updated.Name)
 	if final && len(updated.Input) == 0 {
 		updated.Input = json.RawMessage("{}")
 	}
@@ -1759,6 +1764,21 @@ func (a *Agent) updateToolCall(toolCalls []provider.ToolCall, updated *provider.
 	}
 	// Fallback: update the last entry.
 	toolCalls[len(toolCalls)-1] = *updated
+}
+
+// canonicalToolName maps a provider-emitted tool name onto the registered
+// tool it means. The Anthropic stealth path advertises tools under Claude
+// Code's MCP naming convention (bash -> mcp_Bash) and normally unwraps the
+// names it gets back, but a model can echo a wire-shaped name anywhere — a
+// non-stealth request, another provider, or nested inside batch's arguments.
+// Resolving centrally here means one bad spelling no longer costs a whole
+// round trip to a "tool not registered" error. Unknown names pass through so
+// the error still reports exactly what the model asked for.
+func (a *Agent) canonicalToolName(name string) string {
+	if a == nil || a.tools == nil {
+		return name
+	}
+	return a.tools.Canonical(name)
 }
 
 func (a *Agent) computeCost(providerID, model string, input, output, cacheRead, cacheWrite int) float64 {

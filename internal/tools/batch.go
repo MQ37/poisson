@@ -75,7 +75,10 @@ func ParseBatchCalls(input json.RawMessage) []BatchCallSpec {
 	}
 	specs := make([]BatchCallSpec, len(in.Calls))
 	for i, c := range in.Calls {
-		specs[i] = BatchCallSpec{Tool: strings.TrimSpace(c.Tool), Input: c.Input}
+		// Same canonicalization the dispatch path applies, so a pre-rendered
+		// card (and agent.go's nested-call inspection) names the tool the way
+		// it will actually run.
+		specs[i] = BatchCallSpec{Tool: stripWireToolPrefix(strings.TrimSpace(c.Tool)), Input: c.Input}
 	}
 	return specs
 }
@@ -153,17 +156,23 @@ func (t *BatchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 		return ToolResult{Error: fmt.Sprintf("too many calls (%d); max %d per batch", len(in.Calls), batchMaxCalls)}, nil
 	}
 
-	// Validate names up front so a typo doesn't half-apply a batch.
+	if t.reg == nil {
+		return ToolResult{Error: "batch has no registry"}, nil
+	}
+	// Validate names up front so a typo doesn't half-apply a batch. Names are
+	// canonicalized first (mcp_Batch -> batch): the deny list, the
+	// mutating-tool set and the subagent check below all key off the
+	// registered spelling, so a wire-prefixed name must not reach them raw.
+	for i := range in.Calls {
+		in.Calls[i].Tool = t.reg.Canonical(strings.TrimSpace(in.Calls[i].Tool))
+	}
 	for i, c := range in.Calls {
-		name := strings.TrimSpace(c.Tool)
+		name := c.Tool
 		if name == "" {
 			return ToolResult{Error: fmt.Sprintf("call %d: tool is required", i+1)}, nil
 		}
 		if batchDenied[name] {
 			return ToolResult{Error: fmt.Sprintf("call %d: tool %q is not allowed inside batch (denied: batch, no recursion)", i+1, name)}, nil
-		}
-		if t.reg == nil {
-			return ToolResult{Error: "batch has no registry"}, nil
 		}
 		if _, ok := t.reg.Get(name); !ok {
 			return ToolResult{Error: fmt.Sprintf("call %d: tool not registered: %s", i+1, name)}, nil
@@ -175,7 +184,7 @@ func (t *BatchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 
 	serial := false
 	for _, c := range in.Calls {
-		if mutatingTools[strings.TrimSpace(c.Tool)] {
+		if mutatingTools[c.Tool] {
 			serial = true
 			break
 		}
@@ -186,7 +195,7 @@ func (t *BatchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 
 	runOne := func(i int) {
 		c := in.Calls[i]
-		name := strings.TrimSpace(c.Tool)
+		name := c.Tool
 		callCtx := ctx
 		if hasOuterID {
 			callCtx = WithToolCallID(ctx, BatchCallID(outerID, i))
