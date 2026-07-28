@@ -199,6 +199,11 @@ func postTokenRequest(tokenURL string, body map[string]string, keepRefresh strin
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	// Real Claude Code's token exchange/refresh runs through its bundled
+	// axios client, not the SDK's own fetch — a bare Go User-Agent on this
+	// endpoint is a fingerprintable tell even though /v1/messages is spoofed
+	// (see opencode-anthropic-auth's index.ts, same header/value).
+	req.Header.Set("User-Agent", "axios/1.13.6")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

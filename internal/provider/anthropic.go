@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -49,15 +50,18 @@ func NewAnthropicProvider(a auth.AuthStore, cfg *config.Config) *AnthropicProvid
 // ID returns "anthropic".
 func (p *AnthropicProvider) ID() string { return "anthropic" }
 
-// stealthUserAgent returns the "claude-cli/<version>" user-agent spoofed on
-// stealth OAuth requests, from cfg.Stealth.CCVersion or (cfg == nil)
-// config.DefaultCCVersion. Shared by anthropic.go and anthropic_usage.go so
-// the fallback version lives in one place, not two copy-pasted literals.
+// stealthUserAgent returns the "claude-cli/<version> (external, <entrypoint>)"
+// user-agent spoofed on stealth OAuth requests — the parenthesized suffix is
+// real (cc-sniff capture: "claude-cli/2.1.201 (external, sdk-cli)"), not
+// decorative; a bare "claude-cli/<version>" is a different, wrong shape.
+// Shared by anthropic.go and anthropic_usage.go so the fallback lives in one
+// place, not two copy-pasted literals.
 func stealthUserAgent(cfg *config.Config) string {
+	sc := config.DefaultStealthConfig()
 	if cfg != nil {
-		return "claude-cli/" + cfg.Stealth.CCVersion
+		sc = cfg.Stealth
 	}
-	return "claude-cli/" + config.DefaultCCVersion
+	return "claude-cli/" + sc.CCVersion + " (external, " + sc.CCEntrypoint + ")"
 }
 
 // Models returns the curated Anthropic models (see KnownModels in models.go —
@@ -106,6 +110,12 @@ func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, r
 
 	adaptive := anthropicReq.Thinking != nil && anthropicReq.Thinking.Type == "adaptive"
 
+	// requestID is stable across retries of this call (a real client reuses
+	// its x-client-request-id and only bumps X-Stainless-Retry-Count), attemptN
+	// is not.
+	requestID := newUUIDv4()
+	attemptN := 0
+
 	// DoWithRetry retries connection failures and transient server errors
 	// (429/5xx, plus Anthropic's 529 "overloaded_error") with exponential
 	// backoff, indefinitely, before this function ever returns — the 401
@@ -115,12 +125,16 @@ func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, r
 	// bytes.NewReader over it is safe to create repeatedly) so a body already
 	// consumed by a failed attempt is never resent short or empty.
 	resp, err := DoWithRetry(ctx, AnthropicRetryableStatus, func(attemptCtx context.Context) (*http.Response, error) {
+		// ?beta=true matches every real Claude Code /v1/messages capture
+		// (cc-sniff 0011-0015) — omitting it is itself a fingerprintable
+		// difference from genuine traffic.
 		httpReq, err := http.NewRequestWithContext(attemptCtx, "POST",
-			p.baseURL+"/v1/messages", bytes.NewReader(reqBody))
+			p.baseURL+"/v1/messages?beta=true", bytes.NewReader(reqBody))
 		if err != nil {
 			return nil, err
 		}
-		p.setHeaders(httpReq, isOAuth, adaptive)
+		p.setHeaders(httpReq, isOAuth, adaptive, attemptN, requestID)
+		attemptN++
 		return p.client.Do(httpReq)
 	})
 	if err != nil {
@@ -151,7 +165,7 @@ func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, r
 	}
 
 	ch := make(chan StreamEvent, 64)
-	go p.pumpSSE(ctx, resp.Body, ch)
+	go p.pumpSSE(ctx, resp.Body, ch, isOAuth)
 	return ch, nil
 }
 
@@ -430,8 +444,12 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 					})
 				}
 			case "tool_use":
+				name := cb.ToolName
+				if isOAuth {
+					name = prefixToolName(name)
+				}
 				am.Content = append(am.Content, anthropicContentBlock{
-					Type: "tool_use", ID: cb.ToolCallID, Name: cb.ToolName, Input: cb.ToolInput,
+					Type: "tool_use", ID: cb.ToolCallID, Name: name, Input: cb.ToolInput,
 				})
 			case "tool_result":
 				resultContent, _ := json.Marshal(cb.ToolResult)
@@ -453,10 +471,16 @@ func (p *AnthropicProvider) buildAnthropicRequest(req *Request, isOAuth bool) an
 		ar.Messages = append(ar.Messages, am)
 	}
 
-	// Tools.
+	// Tools. Under OAuth, names are camouflaged as Claude Code's own
+	// MCP-tool convention (see prefixToolName) — real bare lowercase names
+	// like "bash"/"read" are what got other third-party clients flagged.
 	for _, td := range req.Tools {
+		name := td.Name
+		if isOAuth {
+			name = prefixToolName(name)
+		}
 		ar.Tools = append(ar.Tools, anthropicTool{
-			Name: td.Name, Description: td.Description, InputSchema: td.Schema,
+			Name: name, Description: td.Description, InputSchema: td.Schema,
 		})
 	}
 
@@ -515,7 +539,10 @@ func applyPromptCache(ar *anthropicRequest) {
 }
 
 // setHeaders configures the HTTP request headers based on auth type.
-func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool, adaptiveEffort bool) {
+// retryCount is this attempt's 0-indexed position within DoWithRetry's loop
+// (X-Stainless-Retry-Count); requestID is stable across those retries
+// (x-client-request-id) — see streamWithRetry.
+func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool, adaptiveEffort bool, retryCount int, requestID string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -533,13 +560,24 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool, adaptive
 		// thinking:disabled request. Sending it unconditionally would diverge
 		// from the real client's header shape, which this stealth path exists
 		// to match exactly.
-		beta := "claude-code-20250219,oauth-2025-04-20"
-		if adaptiveEffort {
-			beta += ",effort-2025-11-24"
-		}
-		req.Header.Set("anthropic-beta", beta)
+		req.Header.Set("anthropic-beta", stealthBetaHeader(adaptiveEffort))
 		req.Header.Set("user-agent", stealthUserAgent(p.config))
 		req.Header.Set("x-app", "cli")
+		// The rest of these mirror every /v1/messages header real Claude Code
+		// sends (cc-sniff captures 0011-0015) that was previously missing
+		// outright — their absence is itself a fingerprintable gap, not a
+		// neutral omission.
+		req.Header.Set("anthropic-dangerous-direct-browser-access", "true")
+		req.Header.Set("X-Claude-Code-Session-Id", stealthSessionID())
+		req.Header.Set("x-client-request-id", requestID)
+		req.Header.Set("X-Stainless-Arch", stealthArch())
+		req.Header.Set("X-Stainless-Lang", "js")
+		req.Header.Set("X-Stainless-OS", stealthOS())
+		req.Header.Set("X-Stainless-Package-Version", "0.94.0")
+		req.Header.Set("X-Stainless-Retry-Count", strconv.Itoa(retryCount))
+		req.Header.Set("X-Stainless-Runtime", "node")
+		req.Header.Set("X-Stainless-Runtime-Version", "v26.3.0")
+		req.Header.Set("X-Stainless-Timeout", "600")
 	} else {
 		if apiKey == "" && p.config != nil {
 			apiKey = p.config.Anthropic.APIKey
@@ -549,8 +587,10 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool, adaptive
 }
 
 // pumpSSE reads the SSE stream from the response body and converts it to
-// StreamEvents on the channel.
-func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<- StreamEvent) {
+// StreamEvents on the channel. isOAuth mirrors buildAnthropicRequest's flag:
+// tool names arriving from a stealth request carry the mcp_ camouflage
+// prefix (see prefixToolName) and must be unwrapped before dispatch.
+func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<- StreamEvent, isOAuth bool) {
 	defer close(ch)
 	defer body.Close()
 
@@ -619,9 +659,13 @@ func (p *AnthropicProvider) pumpSSE(ctx context.Context, body io.ReadCloser, ch 
 			json.Unmarshal([]byte(data), &block)
 			switch block.ContentBlock.Type {
 			case "tool_use":
+				name := block.ContentBlock.Name
+				if isOAuth {
+					name = unprefixToolName(name)
+				}
 				call := &ToolCall{
 					ID:   block.ContentBlock.ID,
-					Name: block.ContentBlock.Name,
+					Name: name,
 				}
 				toolCalls[block.Index] = call
 				toolInputBuffers[block.Index] = &bytes.Buffer{}

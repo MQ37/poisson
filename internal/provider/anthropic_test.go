@@ -565,6 +565,65 @@ func TestAnthropicStealthHeadersAdaptiveEffort(t *testing.T) {
 	}
 }
 
+// TestAnthropicStealthToolNameObfuscation verifies tool names are camouflaged
+// as Claude Code's MCP-tool convention (bash -> mcp_Bash) only under OAuth,
+// on both the outgoing tool/tool_use wire shape and the incoming
+// tool_use.name from the SSE stream, which must unwrap back to the original
+// name the rest of poisson (dispatch, UI) expects.
+func TestAnthropicStealthToolNameObfuscation(t *testing.T) {
+	sseResponse := "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"mcp_Bash\"}}\n\n" +
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+
+	server := newFakeSSEServer(sseResponse)
+	defer server.Close()
+
+	cfg := &config.Config{Stealth: config.DefaultStealthConfig()}
+	authStore := auth.AuthStore{
+		"anthropic": {Type: "oauth", Access: "oauth-token-123", Refresh: "refresh-456", Expires: 9999999999999},
+	}
+	p := NewAnthropicProvider(authStore, cfg)
+	p.baseURL = server.URL
+
+	ch, err := p.Stream(context.Background(), &Request{
+		Model:     "claude-sonnet-4-20250514",
+		Messages:  []Message{{Role: "user", Content: []ContentBlock{{Type: "text", Text: "do a tool"}}}},
+		MaxTokens: 100,
+		Tools:     []ToolDef{{Name: "bash", Description: "run a shell command"}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	var sawStart bool
+	for ev := range ch {
+		switch ev.Type {
+		case EventToolUseStart:
+			sawStart = true
+			if ev.ToolCall.Name != "bash" {
+				t.Errorf("ToolCall.Name = %q, want unwrapped %q", ev.ToolCall.Name, "bash")
+			}
+		case EventError:
+			t.Fatalf("error: %v", ev.Error)
+		}
+	}
+	if !sawStart {
+		t.Fatal("never saw EventToolUseStart")
+	}
+
+	var body struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(server.lastBody, &body); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if len(body.Tools) != 1 || body.Tools[0].Name != "mcp_Bash" {
+		t.Fatalf("request tools = %#v, want a single mcp_Bash", body.Tools)
+	}
+}
+
 func TestAnthropicStealthHeaders(t *testing.T) {
 	server := newFakeSSEServer("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	defer server.Close()
@@ -601,6 +660,26 @@ func TestAnthropicStealthHeaders(t *testing.T) {
 	}
 	if !strings.HasPrefix(req.Header.Get("user-agent"), "claude-cli/") {
 		t.Errorf("user-agent = %q, want claude-cli/...", req.Header.Get("user-agent"))
+	}
+	if !strings.Contains(req.Header.Get("user-agent"), "(external, sdk-cli)") {
+		t.Errorf("user-agent = %q, want '(external, sdk-cli)' suffix (cc-sniff: claude-cli/2.1.201 (external, sdk-cli))", req.Header.Get("user-agent"))
+	}
+	if !strings.HasSuffix(req.URL.String(), "?beta=true") {
+		t.Errorf("request URL = %q, want ?beta=true suffix (every real /v1/messages capture has it)", req.URL.String())
+	}
+	if req.Header.Get("anthropic-dangerous-direct-browser-access") != "true" {
+		t.Errorf("anthropic-dangerous-direct-browser-access = %q, want %q", req.Header.Get("anthropic-dangerous-direct-browser-access"), "true")
+	}
+	if req.Header.Get("X-Claude-Code-Session-Id") == "" {
+		t.Error("X-Claude-Code-Session-Id missing")
+	}
+	if req.Header.Get("x-client-request-id") == "" {
+		t.Error("x-client-request-id missing")
+	}
+	for _, h := range []string{"X-Stainless-Arch", "X-Stainless-Lang", "X-Stainless-OS", "X-Stainless-Package-Version", "X-Stainless-Retry-Count", "X-Stainless-Runtime", "X-Stainless-Runtime-Version", "X-Stainless-Timeout"} {
+		if req.Header.Get(h) == "" {
+			t.Errorf("%s missing", h)
+		}
 	}
 	// claude-sonnet-4-20250514 with no Effort set doesn't use adaptive thinking
 	// (see TestAnthropicEffortMapsToThinking) — the effort beta flag must be
@@ -761,7 +840,7 @@ func TestAnthropicSSEParsesThinking(t *testing.T) {
 
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 	ch := make(chan StreamEvent, 64)
-	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, false)
 
 	var thinking, sig string
 	for ev := range ch {
@@ -787,7 +866,7 @@ func TestAnthropicSSEParsesRedactedThinking(t *testing.T) {
 
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": {Type: "api_key", Key: "k"}}, &config.Config{Stealth: config.DefaultStealthConfig()})
 	ch := make(chan StreamEvent, 8)
-	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch)
+	go p.pumpSSE(context.Background(), &stringReadCloser{strings.NewReader(sse)}, ch, false)
 
 	var redacted string
 	for ev := range ch {
