@@ -130,12 +130,19 @@ func buildSpawnArgs(input SpawnInput) []string {
 // to learn its provider/model/effort/name/db settings. Pulled out of Spawn
 // as a pure function for the same reason as buildSpawnArgs.
 //
+// Inherited POISSON_SUBAGENT_* variables are stripped first: this SpawnInput
+// is the single source of truth for what the child should be, and an ambient
+// value (a px session started from inside another agent's shell, an exported
+// leftover, a nested `go test`) would otherwise decide the child's model,
+// effort or database whenever the corresponding input field is empty —
+// silently, and pointing at the wrong session's DB in the worst case.
+//
 // Deliberately does NOT set any "sandbox" env flag: an ambient
 // POISSON_SANDBOX=/IS_SANDBOX= used to short-circuit the bash guard to
 // always-safe, which is the opposite of isolation. Child approvals still
 // go through the parent broker.
 func buildSpawnEnv(input SpawnInput) []string {
-	env := append(os.Environ(), input.ExtraEnv...)
+	env := append(inheritedEnvWithoutSubagentVars(), input.ExtraEnv...)
 	env = append(env, "POISSON_SUBAGENT_CHILD=1")
 	if input.Provider != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_PROVIDER=%s", input.Provider))
@@ -154,6 +161,25 @@ func buildSpawnEnv(input SpawnInput) []string {
 	}
 	if input.DBPath != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_DB=%s", input.DBPath))
+	}
+	return env
+}
+
+// subagentEnvPrefix names the variables that exist purely to configure a child
+// process. Any of them present in this process's own environment describes
+// THIS process (or is a stale leftover), never the child being spawned.
+const subagentEnvPrefix = "POISSON_SUBAGENT_"
+
+// inheritedEnvWithoutSubagentVars is os.Environ() minus every
+// POISSON_SUBAGENT_* entry.
+func inheritedEnvWithoutSubagentVars() []string {
+	all := os.Environ()
+	env := make([]string, 0, len(all))
+	for _, entry := range all {
+		if strings.HasPrefix(entry, subagentEnvPrefix) {
+			continue
+		}
+		env = append(env, entry)
 	}
 	return env
 }

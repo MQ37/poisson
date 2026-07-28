@@ -74,34 +74,41 @@ func envValue(env []string, key string) (string, bool) {
 	return "", false
 }
 
-// subagentEnvKeys is every POISSON_SUBAGENT_* variable buildSpawnEnv can set.
-var subagentEnvKeys = []string{
-	"POISSON_SUBAGENT_CHILD",
-	"POISSON_SUBAGENT_PROVIDER",
-	"POISSON_SUBAGENT_MODEL",
-	"POISSON_SUBAGENT_CLASSIFIER_MODEL",
-	"POISSON_SUBAGENT_EFFORT",
-	"POISSON_SUBAGENT_NAME",
-	"POISSON_SUBAGENT_DB",
-}
+// TestBuildSpawnEnvDropsInheritedSubagentVars is the regression this replaces
+// a test-only workaround with: buildSpawnEnv used to start from a raw
+// os.Environ(), so an ambient POISSON_SUBAGENT_* value leaked into the child
+// whenever the matching SpawnInput field was empty — deciding the child's
+// model, effort or DATABASE from a stale variable. It also made the suite
+// fail when run from inside a subagent, which is how it was found.
+func TestBuildSpawnEnvDropsInheritedSubagentVars(t *testing.T) {
+	t.Setenv("POISSON_SUBAGENT_CLASSIFIER_MODEL", "ambient-classifier")
+	t.Setenv("POISSON_SUBAGENT_MODEL", "ambient-model")
+	t.Setenv("POISSON_SUBAGENT_DB", "/tmp/ambient.db")
 
-// clearInheritedSubagentEnv removes any ambient POISSON_SUBAGENT_* variables
-// for the duration of the test. buildSpawnEnv starts from os.Environ() and
-// envValue returns the first match, so a suite run from INSIDE a subagent
-// (px spawning a child that runs `go test`) would otherwise see the parent's
-// values shadowing the ones under test.
-func clearInheritedSubagentEnv(t *testing.T) {
-	t.Helper()
-	for _, key := range subagentEnvKeys {
-		if old, ok := os.LookupEnv(key); ok {
-			os.Unsetenv(key)
-			t.Cleanup(func() { os.Setenv(key, old) })
+	// Nothing pinned: the child must resolve its own settings, not inherit.
+	env := buildSpawnEnv(SpawnInput{})
+	for _, key := range []string{"POISSON_SUBAGENT_CLASSIFIER_MODEL", "POISSON_SUBAGENT_MODEL", "POISSON_SUBAGENT_DB"} {
+		if got, ok := envValue(env, key); ok {
+			t.Errorf("%s = %q, want absent (ambient value must not reach the child)", key, got)
 		}
+	}
+	// The one variable buildSpawnEnv always sets is still there.
+	if got, ok := envValue(env, "POISSON_SUBAGENT_CHILD"); !ok || got != "1" {
+		t.Errorf("POISSON_SUBAGENT_CHILD = %q ok=%v, want \"1\"", got, ok)
+	}
+	// Unrelated inherited variables survive — the child still needs PATH etc.
+	if _, ok := envValue(env, "PATH"); !ok {
+		t.Error("PATH missing from the child environment")
+	}
+
+	// An explicit input still wins over the ambient value it replaces.
+	env = buildSpawnEnv(SpawnInput{ClassifierModel: "pinned-classifier"})
+	if got, _ := envValue(env, "POISSON_SUBAGENT_CLASSIFIER_MODEL"); got != "pinned-classifier" {
+		t.Errorf("POISSON_SUBAGENT_CLASSIFIER_MODEL = %q, want pinned-classifier", got)
 	}
 }
 
 func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
-	clearInheritedSubagentEnv(t)
 	env := buildSpawnEnv(SpawnInput{
 		Provider:        "anthropic",
 		Model:           "claude-opus-5",
@@ -144,7 +151,6 @@ func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
 // empty var would silently override that fallback with an empty string
 // instead of leaving it alone.
 func TestBuildSpawnEnvOmitsUnsetFields(t *testing.T) {
-	clearInheritedSubagentEnv(t)
 	env := buildSpawnEnv(SpawnInput{})
 	for _, key := range []string{"POISSON_SUBAGENT_PROVIDER", "POISSON_SUBAGENT_MODEL", "POISSON_SUBAGENT_CLASSIFIER_MODEL", "POISSON_SUBAGENT_EFFORT", "POISSON_SUBAGENT_NAME", "POISSON_SUBAGENT_DB", "POISSON_SANDBOX"} {
 		if _, ok := envValue(env, key); ok {
