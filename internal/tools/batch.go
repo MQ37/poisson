@@ -36,12 +36,57 @@ const (
 // front. Prefer native parallel tool_use when the model supports it.
 type BatchTool struct {
 	reg *Registry
+	// subagentDoneFn, if set, is called immediately after each nested
+	// subagent call finishes — see SetSubagentDoneFn.
+	subagentDoneFn func(toolCallID string, res ToolResult)
 }
 
 // NewBatchTool wires batch against the registry it will dispatch into.
 // Register the returned tool on that same registry after the other tools.
 func NewBatchTool(reg *Registry) *BatchTool {
 	return &BatchTool{reg: reg}
+}
+
+// SetSubagentDoneFn wires the callback invoked right after a nested subagent
+// call inside this batch finishes. A batched subagent gets its own live TUI
+// widget (agent.go pre-renders one per nested subagent call, keyed by
+// BatchCallID, before Execute even starts) — this is how that widget learns
+// to flip from spinner to done/error the moment ITS call finishes, rather
+// than only when the whole batch does.
+func (t *BatchTool) SetSubagentDoneFn(fn func(toolCallID string, res ToolResult)) {
+	t.subagentDoneFn = fn
+}
+
+// BatchCallSpec is one entry of a batch tool's calls array — exported so a
+// caller (agent.go) can pre-inspect nested calls without re-deriving batch's
+// JSON shape itself.
+type BatchCallSpec struct {
+	Tool  string
+	Input json.RawMessage
+}
+
+// ParseBatchCalls parses a batch tool's raw input into its call list.
+// Returns nil on any parse error — callers treat that the same as an
+// ordinary tool call with unparseable input: nothing to pre-render.
+func ParseBatchCalls(input json.RawMessage) []BatchCallSpec {
+	var in batchInput
+	if json.Unmarshal(input, &in) != nil {
+		return nil
+	}
+	specs := make([]BatchCallSpec, len(in.Calls))
+	for i, c := range in.Calls {
+		specs[i] = BatchCallSpec{Tool: strings.TrimSpace(c.Tool), Input: c.Input}
+	}
+	return specs
+}
+
+// BatchCallID derives the synthetic per-nested-call tool-call-id used to
+// give a batched subagent call its own live TUI widget. The same
+// deterministic derivation runs on both ends — here (threaded into the
+// nested call's context) and in agent.go (pre-rendering the widget before
+// batch even starts) — so they agree with no explicit handshake.
+func BatchCallID(outerID string, i int) string {
+	return fmt.Sprintf("%s.%d", outerID, i)
 }
 
 func (t *BatchTool) Name() string { return "batch" }
@@ -137,15 +182,23 @@ func (t *BatchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 	}
 
 	outs := make([]batchStepOut, len(in.Calls))
+	outerID, hasOuterID := ToolCallIDFromContext(ctx)
 
 	runOne := func(i int) {
 		c := in.Calls[i]
 		name := strings.TrimSpace(c.Tool)
-		res, err := t.reg.Execute(ctx, name, c.Input)
+		callCtx := ctx
+		if hasOuterID {
+			callCtx = WithToolCallID(ctx, BatchCallID(outerID, i))
+		}
+		res, err := t.reg.Execute(callCtx, name, c.Input)
 		// Registry.Execute returns (trimmed result, err) for unknown tools;
 		// known tools put failures in res.Error and err==nil.
 		if err != nil && res.Error == "" {
 			res.Error = err.Error()
+		}
+		if name == "subagent" && hasOuterID && t.subagentDoneFn != nil {
+			t.subagentDoneFn(BatchCallID(outerID, i), res)
 		}
 		label := fmt.Sprintf("%d. %s", i+1, name)
 		if res.Error != "" {

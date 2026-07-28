@@ -110,6 +110,24 @@ func BindSubagentSkills(reg *Registry, fn func() bool) {
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetSkillsEnabledFn(fn) })
 }
 
+// withBatchTool looks up the batch tool on reg and, if present, applies fn —
+// same pattern as withSubagentTool.
+func withBatchTool(reg *Registry, fn func(*BatchTool)) {
+	if t, ok := reg.Get("batch"); ok {
+		if bt, ok := t.(*BatchTool); ok {
+			fn(bt)
+		}
+	}
+}
+
+// BindBatchSubagentDone wires the callback invoked when a subagent call
+// nested inside a batch finishes, so its pre-rendered widget (see agent.go's
+// batch tool-start dispatch) can flip to done/error as soon as that call
+// itself finishes, instead of only when the whole batch does.
+func BindBatchSubagentDone(reg *Registry, fn func(toolCallID string, res ToolResult)) {
+	withBatchTool(reg, func(bt *BatchTool) { bt.SetSubagentDoneFn(fn) })
+}
+
 // BindSubagentUsage wires the callback that rolls a finished subagent's token
 // usage into the parent session's cost (see SubagentTool.usageFn).
 func BindSubagentUsage(reg *Registry, fn func(providerID, model string, usage *provider.Usage) (float64, error)) {

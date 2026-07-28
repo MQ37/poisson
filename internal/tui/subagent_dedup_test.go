@@ -122,3 +122,48 @@ func TestSubagentCardShowsExpediting(t *testing.T) {
 		t.Fatalf("completed card still shows wrapping-up: %q", out[0].Text)
 	}
 }
+
+// TestSubagentCardExpediteReachesEveryBatchedWidget is the Ctrl+G regression
+// guard for batched subagents: before subagents nested in a batch call got
+// their own pre-rendered widget (see agent.go's batch tool-start dispatch),
+// Ctrl+G's underlying nudge to the child processes always worked (tracked
+// independently in SubagentTool.live, keyed off the running child, not any
+// TUI block) but had no widget to visually flag — looking, to the user,
+// exactly like "Ctrl+G isn't doing anything". With each batched subagent
+// call now getting its own widget keyed by a distinct synthetic ID (see
+// tools.BatchCallID), markSubagentsExpediting must flag every one of them,
+// not just the most recently started.
+func TestSubagentCardExpediteReachesEveryBatchedWidget(t *testing.T) {
+	s := newScrollback(200)
+	s.appendSubagentCard(1, "call-batch.0", "explore", "Explore checkout flow", "glm-5.2:cloud")
+	s.appendSubagentCard(2, "call-batch.1", "explore", "Explore payment flow", "glm-5.2:cloud")
+	s.appendSubagentCard(3, "call-batch.2", "explore", "Explore refund flow", "glm-5.2:cloud")
+
+	if got := s.markSubagentsExpediting(); got != 3 {
+		t.Fatalf("markSubagentsExpediting = %d, want 3 (one per batched subagent)", got)
+	}
+	for i := range s.blocks {
+		b := &s.blocks[i]
+		if b.kind != blockSubagent {
+			continue
+		}
+		if !b.meta.Expediting {
+			t.Errorf("widget %q not marked expediting", b.meta.ProviderCallID)
+		}
+	}
+
+	// Completing one by its exact synthetic ID must not disturb its siblings.
+	if !s.completeSubagentCard("call-batch.1", "", 500) {
+		t.Fatal("completeSubagentCard did not match call-batch.1")
+	}
+	running := 0
+	for i := range s.blocks {
+		b := &s.blocks[i]
+		if b.kind == blockSubagent && !b.meta.ToolDone {
+			running++
+		}
+	}
+	if running != 2 {
+		t.Fatalf("still-running widgets = %d, want 2 after completing one of three", running)
+	}
+}

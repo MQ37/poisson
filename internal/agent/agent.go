@@ -655,6 +655,20 @@ func (a *Agent) SendSubagentProgress(toolCallID string, turns, contextTokens, co
 	})
 }
 
+// CompleteBatchedSubagent reports a batched subagent call's completion to
+// the TUI (see tools.BindBatchSubagentDone) — the counterpart to the
+// OutputToolResult a direct (non-batched) subagent call already gets from
+// the ordinary per-call dispatch path in runTurn. Called from batch's own
+// goroutine while other calls in the same batch may still be running,
+// concurrently with the rest of the turn loop — same as SendSubagentProgress,
+// sendEvent is safe for that.
+func (a *Agent) CompleteBatchedSubagent(toolCallID string, res tools.ToolResult) {
+	a.sendEvent(OutputEvent{
+		Type: OutputToolResult, ToolName: "subagent", ToolCallID: toolCallID,
+		ToolResultContent: res.Content, ToolError: res.Error,
+	})
+}
+
 // ExpediteSubagents forwards the user's "finish now" nudge to every running
 // subagent child and returns how many were signalled. The main agent's own
 // turn is left untouched. Used by the TUI Ctrl+G handler.
@@ -1168,6 +1182,27 @@ roundLoop:
 				ToolCallID: tc.ID,
 				ToolInput:  tc.Input,
 			})
+			// A subagent nested inside a batch call otherwise never gets its
+			// own start/progress/done events — those normally come from the
+			// per-call dispatch path below, which batch bypasses by running
+			// its nested calls internally (see tools.BatchTool.Execute). Pre-
+			// render one widget per nested subagent here, keyed by the same
+			// synthetic ID batch.go threads into that call's context, so the
+			// TUI's existing subagent-widget handling (already keyed only on
+			// ToolName=="subagent") picks it up with no changes on that side.
+			if tc.Name == "batch" {
+				for i, spec := range tools.ParseBatchCalls(tc.Input) {
+					if spec.Tool != "subagent" {
+						continue
+					}
+					a.sendEvent(OutputEvent{
+						Type:       OutputToolStart,
+						ToolName:   "subagent",
+						ToolCallID: tools.BatchCallID(tc.ID, i),
+						ToolInput:  spec.Input,
+					})
+				}
+			}
 		}
 		// Report this round's speed only now that the tool-call blocks it
 		// produced exist in the TUI too (thinking/text blocks, if any,

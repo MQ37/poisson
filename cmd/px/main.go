@@ -351,6 +351,7 @@ func runREPL(noSkills bool) {
 	tools.BindSubagentProgress(reg, a.SendSubagentProgress)
 	tools.BindSubagentSkills(reg, a.SkillsEnabled)
 	tools.BindSubagentUsage(reg, a.RecordSubagentUsage)
+	tools.BindBatchSubagentDone(reg, a.CompleteBatchedSubagent)
 
 	var skillList []skills.Skill
 	if !noSkills {

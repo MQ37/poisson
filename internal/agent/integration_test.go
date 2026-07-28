@@ -220,6 +220,65 @@ func TestInteg_ToolDispatchCapsConcurrency(t *testing.T) {
 	}
 }
 
+// TestInteg_BatchedSubagentGetsOwnStartAndDoneEvents is the regression guard
+// for the fix that gives a subagent nested inside batch its own live TUI
+// widget instead of being invisible until the whole batch call finishes:
+// agent.go must pre-emit a synthetic OutputToolStart (ToolName="subagent")
+// for each nested subagent call before dispatching the batch, and (via
+// tools.BindBatchSubagentDone) a matching OutputToolResult once THAT call
+// finishes — not only once, for the whole batch.
+func TestInteg_BatchedSubagentGetsOwnStartAndDoneEvents(t *testing.T) {
+	batchInput, err := json.Marshal(map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "subagent", "input": map[string]string{"task": "explore checkout"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := []provider.StreamEvent{
+		{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_batch", Name: "batch", Input: batchInput}},
+		{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_batch", Name: "batch", Input: batchInput}},
+		{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+	}
+	e := newIntegEnv(t, [][]provider.StreamEvent{turn, provider.FakeTextResponse("done", nil)})
+
+	// A stub "subagent" tool stands in for the real SubagentTool (which
+	// spawns an actual child process) — this test is only about agent.go's
+	// event plumbing around batch, not subagent execution itself.
+	e.reg.Register(barrierTool{name: "subagent", run: func(ctx context.Context) (tools.ToolResult, error) {
+		return tools.ToolResult{Content: "child result"}, nil
+	}})
+	e.reg.Register(tools.NewBatchTool(e.reg))
+	tools.BindBatchSubagentDone(e.reg, e.agent.CompleteBatchedSubagent)
+
+	events := e.send("run it")
+
+	wantID := tools.BatchCallID("call_batch", 0)
+	var sawStart, sawDone bool
+	startIdx, doneIdx := -1, -1
+	for i, ev := range events {
+		if ev.Type == OutputToolStart && ev.ToolName == "subagent" && ev.ToolCallID == wantID {
+			sawStart, startIdx = true, i
+		}
+		if ev.Type == OutputToolResult && ev.ToolName == "subagent" && ev.ToolCallID == wantID {
+			sawDone, doneIdx = true, i
+			if ev.ToolResultContent != "child result" {
+				t.Errorf("done event content = %q, want %q", ev.ToolResultContent, "child result")
+			}
+		}
+	}
+	if !sawStart {
+		t.Fatal("missing synthetic OutputToolStart for the batched subagent call")
+	}
+	if !sawDone {
+		t.Fatal("missing synthetic OutputToolResult for the batched subagent call")
+	}
+	if startIdx > doneIdx {
+		t.Errorf("start event (idx %d) came after done event (idx %d)", startIdx, doneIdx)
+	}
+}
+
 // TestInteg_PanickingToolDoesNotCrashTurn covers the crash traced back from a
 // subagent session that died with a bare "EOF" reaching its parent, with zero
 // information about why — one tool call panicked (registry.Execute, agent.go's

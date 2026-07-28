@@ -187,6 +187,36 @@ func TestToolCardExpandedLayout(t *testing.T) {
 	}
 }
 
+// TestBatchExpandedShowsPerCallDetails is the regression guard for the
+// batch-card expand duplication: the body used to just repeat the header's
+// "N calls: tool, tool, ..." summary verbatim instead of showing anything
+// call-specific. Expanding now lists each call's own reason (subagent's
+// task, read's path, ...).
+func TestBatchExpandedShowsPerCallDetails(t *testing.T) {
+	input := toolInputJSON("batch", map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "subagent", "input": map[string]string{"task": "explore checkout flow"}},
+			{"tool": "read", "input": map[string]string{"path": "main.go"}},
+		},
+	})
+	lines := toolExpandedInputLines("batch", input, 60)
+	if len(lines) != 2 {
+		t.Fatalf("lines = %d, want 2: %v", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "1. subagent") || !strings.Contains(lines[0], "explore checkout flow") {
+		t.Fatalf("line[0] = %q, want mention of subagent's task", lines[0])
+	}
+	if !strings.Contains(lines[1], "2. read") || !strings.Contains(lines[1], "main.go") {
+		t.Fatalf("line[1] = %q, want mention of read's path", lines[1])
+	}
+	// Must differ from the collapsed header's generic summary, not repeat it.
+	header := toolCollapsedReason("batch", input)
+	joined := strings.Join(lines, "\n")
+	if joined == header {
+		t.Fatalf("expanded body duplicates the collapsed header verbatim: %q", header)
+	}
+}
+
 func TestToggleToolExpandInView(t *testing.T) {
 	s := newScrollback(1024)
 	long := strings.Repeat("z", 600)

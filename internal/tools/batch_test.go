@@ -2,9 +2,13 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mq37/poisson/internal/testutil"
@@ -255,4 +259,119 @@ func TestBatch_DeniedToolAbortsBeforeAnyStep(t *testing.T) {
 	if string(got) != "foo\n" {
 		t.Fatalf("edit must not have run; file = %q", got)
 	}
+}
+
+func TestBatchCallID(t *testing.T) {
+	if got := BatchCallID("outer-1", 3); got != "outer-1.3" {
+		t.Fatalf("BatchCallID = %q, want %q", got, "outer-1.3")
+	}
+}
+
+func TestParseBatchCalls(t *testing.T) {
+	input := mustJSON(t, map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "subagent", "input": map[string]string{"task": "x"}},
+			{"tool": "read", "input": map[string]string{"path": "a.go"}},
+		},
+	})
+	specs := ParseBatchCalls(input)
+	if len(specs) != 2 || specs[0].Tool != "subagent" || specs[1].Tool != "read" {
+		t.Fatalf("specs = %+v", specs)
+	}
+}
+
+func TestParseBatchCalls_InvalidInputReturnsNil(t *testing.T) {
+	if specs := ParseBatchCalls([]byte("not json")); specs != nil {
+		t.Fatalf("specs = %+v, want nil", specs)
+	}
+}
+
+// TestBatch_ThreadsSyntheticToolCallIDForSubagent is the regression guard for
+// giving a batched subagent call its own live TUI widget: without a distinct
+// per-nested-call ID in context, SubagentTool's existing progress-reporting
+// (which reads its ID from ctx) would report every nested subagent under the
+// same outer batch call ID, conflating their widgets.
+func TestBatch_ThreadsSyntheticToolCallIDForSubagent(t *testing.T) {
+	reg := NewRegistry()
+	var mu sync.Mutex
+	var gotIDs []string
+	reg.Register(staticToolWithCtx{name: "subagent", onExecute: func(ctx context.Context) {
+		id, _ := ToolCallIDFromContext(ctx)
+		mu.Lock()
+		gotIDs = append(gotIDs, id)
+		mu.Unlock()
+	}})
+	bt := NewBatchTool(reg)
+	reg.Register(bt)
+
+	ctx := WithToolCallID(context.Background(), "outer-1")
+	_, err := bt.Execute(ctx, mustJSON(t, map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "subagent", "input": map[string]string{"task": "a"}},
+			{"tool": "subagent", "input": map[string]string{"task": "b"}},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	sort.Strings(gotIDs)
+	want := []string{"outer-1.0", "outer-1.1"}
+	if !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("ctx tool-call-ids = %v, want %v", gotIDs, want)
+	}
+}
+
+// TestBatch_NotifiesSubagentDoneFn is the regression guard for flipping a
+// batched subagent's widget to done the moment ITS call finishes, not only
+// when the whole batch does.
+func TestBatch_NotifiesSubagentDoneFn(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(staticTool{name: "subagent", result: ToolResult{Content: "child done"}})
+	reg.Register(staticTool{name: "read", result: ToolResult{Content: "file text"}})
+	bt := NewBatchTool(reg)
+	reg.Register(bt)
+
+	var gotID string
+	var gotRes ToolResult
+	calls := 0
+	bt.SetSubagentDoneFn(func(toolCallID string, res ToolResult) {
+		calls++
+		gotID, gotRes = toolCallID, res
+	})
+
+	ctx := WithToolCallID(context.Background(), "outer-2")
+	_, err := bt.Execute(ctx, mustJSON(t, map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "read", "input": map[string]string{"path": "a.go"}},
+			{"tool": "subagent", "input": map[string]string{"task": "a"}},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("subagentDoneFn called %d times, want exactly 1 (not for the read call)", calls)
+	}
+	if gotID != "outer-2.1" {
+		t.Fatalf("toolCallID = %q, want %q", gotID, "outer-2.1")
+	}
+	if gotRes.Content != "child done" {
+		t.Fatalf("result content = %q, want %q", gotRes.Content, "child done")
+	}
+}
+
+// staticToolWithCtx is like staticTool but also observes the context passed
+// to Execute — used to prove BatchTool threads a distinct ToolCallID per
+// nested call.
+type staticToolWithCtx struct {
+	name      string
+	onExecute func(ctx context.Context)
+}
+
+func (t staticToolWithCtx) Name() string            { return t.name }
+func (t staticToolWithCtx) Description() string     { return "static test tool" }
+func (t staticToolWithCtx) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t staticToolWithCtx) Execute(ctx context.Context, _ json.RawMessage) (ToolResult, error) {
+	t.onExecute(ctx)
+	return ToolResult{Content: "ok"}, nil
 }

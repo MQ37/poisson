@@ -292,6 +292,11 @@ func toolExpandedInputLines(toolName string, input []byte, width int) []string {
 			return bashToolCommandLines(in.Command, inner)
 		}
 	}
+	if toolName == "batch" {
+		if lines := batchExpandedCallLines(input, inner); lines != nil {
+			return lines
+		}
+	}
 	preview := toolInputPreview(toolName, input)
 	if preview == "" || preview == "..." {
 		return nil
@@ -299,6 +304,38 @@ func toolExpandedInputLines(toolName string, input []byte, width int) []string {
 	var out []string
 	for _, chunk := range wrapLine(preview, inner) {
 		out = append(out, dim+"  "+chunk+reset)
+	}
+	return out
+}
+
+// batchExpandedCallLines lists each nested call's tool name plus its own
+// short reason (path/pattern/task/…, via the same lookup a top-level card of
+// that tool would use) — e.g. "1. subagent — explore checkout flow". Unlike
+// the card header's "N calls: tool, tool, ..." summary, this actually
+// differs call to call, which is the point of expanding in the first place.
+func batchExpandedCallLines(input []byte, inner int) []string {
+	var in struct {
+		Calls json.RawMessage `json:"calls"`
+	}
+	if json.Unmarshal(input, &in) != nil || len(in.Calls) == 0 {
+		return nil
+	}
+	var calls []struct {
+		Tool  string          `json:"tool"`
+		Input json.RawMessage `json:"input"`
+	}
+	if json.Unmarshal(in.Calls, &calls) != nil || len(calls) == 0 {
+		return nil
+	}
+	var out []string
+	for i, c := range calls {
+		line := fmt.Sprintf("%d. %s", i+1, c.Tool)
+		if reason := toolCollapsedReason(c.Tool, c.Input); reason != "" {
+			line += " — " + reason
+		}
+		for _, chunk := range wrapLine(line, inner) {
+			out = append(out, dim+"  "+chunk+reset)
+		}
 	}
 	return out
 }
