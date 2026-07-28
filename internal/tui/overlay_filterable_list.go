@@ -20,7 +20,6 @@ type filterableListOverlay struct {
 	idx       int
 	pick      func(id string) bool // returns done
 	chrome    listBoxChrome
-	listWidth int
 
 	// onDelete, when set (session picker only), enables Ctrl+D to delete the
 	// selected row after an Enter confirmation. pendingDeleteID holds the row
@@ -76,7 +75,7 @@ func (p *filterableListOverlay) removeItem(id string) {
 	}
 }
 
-func newFilterableListOverlay(title string, items []filterableListItem, currentID string, pick func(string) bool, listWidth int) *filterableListOverlay {
+func newFilterableListOverlay(title string, items []filterableListItem, currentID string, pick func(string) bool) *filterableListOverlay {
 	idx := 0
 	for i, it := range items {
 		if it.id == currentID {
@@ -84,16 +83,12 @@ func newFilterableListOverlay(title string, items []filterableListItem, currentI
 			break
 		}
 	}
-	if listWidth <= 0 {
-		listWidth = boxListMaxInner
-	}
 	return &filterableListOverlay{
 		title:     title,
 		items:     items,
 		currentID: currentID,
 		idx:       idx,
 		pick:      pick,
-		listWidth: listWidth,
 	}
 }
 
@@ -124,7 +119,7 @@ func (p *filterableListOverlay) render(scrollRows, cols int) (int, []string) {
 	visible := p.filtered()
 	if len(visible) == 0 {
 		body := []string{dim + "(no matches)" + reset}
-		chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.listWidth, p.footerHint)
+		chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.footerHint)
 		p.chrome = chrome
 		return p.chrome.anchor, lines
 	}
@@ -174,7 +169,7 @@ func (p *filterableListOverlay) render(scrollRows, cols int) (int, []string) {
 		body = append(body, style+marker+it.label+reset+cur+hint)
 	}
 
-	chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.listWidth, p.footerHint)
+	chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.footerHint)
 	p.chrome = chrome
 	return p.chrome.anchor, lines
 }

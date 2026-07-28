@@ -5,8 +5,6 @@ import (
 	"unicode"
 )
 
-const boxListMaxInner = 72
-
 // resolveApprovalPurpose returns the purpose line for approval modals.
 func resolveApprovalPurpose(command, description string) string {
 	if strings.TrimSpace(description) != "" {

@@ -191,7 +191,7 @@ func TestFilterableListNamedOnlyToggle(t *testing.T) {
 	ov := newFilterableListOverlay("Sessions", []filterableListItem{
 		{id: "s1", label: "one", named: true},
 		{id: "s2", label: "two"},
-	}, "", func(string) bool { return true }, boxListMaxInner)
+	}, "", func(string) bool { return true })
 	ov.namedFilterEnabled = true
 
 	if len(ov.filtered()) != 2 {
@@ -219,7 +219,7 @@ func TestFilterableListNamedOnlyToggle(t *testing.T) {
 func TestFilterableListNamedOnlyIgnoredWhenDisabled(t *testing.T) {
 	ov := newFilterableListOverlay("Test", []filterableListItem{
 		{id: "a", label: "alpha"},
-	}, "", nil, boxListMaxInner)
+	}, "", nil)
 	handled, _, _ := ov.feedKey(Key{Kind: KeyCtrl, Byte: 14})
 	if handled {
 		t.Fatal("Ctrl+N must not be consumed when namedFilterEnabled is false")
@@ -233,7 +233,7 @@ func TestSessionPickerDeleteConfirmFlow(t *testing.T) {
 			{id: "s1", label: "one"},
 			{id: "s2", label: "two"},
 			{id: "cur", label: "current"},
-		}, "cur", func(string) bool { return true }, boxListMaxInner)
+		}, "cur", func(string) bool { return true })
 		ov.onDelete = func(id string) error { deleted = id; return nil }
 		return ov
 	}

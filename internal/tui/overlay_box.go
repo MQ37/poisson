@@ -13,19 +13,17 @@ type listBoxChrome struct {
 	totalLines int
 }
 
-// boxInnerWidth picks a centered modal width from terminal cols.
-func boxInnerWidth(cols, maxInner int) int {
-	inner := cols - 4
-	if inner > maxInner {
-		inner = maxInner
+// boxInnerWidth is the width of a list modal: the full terminal, because the
+// rows inside are model ids, session titles and file paths that are routinely
+// longer than any fixed cap. This used to cap at 72 columns and centre the
+// box, which truncated names like
+// "DavidAU/Qwen3.6-27B-Fable-Fusion-711-...-MTP-GGUF" into ambiguity while
+// two thirds of a wide terminal sat empty.
+func boxInnerWidth(cols int) int {
+	if cols < 12 {
+		return 12
 	}
-	if inner < 24 {
-		inner = cols - 2
-	}
-	if inner < 12 {
-		inner = 12
-	}
-	return inner
+	return cols
 }
 
 func boxTopBorder(title string, width int) string {
@@ -68,9 +66,10 @@ func boxFooterLine(width int, hint string) string {
 	return boxBodyLine(width, dim+hint+reset)
 }
 
-// renderBoxedList draws a bordered list modal centered in the scroll region.
-// footerHint overrides the default footer keybinding line when non-empty.
-func renderBoxedList(title, filter string, body []string, scrollRows, cols, maxInner int, footerHint string) (listBoxChrome, []string) {
+// renderBoxedList draws a full-width bordered list modal, vertically centered
+// in the scroll region. footerHint overrides the default footer keybinding
+// line when non-empty.
+func renderBoxedList(title, filter string, body []string, scrollRows, cols int, footerHint string) (listBoxChrome, []string) {
 	chrome := listBoxChrome{}
 	if scrollRows < 4 || cols < 20 {
 		lines := make([]string, len(body))
@@ -83,7 +82,7 @@ func renderBoxedList(title, filter string, body []string, scrollRows, cols, maxI
 		return chrome, lines
 	}
 
-	width := boxInnerWidth(cols, maxInner)
+	width := boxInnerWidth(cols)
 
 	var lines []string
 	lines = append(lines, boxTopBorder(title, width))

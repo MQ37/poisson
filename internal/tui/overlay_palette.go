@@ -42,5 +42,5 @@ func newPaletteOverlay(onRun func(string) error) *paletteOverlay {
 		err := onRun(id)
 		return errors.Is(err, errQuitSentinel) || err == nil
 	}
-	return newFilterableListOverlay("command palette", list, "", pick, 72)
+	return newFilterableListOverlay("command palette", list, "", pick)
 }

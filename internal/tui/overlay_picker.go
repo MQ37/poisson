@@ -43,7 +43,7 @@ func newPickerOverlay(title string, items []pickerItem, current string, onPick f
 		}
 		return true
 	}
-	return newFilterableListOverlay(title, list, current, pick, boxListMaxInner)
+	return newFilterableListOverlay(title, list, current, pick)
 }
 
 func pickerProviderItems(h commandHost) []pickerItem {
