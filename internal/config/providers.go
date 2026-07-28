@@ -57,10 +57,12 @@ var Providers = []ProviderMeta{
 		Model:        func(c *Config) *string { return &c.XAI.Model },
 	},
 	{
-		ID:           "openai",
-		Desc:         "GPT ChatGPT subscription",
-		NeedsAuth:    true,
-		DefaultModel: "gpt-5.5",
+		ID:        "openai",
+		Desc:      "GPT ChatGPT subscription",
+		NeedsAuth: true,
+		// Terra is the balanced tier of the current GPT-5.6 family — the same
+		// role gpt-5.5 used to play as the default.
+		DefaultModel: "gpt-5.6-terra",
 		Model:        func(c *Config) *string { return &c.OpenAI.Model },
 	},
 }

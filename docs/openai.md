@@ -61,15 +61,16 @@ usage/done.
 
 ## Model
 
-`gpt-5.5` — 400K context (the Codex subscription cap), vision, reasoning effort
-`low | medium | high | xhigh` (Poisson's `max` maps to `xhigh`; default
-`medium`). Registered in `internal/provider/models.go`.
-
 `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` — frontier / balanced /
-cost-optimized tiers of the same family, 272K context (confirmed live via
+cost-optimized tiers of the current family, 272K context (confirmed live via
 `GET /backend-api/codex/models`, see `cc-sniff/`), vision, full
-`none | low | medium | high | xhigh | max` effort range. Same registration
-file; pricing in `internal/pricing/pricing.go`.
+`none | low | medium | high | xhigh | max` effort range. `gpt-5.6-terra` is the
+provider default. Registered in `internal/provider/models.go`; pricing in
+`internal/config/config.go`.
+
+`gpt-5.5` — previous generation, still selectable: 400K context (the Codex
+subscription cap), vision, reasoning effort `low | medium | high | xhigh`
+(Poisson's `max` maps to `xhigh`; default `medium`).
 
 ## Known limitation
 

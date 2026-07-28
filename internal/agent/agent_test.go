@@ -1038,7 +1038,7 @@ func TestContextWindow(t *testing.T) {
 // TestContextWindowBeforeSessionUsesConfigModel guards the lazy-session case:
 // before the first message the session row doesn't exist, so currentModel()
 // falls back to the provider's configured model. A missing provider case there
-// made openai report the 8192 default instead of gpt-5.5's 400K window.
+// made openai report the 8192 default instead of that model's real window.
 // TestContextTokensIncludesCachedInput guards against the caching regression:
 // once prompt caching is on, the provider reports input_tokens EXCLUDING cached
 // tokens (the rest land in cache read/write). The status counter must sum all
@@ -1067,13 +1067,21 @@ func TestContextTokensIncludesCachedInput(t *testing.T) {
 
 func TestContextWindowBeforeSessionUsesConfigModel(t *testing.T) {
 	s := newTestStore(t)
-	cfg := config.DefaultConfig() // OpenAI.Model defaults to gpt-5.5
+	cfg := config.DefaultConfig()
 	p := provider.NewFakeProvider("openai", nil)
 	id := store.NewSessionID() // deliberately not created yet
 	a := NewAgent(s, p, newTestRegistry(testutil.TempDir(t)), cfg, id, nil, nil)
 
-	if got := a.ContextWindow(); got != 400000 {
-		t.Errorf("ContextWindow() before session = %d, want 400000 (gpt-5.5)", got)
+	// Expected window comes from the registry entry for whichever model is
+	// openai's configured default, so bumping that default (gpt-5.5 ->
+	// gpt-5.6-terra) doesn't turn this regression guard into a version check.
+	settings, ok := provider.MergedModelSettings(cfg, "openai", cfg.OpenAI.Model)
+	if !ok || settings.ContextWindow == 0 {
+		t.Fatalf("no registry entry for openai/%s", cfg.OpenAI.Model)
+	}
+	if got := a.ContextWindow(); got != settings.ContextWindow {
+		t.Errorf("ContextWindow() before session = %d, want %d (openai/%s)",
+			got, settings.ContextWindow, cfg.OpenAI.Model)
 	}
 }
 

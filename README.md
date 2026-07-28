@@ -130,10 +130,11 @@ px -p --yolo "run the test suite and fix failures"
 | Provider | Model | Auth | Vision |
 |---|---|---|---|
 | `anthropic` | `claude-opus-5` | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
-| `openai` | `gpt-5.5` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
-| `openai` | `gpt-5.6-sol` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
-| `openai` | `gpt-5.6-terra` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
-| `openai` | `gpt-5.6-luna` | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
+| `anthropic` | `claude-sonnet-5` | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
+| `openai` | `gpt-5.6-terra` *(default)* — balanced | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
+| `openai` | `gpt-5.6-sol` — frontier | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
+| `openai` | `gpt-5.6-luna` — cost-optimized | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
+| `openai` | `gpt-5.5` — previous generation | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `xai` | `grok-build` | OAuth (SuperGrok) | ✅ |
 | `xai` | `grok-4.5` | OAuth (SuperGrok) | ✅ |
 | `ollama` | `glm-5.2:cloud` *(default)* | local daemon / Ollama cloud | ❌ |
@@ -187,10 +188,12 @@ via `/providers` without naming a model):
 
 [anthropic]
 # model = "claude-opus-5"          # or claude-sonnet-5 (both adaptive-reasoning)
+# classifier = "claude-sonnet-5"    # bash-risk classifier for this provider
 # api_key = "sk-ant-..."             # optional; OAuth (auth.json) preferred
 
 [openai]
-# model = "gpt-5.5"                 # via ChatGPT Codex subscription (px login openai)
+# model = "gpt-5.6-terra"           # via ChatGPT Codex subscription (px login openai)
+                                    # or gpt-5.6-sol / gpt-5.6-luna / gpt-5.5
 
 [xai]
 # model = "grok-build"          # via SuperGrok subscription (px login xai)
@@ -287,9 +290,25 @@ to fuzzy-attach a file (or `@image.png` for an image).
 
 `/classifier-model` picks which model rates bash-command risk for the
 approval gate, for the currently selected provider — usually worth pointing
-at something small and fast, since the answer is one word. It never touches
-the model running the conversation, works mid-turn, and lasts for the
-session; set `[classifier] model` in `config.toml` to make it permanent.
+at something small and fast, since the answer is one word, and an expensive
+session model otherwise pays its own rate once per gated command. It never
+touches the model running the conversation, works mid-turn, and lasts for the
+session. To make it permanent, set it next to that provider's own model in
+`config.toml`:
+
+```toml
+[anthropic]
+model = "claude-opus-5"
+classifier = "claude-sonnet-5"
+
+[xai]
+classifier = "grok-build-0.1"
+```
+
+`[classifier] model` remains the fallback for providers that declare no
+classifier of their own (bare = all of them, `"provider/model"` = that one
+only). Resolution order: `/classifier-model` pin → `[<provider>] classifier`
+→ `[classifier] model` → the session's own model.
 
 ---
 

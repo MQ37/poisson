@@ -52,7 +52,7 @@ func (p *OpenAIProvider) Models() ([]Model, error) {
 	if m := CuratedModels("openai"); len(m) > 0 {
 		return m, nil
 	}
-	return []Model{{ID: "gpt-5.5", Name: "gpt-5.5", ContextWindow: 400000}}, nil
+	return []Model{{ID: "gpt-5.6-terra", Name: "gpt-5.6-terra", ContextWindow: 272000}}, nil
 }
 
 // Stream sends a request to the Codex Responses API and returns a channel of
