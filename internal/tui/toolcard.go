@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 	"unicode"
 )
 
@@ -174,8 +173,8 @@ func formatToolCollapsed(b *Block, width int) string {
 
 	metaParts := []string{}
 	durMs := b.meta.DurationMs
-	if !b.meta.ToolDone && !b.meta.StartedAt.IsZero() {
-		durMs = time.Since(b.meta.StartedAt).Milliseconds()
+	if !b.meta.ToolDone {
+		durMs = blockElapsedMs(b.meta)
 	}
 	if durMs > 0 {
 		metaParts = append(metaParts, fmt.Sprintf("%.1fs", float64(durMs)/1000))
@@ -419,9 +418,9 @@ func (s *scrollback) appendToolCall(id int64, providerCallID, name string, input
 		ProviderCallID: providerCallID,
 		ToolInput:      append([]byte(nil), input...),
 		Streaming:      true,
-		StartedAt:      time.Now(),
 		Expanded:       alwaysOpen,
 	}
+	markStarted(&b.meta)
 	// Snapshot the target file BEFORE the tool mutates it so edit diffs can
 	// keep absolute line numbers after oldText is gone from disk.
 	if name == "edit" {
@@ -444,8 +443,8 @@ func (s *scrollback) appendFileRefCard(id int64, path, content string) {
 		ToolInput:  toolInputJSON("@file", map[string]string{"path": path}),
 		ToolResult: content,
 		ToolDone:   true,
-		StartedAt:  time.Now(),
 	}
+	markStarted(&b.meta)
 	s.blocks = append(s.blocks, b)
 	s.totalAdded++
 	s.trim()
@@ -458,8 +457,8 @@ func (s *scrollback) appendImageRefCard(id int64, name, mediaType string, size i
 		ToolName:  "@image",
 		ToolInput: toolInputJSON("@image", map[string]any{"name": name, "media_type": mediaType, "size": size}),
 		ToolDone:  true,
-		StartedAt: time.Now(),
 	}
+	markStarted(&b.meta)
 	s.blocks = append(s.blocks, b)
 	s.totalAdded++
 	s.trim()
@@ -489,8 +488,8 @@ func (s *scrollback) completeToolCall(providerCallID, result, err string, durati
 		}
 		if durationMs > 0 {
 			b.meta.DurationMs = durationMs
-		} else if !b.meta.StartedAt.IsZero() {
-			b.meta.DurationMs = time.Since(b.meta.StartedAt).Milliseconds()
+		} else {
+			b.meta.DurationMs = blockElapsedMs(b.meta)
 		}
 		b.invalidateLayout()
 		return

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // layoutSubagentCard renders a compact one-line subagent widget in the spirit
@@ -41,11 +40,7 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 		}
 	} else {
 		glyph = toolCardSpinnerSlot
-		elapsed := int64(0)
-		if !b.meta.StartedAt.IsZero() {
-			elapsed = time.Since(b.meta.StartedAt).Milliseconds()
-		}
-		dur = formatDuration(elapsed)
+		dur = formatDuration(blockElapsedMs(b.meta))
 	}
 
 	// While reconnecting, the turn/context numbers are stale and a status tag
@@ -176,8 +171,8 @@ func (s *scrollback) appendSubagentCard(id int64, providerCallID, name, task, mo
 		SubagentTask:   collapseWhitespace(task),
 		SubagentModel:  model,
 		Streaming:      true,
-		StartedAt:      time.Now(),
 	}
+	markStarted(&b.meta)
 	s.blocks = append(s.blocks, b)
 	s.totalAdded++
 	s.trim()
@@ -203,8 +198,8 @@ func (s *scrollback) completeSubagentCard(providerCallID, errMsg string, duratio
 			b.meta.DurationMs = 0 // unknown (e.g. resume) — omit from display
 		case durationMs > 0:
 			b.meta.DurationMs = durationMs
-		case !b.meta.StartedAt.IsZero():
-			b.meta.DurationMs = time.Since(b.meta.StartedAt).Milliseconds()
+		default:
+			b.meta.DurationMs = blockElapsedMs(b.meta)
 		}
 		b.invalidateLayout()
 		return true

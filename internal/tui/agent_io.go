@@ -131,6 +131,15 @@ func (t *TUI) startTurn(segments []agent.TextSegment, images ...agent.ImageAttac
 	}()
 }
 
+// liveSafeCommands are the slash commands that may run while a turn is in
+// flight, because none of them mutates turn or session state.
+var liveSafeCommands = map[string]bool{
+	"/btw":    true,
+	"/name":   true,
+	"/status": true,
+	"/cost":   true,
+}
+
 // enqueueLocked queues a message typed while a turn is in flight. It shows in
 // the pending-preview area and is sent (with any other queued messages) once
 // the turn finishes. Caller must hold t.mu.
@@ -144,9 +153,11 @@ func (t *TUI) enqueueLocked(text string) {
 		// /btw is a side question meant to run *alongside* a live turn (its own
 		// one-shot request, no shared session/turn state), so dispatch it now.
 		// /name only writes the session's title (store metadata, not turn/message
-		// state), so it's equally safe to run immediately. Every other command
-		// mutates turn/session state, so keep blocking those.
-		if fields := strings.Fields(trimmed); len(fields) > 0 && (fields[0] == "/btw" || fields[0] == "/name") {
+		// state), and /status only reads state — both are equally safe to run
+		// immediately, and "what model is this turn using" is a question worth
+		// answering *while* the turn is running. Every other command mutates
+		// turn/session state, so keep blocking those.
+		if fields := strings.Fields(trimmed); len(fields) > 0 && liveSafeCommands[fields[0]] {
 			t.editor.setText("")
 			t.history = append(t.history, text)
 			t.histIdx = -1
@@ -367,6 +378,14 @@ func (t *TUI) Approve(command, description, workdir string, risk agent.BashRisk,
 		}
 	}
 drained:
+
+	// Freeze every live elapsed timer for as long as the human is deciding —
+	// bash cards, edit/write cards, thinking blocks and subagent widgets all
+	// measure from their own StartedAt, and none of them is doing any work
+	// while this prompt is up. Started before the overlay is built so the
+	// risk-classification call made on its behalf is inside the window too.
+	approvalClock.begin()
+	defer approvalClock.end()
 
 	t.approving.Store(true)
 	defer func() {

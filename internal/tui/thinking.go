@@ -3,7 +3,6 @@ package tui
 import (
 	"fmt"
 	"strings"
-	"time"
 )
 
 const thinkingStreamMarker = "▾ thinking"
@@ -50,8 +49,8 @@ func layoutThinking(b *Block, width int, _ int) []ScreenRow {
 	}
 	if b.meta.Collapsed {
 		dur := b.meta.DurationMs
-		if b.meta.Streaming && !b.meta.StartedAt.IsZero() {
-			dur = time.Since(b.meta.StartedAt).Milliseconds()
+		if b.meta.Streaming {
+			dur = blockElapsedMs(b.meta)
 		}
 		text := prefix + formatThinkingCollapsed(len([]rune(b.raw)), dur, b.meta.TokensPerSec) + reset
 		return []ScreenRow{{Text: text, Tag: RowTag{BlockID: b.id, RowIdx: 0}}}
@@ -85,9 +84,7 @@ func (s *scrollback) finalizeThinking() {
 		}
 		b.meta.Streaming = false
 		b.meta.Collapsed = true
-		if !b.meta.StartedAt.IsZero() {
-			b.meta.DurationMs = time.Since(b.meta.StartedAt).Milliseconds()
-		}
+		b.meta.DurationMs = blockElapsedMs(b.meta)
 		b.invalidateLayout()
 	}
 }
@@ -103,7 +100,7 @@ func (s *scrollback) markThinkingStreaming() {
 	}
 	tail.meta.Streaming = true
 	if tail.meta.StartedAt.IsZero() {
-		tail.meta.StartedAt = time.Now()
+		markStarted(&tail.meta)
 	}
 	tail.meta.Collapsed = false
 	tail.invalidateLayout()
