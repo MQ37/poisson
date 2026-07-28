@@ -267,7 +267,7 @@ func (s *scrollback) clickBlockAt(height, width, vi int) bool {
 			b.invalidateLayout()
 			return true
 		case blockToolCall:
-			return s.toggleToolExpandBlock(id)
+			return s.toggleToolExpandBlock(id, width)
 		default:
 			return false
 		}

@@ -344,6 +344,62 @@ func TestDiffToolNoExpandToggle(t *testing.T) {
 	}
 }
 
+// TestDiffToolLongPathExpandsToRevealFullPath is the regression test for the
+// write/edit header truncating a long path with no way to ever see it: at a
+// narrow width the header must truncate the path (not overflow it), the
+// toggle must report "handled", and the untruncated path must show up on its
+// own line once expanded.
+func TestDiffToolLongPathExpandsToRevealFullPath(t *testing.T) {
+	s := newScrollback(1024)
+	longPath := "internal/some/deeply/nested/package/that/keeps/going/on/for/a/while/file.go"
+	s.appendToolCall(1, "", "write", toolInputJSON("write", map[string]any{
+		"path":    longPath,
+		"content": "package foo\n",
+	}))
+	s.completeToolCall("", "wrote "+longPath, "", 10)
+
+	width := 60
+	rows := layoutToolCard(&s.blocks[0], width, 0)
+	header := stripANSI(rows[0].Text)
+	if strings.Contains(header, longPath) {
+		t.Fatalf("header should truncate a path this long at width %d, got %q", width, header)
+	}
+
+	if !s.toggleToolExpandInView(10, width) {
+		t.Fatal("expected toggle to report handled — the path is truncated, there's something to reveal")
+	}
+	if !s.blocks[0].meta.PathExpanded {
+		t.Fatal("expected PathExpanded set after toggle")
+	}
+
+	// The full path is shown wrapped (a slash-only string has no break
+	// points, so it hard-wraps across width-worth chunks with no separator)
+	// — reassemble by stripping the "  " indent prefix from each line and
+	// concatenating, rather than expecting it on a single row.
+	rows = layoutToolCard(&s.blocks[0], width, 0)
+	var joined strings.Builder
+	for _, r := range rows[1:] {
+		joined.WriteString(strings.TrimPrefix(stripANSI(r.Text), "  "))
+	}
+	if !strings.Contains(joined.String(), longPath) {
+		t.Errorf("expected the full untruncated path to appear once expanded, got %q", joined.String())
+	}
+
+	// Toggle again: collapses back, full path line gone.
+	if !s.toggleToolExpandInView(10, width) {
+		t.Fatal("expected second toggle to also report handled (collapsing)")
+	}
+	if s.blocks[0].meta.PathExpanded {
+		t.Fatal("expected PathExpanded cleared after second toggle")
+	}
+	rows = layoutToolCard(&s.blocks[0], width, 0)
+	for _, r := range rows {
+		if strings.Contains(stripANSI(r.Text), longPath) {
+			t.Error("full path line should be gone after collapsing back")
+		}
+	}
+}
+
 func TestEditDiffLinesFlatShape(t *testing.T) {
 	input := toolInputJSON("edit", map[string]any{
 		"path":    filepath.Join(t.TempDir(), "missing.go"),

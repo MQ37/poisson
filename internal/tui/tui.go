@@ -80,6 +80,15 @@ type TUI struct {
 	// too, instead of leaving a stale partial-repaint gap for one frame.
 	layoutJustChanged bool
 	activeOverlay     overlay
+	// currentBTW tracks whether a /btw session is open independent of what
+	// activeOverlay momentarily shows — /btw's own approval prompts
+	// temporarily replace activeOverlay with an *approvalOverlay without
+	// closing the session, so Approve()'s park decision (for other origins)
+	// can't rely on activeOverlay's instantaneous type alone: it would
+	// misread that flicker as "/btw already closed" and destroy the panel
+	// once restored. Set in openBTW, cleared only in cancelOverlayWork — the
+	// one real teardown point. Guarded by t.mu, same as activeOverlay.
+	currentBTW *btwOverlay
 
 	// Lifecycle.
 	stopped atomic.Bool

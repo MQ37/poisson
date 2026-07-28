@@ -314,10 +314,48 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 // origin == agent.ApprovalOriginBTW gets different overlay handling: /btw's
 // side panel is itself an overlay (t.activeOverlay), and this approval fires
 // WHILE that panel is showing and its underlying quick-answer stream is still
-// running. Every other origin replaces + cancels whatever overlay work was
-// active, same as always; btw's is preserved and restored once the human
-// answers, instead of being destroyed mid-answer.
+// running. Every other origin used to replace + cancel whatever overlay work
+// was active; that's wrong for /btw specifically — the human is reading its
+// panel and typically hasn't finished with it, so a concurrent main-turn (or
+// subagent) approval must not destroy it. Such an approval instead parks:
+// /btw's panel keeps showing (stream still running, fully interactive) and
+// this prompt only appears once the human closes /btw themselves — see
+// btwOverlay.closedCh and cancelOverlayWork, the only place that ever tears
+// a live /btw stream down.
+//
+// The parking wait below happens BEFORE approvalMu is acquired, deliberately.
+// approvalMu is a single lock shared by every origin, including /btw's own —
+// a multi-tool-call /btw side question routinely asks for its own approval
+// mid-stream. Parking while holding approvalMu would deadlock the moment
+// that happens: the parked call holds the lock waiting for /btw to close,
+// /btw can't close because its own Approve() call (needing the same lock to
+// ever show its prompt) can never acquire it.
+//
+// The wait also keys off t.currentBTW, not activeOverlay's instantaneous
+// type — while /btw's own nested approval is showing, activeOverlay is
+// briefly an *approvalOverlay even though the /btw session itself is still
+// very much open. Checking activeOverlay's type on every loop pass would
+// misread that flicker as "already closed" and let this call through to
+// destroy the panel once it's restored.
 func (t *TUI) Approve(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
+	if origin != agent.ApprovalOriginBTW {
+		t.mu.Lock()
+		b := t.currentBTW
+		t.mu.Unlock()
+		for b != nil {
+			select {
+			case <-b.closedCh():
+			case <-t.done:
+				return false, ""
+			}
+			// b itself is done; check whether a (possibly different) /btw
+			// session has since been opened.
+			t.mu.Lock()
+			b = t.currentBTW
+			t.mu.Unlock()
+		}
+	}
+
 	t.approvalMu.Lock()
 	defer t.approvalMu.Unlock()
 
@@ -351,6 +389,10 @@ drained:
 		}
 	}
 	if resumeBTW == nil {
+		// The park loop above already ensures activeOverlay isn't a foreign
+		// /btw panel at this point (bar an astronomically small race between
+		// the check and acquiring approvalMu) — safe to cancel unconditionally,
+		// same as any other overlay.
 		t.cancelOverlayWork()
 	}
 	overlay := newApprovalOverlay(command, description, workdir, origin)

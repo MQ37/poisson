@@ -13,6 +13,7 @@ func (t *TUI) openBTW(question string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	o.setCancel(cancel)
 	t.activeOverlay = o
+	t.currentBTW = o
 	t.dirty.markFull()
 	go t.runBTW(ctx, o, question)
 }
@@ -219,14 +220,25 @@ func (t *TUI) blocksBackgroundInput() bool {
 	return true
 }
 
+// cancelOverlayWork is the one place that ever tears a live /btw stream
+// down — cancels its context, clears currentBTW, and signals closedCh so a
+// parked non-btw approval (see tui.TUI.Approve) knows it can show its own
+// prompt now. Checks currentBTW rather than activeOverlay's current type:
+// the panel being torn down might not even be the active overlay right now
+// (e.g. its own approval prompt is what's showing), but it's still the live
+// /btw session that needs tearing down.
 func (t *TUI) cancelOverlayWork() {
-	if b, ok := t.activeOverlay.(*btwOverlay); ok {
-		b.mu.Lock()
-		if c := b.cancel; c != nil {
-			c()
-		}
-		b.mu.Unlock()
+	b := t.currentBTW
+	if b == nil {
+		return
 	}
+	b.mu.Lock()
+	if c := b.cancel; c != nil {
+		c()
+	}
+	b.mu.Unlock()
+	t.currentBTW = nil
+	b.markClosed()
 }
 
 func (t *TUI) setActiveOverlay(o overlay) {

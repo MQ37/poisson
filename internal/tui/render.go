@@ -127,6 +127,41 @@ func toolInputPreview(toolName string, input []byte) string {
 	return previewText(strings.TrimSpace(string(input)), 80)
 }
 
+// diffToolPathAndSuffix returns the raw (untruncated) path plus the trailing
+// summary suffix — " (N bytes)" for write, " (N edit(s))" for edit — for a
+// write/edit tool card. Kept separate from toolInputPreview so the diff
+// tool's header can truncate the path to the actual terminal width (and the
+// user can expand to see the untruncated path — see toggleToolExpandBlock
+// and layoutDiffTool) instead of toolInputPreview's fixed 80-byte cap, which
+// silently ate long paths with no way to ever see them.
+func diffToolPathAndSuffix(name string, input []byte) (path, suffix string, ok bool) {
+	switch name {
+	case "write":
+		var in struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Path != "" {
+			return in.Path, fmt.Sprintf(" (%d bytes)", len(in.Content)), true
+		}
+	case "edit":
+		var in struct {
+			Path    string          `json:"path"`
+			Edits   json.RawMessage `json:"edits"`
+			OldText string          `json:"oldText"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Path != "" {
+			n := editCountFromInput(in.Edits, in.OldText)
+			unit := "edit"
+			if n != 1 {
+				unit = "edits"
+			}
+			return in.Path, fmt.Sprintf(" (%d %s)", n, unit), true
+		}
+	}
+	return "", "", false
+}
+
 // editCountFromInput counts edits across every shape parseEditInput
 // (internal/tools/edit.go) accepts: the edits: [...] array, that array
 // double-encoded as a JSON string, or the flat {oldText, newText} shorthand

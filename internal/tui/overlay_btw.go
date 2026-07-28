@@ -23,14 +23,31 @@ type btwOverlay struct {
 	// moment real answer text starts arriving, so it never shows a stale tool
 	// name once the model has moved on to producing its final answer.
 	status string
+	// closed is closed exactly once when this panel actually goes away (see
+	// cancelOverlayWork, the only place that ever tears a live /btw stream
+	// down). A bash approval originating from the main conversation (or a
+	// subagent) while /btw's own panel is showing parks behind it instead of
+	// destroying it — tui.TUI.Approve waits on this channel before it ever
+	// shows its own prompt, so /btw stays alive and in front until the user
+	// closes it themselves.
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 func newBTWOverlay(question string) *btwOverlay {
 	return &btwOverlay{
 		question:   question,
 		processing: true,
+		closed:     make(chan struct{}),
 	}
 }
+
+// closedCh returns the signal channel a parked non-btw approval waits on.
+func (o *btwOverlay) closedCh() <-chan struct{} { return o.closed }
+
+// markClosed signals closedCh exactly once. Safe to call more than once or
+// concurrently.
+func (o *btwOverlay) markClosed() { o.closeOnce.Do(func() { close(o.closed) }) }
 
 func (o *btwOverlay) setCancel(c context.CancelFunc) {
 	o.mu.Lock()

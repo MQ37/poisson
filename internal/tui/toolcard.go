@@ -63,7 +63,25 @@ func layoutToolCard(b *Block, width int, _ int) []ScreenRow {
 // layoutDiffTool renders edit/write: one header line + full colored diff, no box.
 func layoutDiffTool(b *Block, width int) []ScreenRow {
 	var chunks []string
-	chunks = append(chunks, formatDiffToolHeader(b))
+	chunks = append(chunks, formatDiffToolHeader(b, width))
+
+	// The diff body below always renders in full — nothing to expand there.
+	// The one thing a long path can hide is itself, truncated to fit the
+	// header; PathExpanded (toggled the same way as any other tool card,
+	// see toggleToolExpandBlock) reveals it on its own line(s).
+	if b.meta.PathExpanded {
+		if path, _, ok := diffToolPathAndSuffix(b.meta.ToolName, b.meta.ToolInput); ok {
+			if _, truncated := diffToolHeaderPreview(b, width); truncated {
+				inner := width - 2
+				if inner < 1 {
+					inner = 1
+				}
+				for _, ln := range wrapLine(path, inner) {
+					chunks = append(chunks, dim+"  "+ln+reset)
+				}
+			}
+		}
+	}
 
 	lang := toolLangFromInput(b.meta.ToolName, b.meta.ToolInput)
 	diff := toolDiffLines(b.meta.ToolName, b.meta.ToolInput, b.meta.DiffBase)
@@ -84,9 +102,8 @@ func layoutDiffTool(b *Block, width int) []ScreenRow {
 	return rows
 }
 
-func formatDiffToolHeader(b *Block) string {
+func formatDiffToolHeader(b *Block, width int) string {
 	name := b.meta.ToolName
-	preview := toolInputPreview(name, b.meta.ToolInput)
 	mark := "✓"
 	if !b.meta.ToolDone {
 		mark = toolCardSpinnerSlot
@@ -101,7 +118,35 @@ func formatDiffToolHeader(b *Block) string {
 		}
 		meta += toolCardSpeedSuffix(b)
 	}
+	preview, _ := diffToolHeaderPreview(b, width)
 	return dim + italic + mark + " " + title + " · " + reset + dim + preview + meta + reset
+}
+
+// diffToolHeaderPreview computes the write/edit header's path preview,
+// truncated to the actual available width (not a fixed byte count), and
+// whether it's actually truncated — the signal toggleToolExpandBlock uses to
+// decide whether Ctrl+E/click has anything to reveal for this card.
+func diffToolHeaderPreview(b *Block, width int) (preview string, truncated bool) {
+	name := b.meta.ToolName
+	path, suffix, ok := diffToolPathAndSuffix(name, b.meta.ToolInput)
+	if !ok {
+		return toolInputPreview(name, b.meta.ToolInput), false
+	}
+	meta := ""
+	if b.meta.ToolDone {
+		if b.meta.DurationMs > 0 {
+			meta = fmt.Sprintf(" · %.1fs", float64(b.meta.DurationMs)/1000)
+		}
+		meta += toolCardSpeedSuffix(b)
+	}
+	// "✓ Write · " prefix + trailing " (N bytes)"/duration eats into width —
+	// 2 covers the mark glyph + space not otherwise accounted for below.
+	avail := width - visibleWidth(titleCaseTool(name)+" · ") - visibleWidth(suffix+meta) - 2
+	if avail < 8 {
+		avail = 8
+	}
+	shown := truncateToWidth(path, avail)
+	return shown + suffix, shown != path
 }
 
 // formatToolCollapsed is the one-line thinking-style header for bash/read/etc.

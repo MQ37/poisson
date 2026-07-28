@@ -41,11 +41,16 @@ type BlockMeta struct {
 	ToolDone              bool
 	Expanded              bool // tool result body expanded (PR-16)
 	ToolScroll            int  // scroll offset inside expanded result
-	Collapsed             bool
-	ThinkingRedacted      bool
-	Streaming             bool // true while assistant/thinking/tool stream is in flight
-	StartedAt             time.Time
-	DurationMs            int64
+	// PathExpanded is write/edit-only: the diff body always renders in full
+	// regardless of Expanded, so the one thing left to reveal on toggle is a
+	// long path truncated in the header — see toggleToolExpandBlock and
+	// layoutDiffTool.
+	PathExpanded     bool
+	Collapsed        bool
+	ThinkingRedacted bool
+	Streaming        bool // true while assistant/thinking/tool stream is in flight
+	StartedAt        time.Time
+	DurationMs       int64
 	// TokensPerSec is the average output tokens/sec of the streaming round
 	// that produced this block (thinking, assistant text, or tool call) — see
 	// agent.OutputInferenceSpeed and scrollback.applyInferenceSpeed. Zero

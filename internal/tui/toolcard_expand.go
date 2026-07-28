@@ -90,24 +90,32 @@ func toolCardExpandedResultLines(b *Block, width int) []string {
 // toggleToolExpandInView toggles expand on the focused or last completed tool card in view.
 func (s *scrollback) toggleToolExpandInView(height, width int) bool {
 	if s.focusedToolID != 0 {
-		return s.toggleToolExpandBlock(s.focusedToolID)
+		return s.toggleToolExpandBlock(s.focusedToolID, width)
 	}
 	id := s.lastToolBlockInView(height, width, true)
 	if id == 0 {
 		return false
 	}
-	return s.toggleToolExpandBlock(id)
+	return s.toggleToolExpandBlock(id, width)
 }
 
-func (s *scrollback) toggleToolExpandBlock(id int64) bool {
+func (s *scrollback) toggleToolExpandBlock(id int64, width int) bool {
 	for i := range s.blocks {
 		if s.blocks[i].id != id || s.blocks[i].kind != blockToolCall {
 			continue
 		}
 		b := &s.blocks[i]
-		// edit/write always render fully — never collapse or focus-scroll.
+		// edit/write's diff body always renders fully — never collapse or
+		// focus-scroll that. The only thing that can be hidden is a long
+		// path truncated in the header; toggle PathExpanded to reveal it,
+		// and only report "handled" when there's actually something to reveal.
 		if isDiffTool(b.meta.ToolName) && b.meta.ToolError == "" {
-			return false
+			if _, truncated := diffToolHeaderPreview(b, width); !truncated {
+				return false
+			}
+			b.meta.PathExpanded = !b.meta.PathExpanded
+			b.invalidateLayout()
+			return true
 		}
 		// Any non-diff tool can expand to reveal the command (+ result once
 		// done), even while still running and even for short results — the
