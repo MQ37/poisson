@@ -74,22 +74,51 @@ func envValue(env []string, key string) (string, bool) {
 	return "", false
 }
 
+// subagentEnvKeys is every POISSON_SUBAGENT_* variable buildSpawnEnv can set.
+var subagentEnvKeys = []string{
+	"POISSON_SUBAGENT_CHILD",
+	"POISSON_SUBAGENT_PROVIDER",
+	"POISSON_SUBAGENT_MODEL",
+	"POISSON_SUBAGENT_CLASSIFIER_MODEL",
+	"POISSON_SUBAGENT_EFFORT",
+	"POISSON_SUBAGENT_NAME",
+	"POISSON_SUBAGENT_DB",
+}
+
+// clearInheritedSubagentEnv removes any ambient POISSON_SUBAGENT_* variables
+// for the duration of the test. buildSpawnEnv starts from os.Environ() and
+// envValue returns the first match, so a suite run from INSIDE a subagent
+// (px spawning a child that runs `go test`) would otherwise see the parent's
+// values shadowing the ones under test.
+func clearInheritedSubagentEnv(t *testing.T) {
+	t.Helper()
+	for _, key := range subagentEnvKeys {
+		if old, ok := os.LookupEnv(key); ok {
+			os.Unsetenv(key)
+			t.Cleanup(func() { os.Setenv(key, old) })
+		}
+	}
+}
+
 func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
+	clearInheritedSubagentEnv(t)
 	env := buildSpawnEnv(SpawnInput{
-		Provider: "anthropic",
-		Model:    "claude-opus-5",
-		Effort:   "high",
-		Name:     "scout",
-		DBPath:   "/tmp/child.db",
+		Provider:        "anthropic",
+		Model:           "claude-opus-5",
+		ClassifierModel: "claude-haiku-5",
+		Effort:          "high",
+		Name:            "scout",
+		DBPath:          "/tmp/child.db",
 	})
 
 	cases := map[string]string{
-		"POISSON_SUBAGENT_CHILD":    "1",
-		"POISSON_SUBAGENT_PROVIDER": "anthropic",
-		"POISSON_SUBAGENT_MODEL":    "claude-opus-5",
-		"POISSON_SUBAGENT_EFFORT":   "high",
-		"POISSON_SUBAGENT_NAME":     "scout",
-		"POISSON_SUBAGENT_DB":       "/tmp/child.db",
+		"POISSON_SUBAGENT_CHILD":            "1",
+		"POISSON_SUBAGENT_PROVIDER":         "anthropic",
+		"POISSON_SUBAGENT_MODEL":            "claude-opus-5",
+		"POISSON_SUBAGENT_CLASSIFIER_MODEL": "claude-haiku-5",
+		"POISSON_SUBAGENT_EFFORT":           "high",
+		"POISSON_SUBAGENT_NAME":             "scout",
+		"POISSON_SUBAGENT_DB":               "/tmp/child.db",
 	}
 	for key, want := range cases {
 		got, ok := envValue(env, key)
@@ -115,8 +144,9 @@ func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
 // empty var would silently override that fallback with an empty string
 // instead of leaving it alone.
 func TestBuildSpawnEnvOmitsUnsetFields(t *testing.T) {
+	clearInheritedSubagentEnv(t)
 	env := buildSpawnEnv(SpawnInput{})
-	for _, key := range []string{"POISSON_SUBAGENT_PROVIDER", "POISSON_SUBAGENT_MODEL", "POISSON_SUBAGENT_EFFORT", "POISSON_SUBAGENT_NAME", "POISSON_SUBAGENT_DB", "POISSON_SANDBOX"} {
+	for _, key := range []string{"POISSON_SUBAGENT_PROVIDER", "POISSON_SUBAGENT_MODEL", "POISSON_SUBAGENT_CLASSIFIER_MODEL", "POISSON_SUBAGENT_EFFORT", "POISSON_SUBAGENT_NAME", "POISSON_SUBAGENT_DB", "POISSON_SANDBOX"} {
 		if _, ok := envValue(env, key); ok {
 			t.Errorf("%s should be absent when unset, but was present", key)
 		}

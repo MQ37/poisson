@@ -192,7 +192,7 @@ type Agent struct {
 	// turn is already in flight.
 	pendingInputFn func() (segments []TextSegment, ok bool)
 
-	// cumUsageMu guards cumUsage.
+	// cumUsageMu guards cumUsage and cumCost.
 	cumUsageMu sync.Mutex
 	// cumUsage is the running total of every api_calls row this Agent has
 	// recorded for its session so far (main turns, compaction, and auxiliary
@@ -201,6 +201,11 @@ type Agent struct {
 	// subagent/child mode to report live spend back to the parent process on
 	// every progress tick without an extra SQL query per tick.
 	cumUsage provider.Usage
+	// cumCost is the matching running total in dollars, summed from each
+	// row's own cost — priced against the model that served that call, which
+	// the bash-risk classifier can make differ from the session model. Read
+	// via CumulativeCost().
+	cumCost float64
 }
 
 // SetPendingInputFn wires the callback runTurn polls at each iteration
@@ -1801,12 +1806,15 @@ func (a *Agent) recordAPICallFor(usage *provider.Usage, purpose, providerID, mod
 	if err := a.store.RecordAPICall(call); err != nil {
 		return "", err
 	}
-	a.addCumulativeUsage(usage)
+	a.addCumulativeUsage(usage, cost)
 	return call.ID, nil
 }
 
-// addCumulativeUsage folds usage into the running total (see cumUsage).
-func (a *Agent) addCumulativeUsage(usage *provider.Usage) {
+// addCumulativeUsage folds usage and its cost into the running totals (see
+// cumUsage). cost is accumulated separately from the tokens because it was
+// priced against THIS call's model, which is not necessarily the session's
+// current one — the bash-risk classifier can run on a different model.
+func (a *Agent) addCumulativeUsage(usage *provider.Usage, cost float64) {
 	a.cumUsageMu.Lock()
 	defer a.cumUsageMu.Unlock()
 	a.cumUsage.InputTokens += usage.InputTokens
@@ -1814,16 +1822,30 @@ func (a *Agent) addCumulativeUsage(usage *provider.Usage) {
 	a.cumUsage.CacheReadTokens += usage.CacheReadTokens
 	a.cumUsage.CacheWriteTokens += usage.CacheWriteTokens
 	a.cumUsage.InputTokensUnknown = a.cumUsage.InputTokensUnknown || usage.InputTokensUnknown
+	a.cumCost += cost
 }
 
 // CumulativeUsage returns the running total of every api_calls row recorded
 // for this Agent's session so far. Cheap (in-memory, mutex-guarded) — safe to
 // call on every turn-loop tick, unlike GetSessionTokenBreakdown which re-sums
 // via SQL. Used by subagent/child mode to relay live spend to the parent.
+// Tokens only — see CumulativeCost for what those tokens actually cost.
 func (a *Agent) CumulativeUsage() provider.Usage {
 	a.cumUsageMu.Lock()
 	defer a.cumUsageMu.Unlock()
 	return a.cumUsage
+}
+
+// CumulativeCost returns the total dollar cost of every api_calls row this
+// Agent has recorded for its session, each priced against the model that
+// actually served it. Child mode relays this to the parent so a subagent's
+// spend is recorded at the price the child really paid, rather than the parent
+// re-pricing the whole token blob at the child's main model — see
+// subagent.ChildEvent.Cost.
+func (a *Agent) CumulativeCost() float64 {
+	a.cumUsageMu.Lock()
+	defer a.cumUsageMu.Unlock()
+	return a.cumCost
 }
 
 // RecordSubagentUsage records a finished (or partially finished — e.g. the
@@ -1836,10 +1858,22 @@ func (a *Agent) CumulativeUsage() provider.Usage {
 // which could have moved on (via /model, /provider) by the time a
 // long-running subagent finishes. providerID/model here must be whatever the
 // subagent was actually spawned against (SubagentTool captures them once, at
-// spawn time). Returns the computed cost.
-func (a *Agent) RecordSubagentUsage(providerID, model string, usage *provider.Usage) (float64, error) {
-	cost := a.computeCost(providerID, model,
-		usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
+// spawn time). Returns the recorded cost.
+//
+// childCost, when positive, is the child's own cumulative cost (see
+// subagent.ChildEvent.Cost) and is recorded verbatim. The child prices each of
+// its calls against the model that actually served it, so this is the only
+// figure that gets a session mixing models right — a bash-risk classifier
+// running under a /classifier-model pin spends at a different rate than the
+// child's main model, and re-pricing the whole token blob at one model here
+// would be wrong for that slice. Falls back to pricing the blob at
+// providerID/model when the child reported no cost (nothing recorded yet).
+func (a *Agent) RecordSubagentUsage(providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
+	cost := childCost
+	if cost <= 0 {
+		cost = a.computeCost(providerID, model,
+			usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
+	}
 	call := &store.APICall{
 		SessionID:          a.sessionID,
 		Seq:                a.nextAPICallSeq(),

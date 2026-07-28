@@ -351,6 +351,7 @@ func runREPL(noSkills bool) {
 	tools.BindSubagentProgress(reg, a.SendSubagentProgress)
 	tools.BindSubagentSkills(reg, a.SkillsEnabled)
 	tools.BindSubagentUsage(reg, a.RecordSubagentUsage)
+	tools.BindSubagentClassifier(reg, a.ClassifierModel)
 	tools.BindBatchSubagentDone(reg, a.CompleteBatchedSubagent)
 
 	var skillList []skills.Skill
@@ -668,6 +669,7 @@ func runChildMode() {
 		if childAgentRef != nil {
 			usage := childAgentRef.CumulativeUsage()
 			event["usage"] = usage
+			event["cost"] = childAgentRef.CumulativeCost()
 		}
 		return approvalBroker.emitAndWait(event)
 	}
@@ -702,6 +704,13 @@ func runChildMode() {
 	a.SetModel(childModel)
 	if e := os.Getenv("POISSON_SUBAGENT_EFFORT"); e != "" {
 		a.SetEffort(e)
+	}
+	// The parent's /classifier-model pin is instance-wide: without this the
+	// child would classify bash risk with its own main model (or the config
+	// default), silently ignoring the pin and spending at a different rate
+	// than the user asked for.
+	if m := os.Getenv("POISSON_SUBAGENT_CLASSIFIER_MODEL"); m != "" {
+		a.SetClassifierModel(m)
 	}
 	// Subagents get the same skill set as the main session (builtin skills
 	// plus any user skills under ~/.poisson/skills/), so a child can e.g.
@@ -776,6 +785,7 @@ func runChildMode() {
 		"contextTokens": ctxUsed,
 		"contextWindow": ctxWindow,
 		"usage":         usage,
+		"cost":          a.CumulativeCost(),
 	})
 }
 
@@ -800,7 +810,7 @@ func forwardChildEvents(outputChan <-chan agent.OutputEvent, a *agent.Agent, wri
 			write(map[string]interface{}{
 				"type": "tool", "tool": ev.ToolName, "tool_input": ev.ToolInput,
 				"turns": a.RunTurns(), "contextTokens": ctxUsed, "contextWindow": ctxWindow,
-				"usage": usage,
+				"usage": usage, "cost": a.CumulativeCost(),
 			})
 		case agent.OutputRetrying:
 			// Relayed so the parent's subagent widget can show "reconnecting"

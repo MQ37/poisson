@@ -24,9 +24,14 @@ type SpawnInput struct {
 	Provider  string
 	Model     string
 	Effort    string
-	NoSkills  bool // mirrors the parent's SkillsEnabled(): true disables skills in the child too
-	ExtraEnv  []string
-	DBPath    string // ephemeral DB path for the child (empty = parent's DB)
+	// ClassifierModel is the bash-risk classifier model the parent session is
+	// using, so a /classifier-model pin applies to the whole px instance
+	// rather than stopping at the process boundary (children otherwise see
+	// only the config default). Empty means "let the child resolve it".
+	ClassifierModel string
+	NoSkills        bool // mirrors the parent's SkillsEnabled(): true disables skills in the child too
+	ExtraEnv        []string
+	DBPath          string // ephemeral DB path for the child (empty = parent's DB)
 }
 
 // ChildProcess wraps a spawned Poisson child process.
@@ -67,6 +72,13 @@ type ChildEvent struct {
 	// child's inference speed the same way the main conversation shows it
 	// for its own rounds. Zero/omitted means nothing measurable to report.
 	TokensPerSec float64 `json:"tokensPerSec,omitempty"`
+	// Cost is the child's own cumulative dollar cost for every api_calls row
+	// it has recorded so far, priced by the child against the actual model of
+	// each call. Sent everywhere Usage is. The parent records it verbatim
+	// rather than re-pricing Usage as one lump at the child's main model,
+	// which would misprice any round that ran on a different model — notably
+	// bash-risk classification under a /classifier-model pin.
+	Cost float64 `json:"cost,omitempty"`
 	// OutputTokens is that same round's exact output-token count, sent
 	// alongside TokensPerSec so the parent can keep a token-weighted running
 	// average across the child's rounds instead of showing one raw last-round
@@ -130,6 +142,9 @@ func buildSpawnEnv(input SpawnInput) []string {
 	}
 	if input.Model != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_MODEL=%s", input.Model))
+	}
+	if input.ClassifierModel != "" {
+		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_CLASSIFIER_MODEL=%s", input.ClassifierModel))
 	}
 	if input.Effort != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_EFFORT=%s", input.Effort))

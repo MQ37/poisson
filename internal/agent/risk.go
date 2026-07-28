@@ -138,10 +138,11 @@ func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdi
 // active provider — only the model name is configurable, so a pinned model
 // travels with whichever provider it was chosen under.
 //
-// A subagent runs in its own process with its own Agent, so it sees only the
-// config default, not a pin made in the parent session. Use
-// [classifier] model in config.toml when children should classify with the
-// same model.
+// A pin is instance-wide: a subagent runs in its own process with its own
+// Agent, but the parent propagates its resolved classifier model to every
+// child it spawns (POISSON_SUBAGENT_CLASSIFIER_MODEL, see
+// tools.BindSubagentClassifier), so children classify with the same model.
+// [classifier] model in config.toml remains the durable default.
 func (a *Agent) ClassifierModel() string {
 	if a == nil {
 		return ""

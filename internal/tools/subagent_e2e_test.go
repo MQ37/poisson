@@ -265,6 +265,63 @@ printf '{"type":"done","success":true}\n'
 	}
 }
 
+// TestSubagentToolPropagatesClassifierModel verifies a /classifier-model pin
+// is instance-wide: the resolver's model must reach the spawned child's
+// environment, so the child classifies bash risk with the same model the user
+// pinned in the parent instead of silently falling back to its own main model
+// (or the config default). The real child process here is a fake script that
+// echoes back the env var it received.
+func TestSubagentToolPropagatesClassifierModel(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-classifier.sh"
+	script := `#!/bin/sh
+printf '{"type":"text","text":"classifier=%s"}\n' "${POISSON_SUBAGENT_CLASSIFIER_MODEL:-unset}"
+printf '{"type":"done","success":true}\n'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	for _, tc := range []struct {
+		name      string
+		resolver  func() string
+		wantValue string
+	}{
+		{"pin propagated", func() string { return "claude-haiku-5" }, "claude-haiku-5"},
+		{"no resolver: child resolves its own", nil, "unset"},
+		{"empty resolver result: child resolves its own", func() string { return "" }, "unset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool := NewSubagentTool(".", alwaysApproveSubagent)
+			tool.SetRuntime(
+				func() string { return "anthropic" },
+				func() string { return "claude-opus-5" },
+				func() string { return "" },
+			)
+			if tc.resolver != nil {
+				tool.SetClassifierModelFn(tc.resolver)
+			}
+
+			res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
+			if err != nil {
+				t.Fatalf("Execute returned a Go error: %v", err)
+			}
+			if res.Error != "" {
+				t.Fatalf("Execute reported an error: %q", res.Error)
+			}
+			want := "classifier=" + tc.wantValue
+			if !strings.Contains(res.Content, want) {
+				t.Fatalf("child env result = %q, want it to contain %q", res.Content, want)
+			}
+		})
+	}
+}
+
 // TestSubagentToolRelaysRetryingThenChildDiesGivesClearError verifies that if
 // the child's connection never recovers (it emits "retrying" and then the
 // process simply exits without a "done"), the tool still returns a
@@ -348,7 +405,7 @@ printf '{"type":"done","success":true,"turns":2,"usage":{"InputTokens":300,"Outp
 		usage             provider.Usage
 	}
 	var calls []call
-	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage) (float64, error) {
+	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
 		calls = append(calls, call{providerID, model, *usage})
 		return 0.0042, nil
 	})
@@ -410,7 +467,7 @@ sleep 30
 
 	var calls int
 	var gotUsage provider.Usage
-	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage) (float64, error) {
+	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
 		calls++
 		gotUsage = *usage
 		return 0.01, nil
@@ -451,7 +508,7 @@ func TestSubagentToolRecordsUsageFromApprovalRequestWhenCancelled(t *testing.T) 
 	// An approval prompt carrying usage (as the real child does), then a hang
 	// past the test's timeout — the parent cancels mid-decision.
 	script := `#!/bin/sh
-printf '{"type":"approval_request","command":"rm -rf /tmp/x","risk":"high","usage":{"InputTokens":1500,"OutputTokens":300}}\n'
+printf '{"type":"approval_request","command":"rm -rf /tmp/x","risk":"high","usage":{"InputTokens":1500,"OutputTokens":300},"cost":0.0031}\n'
 sleep 30
 `
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
@@ -473,9 +530,10 @@ sleep 30
 
 	var calls int
 	var gotUsage provider.Usage
-	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage) (float64, error) {
+	var gotChildCost float64
+	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
 		calls++
-		gotUsage = *usage
+		gotUsage, gotChildCost = *usage, childCost
 		return 0.02, nil
 	})
 
@@ -490,6 +548,12 @@ sleep 30
 	want := provider.Usage{InputTokens: 1500, OutputTokens: 300}
 	if gotUsage != want {
 		t.Fatalf("usageFn usage = %+v, want the approval_request's totals %+v", gotUsage, want)
+	}
+	// The child's own cost must ride along, not be recomputed by the parent:
+	// the classifier can have run on a different model than the child's main
+	// one, which the parent has no way to price from a lump token total.
+	if gotChildCost != 0.0031 {
+		t.Fatalf("usageFn childCost = %v, want the child's own reported 0.0031", gotChildCost)
 	}
 }
 

@@ -110,6 +110,13 @@ func BindSubagentSkills(reg *Registry, fn func() bool) {
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetSkillsEnabledFn(fn) })
 }
 
+// BindSubagentClassifier wires the parent's bash-risk classifier model
+// resolver onto the subagent tool, so a /classifier-model pin applies to the
+// whole px instance rather than stopping at the child process boundary.
+func BindSubagentClassifier(reg *Registry, fn func() string) {
+	withSubagentTool(reg, func(st *SubagentTool) { st.SetClassifierModelFn(fn) })
+}
+
 // withBatchTool looks up the batch tool on reg and, if present, applies fn —
 // same pattern as withSubagentTool.
 func withBatchTool(reg *Registry, fn func(*BatchTool)) {
@@ -130,6 +137,6 @@ func BindBatchSubagentDone(reg *Registry, fn func(toolCallID string, res ToolRes
 
 // BindSubagentUsage wires the callback that rolls a finished subagent's token
 // usage into the parent session's cost (see SubagentTool.usageFn).
-func BindSubagentUsage(reg *Registry, fn func(providerID, model string, usage *provider.Usage) (float64, error)) {
+func BindSubagentUsage(reg *Registry, fn func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error)) {
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetUsageFn(fn) })
 }

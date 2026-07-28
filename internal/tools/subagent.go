@@ -62,7 +62,15 @@ type SubagentTool struct {
 	// total instead of vanishing with the child's ephemeral, throwaway DB.
 	// Returns the computed cost. nil means no recorder wired (e.g. tests
 	// that don't care) — Execute treats that as "nothing to record".
-	usageFn func(providerID, model string, usage *provider.Usage) (float64, error)
+	// childCost is the child's own cumulative cost, priced per call against
+	// whichever model served it (see subagent.ChildEvent.Cost).
+	usageFn func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error)
+
+	// classifierModelFn resolves the parent session's bash-risk classifier
+	// model, propagated to the child so a /classifier-model pin covers the
+	// whole px instance instead of stopping at the process boundary. nil (or
+	// an empty result) leaves the child to resolve its own.
+	classifierModelFn func() string
 }
 
 // NewSubagentTool creates a subagent tool.
@@ -122,8 +130,15 @@ func (t *SubagentTool) SetProgressFn(fn func(toolCallID string, turns, contextTo
 
 // SetUsageFn supplies the callback that rolls a finished subagent's token
 // usage into the parent session's cost (see usageFn's doc comment).
-func (t *SubagentTool) SetUsageFn(fn func(providerID, model string, usage *provider.Usage) (float64, error)) {
+func (t *SubagentTool) SetUsageFn(fn func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error)) {
 	t.usageFn = fn
+}
+
+// SetClassifierModelFn supplies the resolver for the parent's bash-risk
+// classifier model, propagated to every child this tool spawns (see
+// classifierModelFn's doc comment).
+func (t *SubagentTool) SetClassifierModelFn(fn func() string) {
+	t.classifierModelFn = fn
 }
 
 func (t *SubagentTool) Name() string { return "subagent" }
@@ -182,6 +197,10 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	if t.effortFn != nil {
 		effort = t.effortFn()
 	}
+	classifierModel := ""
+	if t.classifierModelFn != nil {
+		classifierModel = t.classifierModelFn()
+	}
 
 	// The child conversation is ephemeral: it lives in a throwaway DB under the
 	// OS temp dir and is deleted when the subagent finishes, so nothing is
@@ -190,15 +209,16 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	defer removeDBFiles(dbPath)
 
 	child, err := subagent.Spawn(subagent.SpawnInput{
-		Task:      params.Task,
-		Cwd:       t.cwd,
-		SessionID: childSessionID,
-		Name:      agentName,
-		Provider:  prov,
-		Model:     model,
-		Effort:    effort,
-		NoSkills:  t.skillsEnabledFn != nil && !t.skillsEnabledFn(),
-		DBPath:    dbPath,
+		Task:            params.Task,
+		Cwd:             t.cwd,
+		SessionID:       childSessionID,
+		Name:            agentName,
+		Provider:        prov,
+		Model:           model,
+		Effort:          effort,
+		ClassifierModel: classifierModel,
+		NoSkills:        t.skillsEnabledFn != nil && !t.skillsEnabledFn(),
+		DBPath:          dbPath,
 	})
 	if err != nil {
 		return ToolResult{Error: "failed to spawn subagent: " + err.Error()}, nil
@@ -238,9 +258,20 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	// approval-send failure, etc.) — a subagent killed mid-run by a cancelled
 	// parent turn still gets partial credit for whatever it had already
 	// spent as of its last progress tick.
+	// lastChildCost rides along with it: the child prices every call against
+	// the model that served it, so its own figure is the only correct one for
+	// a run that mixed models (e.g. a bash-risk classifier pinned to a
+	// different model than the child's main one).
 	var lastUsage provider.Usage
+	var lastChildCost float64
 	var usageSeen, recorded bool
 	var recordedCost float64
+	bankUsage := func(ev *subagent.ChildEvent) {
+		if ev.Usage == nil {
+			return
+		}
+		lastUsage, lastChildCost, usageSeen = *ev.Usage, ev.Cost, true
+	}
 	recordUsage := func() {
 		if recorded || !usageSeen || t.usageFn == nil {
 			return
@@ -250,7 +281,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 			return // nothing billed yet (e.g. cancelled before the child's first turn completed)
 		}
 		recorded = true
-		cost, err := t.usageFn(prov, model, &lastUsage)
+		cost, err := t.usageFn(prov, model, &lastUsage, lastChildCost)
 		if err != nil {
 			log.Printf("warning: record subagent usage: %v", err)
 			return
@@ -310,9 +341,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 					// widget was showing.
 					reportProgress("")
 				}
-				if ev.Usage != nil {
-					lastUsage, usageSeen = *ev.Usage, true
-				}
+				bankUsage(ev)
 
 			case "retrying":
 				// Relayed from the child's own network-retry notice (see
@@ -341,9 +370,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 				// this event carries the usage of the risk-classification call
 				// that produced the verdict being shown, and the wait below can
 				// end in cancellation with no further event ever arriving.
-				if ev.Usage != nil {
-					lastUsage, usageSeen = *ev.Usage, true
-				}
+				bankUsage(ev)
 				if ctx.Err() != nil {
 					goto done
 				}
@@ -363,9 +390,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 					contextTokens, contextWindow = ev.ContextTokens, ev.ContextWindow
 					reportProgress("") // final count, before the card flips to done
 				}
-				if ev.Usage != nil {
-					lastUsage, usageSeen = *ev.Usage, true
-				}
+				bankUsage(ev)
 				if ev.Error != "" {
 					childErr = ev.Error
 				}
