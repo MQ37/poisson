@@ -534,7 +534,7 @@ func TestCmdClassifierModelNoArgReportsCurrent(t *testing.T) {
 
 	cmdClassifierModel(cmdHost(tui), nil)
 	out := testScrollOutput(tui)
-	if !strings.Contains(out, a.ClassifierModel()) || !strings.Contains(out, "inherited") {
+	if !strings.Contains(out, a.ClassifierModel()) || !strings.Contains(out, "inherits session model") {
 		t.Errorf("expected the inherited classifier model to be reported, got %q", out)
 	}
 }

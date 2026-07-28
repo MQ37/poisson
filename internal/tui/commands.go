@@ -314,10 +314,16 @@ func cmdStatus(h commandHost) {
 		head += "  · unsaved (send a message to persist)"
 	}
 	b.WriteString(head + "\n")
-	b.WriteString(fmt.Sprintf("  Model:    %s/%s\n", a.Provider().ID(), a.Model()))
+	prov := a.Provider().ID()
+	b.WriteString(fmt.Sprintf("  Model:    %s/%s\n", prov, a.Model()))
 	if eff := a.Effort(); eff != "" {
 		b.WriteString(fmt.Sprintf("  Effort:   %s\n", eff))
 	}
+	// The bash-risk classifier is a second model spending real quota (one call
+	// per gated command), so it belongs next to the conversation's model
+	// rather than hidden behind /classifier-model.
+	b.WriteString(fmt.Sprintf("  Risk classifier: %s/%s  (%s)\n",
+		prov, a.ClassifierModel(), classifierOrigin(a)))
 	b.WriteString(fmt.Sprintf("  Cwd:      %s\n", cwd))
 	used, total := a.ContextTokens()
 	if total > 0 {
@@ -387,6 +393,20 @@ func humanBytes(n int) string {
 // is also the picker's synthetic first row.
 var classifierModelResetIDs = map[string]bool{"default": true, "reset": true, "clear": true, "-": true}
 
+// classifierOrigin explains where the active classifier model came from, so
+// /status and /classifier-model tell the same story: a session pin, config, or
+// plain inheritance from the conversation's model.
+func classifierOrigin(a *agent.Agent) string {
+	switch {
+	case a.ClassifierModelPinned():
+		return "pinned this session"
+	case a.ClassifierModel() == a.Model():
+		return "inherits session model"
+	default:
+		return "from config"
+	}
+}
+
 // cmdClassifierModel pins (or clears) the model that rates bash-command risk
 // for the approval gate, for the currently selected provider. The classifier
 // always runs on that provider — only the model changes.
@@ -394,11 +414,7 @@ func cmdClassifierModel(h commandHost, args []string) error {
 	a := h.Agent()
 	prov := a.Provider().ID()
 	if len(args) == 0 {
-		origin := "inherited (session model or config)"
-		if a.ClassifierModelPinned() {
-			origin = "pinned for this session"
-		}
-		h.Out(styleSystem, fmt.Sprintf("bash-risk classifier model: %s/%s — %s", prov, a.ClassifierModel(), origin))
+		h.Out(styleSystem, fmt.Sprintf("bash-risk classifier model: %s/%s — %s", prov, a.ClassifierModel(), classifierOrigin(a)))
 		return nil
 	}
 	target := strings.TrimSpace(strings.Join(args, " "))
