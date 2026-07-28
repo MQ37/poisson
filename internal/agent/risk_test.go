@@ -276,6 +276,35 @@ func TestClassifierModelResolution(t *testing.T) {
 	if got := a.ClassifierModel(); got != "cfg-classifier" {
 		t.Errorf("clearing the pin should fall back to config, got %q", got)
 	}
+
+	// A provider's own [<provider>] classifier key outranks the single-value form,
+	// which is the whole point: one config can pin a cheap classifier for
+	// anthropic without touching what xai or ollama sessions do.
+	cfg.Classifier.Models = map[string]string{"fake": "per-provider-classifier", "other": "not-mine"}
+	if got := a.ClassifierModel(); got != "per-provider-classifier" {
+		t.Errorf("classifier model = %q, want this provider's own classifier key", got)
+	}
+
+	// A table with no entry for this provider leaves the fallback in charge.
+	cfg.Classifier.Models = map[string]string{"other": "not-mine"}
+	if got := a.ClassifierModel(); got != "cfg-classifier" {
+		t.Errorf("classifier model = %q, want the classifier.model fallback", got)
+	}
+
+	// A session pin still wins over everything.
+	cfg.Classifier.Models = map[string]string{"fake": "per-provider-classifier"}
+	a.SetClassifierModel("pinned")
+	if got := a.ClassifierModel(); got != "pinned" {
+		t.Errorf("pin should win over the provider's classifier key, got %q", got)
+	}
+	a.SetClassifierModel("")
+
+	// With no config at all, the session model remains the answer.
+	cfg.Classifier.Models = nil
+	cfg.Classifier.Model = ""
+	if got := a.ClassifierModel(); got != "m" {
+		t.Errorf("classifier model = %q, want the session model", got)
+	}
 }
 
 // TestClassifierModelUsedInRiskRequest verifies the pinned classifier model

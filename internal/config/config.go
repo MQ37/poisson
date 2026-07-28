@@ -53,11 +53,23 @@ type LlamaCppConfig struct {
 }
 
 // ClassifierConfig controls the bash-command risk classifier (the small LLM
-// call behind the approval gate). Model is "model" or "provider/model";
-// empty means "use the session's own model". The TUI's /classifier-model
-// command overrides it per provider for the running session.
+// call behind the approval gate).
+//
+// Models holds one entry per provider, collected from each provider's own
+// [<provider>] classifier = "model" key — the maintainable form once more
+// than one provider needs its own classifier (anthropic wants a cheap Sonnet
+// while sessions run Opus; xai wants something else entirely). Keys are
+// provider ids, values model names as written (which may themselves contain a
+// slash, e.g. llamacpp's "unsloth/Laguna-S-2.1-GGUF").
+//
+// Model is the older single-value form, "model" or "provider/model", kept
+// working: a provider-qualified value applies to that provider only, a bare
+// one to every provider with no Models entry. Empty everywhere means "use the
+// session's own model". The TUI's /classifier-model overrides both per
+// provider for the running session.
 type ClassifierConfig struct {
-	Model string
+	Models map[string]string
+	Model  string
 }
 
 // CompactionConfig controls auto-compaction.
@@ -233,6 +245,7 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 
 [anthropic]
 # model = "claude-opus-5"
+# classifier = "claude-sonnet-5"  # bash-risk classifier for this provider
 # If auth.json has OAuth tokens for anthropic, stealth mode is active.
 # Otherwise set an API key here or in auth.json.
 # api_key = "sk-ant-..."
@@ -242,7 +255,7 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 
 [openai]
 # GPT via the ChatGPT Codex subscription (run: px login openai).
-# model = "gpt-5.5"
+# model = "gpt-5.6-terra"          # or gpt-5.6-sol / gpt-5.6-luna, or legacy gpt-5.5
 
 [ollama]
 # base_url = "http://localhost:11434"
@@ -254,10 +267,19 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 # model = "unsloth/Laguna-S-2.1-GGUF"
 
 [classifier]
-# Model that rates bash-command risk for the approval gate. Runs on the
-# session's provider unless you qualify it as "provider/model". A small, fast
-# model is usually the right choice — the answer is one word.
+# Model that rates bash-command risk for the approval gate. The classifier
+# always runs on the session's provider — only the model differs. A small,
+# fast model is the right choice: the answer is one word, and inheriting an
+# expensive session model means paying its rate once per gated command.
 # Change it live with /classifier-model (per provider, current session only).
+#
+# Per provider, set it next to that provider's model:
+#   [anthropic]
+#   model = "claude-opus-5"
+#   classifier = "claude-sonnet-5"
+#
+# The key below is the fallback for providers with no classifier of their own.
+# Bare = every such provider; "provider/model" = that provider only.
 # model = ""                     # model or provider/model (default: session model)
 
 [compaction]
@@ -480,6 +502,41 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 			return nil, fmt.Errorf("classifier.model: %w", err)
 		}
 		cfg.Classifier.Model = s
+	}
+	// [<provider>] classifier = "model" — the durable per-provider pin, next
+	// to that provider's own model where it belongs.
+	for _, provider := range ProviderIDs() {
+		v, ok := lookup(m, provider, "classifier")
+		if !ok {
+			continue
+		}
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("%s.classifier: %w", provider, err)
+		}
+		if s = strings.TrimSpace(s); s == "" {
+			continue
+		}
+		// The table already names the provider, so a provider-qualified value
+		// is at best redundant and at worst contradictory — accept the
+		// redundant spelling, reject the contradiction instead of picking a
+		// winner. A leading segment that is NOT a provider id is part of the
+		// model name (llamacpp and ollama both use HF-style
+		// "unsloth/Laguna-S-2.1-GGUF" names), so it must survive untouched.
+		if p, mdl, qualified := strings.Cut(s, "/"); qualified {
+			if _, isProvider := ProviderMetaByID(strings.TrimSpace(p)); isProvider {
+				if strings.TrimSpace(p) != provider {
+					return nil, fmt.Errorf(
+						"%s.classifier = %q: the table already names the provider; write %q",
+						provider, s, strings.TrimSpace(mdl))
+				}
+				s = strings.TrimSpace(mdl)
+			}
+		}
+		if cfg.Classifier.Models == nil {
+			cfg.Classifier.Models = map[string]string{}
+		}
+		cfg.Classifier.Models[provider] = s
 	}
 
 	if v, ok := lookup(m, "compaction", "threshold"); ok {

@@ -132,11 +132,16 @@ func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdi
 }
 
 // ClassifierModel returns the model that rates bash-command risk for the
-// active provider: an explicit /classifier-model choice for that provider,
-// else config.Classifier.Model (honored when it names no provider, or names
-// this one), else the session's own model. The classifier always runs on the
-// active provider — only the model name is configurable, so a pinned model
-// travels with whichever provider it was chosen under.
+// active provider, first match wins:
+//
+//  1. an explicit /classifier-model pin for that provider (session only);
+//  2. config's [<provider>] classifier key for that provider;
+//  3. config's [classifier] model, when it names no provider or names this one;
+//  4. the session's own model.
+//
+// The classifier always runs on the active provider — only the model name is
+// configurable, so a pinned model travels with whichever provider it was
+// chosen under.
 //
 // A pin is instance-wide: a subagent runs in its own process with its own
 // Agent, but the parent propagates its resolved classifier model to every
@@ -151,6 +156,9 @@ func (a *Agent) ClassifierModel() string {
 		return m
 	}
 	if a.config != nil {
+		if m := strings.TrimSpace(a.config.Classifier.Models[a.providerID()]); m != "" {
+			return m
+		}
 		if target := strings.TrimSpace(a.config.Classifier.Model); target != "" {
 			providerID, model, qualified := strings.Cut(target, "/")
 			if !qualified {
