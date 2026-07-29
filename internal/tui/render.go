@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/mq37/poisson/internal/tools"
 )
 
 // bashInputPreview summarizes a bash command for the tool card body.
@@ -107,7 +109,7 @@ func toolInputPreview(toolName string, input []byte) string {
 				names := make([]string, 0, len(calls))
 				for _, c := range calls {
 					if c.Tool != "" {
-						names = append(names, c.Tool)
+						names = append(names, tools.CanonicalToolName(c.Tool))
 					}
 				}
 				if len(names) > 0 {

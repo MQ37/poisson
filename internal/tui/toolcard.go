@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	"github.com/mq37/poisson/internal/tools"
 )
 
 const toolCardSpinnerSlot = "◌" // replaced at paint time with animated spinner
@@ -359,8 +361,11 @@ func batchExpandedCallLines(input []byte, inner int) []string {
 	}
 	var out []string
 	for i, c := range calls {
-		line := fmt.Sprintf("%d. %s", i+1, c.Tool)
-		if reason := toolCollapsedReason(c.Tool, c.Input); reason != "" {
+		// Bare name, not the wire spelling the model may have echoed: it also
+		// decides which per-tool preview below applies.
+		name := tools.CanonicalToolName(c.Tool)
+		line := fmt.Sprintf("%d. %s", i+1, name)
+		if reason := toolCollapsedReason(name, c.Input); reason != "" {
 			line += " — " + reason
 		}
 		for _, chunk := range wrapLine(line, inner) {
@@ -378,6 +383,9 @@ func titleCaseTool(name string) string {
 	if strings.HasPrefix(name, "@") {
 		return name
 	}
+	// A session recorded before the dispatch path canonicalized names (or one
+	// resumed from such a session) can still hold "mcp_Bash" on disk.
+	name = tools.CanonicalToolName(name)
 	runes := []rune(name)
 	runes[0] = unicode.ToUpper(runes[0])
 	return string(runes)

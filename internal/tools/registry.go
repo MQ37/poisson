@@ -81,6 +81,14 @@ func (r *Registry) resolveName(name string) string {
 	return name
 }
 
+// CanonicalToolName maps a wire tool name to its bare form (mcp_Bash -> bash)
+// without a registry. Registry.Canonical is the dispatch path's version and
+// only rewrites names it can actually resolve; display paths (a tool card, a
+// batch call list) have no registry at hand and want the bare spelling
+// regardless — a model that echoes wire names inside batch's own arguments
+// otherwise leaves "mcp_Bash, mcp_Read" on screen.
+func CanonicalToolName(name string) string { return stripWireToolPrefix(name) }
+
 // stripWireToolPrefix turns a wire tool name into the bare one
 // (mcp_Web_ask -> web_ask). Names without the prefix pass through unchanged.
 func stripWireToolPrefix(name string) string {
