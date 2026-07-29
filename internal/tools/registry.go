@@ -66,17 +66,16 @@ func (r *Registry) Canonical(name string) string {
 
 // resolveName maps a model-emitted tool name to a registered one. Exact
 // matches win; otherwise the wire prefix is stripped and the first letter
-// lowercased (mcp_Web_ask -> web_ask). Callers must hold r.mu.
+// lowercased (mcp_Web_ask -> web_ask), and finally the whole name is
+// lowercased. That last step matters for batch: a model that half-strips the
+// wire prefix emits "Glob" or "Web_ask" inside calls[].tool, which is neither
+// an exact match nor prefixed. Registered names are all lowercase, so a
+// lowercase probe is unambiguous. Callers must hold r.mu.
 func (r *Registry) resolveName(name string) string {
-	if _, ok := r.tools[name]; ok {
-		return name
-	}
-	candidate := stripWireToolPrefix(name)
-	if candidate == name {
-		return name
-	}
-	if _, ok := r.tools[candidate]; ok {
-		return candidate
+	for _, candidate := range []string{name, stripWireToolPrefix(name), strings.ToLower(stripWireToolPrefix(name))} {
+		if _, ok := r.tools[candidate]; ok {
+			return candidate
+		}
 	}
 	return name
 }
@@ -87,7 +86,7 @@ func (r *Registry) resolveName(name string) string {
 // batch call list) have no registry at hand and want the bare spelling
 // regardless — a model that echoes wire names inside batch's own arguments
 // otherwise leaves "mcp_Bash, mcp_Read" on screen.
-func CanonicalToolName(name string) string { return stripWireToolPrefix(name) }
+func CanonicalToolName(name string) string { return strings.ToLower(stripWireToolPrefix(name)) }
 
 // stripWireToolPrefix turns a wire tool name into the bare one
 // (mcp_Web_ask -> web_ask). Names without the prefix pass through unchanged.

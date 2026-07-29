@@ -87,6 +87,58 @@ func TestBatchResolvesWireToolNames(t *testing.T) {
 	}
 }
 
+// TestGetResolvesCapitalizedBareName covers the second reported failure: a
+// model that half-strips the wire prefix sends "Glob" (or "Web_ask") — no
+// mcp_ prefix to strip, so only a lowercase probe saves it.
+func TestGetResolvesCapitalizedBareName(t *testing.T) {
+	r := NewRegistry()
+	r.Register(echoTool{name: "glob"})
+	r.Register(echoTool{name: "web_ask"})
+
+	for name, want := range map[string]string{"Glob": "glob", "GLOB": "glob", "Web_ask": "web_ask", "Web_Ask": "web_ask"} {
+		got, ok := r.Get(name)
+		if !ok {
+			t.Fatalf("Get(%q) not found, want %s", name, want)
+		}
+		if got.Name() != want {
+			t.Fatalf("Get(%q) = %q, want %q", name, got.Name(), want)
+		}
+	}
+}
+
+// TestBatchResolvesCapitalizedBareName is the reported case end to end: a
+// batch step naming "Glob" must run, not fail validation.
+func TestBatchResolvesCapitalizedBareName(t *testing.T) {
+	r := NewRegistry()
+	r.Register(echoTool{name: "glob"})
+	b := NewBatchTool(r)
+	r.Register(b)
+
+	res, err := b.Execute(context.Background(), json.RawMessage(`{"calls":[{"tool":"Glob","input":{"pattern":"*.go"}}]}`))
+	if err != nil {
+		t.Fatalf("batch err = %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("batch res.Error = %q, want no error", res.Error)
+	}
+	if !strings.Contains(res.Content, "ran glob") {
+		t.Fatalf("res.Content = %q, want it to run glob", res.Content)
+	}
+}
+
+// TestBatchDeniesCapitalizedBatch keeps the deny list aligned with the wider
+// resolution: "Batch" must hit the no-recursion rule too.
+func TestBatchDeniesCapitalizedBatch(t *testing.T) {
+	r := NewRegistry()
+	b := NewBatchTool(r)
+	r.Register(b)
+
+	res, _ := b.Execute(context.Background(), json.RawMessage(`{"calls":[{"tool":"Batch","input":{}}]}`))
+	if !strings.Contains(res.Error, "not allowed inside batch") {
+		t.Fatalf("res.Error = %q, want the recursion denial", res.Error)
+	}
+}
+
 // TestBatchDeniesWireNamedBatch closes the hole the same normalization opens:
 // the no-recursion deny list keys off "batch", so "mcp_Batch" must be
 // canonicalized BEFORE the deny check, not after it.
