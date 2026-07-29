@@ -730,6 +730,10 @@ func runChildMode() {
 		}
 	}
 	a.SetSkills(!noSkills, skillList)
+	// Same provider-gated web tools the parent gets: without this a child had
+	// no fetch tool at all (BuildRegistry doesn't register it) and no
+	// Anthropic web_search backend even on an Anthropic session.
+	a.ReloadConfigDependentTools()
 
 	// Forward the parent's Ctrl+G nudge to the agent, and start the stdin reader
 	// now so it listens for expedite even in runs that never hit a bash approval.

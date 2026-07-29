@@ -33,7 +33,7 @@ func TestFetch_DirectModeConvertsHTMLToMarkdown(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := NewFetchTool("")
+	tool := NewFetchTool("", nil)
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]string{"url": srv.URL}))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -57,7 +57,7 @@ func TestFetch_DirectModePassesThroughNonHTML(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := NewFetchTool("")
+	tool := NewFetchTool("", nil)
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]string{"url": srv.URL}))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -75,7 +75,7 @@ func TestFetch_DirectModeNon200ReturnsError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := NewFetchTool("")
+	tool := NewFetchTool("", nil)
 	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]string{"url": srv.URL}))
 	if res.Error == "" || !strings.Contains(res.Error, "404") {
 		t.Fatalf("expected a 404 error, got %q", res.Error)
@@ -85,7 +85,7 @@ func TestFetch_DirectModeNon200ReturnsError(t *testing.T) {
 // TestFetch_DirectModeRejectsNonHTTPScheme confirms fetchDirect refuses
 // file:// and similar schemes before ever making a request.
 func TestFetch_DirectModeRejectsNonHTTPScheme(t *testing.T) {
-	tool := NewFetchTool("")
+	tool := NewFetchTool("", nil)
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]string{"url": "file:///etc/passwd"}))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -105,7 +105,7 @@ func TestFetch_DirectModeBlocksLoopback(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := NewFetchTool("")
+	tool := NewFetchTool("", nil)
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]string{"url": srv.URL}))
 	if err != nil {
 		t.Fatalf("execute: %v", err)
@@ -127,7 +127,7 @@ func TestFetch_OllamaModeProxiesRequest(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := NewFetchTool(srv.URL)
+	tool := NewFetchTool(srv.URL, nil)
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]string{"url": "https://example.com"}))
 	if err != nil {
 		t.Fatalf("execute: %v", err)

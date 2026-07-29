@@ -42,7 +42,8 @@ px                                                   # launch the TUI
   (Ctrl+P), mouse scroll, status bar with live context % and cost.
 - **Real tools, not just bash** — `read`/`write`/`edit`/`grep`/`glob` for file
   work, `batch` for independent calls in one step, plus `web_search`,
-  `web_ask`, `fetch`, `recall` (cross-session full-text search), subagents,
+  `web_ask`, `fetch` (selectable backends, [details](docs/web-tools.md)),
+  `recall` (cross-session full-text search), subagents,
   and 8 built-in skills ([below](#-built-in-skills)), user-extendable via
   `~/.poisson/skills/`. `bash` keeps sticky cwd/env across calls in a
   session.

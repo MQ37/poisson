@@ -60,35 +60,63 @@ func safeFetchDialContext(ctx context.Context, network, addr string) (net.Conn, 
 // configured Ollama instance, not an untrusted URL.
 var safeFetchClient = &http.Client{Transport: &http.Transport{DialContext: safeFetchDialContext}}
 
-// FetchTool fetches a URL and returns its readable content. With a non-empty
-// ollamaBaseURL it proxies through the local Ollama instance's own web_fetch
-// API (its own extraction, already good and worth reusing when available).
-// Otherwise (any other provider, or Ollama unreachable) it fetches the page
-// itself and converts HTML to Markdown with a hand-rolled converter
-// (html2md.go) — no third-party HTML/markdown package, matching this
-// project's stdlib-first dependency policy.
+// Fetch backends, selectable per call via the tool's provider argument.
+const (
+	// fetchViaCurl fetches the page in-process (Go's HTTP client, not the
+	// curl binary — the name is the model-facing spelling for "plain HTTP
+	// GET, no model in the loop") and converts HTML to Markdown.
+	fetchViaCurl = "curl"
+	// fetchViaOllama proxies to the local Ollama instance's own web_fetch API.
+	fetchViaOllama = "ollama"
+	// fetchViaAnthropic fetches like curl, then answers `prompt` against the
+	// page with Anthropic's small model — Claude Code's WebFetch, ported.
+	fetchViaAnthropic = "anthropic"
+)
+
+// FetchTool fetches a URL and returns its readable content. Three backends:
+//
+//   - curl: fetch in-process and convert HTML to Markdown with a hand-rolled
+//     converter (html2md.go) — no third-party HTML/markdown package, matching
+//     this project's stdlib-first dependency policy. Always available.
+//   - ollama: proxy through the local Ollama instance's own web_fetch API (its
+//     own extraction, already good and worth reusing when available). Only
+//     while an Ollama session is active and Ollama is reachable.
+//   - anthropic: curl, then a small-model summarization pass answering the
+//     caller's prompt (see AnthropicWebBackend). Only while an Anthropic
+//     session is active.
+//
+// The default is ollama when it's available, else curl — the pre-existing
+// behavior, unchanged.
 type FetchTool struct {
-	ollamaBaseURL string // empty means: fetch directly, no Ollama
+	ollamaBaseURL string              // empty means: Ollama backend unavailable
+	anthropic     AnthropicWebBackend // nil means: Anthropic backend unavailable
 }
 
-// NewFetchTool creates a fetch tool. Pass "" for ollamaBaseURL to always use
-// the direct (non-Ollama) path; pass a real base URL (already resolved to its
-// default if unset) to proxy through Ollama's web_fetch API instead.
-func NewFetchTool(ollamaBaseURL string) *FetchTool {
-	return &FetchTool{ollamaBaseURL: ollamaBaseURL}
+// NewFetchTool creates a fetch tool. Pass "" for ollamaBaseURL and nil for
+// anthropic to leave only the curl backend available; pass a real Ollama base
+// URL (already resolved to its default if unset) and/or an Anthropic backend
+// to offer those too.
+func NewFetchTool(ollamaBaseURL string, anthropic AnthropicWebBackend) *FetchTool {
+	return &FetchTool{ollamaBaseURL: ollamaBaseURL, anthropic: anthropic}
 }
 
 func (t *FetchTool) Name() string { return "fetch" }
 
 func (t *FetchTool) Description() string {
-	return "Fetch a URL and extract its readable text content (docs, articles, specs). Prefer this over bash `curl`/`wget` when you just need a page's content — skips bash's risk-classification step entirely. Not for HTTP API testing: no custom methods, headers, or status-code inspection — use bash for that."
+	desc := "Fetch a URL and extract its readable text content (docs, articles, specs). Prefer this over bash `curl`/`wget` when you just need a page's content — skips bash's risk-classification step entirely. Not for HTTP API testing: no custom methods, headers, or status-code inspection — use bash for that."
+	if t.anthropic != nil {
+		desc += " provider=anthropic answers `prompt` against the page with a small model instead of returning the whole page — cheaper context when you only need one fact out of a long document."
+	}
+	return desc
 }
 
 func (t *FetchTool) Schema() json.RawMessage {
 	return json.RawMessage(`{
 		"type": "object",
 		"properties": {
-			"url": {"type": "string", "description": "URL to fetch"}
+			"url": {"type": "string", "description": "URL to fetch"},
+			"provider": {"type": "string", "description": "curl | ollama | anthropic (default: ollama when an Ollama session is active, else curl). ollama needs an Ollama session, anthropic an Anthropic session."},
+			"prompt": {"type": "string", "description": "anthropic only: question to answer against the page (default: summarize it)"}
 		},
 		"required": ["url"]
 	}`)
@@ -96,7 +124,9 @@ func (t *FetchTool) Schema() json.RawMessage {
 
 func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
 	var params struct {
-		URL string `json:"url"`
+		URL      string `json:"url"`
+		Provider string `json:"provider"`
+		Prompt   string `json:"prompt"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return ToolResult{Error: "invalid input: " + err.Error()}, nil
@@ -104,8 +134,28 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 	if params.URL == "" {
 		return ToolResult{Error: "url is required"}, nil
 	}
-	if t.ollamaBaseURL == "" {
+
+	backend := params.Provider
+	if backend == "" {
+		backend = t.defaultBackend()
+	}
+	// A prompt on any other backend would be silently dropped, and the model
+	// would read a whole-page dump as if it were an answer to its question.
+	if params.Prompt != "" && backend != fetchViaAnthropic {
+		return ToolResult{Error: fmt.Sprintf("prompt is only supported by provider=anthropic, not %q — drop it, or pass provider=anthropic", backend)}, nil
+	}
+
+	switch backend {
+	case fetchViaCurl:
 		return t.fetchDirect(ctx, params.URL)
+	case fetchViaAnthropic:
+		return t.fetchViaAnthropicBackend(ctx, params.URL, params.Prompt)
+	case fetchViaOllama:
+		if t.ollamaBaseURL == "" {
+			return ToolResult{Error: "provider=ollama needs a reachable Ollama session (switch with /model ollama/<model>); use provider=curl instead"}, nil
+		}
+	default:
+		return ToolResult{Error: fmt.Sprintf("unknown provider %q (use curl, ollama or anthropic)", params.Provider)}, nil
 	}
 
 	body, _ := json.Marshal(map[string]string{"url": params.URL})
@@ -134,6 +184,36 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 	}
 
 	return ToolResult{Content: string(data)}, nil
+}
+
+// defaultBackend keeps the pre-provider-argument behavior: Ollama's own
+// web_fetch when this session can use it, else a plain fetch. Anthropic is
+// never a default — it spends tokens, so the model has to ask for it.
+func (t *FetchTool) defaultBackend() string {
+	if t.ollamaBaseURL != "" {
+		return fetchViaOllama
+	}
+	return fetchViaCurl
+}
+
+// fetchViaAnthropicBackend fetches the page through the same guarded direct
+// path as provider=curl, then hands the extracted markdown to Anthropic's
+// small model. The fetch stays local (matching Claude Code's WebFetch), so
+// the SSRF guard in safeFetchDialContext still governs which addresses a
+// model-supplied URL can reach.
+func (t *FetchTool) fetchViaAnthropicBackend(ctx context.Context, rawURL, prompt string) (ToolResult, error) {
+	if t.anthropic == nil {
+		return ToolResult{Error: "provider=anthropic needs an Anthropic session (switch with /model anthropic/<model>); use provider=curl instead"}, nil
+	}
+	page, err := t.fetchDirect(ctx, rawURL)
+	if err != nil || page.Error != "" {
+		return page, err
+	}
+	answer, aerr := t.anthropic.WebFetchSummarize(ctx, page.Content, prompt)
+	if aerr != nil {
+		return ToolResult{Error: aerr.Error()}, nil
+	}
+	return ToolResult{Content: answer}, nil
 }
 
 // fetchDirect fetches url itself (no Ollama) and converts HTML responses to

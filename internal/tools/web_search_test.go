@@ -72,7 +72,7 @@ func TestDecodeDDGRedirect_NoUddgParam(t *testing.T) {
 }
 
 func TestWebSearchTool_SchemaAndName(t *testing.T) {
-	tool := NewWebSearchTool()
+	tool := NewWebSearchTool(nil)
 	if tool.Name() != "web_search" {
 		t.Errorf("Name() = %q, want web_search", tool.Name())
 	}
@@ -95,7 +95,7 @@ func TestIsDDGChallenge(t *testing.T) {
 }
 
 func TestWebSearchTool_Execute_RequiresQuery(t *testing.T) {
-	tool := NewWebSearchTool()
+	tool := NewWebSearchTool(nil)
 	res, err := tool.Execute(context.Background(), []byte(`{}`))
 	if err != nil {
 		t.Fatalf("Execute() error: %v", err)

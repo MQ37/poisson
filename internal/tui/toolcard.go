@@ -281,22 +281,8 @@ func toolCollapsedReason(toolName string, input []byte) string {
 		if json.Unmarshal(input, &in) == nil && in.Pattern != "" {
 			return previewText(in.Pattern, 100)
 		}
-	case "batch":
+	case "batch", "fetch", "web_search", "web_ask":
 		return toolInputPreview(toolName, input)
-	case "fetch":
-		var in struct {
-			URL string `json:"url"`
-		}
-		if json.Unmarshal(input, &in) == nil && in.URL != "" {
-			return previewText(in.URL, 100)
-		}
-	case "web_search", "web_ask":
-		var in struct {
-			Query string `json:"query"`
-		}
-		if json.Unmarshal(input, &in) == nil && in.Query != "" {
-			return previewText(in.Query, 100)
-		}
 	case "skill":
 		var in struct {
 			Name string `json:"name"`
