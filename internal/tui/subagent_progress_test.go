@@ -64,7 +64,7 @@ func TestUpdateSubagentTurnsSurvivesCompletion(t *testing.T) {
 	// Final progress update (Execute reports it right before returning,
 	// strictly before the outer tool_result flips the card to done).
 	s.updateSubagentProgress("call-1", 5, 0, 0, 0, "")
-	s.completeSubagentCard("call-1", "", 1200)
+	s.completeSubagentCard("call-1", "", "", 1200)
 
 	rows := layoutSubagentCard(&s.blocks[0], 80)
 	plain := stripANSI(rows[0].Text)
@@ -105,7 +105,7 @@ func TestUpdateSubagentProgressShowsContextUsage(t *testing.T) {
 		t.Errorf("card missing context usage %q, got %q", want, plain)
 	}
 
-	s.completeSubagentCard("call-1", "", 800)
+	s.completeSubagentCard("call-1", "", "", 800)
 	rows = layoutSubagentCard(&s.blocks[0], 120)
 	plain = stripANSI(rows[0].Text)
 	if !strings.Contains(plain, want) {

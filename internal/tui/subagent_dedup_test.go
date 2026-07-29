@@ -116,7 +116,7 @@ func TestSubagentCardShowsExpediting(t *testing.T) {
 		t.Fatalf("card does not show wrapping-up marker: %+v", out)
 	}
 	// A completed card must not show the marker.
-	s.completeSubagentCard("call-1", "", 1000)
+	s.completeSubagentCard("call-1", "", "", 1000)
 	out = layoutSubagentCard(card, 80)
 	if strings.Contains(out[0].Text, "wrapping up") {
 		t.Fatalf("completed card still shows wrapping-up: %q", out[0].Text)
@@ -153,7 +153,7 @@ func TestSubagentCardExpediteReachesEveryBatchedWidget(t *testing.T) {
 	}
 
 	// Completing one by its exact synthetic ID must not disturb its siblings.
-	if !s.completeSubagentCard("call-batch.1", "", 500) {
+	if !s.completeSubagentCard("call-batch.1", "", "", 500) {
 		t.Fatal("completeSubagentCard did not match call-batch.1")
 	}
 	running := 0

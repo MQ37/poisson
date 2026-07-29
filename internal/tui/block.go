@@ -35,6 +35,8 @@ type BlockMeta struct {
 	SubagentContextWindow int     // subagent widget: the child's own model context window
 	SubagentStatus        string  // subagent widget: non-empty while the child is retrying a network failure (see agent.OutputRetrying) — shown in place of the turn/context line
 	SubagentTokensPerSec  float64 // subagent widget: the child's own token-weighted average inference speed so far, same measure as the header's (0 = none reported yet)
+	SubagentCost          float64 // subagent widget: recorded spend, meaningful only when SubagentCostKnown
+	SubagentCostKnown     bool    // subagent widget: whether a cost was actually recorded (false ≠ $0 — it means "nothing billed yet/found")
 	Expediting            bool    // subagent widget: user pressed Ctrl+G, child is wrapping up
 	ToolResult            string
 	ToolError             string

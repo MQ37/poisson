@@ -185,7 +185,7 @@ func (t *TUI) hydrateScrollbackLocked() {
 					content, errMsg := parseHydratedToolResult(b)
 					// Try the subagent widget first; only fall back to a tool card
 					// (which appends an orphan line if unmatched) when it isn't one.
-					if !t.scroll.completeSubagentCard(b.ToolCallID, errMsg, -1) {
+					if !t.scroll.completeSubagentCard(b.ToolCallID, content, errMsg, -1) {
 						t.scroll.completeToolCall(b.ToolCallID, content, errMsg, 0)
 					}
 				}

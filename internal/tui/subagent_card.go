@@ -3,6 +3,8 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -78,6 +80,19 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 			dur += "  " + speedText
 		} else {
 			dur = speedText
+		}
+	}
+
+	// Cost is only known once the child is done and its spend was actually
+	// recorded (see completeSubagentCard/subagentCostFromResult) — never
+	// shown on a still-running widget, and never fabricated as $0.0000 for a
+	// run that recorded nothing (e.g. cancelled before its first billed call).
+	if b.meta.ToolDone && b.meta.SubagentCostKnown {
+		costText := fmt.Sprintf("$%.4f", b.meta.SubagentCost)
+		if dur != "" {
+			dur += "  " + costText
+		} else {
+			dur = costText
 		}
 	}
 
@@ -178,10 +193,37 @@ func (s *scrollback) appendSubagentCard(id int64, providerCallID, name, task, mo
 	s.trim()
 }
 
+// subagentCostRe extracts the dollar figure subagent.go's Execute appends to
+// its own result text — " Cost: $0.0071." — right after "N tool calls, N
+// turns.". That sentence is the only place a subagent's recorded spend
+// exists once its ephemeral child DB is gone, so the widget reads it back out
+// instead of threading a separate cost value through ToolResult/OutputEvent
+// for what both the direct and batched completion paths already carry as
+// plain text (see agent.go's tool_result dispatch and CompleteBatchedSubagent).
+var subagentCostRe = regexp.MustCompile(`Cost: \$(\d+\.\d+)\.`)
+
+// subagentCostFromResult reports the cost a finished subagent's result text
+// carries, and whether one was found at all — absent (ok=false) means the run
+// recorded nothing (e.g. cancelled before its first billed call), which must
+// stay invisible rather than render as a fabricated $0.0000.
+func subagentCostFromResult(content string) (cost float64, ok bool) {
+	m := subagentCostRe.FindStringSubmatch(content)
+	if m == nil {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
 // completeSubagentCard marks the matching subagent widget done and reports
 // whether a widget matched. Match is by providerCallID when set, otherwise the
-// most recent still-running widget.
-func (s *scrollback) completeSubagentCard(providerCallID, errMsg string, durationMs int64) bool {
+// most recent still-running widget. content is the tool_result text (see
+// subagentCostFromResult) — pass "" when unavailable (there is then simply no
+// cost to show, same as any other run that recorded nothing).
+func (s *scrollback) completeSubagentCard(providerCallID, content, errMsg string, durationMs int64) bool {
 	for i := len(s.blocks) - 1; i >= 0; i-- {
 		b := &s.blocks[i]
 		if b.kind != blockSubagent || b.meta.ToolDone {
@@ -193,6 +235,9 @@ func (s *scrollback) completeSubagentCard(providerCallID, errMsg string, duratio
 		b.meta.Streaming = false
 		b.meta.ToolDone = true
 		b.meta.ToolError = errMsg
+		if cost, ok := subagentCostFromResult(content); ok {
+			b.meta.SubagentCost, b.meta.SubagentCostKnown = cost, true
+		}
 		switch {
 		case durationMs < 0:
 			b.meta.DurationMs = 0 // unknown (e.g. resume) — omit from display

@@ -286,7 +286,7 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		t.scroll.updateSubagentProgress(ev.ToolCallID, ev.SubagentTurns, ev.ContextTokens, ev.ContextWindow, ev.SubagentTokensPerSec, ev.Text)
 	case agent.OutputToolResult:
 		if ev.ToolName == "subagent" {
-			t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolError, 0)
+			t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
 			break
 		}
 		t.scroll.completeToolCall(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
