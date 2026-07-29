@@ -81,10 +81,13 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (<-chan St
 	return p.streamWithRetry(ctx, req, 0)
 }
 
-func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, retry int) (<-chan StreamEvent, error) {
-	// Guard all auth-map access: concurrent Stream calls (parallel bash-risk
-	// assessments) would otherwise race on the shared map and crash the process.
+// refreshOAuthIfNeeded reports whether auth is OAuth, refreshing a token
+// that expires within 5 minutes first. All auth-map access is guarded:
+// concurrent callers (parallel bash-risk assessments, a web-tool helper call
+// during a turn) would otherwise race on the shared map and crash the process.
+func (p *AnthropicProvider) refreshOAuthIfNeeded() bool {
 	p.authMu.Lock()
+	defer p.authMu.Unlock()
 	isOAuth := auth.IsOAuth(p.auth, "anthropic")
 	if isOAuth && auth.IsExpired(p.auth["anthropic"], 5*60*1000) {
 		if refreshed, err := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh); err == nil {
@@ -94,7 +97,27 @@ func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, r
 			}
 		}
 	}
-	p.authMu.Unlock()
+	return isOAuth
+}
+
+// forceRefreshOAuth refreshes the OAuth token unconditionally — used after a
+// 401, where the stored token is known bad regardless of its expiry field.
+func (p *AnthropicProvider) forceRefreshOAuth() error {
+	p.authMu.Lock()
+	defer p.authMu.Unlock()
+	refreshed, err := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh)
+	if err != nil {
+		return err
+	}
+	p.auth["anthropic"] = *refreshed
+	if serr := auth.Save(p.auth); serr != nil {
+		log.Printf("warning: save anthropic auth after refresh: %v", serr)
+	}
+	return nil
+}
+
+func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, retry int) (<-chan StreamEvent, error) {
+	isOAuth := p.refreshOAuthIfNeeded()
 
 	streamReq := req
 	if isOAuth {
@@ -143,19 +166,10 @@ func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, r
 
 	if resp.StatusCode == 401 && isOAuth && retry == 0 {
 		resp.Body.Close()
-		p.authMu.Lock()
-		refreshed, err := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh)
-		if err == nil {
-			p.auth["anthropic"] = *refreshed
-			if serr := auth.Save(p.auth); serr != nil {
-				log.Printf("warning: save anthropic auth after refresh: %v", serr)
-			}
+		if err := p.forceRefreshOAuth(); err != nil {
+			return nil, fmt.Errorf("token expired, refresh failed: %w", err)
 		}
-		p.authMu.Unlock()
-		if err == nil {
-			return p.streamWithRetry(ctx, req, 1)
-		}
-		return nil, fmt.Errorf("token expired, refresh failed: %w", err)
+		return p.streamWithRetry(ctx, req, 1)
 	}
 
 	if resp.StatusCode != 200 {

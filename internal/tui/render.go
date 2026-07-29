@@ -36,6 +36,17 @@ func bashInputPreview(command string) string {
 	return out
 }
 
+// backendSuffix annotates a web tool's preview with the backend it was asked
+// to use (" [anthropic]"), empty for the default — which backend ran is the
+// difference between a free scrape and a billed API call, so it belongs on the
+// card the user actually reads.
+func backendSuffix(provider string) string {
+	if provider == "" {
+		return ""
+	}
+	return " [" + previewText(provider, 20) + "]"
+}
+
 func toolInputPreview(toolName string, input []byte) string {
 	if len(input) == 0 {
 		return "..."
@@ -107,10 +118,19 @@ func toolInputPreview(toolName string, input []byte) string {
 		}
 	case "fetch":
 		var in struct {
-			URL string `json:"url"`
+			URL      string `json:"url"`
+			Provider string `json:"provider"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.URL != "" {
-			return previewText(in.URL, 100)
+			return previewText(in.URL, 100) + backendSuffix(in.Provider)
+		}
+	case "web_search", "web_ask":
+		var in struct {
+			Query    string `json:"query"`
+			Provider string `json:"provider"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.Query != "" {
+			return previewText(in.Query, 100) + backendSuffix(in.Provider)
 		}
 	case "@image":
 		var in struct {

@@ -62,7 +62,10 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	reg.Register(NewEditTool(opts.Cwd, opts.Sandbox, fileApproval))
 	reg.Register(NewGrepTool(opts.Cwd, opts.Sandbox, fileApproval))
 	reg.Register(NewGlobTool(opts.Cwd, opts.Sandbox, fileApproval))
-	reg.Register(NewWebSearchTool())
+	// web_search and fetch are re-registered with their provider-gated
+	// backends by agent.ReloadConfigDependentTools, which runs right after the
+	// agent knows its provider; here they get the always-available ones.
+	reg.Register(NewWebSearchTool(nil))
 	reg.Register(NewWebAskTool(opts.Auth))
 	if opts.Store != nil {
 		reg.Register(NewRecallTool(opts.Store))

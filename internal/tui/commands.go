@@ -144,6 +144,10 @@ func switchAgentToSession(h commandHost, sess *store.Session) bool {
 	a.SwitchSession(sess.ID)
 	warnPersist(h, a.SetProvider(p))
 	warnPersist(h, a.SetModel(sess.Model))
+	// A resumed session can carry a different provider than the running one,
+	// so the provider-gated tool backends (fetch's ollama/anthropic paths,
+	// web_search's anthropic path) have to be re-wired here too.
+	a.ReloadConfigDependentTools()
 	h.SetSessionID(sess.ID)
 	resetHostSessionView(h)
 	return true

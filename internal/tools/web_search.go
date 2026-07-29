@@ -43,14 +43,29 @@ func isDDGChallenge(body []byte) bool {
 // DuckDuckGo's web index. No AI, no summarization, no auth — the cheapest,
 // fastest, always-available search primitive. Use WebAskTool when a
 // synthesized answer is wanted instead of raw links.
-type WebSearchTool struct{}
+//
+// With an Anthropic session, provider=anthropic switches to Anthropic's own
+// server-side web search (the same web_search_20250305 tool Claude Code's
+// WebSearch delegates to), which returns links plus a synthesized summary and
+// is immune to DuckDuckGo's bot challenge.
+type WebSearchTool struct {
+	anthropic AnthropicWebBackend // nil unless the active provider is Anthropic
+}
 
-func NewWebSearchTool() *WebSearchTool { return &WebSearchTool{} }
+// NewWebSearchTool creates the search tool. Pass nil for anthropic on every
+// provider but Anthropic — see AnthropicWebBackend.
+func NewWebSearchTool(anthropic AnthropicWebBackend) *WebSearchTool {
+	return &WebSearchTool{anthropic: anthropic}
+}
 
 func (t *WebSearchTool) Name() string { return "web_search" }
 
 func (t *WebSearchTool) Description() string {
-	return "Search the web via DuckDuckGo. Returns a plain list of links with titles and short descriptions — no AI summary. Fast, free, no account. Use web_ask instead when you want a synthesized answer with sources."
+	desc := "Search the web via DuckDuckGo. Returns a plain list of links with titles and short descriptions — no AI summary. Fast, free, no account. Use web_ask instead when you want a synthesized answer with sources."
+	if t.anthropic != nil {
+		desc += " provider=anthropic uses Anthropic's server-side web search instead (links plus a synthesized summary, billed to the Anthropic account); available only while the session runs on Anthropic."
+	}
+	return desc
 }
 
 func (t *WebSearchTool) Schema() json.RawMessage {
@@ -58,7 +73,8 @@ func (t *WebSearchTool) Schema() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"query": {"type": "string", "description": "Search query"},
-			"num": {"type": "integer", "description": "Number of results (default: 10)"}
+			"num": {"type": "integer", "description": "Number of results (default: 10)"},
+			"provider": {"type": "string", "description": "duckduckgo | anthropic (default: duckduckgo; anthropic requires an Anthropic session)"}
 		},
 		"required": ["query"]
 	}`)
@@ -72,8 +88,9 @@ type webSearchResult struct {
 
 func (t *WebSearchTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
 	var params struct {
-		Query string `json:"query"`
-		Num   int    `json:"num"`
+		Query    string `json:"query"`
+		Num      int    `json:"num"`
+		Provider string `json:"provider"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return ToolResult{Error: "invalid input: " + err.Error()}, nil
@@ -83,6 +100,21 @@ func (t *WebSearchTool) Execute(ctx context.Context, input json.RawMessage) (Too
 	}
 	if params.Num <= 0 {
 		params.Num = 10
+	}
+
+	switch params.Provider {
+	case "", "duckduckgo":
+	case "anthropic":
+		if t.anthropic == nil {
+			return ToolResult{Error: "provider=anthropic needs an Anthropic session (switch with /model anthropic/<model>); use provider=duckduckgo instead"}, nil
+		}
+		out, err := t.anthropic.WebSearch(ctx, params.Query, params.Num)
+		if err != nil {
+			return ToolResult{Error: err.Error()}, nil
+		}
+		return ToolResult{Content: out}, nil
+	default:
+		return ToolResult{Error: fmt.Sprintf("unknown provider %q (use duckduckgo or anthropic)", params.Provider)}, nil
 	}
 
 	results, err := doWebSearch(ctx, params.Query, params.Num)

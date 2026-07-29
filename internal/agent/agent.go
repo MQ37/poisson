@@ -417,13 +417,16 @@ func (a *Agent) ReloadSkills() (int, error) {
 	return len(sk), nil
 }
 
-// ReloadConfigDependentTools updates tools gated on runtime config (e.g.
-// fetch's Ollama-vs-direct mode). fetch is always registered now — it used
-// to be Ollama-only (unregistered entirely on every other provider), which
-// meant Anthropic/OpenAI/xAI sessions never had a working fetch tool at all.
-// Ollama's own web_fetch API is used when it's the active provider and
-// reachable (its own extraction, already good); every other case falls back
-// to FetchTool's direct HTTP fetch + built-in HTML→Markdown conversion.
+// ReloadConfigDependentTools updates tools gated on the active provider and
+// runtime config: fetch's backends (curl / ollama / anthropic) and
+// web_search's optional Anthropic backend. fetch is always registered — it
+// used to be Ollama-only (unregistered entirely on every other provider),
+// which meant Anthropic/OpenAI/xAI sessions never had a working fetch tool at
+// all. Ollama's own web_fetch API is offered when it's the active provider and
+// reachable (its own extraction, already good); Anthropic's server-side search
+// and small-model page summarizer are offered when Anthropic is active, since
+// they spend that account's tokens. Every provider switch must call this, or a
+// backend stays wired to a provider the session already left.
 func (a *Agent) ReloadConfigDependentTools() {
 	if a.tools == nil || a.config == nil {
 		return
@@ -432,7 +435,15 @@ func (a *Agent) ReloadConfigDependentTools() {
 	if a.providerID() == "ollama" && tools.IsOllamaReachable(a.config) {
 		ollamaBaseURL = tools.OllamaBaseURL(a.config)
 	}
-	a.tools.Register(tools.NewFetchTool(ollamaBaseURL))
+	// Typed nil check, not a plain assignment: assigning a nil
+	// *AnthropicProvider into the interface yields a non-nil interface, which
+	// would advertise the Anthropic backends on every provider.
+	var anthropicWeb tools.AnthropicWebBackend
+	if ap, ok := a.provider.(*provider.AnthropicProvider); ok && ap != nil {
+		anthropicWeb = ap
+	}
+	a.tools.Register(tools.NewFetchTool(ollamaBaseURL, anthropicWeb))
+	a.tools.Register(tools.NewWebSearchTool(anthropicWeb))
 }
 
 // Provider returns the current provider.
