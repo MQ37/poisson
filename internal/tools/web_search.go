@@ -50,6 +50,7 @@ func isDDGChallenge(body []byte) bool {
 // is immune to DuckDuckGo's bot challenge.
 type WebSearchTool struct {
 	anthropic AnthropicWebBackend // nil unless the active provider is Anthropic
+	usage     WebUsageFn          // nil unless a host wired cost accounting
 }
 
 // NewWebSearchTool creates the search tool. Pass nil for anthropic on every
@@ -57,6 +58,10 @@ type WebSearchTool struct {
 func NewWebSearchTool(anthropic AnthropicWebBackend) *WebSearchTool {
 	return &WebSearchTool{anthropic: anthropic}
 }
+
+// SetUsageFn wires the sink that banks the Anthropic backend's helper-call
+// spend onto the session (see WebUsageFn).
+func (t *WebSearchTool) SetUsageFn(fn WebUsageFn) { t.usage = fn }
 
 func (t *WebSearchTool) Name() string { return "web_search" }
 
@@ -108,7 +113,13 @@ func (t *WebSearchTool) Execute(ctx context.Context, input json.RawMessage) (Too
 		if t.anthropic == nil {
 			return ToolResult{Error: "provider=anthropic needs an Anthropic session (switch with /model anthropic/<model>); use provider=duckduckgo instead"}, nil
 		}
-		out, err := t.anthropic.WebSearch(ctx, params.Query, params.Num)
+		out, spend, err := t.anthropic.WebSearch(ctx, params.Query, params.Num)
+		// Recorded before the error check: a search that came back empty (or
+		// failed to encode) was still billed.
+		t.usage.record(WebCall{
+			Purpose: webPurposeSearch, Provider: "anthropic", Model: spend.Model,
+			Usage: spend.Usage, SearchRequests: spend.SearchRequests,
+		})
 		if err != nil {
 			return ToolResult{Error: err.Error()}, nil
 		}

@@ -7,36 +7,45 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/mq37/poisson/internal/provider"
 )
 
 // fakeAnthropicWeb stands in for the real provider-backed Anthropic backend,
 // recording what the tools hand it.
 type fakeAnthropicWeb struct {
-	searchQuery  string
-	searchNum    int
-	searchOut    string
-	searchErr    error
-	page, prompt string
-	summarizeOut string
-	summarizeErr error
+	searchQuery    string
+	searchNum      int
+	searchOut      string
+	searchSpend    provider.WebHelperUsage
+	searchErr      error
+	page, prompt   string
+	summarizeOut   string
+	summarizeSpend provider.WebHelperUsage
+	summarizeErr   error
 }
 
-func (f *fakeAnthropicWeb) WebSearch(_ context.Context, query string, maxResults int) (string, error) {
+func (f *fakeAnthropicWeb) WebSearch(_ context.Context, query string, maxResults int) (string, provider.WebHelperUsage, error) {
 	f.searchQuery, f.searchNum = query, maxResults
-	return f.searchOut, f.searchErr
+	return f.searchOut, f.searchSpend, f.searchErr
 }
 
-func (f *fakeAnthropicWeb) WebFetchSummarize(_ context.Context, page, prompt string) (string, error) {
+func (f *fakeAnthropicWeb) WebFetchSummarize(_ context.Context, page, prompt string) (string, provider.WebHelperUsage, error) {
 	f.page, f.prompt = page, prompt
-	return f.summarizeOut, f.summarizeErr
+	return f.summarizeOut, f.summarizeSpend, f.summarizeErr
 }
 
 // TestWebSearch_AnthropicProviderUsesBackend covers the happy path: the tool
 // passes query and num through and returns the backend's text verbatim, with
 // no DuckDuckGo request involved.
 func TestWebSearch_AnthropicProviderUsesBackend(t *testing.T) {
-	be := &fakeAnthropicWeb{searchOut: "Web search results for query: \"go slices\"\n\nLinks: []\n\nprose"}
+	be := &fakeAnthropicWeb{
+		searchOut:   "Web search results for query: \"go slices\"\n\nLinks: []\n\nprose",
+		searchSpend: provider.WebHelperUsage{Usage: provider.Usage{InputTokens: 100, OutputTokens: 20}, Model: "claude-haiku-4-5", SearchRequests: 1},
+	}
 	tool := NewWebSearchTool(be)
+	var recorded []WebCall
+	tool.SetUsageFn(func(c WebCall) { recorded = append(recorded, c) })
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"query": "go slices", "num": 4, "provider": "anthropic",
 	}))
@@ -51,6 +60,10 @@ func TestWebSearch_AnthropicProviderUsesBackend(t *testing.T) {
 	}
 	if be.searchQuery != "go slices" || be.searchNum != 4 {
 		t.Errorf("backend got (%q, %d), want (\"go slices\", 4)", be.searchQuery, be.searchNum)
+	}
+	if len(recorded) != 1 || recorded[0].Provider != "anthropic" || recorded[0].Model != "claude-haiku-4-5" ||
+		recorded[0].Usage.InputTokens != 100 || recorded[0].SearchRequests != 1 || recorded[0].Purpose != webPurposeSearch {
+		t.Errorf("recorded = %+v, want the backend's spend banked as %s", recorded, webPurposeSearch)
 	}
 }
 
@@ -76,8 +89,14 @@ func TestWebSearch_AnthropicProviderRejectedWithoutBackend(t *testing.T) {
 // TestWebSearch_AnthropicBackendErrorSurfaces keeps backend failures visible:
 // an explicitly requested provider must not silently degrade to DuckDuckGo.
 func TestWebSearch_AnthropicBackendErrorSurfaces(t *testing.T) {
-	be := &fakeAnthropicWeb{searchErr: errors.New("anthropic web helper HTTP 429: slow down")}
-	res, err := NewWebSearchTool(be).Execute(context.Background(), mustJSON(t, map[string]any{
+	be := &fakeAnthropicWeb{
+		searchErr:   errors.New("anthropic web helper HTTP 429: slow down"),
+		searchSpend: provider.WebHelperUsage{Usage: provider.Usage{InputTokens: 50}, Model: "claude-haiku-4-5"},
+	}
+	var recorded []WebCall
+	tool := NewWebSearchTool(be)
+	tool.SetUsageFn(func(c WebCall) { recorded = append(recorded, c) })
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"query": "q", "provider": "anthropic",
 	}))
 	if err != nil {
@@ -85,6 +104,11 @@ func TestWebSearch_AnthropicBackendErrorSurfaces(t *testing.T) {
 	}
 	if !strings.Contains(res.Error, "HTTP 429") {
 		t.Fatalf("error = %q, want the backend error", res.Error)
+	}
+	// Anthropic bills the search whether or not the caller found the reply
+	// useful — a 429 mid-stream still carries the tokens spent before it hit.
+	if len(recorded) != 1 || recorded[0].Usage.InputTokens != 50 {
+		t.Errorf("recorded = %+v, want the spend banked even on a backend error", recorded)
 	}
 }
 
@@ -125,8 +149,14 @@ func TestFetch_AnthropicProviderFetchesLocallyThenSummarizes(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	be := &fakeAnthropicWeb{summarizeOut: "The page greets the world."}
-	res, err := NewFetchTool("", be).Execute(context.Background(), mustJSON(t, map[string]any{
+	be := &fakeAnthropicWeb{
+		summarizeOut:   "The page greets the world.",
+		summarizeSpend: provider.WebHelperUsage{Usage: provider.Usage{InputTokens: 30, OutputTokens: 8}, Model: "claude-haiku-4-5"},
+	}
+	var recorded []WebCall
+	tool := NewFetchTool("", be)
+	tool.SetUsageFn(func(c WebCall) { recorded = append(recorded, c) })
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"url": srv.URL, "provider": "anthropic", "prompt": "What does this page say?",
 	}))
 	if err != nil {
@@ -146,6 +176,10 @@ func TestFetch_AnthropicProviderFetchesLocallyThenSummarizes(t *testing.T) {
 	}
 	if be.prompt != "What does this page say?" {
 		t.Errorf("backend prompt = %q", be.prompt)
+	}
+	if len(recorded) != 1 || recorded[0].Provider != "anthropic" || recorded[0].Model != "claude-haiku-4-5" ||
+		recorded[0].Usage.InputTokens != 30 || recorded[0].Purpose != webPurposeFetch {
+		t.Errorf("recorded = %+v, want the summarizer's spend banked as %s", recorded, webPurposeFetch)
 	}
 }
 
@@ -267,7 +301,9 @@ func TestFetch_AnthropicProviderDefaultPrompt(t *testing.T) {
 
 // TestFetch_PromptRejectedOnNonAnthropicBackend: a prompt only means something
 // to the summarizing backend. Silently dropping it would hand the model a
-// whole-page dump as if it answered the question it asked.
+// whole-page dump as if it answered the question it asked. Without an
+// Anthropic backend at all, the error must say so plainly rather than send
+// the model on a retry with provider=anthropic that can only fail again.
 func TestFetch_PromptRejectedOnNonAnthropicBackend(t *testing.T) {
 	res, err := NewFetchTool("", nil).Execute(context.Background(), mustJSON(t, map[string]any{
 		"url": "https://example.com", "provider": "curl", "prompt": "what is this?",
@@ -275,8 +311,26 @@ func TestFetch_PromptRejectedOnNonAnthropicBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if !strings.Contains(res.Error, "prompt is only supported by provider=anthropic") {
-		t.Fatalf("error = %q, want a prompt rejection", res.Error)
+	if !strings.Contains(res.Error, "prompt is not supported by provider=curl") || !strings.Contains(res.Error, "needs an Anthropic session") {
+		t.Fatalf("error = %q, want a prompt rejection that doesn't dangle provider=anthropic", res.Error)
+	}
+	if strings.Contains(res.Error, "pass provider=anthropic") {
+		t.Fatalf("error = %q, must not suggest an unavailable backend", res.Error)
+	}
+}
+
+// TestFetch_PromptRejectedOnCurlWithAnthropicAvailable: when the Anthropic
+// backend IS available, the rejection should point at it — this is the
+// case the original message covered correctly.
+func TestFetch_PromptRejectedOnCurlWithAnthropicAvailable(t *testing.T) {
+	res, err := NewFetchTool("", &fakeAnthropicWeb{}).Execute(context.Background(), mustJSON(t, map[string]any{
+		"url": "https://example.com", "provider": "curl", "prompt": "what is this?",
+	}))
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(res.Error, "prompt is only supported by provider=anthropic") || !strings.Contains(res.Error, "pass provider=anthropic") {
+		t.Fatalf("error = %q, want the anthropic-available rejection", res.Error)
 	}
 }
 

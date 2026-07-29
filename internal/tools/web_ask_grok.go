@@ -11,14 +11,18 @@ import (
 	"time"
 
 	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/provider"
 )
 
 const (
-	grokResponsesURL = "https://api.x.ai/v1/responses"
-	grokModel        = "grok-4.3"
-	grokMaxBytes     = 2 << 20 // 2 MiB: cap Responses API reply (OOM guard)
-	grokErrMaxBytes  = 4 << 10
+	grokModel       = "grok-4.3"
+	grokMaxBytes    = 2 << 20 // 2 MiB: cap Responses API reply (OOM guard)
+	grokErrMaxBytes = 4 << 10
 )
+
+// grokResponsesURL is a var (not a const) so tests can point it at an
+// httptest server instead of the real xAI API.
+var grokResponsesURL = "https://api.x.ai/v1/responses"
 
 // hasXAIAuth reports whether xAI OAuth credentials exist, without refreshing
 // — used to pick web_ask's default provider (grok if logged in, else exa).
@@ -37,21 +41,21 @@ func hasXAIAuth(store auth.AuthStore) bool {
 // share a single lock with XAIProvider over the same AuthStore map (both
 // hold the same instance, wired once in main.go) — required since Go map
 // writes aren't safe under concurrent, unsynchronized access.
-func execGrokSearch(ctx context.Context, store auth.AuthStore, query string, num int) (string, error) {
+func execGrokSearch(ctx context.Context, store auth.AuthStore, query string, num int) (string, WebCall, error) {
 	entry, err := auth.EnsureXAIFresh(store, 5*60*1000)
 	if err != nil {
-		return "", err
+		return "", WebCall{}, err
 	}
 
-	result, statusCode, err := doGrokSearch(ctx, query, num, entry.Access)
+	result, spend, statusCode, err := doGrokSearch(ctx, query, num, entry.Access)
 	if err != nil && statusCode == 401 {
 		refreshed, rerr := auth.ForceRefreshXAI(store, entry.Refresh)
 		if rerr != nil {
-			return "", fmt.Errorf("token expired, refresh failed: %w", rerr)
+			return "", WebCall{}, fmt.Errorf("token expired, refresh failed: %w", rerr)
 		}
-		result, _, err = doGrokSearch(ctx, query, num, refreshed.Access)
+		result, spend, _, err = doGrokSearch(ctx, query, num, refreshed.Access)
 	}
-	return result, err
+	return result, spend, err
 }
 
 // grokPrompt asks Grok to use its web_search tool and return a plain JSON
@@ -71,7 +75,48 @@ func grokPrompt(query string, num int) string {
 			"Query: %s", num, query)
 }
 
-func doGrokSearch(ctx context.Context, query string, num int, accessToken string) (result string, statusCode int, err error) {
+// grokUsageJSON is the Responses API's usage object (probed live against
+// api.x.ai). cost_in_usd_ticks is xAI's own exact price for the call at 1e10
+// ticks per USD — tool fees and cache discounts included, which no local rate
+// table can reproduce, so it wins over pricing.ComputeCost when present.
+type grokUsageJSON struct {
+	InputTokens        int `json:"input_tokens"`
+	InputTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+	OutputTokens   int   `json:"output_tokens"`
+	CostInUSDTicks int64 `json:"cost_in_usd_ticks"`
+}
+
+// grokUSDPerTick converts cost_in_usd_ticks to dollars (1 USD = 1e10 ticks,
+// per xAI's cost-tracking docs).
+const grokUSDPerTick = 1e-10
+
+// grokSpend maps a Responses API reply's usage object onto a recordable
+// WebCall. Cached tokens are reported inside input_tokens, so they are split
+// out the same way the OpenAI Responses path does (convertOpenAIRespUsage).
+func grokSpend(body []byte) WebCall {
+	var envelope struct {
+		Usage grokUsageJSON `json:"usage"`
+	}
+	if json.Unmarshal(body, &envelope) != nil {
+		return WebCall{}
+	}
+	u := envelope.Usage
+	return WebCall{
+		Purpose:  webPurposeAsk,
+		Provider: "xai",
+		Model:    grokModel,
+		Usage: provider.Usage{
+			InputTokens:     u.InputTokens - u.InputTokensDetails.CachedTokens,
+			OutputTokens:    u.OutputTokens,
+			CacheReadTokens: u.InputTokensDetails.CachedTokens,
+		},
+		Cost: float64(u.CostInUSDTicks) * grokUSDPerTick,
+	}
+}
+
+func doGrokSearch(ctx context.Context, query string, num int, accessToken string) (result string, spend WebCall, statusCode int, err error) {
 	payload := map[string]any{
 		"model":   grokModel,
 		"input":   []map[string]string{{"role": "user", "content": grokPrompt(query, num)}},
@@ -84,41 +129,44 @@ func doGrokSearch(ctx context.Context, query string, num int, accessToken string
 	defer cancel()
 	req, reqErr := http.NewRequestWithContext(reqCtx, "POST", grokResponsesURL, bytes.NewReader(body))
 	if reqErr != nil {
-		return "", 0, reqErr
+		return "", WebCall{}, 0, reqErr
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, doErr := http.DefaultClient.Do(req)
 	if doErr != nil {
-		return "", 0, fmt.Errorf("xAI Responses API request: %w", doErr)
+		return "", WebCall{}, 0, fmt.Errorf("xAI Responses API request: %w", doErr)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, grokErrMaxBytes))
-		return "", resp.StatusCode, fmt.Errorf("xAI Responses API HTTP %d: %s", resp.StatusCode, sanitizeHTTPErrorBody(raw))
+		return "", WebCall{}, resp.StatusCode, fmt.Errorf("xAI Responses API HTTP %d: %s", resp.StatusCode, sanitizeHTTPErrorBody(raw))
 	}
 
 	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, grokMaxBytes))
 	if readErr != nil {
-		return "", resp.StatusCode, fmt.Errorf("read response: %w", readErr)
+		return "", WebCall{}, resp.StatusCode, fmt.Errorf("read response: %w", readErr)
 	}
+	// Parsed before anything can go wrong below: a reply that arrived was
+	// billed, whether or not poisson can make sense of its contents.
+	spend = grokSpend(raw)
 
 	var data map[string]any
 	if jsonErr := json.Unmarshal(raw, &data); jsonErr != nil {
-		return "", resp.StatusCode, fmt.Errorf("decode response: %w", jsonErr)
+		return "", spend, resp.StatusCode, fmt.Errorf("decode response: %w", jsonErr)
 	}
 	if apiErr, ok := data["error"].(map[string]any); ok {
 		msg, _ := apiErr["message"].(string)
 		if msg == "" {
 			msg = "unknown error"
 		}
-		return "", resp.StatusCode, fmt.Errorf("xAI returned an error: %s", msg)
+		return "", spend, resp.StatusCode, fmt.Errorf("xAI returned an error: %s", msg)
 	}
 
 	out, _ := json.Marshal(map[string]any{"results": extractGrokResults(data, num)})
-	return string(out), resp.StatusCode, nil
+	return string(out), spend, resp.StatusCode, nil
 }
 
 var grokJSONBlockRe = regexp.MustCompile(`(?s)\{.*\}`)

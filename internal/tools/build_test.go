@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
+	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/store"
 	"github.com/mq37/poisson/internal/testutil"
 )
@@ -26,6 +28,37 @@ func TestBuildRegistry_Parent(t *testing.T) {
 		if _, ok := reg.Get(w); !ok {
 			t.Errorf("parent registry missing %q; have %v", w, names)
 		}
+	}
+}
+
+// TestBindWebUsage proves the sink it wires is live, not just present: after
+// BindWebUsage, actually driving a call through web_search's Anthropic
+// backend must reach the callback — the thing agent.ReloadConfigDependentTools
+// depends on for every web tool's cost to reach api_calls.
+func TestBindWebUsage(t *testing.T) {
+	reg := NewRegistry()
+	be := &fakeAnthropicWeb{
+		searchOut:   "results",
+		searchSpend: provider.WebHelperUsage{Usage: provider.Usage{InputTokens: 5}, Model: "claude-haiku-4-5"},
+	}
+	reg.Register(NewWebSearchTool(be))
+	reg.Register(NewFetchTool("", nil))
+	reg.Register(NewWebAskTool(nil))
+
+	var got []WebCall
+	BindWebUsage(reg, func(c WebCall) { got = append(got, c) })
+
+	webSearch, ok := reg.Get("web_search")
+	if !ok {
+		t.Fatal("web_search not registered")
+	}
+	if _, err := webSearch.Execute(context.Background(), mustJSON(t, map[string]any{
+		"query": "q", "provider": "anthropic",
+	})); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(got) != 1 || got[0].Usage.InputTokens != 5 || got[0].Model != "claude-haiku-4-5" {
+		t.Fatalf("got = %+v, want the backend's spend routed through BindWebUsage's sink", got)
 	}
 }
 

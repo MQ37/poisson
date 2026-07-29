@@ -58,7 +58,7 @@ func TestAnthropicWebSearch_RequestShape(t *testing.T) {
 	defer server.Close()
 	p := oauthProvider(t, server.URL)
 
-	if _, err := p.WebSearch(context.Background(), "suckless philosophy", 0); err != nil {
+	if _, _, err := p.WebSearch(context.Background(), "suckless philosophy", 0); err != nil {
 		t.Fatalf("WebSearch: %v", err)
 	}
 
@@ -122,9 +122,15 @@ func TestAnthropicWebSearch_ResultShape(t *testing.T) {
 	defer server.Close()
 	p := oauthProvider(t, server.URL)
 
-	out, err := p.WebSearch(context.Background(), "suckless philosophy", 0)
+	out, spend, err := p.WebSearch(context.Background(), "suckless philosophy", 0)
 	if err != nil {
 		t.Fatalf("WebSearch: %v", err)
+	}
+	// The fixture's message_delta carries no input_tokens (real captures do —
+	// see webSearchSSE's doc comment), so the merge must fall back to
+	// message_start's 2351.
+	if spend.Model != anthropicWebModel || spend.InputTokens != 2351 || spend.OutputTokens != 461 || spend.SearchRequests != 1 {
+		t.Errorf("spend = %+v", spend)
 	}
 	for _, want := range []string{
 		`Web search results for query: "suckless philosophy"`,
@@ -148,7 +154,7 @@ func TestAnthropicWebSearch_TrimsToMaxResults(t *testing.T) {
 	defer server.Close()
 	p := oauthProvider(t, server.URL)
 
-	out, err := p.WebSearch(context.Background(), "q", 1)
+	out, _, err := p.WebSearch(context.Background(), "q", 1)
 	if err != nil {
 		t.Fatalf("WebSearch: %v", err)
 	}
@@ -157,9 +163,64 @@ func TestAnthropicWebSearch_TrimsToMaxResults(t *testing.T) {
 	}
 }
 
+// TestAnthropicWebSearch_UsesMessageDeltaInputWhenPresent pins the merge's
+// priority the other way around from the trimmed fixture above: a real
+// capture's message_delta DOES carry the full-loop input_tokens (2351+7506=
+// 9857, capture 0029), and that authoritative total must win over
+// message_start's first-iteration-only 2351.
+func TestAnthropicWebSearch_UsesMessageDeltaInputWhenPresent(t *testing.T) {
+	sse := `event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":2351}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}
+
+event: message_delta
+data: {"type":"message_delta","usage":{"input_tokens":9857,"output_tokens":461,"server_tool_use":{"web_search_requests":1}}}
+`
+	server := newFakeSSEServer(sse)
+	defer server.Close()
+	p := oauthProvider(t, server.URL)
+
+	_, spend, err := p.WebSearch(context.Background(), "q", 0)
+	if err != nil {
+		t.Fatalf("WebSearch: %v", err)
+	}
+	if spend.InputTokens != 9857 || spend.OutputTokens != 461 || spend.SearchRequests != 1 {
+		t.Errorf("spend = %+v, want the message_delta total (9857/461/1)", spend)
+	}
+}
+
+// TestAnthropicWebFetchSummarize_UsageHasNoSearchRequests: WebFetch's helper
+// call carries no server-side tool, so its spend must never claim a search
+// happened — that would double-bill the fee on top of what WebSearch already
+// recorded for an unrelated call.
+func TestAnthropicWebFetchSummarize_UsageHasNoSearchRequests(t *testing.T) {
+	sse := `event: message_start
+data: {"type":"message_start","message":{"usage":{"input_tokens":200}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"It is a placeholder page."}}
+
+event: message_delta
+data: {"type":"message_delta","usage":{"output_tokens":88}}
+`
+	server := newFakeSSEServer(sse)
+	defer server.Close()
+	p := oauthProvider(t, server.URL)
+
+	_, spend, err := p.WebFetchSummarize(context.Background(), "page", "q")
+	if err != nil {
+		t.Fatalf("WebFetchSummarize: %v", err)
+	}
+	if spend.SearchRequests != 0 || spend.InputTokens != 200 || spend.OutputTokens != 88 {
+		t.Errorf("spend = %+v", spend)
+	}
+}
+
 func TestAnthropicWebSearch_EmptyQueryRejected(t *testing.T) {
 	p := oauthProvider(t, "http://127.0.0.1:1")
-	if _, err := p.WebSearch(context.Background(), "  ", 0); err == nil {
+	if _, _, err := p.WebSearch(context.Background(), "  ", 0); err == nil {
 		t.Fatal("want an error for an empty query")
 	}
 }
@@ -178,12 +239,15 @@ data: {"type":"message_stop"}
 	defer server.Close()
 	p := oauthProvider(t, server.URL)
 
-	out, err := p.WebFetchSummarize(context.Background(), "# Example Domain\n\nReserved.", "What does this page say?")
+	out, spend, err := p.WebFetchSummarize(context.Background(), "# Example Domain\n\nReserved.", "What does this page say?")
 	if err != nil {
 		t.Fatalf("WebFetchSummarize: %v", err)
 	}
 	if out != "It is a placeholder page." {
 		t.Errorf("answer = %q", out)
+	}
+	if spend.Model != anthropicWebModel {
+		t.Errorf("spend.Model = %q, want %q", spend.Model, anthropicWebModel)
 	}
 
 	var body struct {
@@ -216,7 +280,7 @@ data: {"type":"message_stop"}
 
 func TestAnthropicWebFetchSummarize_EmptyPageRejected(t *testing.T) {
 	p := oauthProvider(t, "http://127.0.0.1:1")
-	if _, err := p.WebFetchSummarize(context.Background(), "   ", "q"); err == nil {
+	if _, _, err := p.WebFetchSummarize(context.Background(), "   ", "q"); err == nil {
 		t.Fatal("want an error for empty page content")
 	}
 }
@@ -228,7 +292,7 @@ func TestAnthropicWeb_StreamErrorSurfaces(t *testing.T) {
 	defer server.Close()
 	p := oauthProvider(t, server.URL)
 
-	if _, err := p.WebSearch(context.Background(), "q", 0); err == nil || !strings.Contains(err.Error(), "overloaded") {
+	if _, _, err := p.WebSearch(context.Background(), "q", 0); err == nil || !strings.Contains(err.Error(), "overloaded") {
 		t.Fatalf("err = %v, want the stream error", err)
 	}
 }
@@ -242,7 +306,7 @@ func TestAnthropicWeb_APIKeyAuthSkipsStealthBlocks(t *testing.T) {
 	p := NewAnthropicProvider(auth.AuthStore{"anthropic": auth.AuthEntry{Type: "api_key", Key: "sk-test"}}, nil)
 	p.baseURL = server.URL
 
-	if _, err := p.WebSearch(context.Background(), "q", 0); err != nil {
+	if _, _, err := p.WebSearch(context.Background(), "q", 0); err != nil {
 		t.Fatalf("WebSearch: %v", err)
 	}
 	var body struct {

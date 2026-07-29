@@ -8,12 +8,15 @@ import (
 	"github.com/mq37/poisson/internal/config"
 )
 
-// Rates holds per-1M-token USD rates.
+// Rates holds per-1M-token USD rates, plus the per-request fee a server-side
+// search on this model bills on top of tokens. Field order must match
+// config.Pricing: Lookup converts one to the other directly.
 type Rates struct {
 	InputPerMTok      float64
 	OutputPerMTok     float64
 	CacheReadPerMTok  float64
 	CacheWritePerMTok float64
+	SearchPerRequest  float64
 }
 
 // Lookup returns pricing for (provider, model). Built-in rates live in
@@ -57,6 +60,20 @@ func lookupWildcardConfig(prov map[string]config.Pricing, model string) (Rates, 
 		return *best, true
 	}
 	return Rates{}, false
+}
+
+// SearchCost returns the USD fee for requests server-side web searches on
+// (provider, model), which Anthropic bills on top of the tokens the results
+// add to the prompt. Unknown pricing → 0.
+func SearchCost(cfg *config.Config, provider, model string, requests int) float64 {
+	if requests <= 0 {
+		return 0
+	}
+	r, ok := Lookup(cfg, provider, model)
+	if !ok {
+		return 0
+	}
+	return float64(requests) * r.SearchPerRequest
 }
 
 // ComputeCost returns USD cost for a single API call. Unknown pricing → 0.

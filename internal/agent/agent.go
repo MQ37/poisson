@@ -192,6 +192,11 @@ type Agent struct {
 	// turn is already in flight.
 	pendingInputFn func() (segments []TextSegment, ok bool)
 
+	// apiCallMu serializes recordAPICallCost: its seq comes from a
+	// max(seq)+1 SELECT, which two concurrent recorders (parallel tool calls,
+	// each able to trigger a risk classification or a web-tool helper call)
+	// would otherwise read as the same number.
+	apiCallMu sync.Mutex
 	// cumUsageMu guards cumUsage and cumCost.
 	cumUsageMu sync.Mutex
 	// cumUsage is the running total of every api_calls row this Agent has
@@ -444,6 +449,10 @@ func (a *Agent) ReloadConfigDependentTools() {
 	}
 	a.tools.Register(tools.NewFetchTool(ollamaBaseURL, anthropicWeb))
 	a.tools.Register(tools.NewWebSearchTool(anthropicWeb))
+	// Re-applied after every Register: a freshly built tool has no sink, and
+	// web_ask (registered once, by BuildRegistry) needs one too. Without it a
+	// web tool's helper-model spend goes unrecorded — see RecordWebToolCall.
+	tools.BindWebUsage(a.tools, a.RecordWebToolCall)
 }
 
 // Provider returns the current provider.
@@ -1813,10 +1822,22 @@ func (a *Agent) recordAuxiliaryAPICall(purpose string, usage *provider.Usage) er
 }
 
 func (a *Agent) recordAPICallFor(usage *provider.Usage, purpose, providerID, model string) (string, error) {
+	cost := a.computeCost(providerID, model,
+		usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
+	return a.recordAPICallCost(usage, purpose, providerID, model, cost)
+}
+
+// recordAPICallCost is recordAPICallFor with the price already decided —
+// needed when the provider itself reports the exact dollar figure (see
+// RecordWebToolCall) rather than leaving it to the local rate table.
+func (a *Agent) recordAPICallCost(usage *provider.Usage, purpose, providerID, model string, cost float64) (string, error) {
 	cacheRead, cacheWrite := usage.CacheReadTokens, usage.CacheWriteTokens
 
-	cost := a.computeCost(providerID, model,
-		usage.InputTokens, usage.OutputTokens, cacheRead, cacheWrite)
+	// Serialized: seq is max(seq)+1 read from the DB, and tools run in
+	// parallel (batch, and web tools inside it), so two concurrent recorders
+	// would otherwise pick the same number.
+	a.apiCallMu.Lock()
+	defer a.apiCallMu.Unlock()
 
 	seq := a.nextAPICallSeq()
 
@@ -1905,6 +1926,13 @@ func (a *Agent) RecordSubagentUsage(providerID, model string, usage *provider.Us
 		cost = a.computeCost(providerID, model,
 			usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
 	}
+
+	// Same seq race recordAPICallCost guards against: a batch can finish
+	// several subagents at once, each racing this function's own
+	// nextAPICallSeq() read against every other recorder in the session.
+	a.apiCallMu.Lock()
+	defer a.apiCallMu.Unlock()
+
 	call := &store.APICall{
 		SessionID:          a.sessionID,
 		Seq:                a.nextAPICallSeq(),
@@ -1924,8 +1952,35 @@ func (a *Agent) RecordSubagentUsage(providerID, model string, usage *provider.Us
 	return cost, nil
 }
 
+// RecordWebToolCall banks an API call a web tool's backend made outside
+// provider.Stream — the Anthropic search/summarize helper model, or web_ask's
+// Grok call (see tools.WebCall). Without this those tokens never reach
+// api_calls, and /cost, `px cost` and a subagent's reported spend all silently
+// undercount every session that used a web tool.
+//
+// The row is priced against the backend's own provider and model, never the
+// session's: web_ask spends xAI credits while the session runs on Anthropic,
+// and the Anthropic backends spend on a small helper model, not the session
+// model. As everywhere else in poisson, an OAuth/subscription session gets
+// shadow pricing at published API rates — the tokens are real, the dollars are
+// indicative.
+func (a *Agent) RecordWebToolCall(c tools.WebCall) {
+	cost := c.Cost
+	if cost <= 0 {
+		// No provider-reported figure: price the tokens locally, plus the
+		// per-search fee Anthropic bills on top of them.
+		cost = a.computeCost(c.Provider, c.Model,
+			c.Usage.InputTokens, c.Usage.OutputTokens, c.Usage.CacheReadTokens, c.Usage.CacheWriteTokens) +
+			pricing.SearchCost(a.config, c.Provider, c.Model, c.SearchRequests)
+	}
+	usage := c.Usage
+	if _, err := a.recordAPICallCost(&usage, c.Purpose, c.Provider, c.Model, cost); err != nil {
+		log.Printf("record %s api call: %v", c.Purpose, err)
+	}
+}
+
 // nextAPICallSeq returns the next sequence number for api_calls in this
-// session (max(seq) + 1, or 1 if no rows yet).
+// session (max(seq) + 1, or 1 if no rows yet). Callers hold apiCallMu.
 func (a *Agent) nextAPICallSeq() int {
 	var ms int
 	row := a.store.DB().QueryRow(

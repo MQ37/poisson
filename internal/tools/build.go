@@ -143,3 +143,21 @@ func BindBatchSubagentDone(reg *Registry, fn func(toolCallID string, res ToolRes
 func BindSubagentUsage(reg *Registry, fn func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error)) {
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetUsageFn(fn) })
 }
+
+// BindWebUsage wires the cost sink on every web tool with a backend that
+// spends an account's tokens: fetch and web_search (Anthropic's helper model)
+// and web_ask (Grok). Called from agent.ReloadConfigDependentTools, which runs
+// on every entry point (REPL, headless, subagent child, cost-eval) and after
+// each provider switch — the sink has to be re-applied there anyway, since
+// that is where fetch and web_search get re-registered.
+func BindWebUsage(reg *Registry, fn WebUsageFn) {
+	for _, name := range []string{"fetch", "web_search", "web_ask"} {
+		t, ok := reg.Get(name)
+		if !ok {
+			continue
+		}
+		if sink, ok := t.(interface{ SetUsageFn(WebUsageFn) }); ok {
+			sink.SetUsageFn(fn)
+		}
+	}
+}

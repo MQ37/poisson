@@ -90,6 +90,7 @@ const (
 type FetchTool struct {
 	ollamaBaseURL string              // empty means: Ollama backend unavailable
 	anthropic     AnthropicWebBackend // nil means: Anthropic backend unavailable
+	usage         WebUsageFn          // nil means: no cost accounting wired
 }
 
 // NewFetchTool creates a fetch tool. Pass "" for ollamaBaseURL and nil for
@@ -99,6 +100,10 @@ type FetchTool struct {
 func NewFetchTool(ollamaBaseURL string, anthropic AnthropicWebBackend) *FetchTool {
 	return &FetchTool{ollamaBaseURL: ollamaBaseURL, anthropic: anthropic}
 }
+
+// SetUsageFn wires the sink that banks the Anthropic summarizer's spend onto
+// the session (see WebUsageFn).
+func (t *FetchTool) SetUsageFn(fn WebUsageFn) { t.usage = fn }
 
 func (t *FetchTool) Name() string { return "fetch" }
 
@@ -142,7 +147,7 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 	// A prompt on any other backend would be silently dropped, and the model
 	// would read a whole-page dump as if it were an answer to its question.
 	if params.Prompt != "" && backend != fetchViaAnthropic {
-		return ToolResult{Error: fmt.Sprintf("prompt is only supported by provider=anthropic, not %q — drop it, or pass provider=anthropic", backend)}, nil
+		return ToolResult{Error: t.promptUnsupportedError(backend)}, nil
 	}
 
 	switch backend {
@@ -186,6 +191,17 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 	return ToolResult{Content: string(data)}, nil
 }
 
+// promptUnsupportedError explains a prompt handed to a backend that cannot
+// answer one. It only suggests provider=anthropic when this session actually
+// has that backend: suggesting it otherwise costs the model a whole round trip
+// to discover the retry fails with "needs an Anthropic session" too.
+func (t *FetchTool) promptUnsupportedError(backend string) string {
+	if t.anthropic == nil {
+		return fmt.Sprintf("prompt is not supported by provider=%s, and the summarizing provider=anthropic backend needs an Anthropic session (this session runs on another provider) — drop the prompt and read the page instead", backend)
+	}
+	return fmt.Sprintf("prompt is only supported by provider=anthropic, not %q — drop it, or pass provider=anthropic", backend)
+}
+
 // defaultBackend keeps the pre-provider-argument behavior: Ollama's own
 // web_fetch when this session can use it, else a plain fetch. Anthropic is
 // never a default — it spends tokens, so the model has to ask for it.
@@ -209,7 +225,12 @@ func (t *FetchTool) fetchViaAnthropicBackend(ctx context.Context, rawURL, prompt
 	if err != nil || page.Error != "" {
 		return page, err
 	}
-	answer, aerr := t.anthropic.WebFetchSummarize(ctx, page.Content, prompt)
+	answer, spend, aerr := t.anthropic.WebFetchSummarize(ctx, page.Content, prompt)
+	// Recorded before the error check: a helper call that answered with nothing
+	// was still billed for the page it read.
+	t.usage.record(WebCall{
+		Purpose: webPurposeFetch, Provider: "anthropic", Model: spend.Model, Usage: spend.Usage,
+	})
 	if aerr != nil {
 		return ToolResult{Error: aerr.Error()}, nil
 	}

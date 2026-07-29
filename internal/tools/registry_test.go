@@ -12,9 +12,9 @@ import (
 // needing to actually trigger one in a real tool implementation.
 type panickingTool struct{ value interface{} }
 
-func (t panickingTool) Name() string             { return "panicky" }
-func (t panickingTool) Description() string      { return "always panics, for tests" }
-func (t panickingTool) Schema() json.RawMessage   { return json.RawMessage(`{"type":"object"}`) }
+func (t panickingTool) Name() string            { return "panicky" }
+func (t panickingTool) Description() string     { return "always panics, for tests" }
+func (t panickingTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
 func (t panickingTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
 	panic(t.value)
 }

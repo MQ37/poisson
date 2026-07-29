@@ -89,6 +89,32 @@ Deliberate differences from Claude Code:
 
 - No `GET /api/web/domain_info` preflight. That is an Anthropic-side allow/deny
   policy gate on a fetch poisson performs locally anyway.
-- Helper-call tokens are not added to session cost. Like `web_ask`'s Grok
-  backend, these calls bypass `provider.Stream`, which is where usage
-  accounting lives.
+
+## Cost accounting
+
+Every backend that spends real tokens or dollars bypasses `provider.Stream`
+(the Anthropic search/summarize helper model, and `web_ask`'s Grok backend),
+which is where the main turn loop's usage accounting normally lives. Each one
+still reports its own spend back out — `provider.WebHelperUsage` for the
+Anthropic backends, `tools.WebCall` for the Grok backend — and
+`agent.RecordWebToolCall` banks it as an `api_calls` row under a dedicated
+purpose (`web_search`, `web_fetch`, `web_ask`), so `/cost`, `px cost`, and a
+subagent's reported spend all include it. `tools.BindWebUsage` wires that sink
+onto fetch/web_search/web_ask from `agent.ReloadConfigDependentTools`, which
+already runs on every entry point and provider switch.
+
+Pricing differs by backend:
+
+- Anthropic (`web_search`/`fetch`): priced from the local rate table against
+  `claude-haiku-4-5*` (the helper model, never the session model), plus
+  Anthropic's $10/1000 `search_per_request` fee on top for each server-side
+  search `usage.server_tool_use.web_search_requests` reports.
+- Grok (`web_ask`): xAI's Responses API returns its own exact
+  `cost_in_usd_ticks` per call (1e10 ticks = $1, tool fees and cache discounts
+  already included), recorded verbatim instead of re-priced locally.
+- exa (`web_ask` fallback) and DuckDuckGo (`web_search` default) are free and
+  record nothing.
+
+A row is only ever banked with real tokens or a real cost attached — a helper
+call that errored before any HTTP request went out (e.g. missing xAI
+credentials) reports nothing, since nothing was actually spent.

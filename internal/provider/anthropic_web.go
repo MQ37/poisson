@@ -59,66 +59,90 @@ type anthropicWebLink struct {
 	URL   string `json:"url"`
 }
 
+// WebHelperUsage is what one helper call spent. These calls bypass Stream, so
+// they carry their own usage out to the caller instead of an EventDone —
+// otherwise their tokens never reach the session's api_calls rows and every
+// cost figure poisson shows silently undercounts them.
+type WebHelperUsage struct {
+	Usage
+	// Model is the helper model that served the call — not the session model,
+	// so a cost row prices at the rate actually paid.
+	Model string
+	// SearchRequests is usage.server_tool_use.web_search_requests: Anthropic
+	// bills each server-side search on top of tokens.
+	SearchRequests int
+}
+
+// anthropicWebReply is one helper call's full result: what the model said,
+// what it found, and what it cost.
+type anthropicWebReply struct {
+	Text  string
+	Links []anthropicWebLink
+	Spend WebHelperUsage
+}
+
 // WebSearch runs one Anthropic-side web search and returns the same
 // text shape Claude Code feeds its main loop: the query, a JSON list of
 // links, then the helper model's prose synthesis. maxResults <= 0 keeps every
 // link returned.
-func (p *AnthropicProvider) WebSearch(ctx context.Context, query string, maxResults int) (string, error) {
+func (p *AnthropicProvider) WebSearch(ctx context.Context, query string, maxResults int) (string, WebHelperUsage, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return "", fmt.Errorf("anthropic web_search: query is required")
+		return "", WebHelperUsage{}, fmt.Errorf("anthropic web_search: query is required")
 	}
 	tools := []map[string]any{{
 		"type":     anthropicWebSearchTool,
 		"name":     "web_search",
 		"max_uses": anthropicWebSearchMaxUses,
 	}}
-	text, links, err := p.webHelper(ctx, anthropicWebSearchSystem,
+	reply, err := p.webHelper(ctx, anthropicWebSearchSystem,
 		"Perform a web search for the query: "+query, tools)
 	if err != nil {
-		return "", err
+		return "", WebHelperUsage{}, err
 	}
-	if len(links) == 0 && text == "" {
-		return "", fmt.Errorf("anthropic web_search returned no results")
+	links := reply.Links
+	if len(links) == 0 && reply.Text == "" {
+		// Billed all the same, so hand the spend back even on this failure.
+		return "", reply.Spend, fmt.Errorf("anthropic web_search returned no results")
 	}
 	if maxResults > 0 && len(links) > maxResults {
 		links = links[:maxResults]
 	}
 	encoded, err := json.Marshal(links)
 	if err != nil {
-		return "", fmt.Errorf("anthropic web_search: encode links: %w", err)
+		return "", reply.Spend, fmt.Errorf("anthropic web_search: encode links: %w", err)
 	}
-	return fmt.Sprintf("Web search results for query: %q\n\nLinks: %s\n\n%s", query, encoded, text), nil
+	return fmt.Sprintf("Web search results for query: %q\n\nLinks: %s\n\n%s", query, encoded, reply.Text), reply.Spend, nil
 }
 
 // WebFetchSummarize answers prompt against already-fetched page content using
 // the same small model and guardrails Claude Code's WebFetch uses. The caller
 // owns fetching and markdown conversion — this never touches the network on
 // the page's behalf, so the fetch tool's SSRF guard stays authoritative.
-func (p *AnthropicProvider) WebFetchSummarize(ctx context.Context, pageMarkdown, prompt string) (string, error) {
+func (p *AnthropicProvider) WebFetchSummarize(ctx context.Context, pageMarkdown, prompt string) (string, WebHelperUsage, error) {
 	if strings.TrimSpace(pageMarkdown) == "" {
-		return "", fmt.Errorf("anthropic web fetch: page content is empty")
+		return "", WebHelperUsage{}, fmt.Errorf("anthropic web fetch: page content is empty")
 	}
 	if strings.TrimSpace(prompt) == "" {
 		prompt = "What does this page say?"
 	}
 	user := fmt.Sprintf("\nWeb page content:\n---\n%s\n---\n\n%s\n\n%s",
 		pageMarkdown, prompt, anthropicWebFetchGuardrails)
-	text, _, err := p.webHelper(ctx, "", user, nil)
+	reply, err := p.webHelper(ctx, "", user, nil)
 	if err != nil {
-		return "", err
+		return "", WebHelperUsage{}, err
 	}
-	if strings.TrimSpace(text) == "" {
-		return "", fmt.Errorf("anthropic web fetch: model returned no answer")
+	if strings.TrimSpace(reply.Text) == "" {
+		return "", reply.Spend, fmt.Errorf("anthropic web fetch: model returned no answer")
 	}
-	return text, nil
+	return reply.Text, reply.Spend, nil
 }
 
 // webHelper performs one small-model helper request and returns its assistant
-// text plus any web_search_tool_result links. systemExtra is the task line
-// appended after the stealth billing/identity blocks (empty for the fetch
-// summarizer, which sends neither a task line nor tools).
-func (p *AnthropicProvider) webHelper(ctx context.Context, systemExtra, userText string, tools []map[string]any) (string, []anthropicWebLink, error) {
+// text, any web_search_tool_result links, and what the call spent. systemExtra
+// is the task line appended after the stealth billing/identity blocks (empty
+// for the fetch summarizer, which sends neither a task line nor tools).
+func (p *AnthropicProvider) webHelper(ctx context.Context, systemExtra, userText string, tools []map[string]any) (anthropicWebReply, error) {
 	isOAuth := p.refreshOAuthIfNeeded()
 
 	system := []map[string]any{}
@@ -154,26 +178,27 @@ func (p *AnthropicProvider) webHelper(ctx context.Context, systemExtra, userText
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return "", nil, fmt.Errorf("anthropic web helper: marshal request: %w", err)
+		return anthropicWebReply{}, fmt.Errorf("anthropic web helper: marshal request: %w", err)
 	}
 
-	text, links, status, err := p.doWebHelper(ctx, payload, isOAuth)
+	reply, status, err := p.doWebHelper(ctx, payload, isOAuth)
 	if err != nil && status == 401 && isOAuth {
 		if rerr := p.forceRefreshOAuth(); rerr != nil {
-			return "", nil, fmt.Errorf("token expired, refresh failed: %w", rerr)
+			return anthropicWebReply{}, fmt.Errorf("token expired, refresh failed: %w", rerr)
 		}
-		text, links, _, err = p.doWebHelper(ctx, payload, isOAuth)
+		reply, _, err = p.doWebHelper(ctx, payload, isOAuth)
 	}
-	return text, links, err
+	reply.Spend.Model = anthropicWebModel
+	return reply, err
 }
 
-func (p *AnthropicProvider) doWebHelper(ctx context.Context, payload []byte, isOAuth bool) (string, []anthropicWebLink, int, error) {
+func (p *AnthropicProvider) doWebHelper(ctx context.Context, payload []byte, isOAuth bool) (anthropicWebReply, int, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, anthropicWebTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, "POST", p.baseURL+"/v1/messages?beta=true", bytes.NewReader(payload))
 	if err != nil {
-		return "", nil, 0, err
+		return anthropicWebReply{}, 0, err
 	}
 	p.setHeaders(req, isOAuth, false, 0, newUUIDv4())
 	if isOAuth {
@@ -183,17 +208,17 @@ func (p *AnthropicProvider) doWebHelper(ctx context.Context, payload []byte, isO
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", nil, 0, fmt.Errorf("anthropic web helper request: %w", err)
+		return anthropicWebReply{}, 0, fmt.Errorf("anthropic web helper request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		raw, _ := readCappedBody(resp)
-		return "", nil, resp.StatusCode, fmt.Errorf("anthropic web helper HTTP %d: %s", resp.StatusCode, string(raw))
+		return anthropicWebReply{}, resp.StatusCode, fmt.Errorf("anthropic web helper HTTP %d: %s", resp.StatusCode, string(raw))
 	}
 
-	text, links, err := parseAnthropicWebSSE(resp.Body)
-	return text, links, resp.StatusCode, err
+	reply, err := parseAnthropicWebSSE(resp.Body)
+	return reply, resp.StatusCode, err
 }
 
 // stealthWebBetaHeader is the anthropic-beta value real Claude Code sends on
@@ -214,17 +239,32 @@ func stealthWebBetaHeader() string {
 	}, ",")
 }
 
-// parseAnthropicWebSSE collects assistant text and web_search_tool_result
-// links from a helper call's SSE stream. Thinking deltas, server_tool_use
-// argument deltas, and per-result encrypted_content are all discarded — only
-// what the caller can act on survives.
-func parseAnthropicWebSSE(body io.Reader) (string, []anthropicWebLink, error) {
+// anthropicWebUsageJSON is the usage object both message_start and
+// message_delta carry. message_delta's copy is already the total across a
+// server-tool loop's iterations (capture 0029: 2351 + 7506 = 9857 input), so
+// the per-iteration breakdown is ignored rather than summed on top.
+type anthropicWebUsageJSON struct {
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+	CacheReadTokens  int `json:"cache_read_input_tokens"`
+	CacheWriteTokens int `json:"cache_creation_input_tokens"`
+	ServerToolUse    struct {
+		WebSearchRequests int `json:"web_search_requests"`
+	} `json:"server_tool_use"`
+}
+
+// parseAnthropicWebSSE collects assistant text, web_search_tool_result links,
+// and token usage from a helper call's SSE stream. Thinking deltas,
+// server_tool_use argument deltas, and per-result encrypted_content are all
+// discarded — only what the caller can act on survives.
+func parseAnthropicWebSSE(body io.Reader) (anthropicWebReply, error) {
 	scanner := bufio.NewScanner(io.LimitReader(body, anthropicWebMaxBytes))
 	scanner.Buffer(make([]byte, 0, 1<<20), 8<<20)
 
 	var text strings.Builder
 	var links []anthropicWebLink
 	seen := map[string]bool{}
+	var start, final anthropicWebUsageJSON
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -233,7 +273,11 @@ func parseAnthropicWebSSE(body io.Reader) (string, []anthropicWebLink, error) {
 			continue
 		}
 		var ev struct {
-			Type         string `json:"type"`
+			Type    string `json:"type"`
+			Message struct {
+				Usage anthropicWebUsageJSON `json:"usage"`
+			} `json:"message"`
+			Usage        anthropicWebUsageJSON `json:"usage"`
 			ContentBlock struct {
 				Type    string `json:"type"`
 				Content []struct {
@@ -255,9 +299,13 @@ func parseAnthropicWebSSE(body io.Reader) (string, []anthropicWebLink, error) {
 			continue
 		}
 		if ev.Error != nil {
-			return "", nil, fmt.Errorf("anthropic web helper stream error: %s", ev.Error.Message)
+			return anthropicWebReply{}, fmt.Errorf("anthropic web helper stream error: %s", ev.Error.Message)
 		}
 		switch ev.Type {
+		case "message_start":
+			start = ev.Message.Usage
+		case "message_delta":
+			final = ev.Usage
 		case "content_block_start":
 			if ev.ContentBlock.Type != "web_search_tool_result" {
 				continue
@@ -276,7 +324,33 @@ func parseAnthropicWebSSE(body io.Reader) (string, []anthropicWebLink, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", nil, fmt.Errorf("anthropic web helper: read stream: %w", err)
+		return anthropicWebReply{}, fmt.Errorf("anthropic web helper: read stream: %w", err)
 	}
-	return strings.TrimSpace(text.String()), links, nil
+	return anthropicWebReply{
+		Text:  strings.TrimSpace(text.String()),
+		Links: links,
+		Spend: mergeAnthropicWebUsage(start, final),
+	}, nil
+}
+
+// mergeAnthropicWebUsage folds the two usage snapshots into one, the same way
+// the main stream does (anthropic.go's message_delta case): message_delta is
+// authoritative, message_start fills in a field it left at zero — a stream cut
+// short before message_delta still reports the prompt it was billed for.
+func mergeAnthropicWebUsage(start, final anthropicWebUsageJSON) WebHelperUsage {
+	pick := func(final, start int) int {
+		if final == 0 {
+			return start
+		}
+		return final
+	}
+	return WebHelperUsage{
+		Usage: Usage{
+			InputTokens:      pick(final.InputTokens, start.InputTokens),
+			OutputTokens:     pick(final.OutputTokens, start.OutputTokens),
+			CacheReadTokens:  pick(final.CacheReadTokens, start.CacheReadTokens),
+			CacheWriteTokens: pick(final.CacheWriteTokens, start.CacheWriteTokens),
+		},
+		SearchRequests: pick(final.ServerToolUse.WebSearchRequests, start.ServerToolUse.WebSearchRequests),
+	}
 }

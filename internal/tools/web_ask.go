@@ -17,10 +17,15 @@ import (
 // so a transient xAI outage or an unauthenticated session never hard-fails
 // the tool outright.
 type WebAskTool struct {
-	auth auth.AuthStore // shared reference with the xai chat provider; may be nil
+	auth  auth.AuthStore // shared reference with the xai chat provider; may be nil
+	usage WebUsageFn     // nil unless a host wired cost accounting
 }
 
 func NewWebAskTool(store auth.AuthStore) *WebAskTool { return &WebAskTool{auth: store} }
+
+// SetUsageFn wires the sink that banks the grok backend's spend onto the
+// session (see WebUsageFn). The exa backend is free and records nothing.
+func (t *WebAskTool) SetUsageFn(fn WebUsageFn) { t.usage = fn }
 
 func (t *WebAskTool) Name() string { return "web_ask" }
 
@@ -74,7 +79,10 @@ func (t *WebAskTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 	}
 
 	if provider == "grok" {
-		result, err := execGrokSearch(ctx, t.auth, params.Query, params.Num)
+		result, spend, err := execGrokSearch(ctx, t.auth, params.Query, params.Num)
+		// Recorded whatever happens next: xAI billed the call even when the
+		// answer was unusable and this falls back to exa below.
+		t.usage.record(spend)
 		if err == nil {
 			return ToolResult{Content: result}, nil
 		}

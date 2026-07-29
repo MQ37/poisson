@@ -28,9 +28,9 @@ func TestLookupBuiltIn(t *testing.T) {
 		t.Fatalf("gpt-5.5 = %+v ok=%v", r, ok)
 	}
 	for id, want := range map[string]Rates{
-		"gpt-5.6-sol":   {5.0, 30.0, 0.5, 0},
-		"gpt-5.6-terra": {2.5, 15.0, 0.25, 0},
-		"gpt-5.6-luna":  {1.0, 6.0, 0.1, 0},
+		"gpt-5.6-sol":   {5.0, 30.0, 0.5, 0, 0},
+		"gpt-5.6-terra": {2.5, 15.0, 0.25, 0, 0},
+		"gpt-5.6-luna":  {1.0, 6.0, 0.1, 0, 0},
 	} {
 		r, ok := Lookup(nil, "openai", id)
 		if !ok || r != want {
@@ -66,5 +66,28 @@ func TestComputeCost(t *testing.T) {
 	}
 	if ComputeCost(cfg, "unknown", "nope", 1_000_000, 1_000_000, 0, 0) != 0 {
 		t.Fatal("unknown should be free")
+	}
+}
+
+// TestLookupHaikuWildcard pins the web-helper model's rate: it must resolve
+// through the "claude-haiku-4-5*" wildcard, matching the exact model string
+// the wire sends (anthropicWebModel = "claude-haiku-4-5-20251001").
+func TestLookupHaikuWildcard(t *testing.T) {
+	r, ok := Lookup(nil, "anthropic", "claude-haiku-4-5-20251001")
+	if !ok || r.InputPerMTok != 1.0 || r.OutputPerMTok != 5.0 || r.SearchPerRequest != 0.01 {
+		t.Fatalf("haiku wildcard = %+v ok=%v", r, ok)
+	}
+}
+
+func TestSearchCost(t *testing.T) {
+	cfg := config.DefaultConfig()
+	if got := SearchCost(cfg, "anthropic", "claude-haiku-4-5-20251001", 3); got != 0.03 {
+		t.Fatalf("3 searches = %v, want 0.03", got)
+	}
+	if got := SearchCost(cfg, "anthropic", "claude-haiku-4-5-20251001", 0); got != 0 {
+		t.Fatalf("0 searches = %v, want 0", got)
+	}
+	if got := SearchCost(cfg, "unknown", "nope", 5); got != 0 {
+		t.Fatalf("unknown model = %v, want 0", got)
 	}
 }

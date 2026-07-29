@@ -9,12 +9,19 @@ import (
 	"strings"
 )
 
-// Pricing holds per-model token pricing (USD per 1M tokens).
+// Pricing holds per-model token pricing (USD per 1M tokens), plus any
+// per-request fee a server-side tool on that model bills on top of tokens.
+// Field order must stay in sync with pricing.Rates, which converts between
+// the two directly.
 type Pricing struct {
 	InputPerMTok      float64
 	OutputPerMTok     float64
 	CacheReadPerMTok  float64
 	CacheWritePerMTok float64
+	// SearchPerRequest is charged per server-side web search, on top of the
+	// tokens the search results add to the prompt (Anthropic bills its
+	// web_search tool at $10 / 1000 searches).
+	SearchPerRequest float64
 }
 
 // ProviderConfig selects the default provider.
@@ -201,11 +208,19 @@ func defaultPricing() map[string]map[string]Pricing {
 			// cacheRead 0.1x input, cacheWrite 2x input — Poisson's 1h cache pool.
 			"claude-opus-5":   {InputPerMTok: 5.0, OutputPerMTok: 25.0, CacheReadPerMTok: 0.5, CacheWritePerMTok: 10.0},
 			"claude-sonnet-5": {InputPerMTok: 3.0, OutputPerMTok: 15.0, CacheReadPerMTok: 0.3, CacheWritePerMTok: 6.0},
+			// Haiku 4.5 is never a session model: it is the small model behind
+			// the web_search/fetch Anthropic backends (provider/anthropic_web.go),
+			// which is also the only place the $10/1000 web-search fee applies.
+			"claude-haiku-4-5*": {InputPerMTok: 1.0, OutputPerMTok: 5.0, CacheReadPerMTok: 0.1, CacheWritePerMTok: 2.0, SearchPerRequest: 0.01},
 		},
 		"xai": {
 			"grok-build": {InputPerMTok: 1.0, OutputPerMTok: 2.0},
 			// grok-4.5: no published prompt-cache rate.
 			"grok-4.5": {InputPerMTok: 2.0, OutputPerMTok: 6.0},
+			// grok-4.3 backs web_ask's grok backend. Only a fallback: that
+			// backend records xAI's own exact cost_in_usd_ticks figure, which
+			// also covers the per-search tool fee these rates don't model.
+			"grok-4.3": {InputPerMTok: 1.25, OutputPerMTok: 2.5, CacheReadPerMTok: 0.2},
 		},
 		"openai": {
 			// Short-context (<=272K input) standard API rate; poisson talks to
@@ -312,6 +327,12 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 # [pricing.xai."grok-4.5"]
 # input = 2.0
 # output = 6.0
+# search_per_request bills a server-side web search on top of its tokens
+# (Anthropic's web_search tool, used by web_search/fetch provider=anthropic).
+# [pricing.anthropic."claude-haiku-4-5*"]
+# input = 1.0
+# output = 5.0
+# search_per_request = 0.01
 # [pricing.ollama."glm-5.2:cloud"]
 # input = 0
 # output = 0
@@ -659,6 +680,13 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 						return nil, fmt.Errorf("pricing.%s.%s.cache_write: %w", provider, model, err)
 					}
 					p.CacheWritePerMTok = f
+				}
+				if v, ok := mmap["search_per_request"]; ok {
+					f, err := asFloat(v)
+					if err != nil {
+						return nil, fmt.Errorf("pricing.%s.%s.search_per_request: %w", provider, model, err)
+					}
+					p.SearchPerRequest = f
 				}
 				cfg.Pricing[provider][model] = p
 			}
