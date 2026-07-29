@@ -36,6 +36,7 @@ Walk the whole diff once before you open the PR. The bar, in plain terms:
 - Every external call is bounded (timeout / limit); everything that can grow is bounded.
 - No magic literals; names use the system's existing vocabulary.
 - The diff is as small as it can be — could you delete more and still pass?
+- If the change adds a path beside an existing one or touches a shared entry point, the [`feature-impact`](../feature-impact/SKILL.md) inventory is done and holds no `unknown` entries.
 
 Full list: the ✅ Pre-flight Checklist in [`code-quality/SKILL.md`](../code-quality/SKILL.md).
 
@@ -130,4 +131,5 @@ If a single PR is doing **two of {types, core, wiring, UI, infra, tests-only}**,
 ## 📚 See also
 
 - [`code-quality` skill](../code-quality/SKILL.md) — the content rules for what's inside the diff.
+- [`feature-impact` skill](../feature-impact/SKILL.md) — blast-radius inventory for a change that forks an existing path.
 - [`review-pr` skill](../review-pr/SKILL.md) — for the other side of the table, reviewing someone else's PR.

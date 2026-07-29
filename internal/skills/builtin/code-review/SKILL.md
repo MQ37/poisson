@@ -16,6 +16,7 @@ Check the invocation for an explicit go-ahead — the word "apply" in the `skill
 Lenses to scan in parallel:
 
 - **Correctness, performance, edge cases, test coverage, security, API design** — the standard surface.
+- **Feature impact (blast radius)** — when the diff adds a path beside an existing one or touches a shared entry point, run [`feature-impact`](../feature-impact/SKILL.md) and demand its inventory. This is the lens that catches what the diff *doesn't* show.
 - **Boundary and type cleanliness** — unnecessary `any`/`unknown`/casts where a clearer type boundary could exist; a silent fallback papering over an invariant that should instead be made explicit. Question every optionality that isn't a real absence.
 - **Orchestration and atomicity** — independent work serialized for no reason (should it run in parallel?); related updates that can leave state half-applied (should the change be more atomic?). Don't over-index on micro-optimization, but flag avoidable orchestration complexity that makes the implementation more brittle.
 - **Simplification** — don't stop at "this could be a bit cleaner." Actively search for the reframing that deletes a whole branch, helper, mode, or conditional layer rather than just tidying it — the restructuring that uses the existing architecture better and makes the change simpler, not just neater. Concretely, flag:
@@ -56,6 +57,7 @@ Treat these as blocking regardless of how the rest of the diff looks — a passi
 - A local problem solved by scattering feature-specific checks across shared/canonical code instead of behind its own boundary.
 - An unnecessary wrapper, cast, or optional field that makes a contract more indirect than it needs to be.
 - Logic duplicated where an existing canonical helper already does the job.
+- An `unknown` entry in the [`feature-impact`](../feature-impact/SKILL.md) inventory, or an existing test gated to the old path without naming the mechanism that makes the case impossible on the new one.
 
 ## 4. Report
 
@@ -85,4 +87,5 @@ Run the relevant tests/lint/build for every file you touched. Report what was ap
 - [`review-pr`](../review-pr/SKILL.md) — gathers the diff this skill reviews (git/gh mechanics, /tmp file).
 - [`stacked-diff-review`](../stacked-diff-review/SKILL.md) — the output format.
 - [`code-quality`](../code-quality/SKILL.md) — the content rules every lens above points back to.
+- [`feature-impact`](../feature-impact/SKILL.md) — the blast-radius inventory the lens above requires.
 - [`council`](../council/SKILL.md) — multi-persona alternative when one lens isn't enough.

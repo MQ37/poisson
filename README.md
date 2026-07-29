@@ -65,7 +65,7 @@ px                                                   # launch the TUI
 
 ## 🧰 Built-in skills
 
-Eight skills ship baked into the `px` binary — no setup, no config directory
+Nine skills ship baked into the `px` binary — no setup, no config directory
 needed. The `skill` tool loads one by name and works the same for subagents
 as it does in the main session.
 
@@ -73,6 +73,7 @@ as it does in the main session.
 |---|---|
 | `code-quality` | Suckless-style simplicity/clarity principles — bloat, over-abstraction, needless defensiveness. Use before writing or reviewing code. |
 | `code-review` | Full multi-lens review of a diff (correctness, security, API design, tests) with subagent-verified findings and apply/escalate/skip fixes. |
+| `feature-impact` | Blast-radius inventory for a change that adds a path beside an existing one — enumerates every mode, flag, and consumer on the shared seam and classifies each as handled, rejected, or unknown. |
 | `review-pr` | Gathers a PR/branch diff (local, GitHub, or fresh checkout) for review; hands off to `code-review` + `stacked-diff-review`. |
 | `stacked-diff-review` | Risk-tiered (🔴/🟡/🟢) write-up format for presenting a review. |
 | `check-work` | Spawns a fresh-context subagent to independently verify finished work actually satisfies the original request — PASS/FAIL verdict. |
@@ -82,7 +83,7 @@ as it does in the main session.
 
 Add your own under `~/.poisson/skills/<name>/SKILL.md` — a user skill with the
 same name as a built-in one overrides it, so you can customize any of the
-eight without touching the binary. `/reload` rediscovers user skills without
+nine without touching the binary. `/reload` rediscovers user skills without
 restarting.
 
 ---
