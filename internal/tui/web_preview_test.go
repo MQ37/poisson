@@ -63,3 +63,48 @@ func TestProviderTagAbsentWithoutProvider(t *testing.T) {
 		t.Errorf("collapsed = %q, want %q", got, want)
 	}
 }
+
+// TestSandboxTagOnCardTitle: a bash call carrying a sandboxId shows
+// "Bash[my-sandbox]" on the card title, same slot/mechanism as the provider
+// tag, so it survives width truncation of the reason text.
+func TestSandboxTagOnCardTitle(t *testing.T) {
+	b := &Block{meta: BlockMeta{
+		ToolName:  "bash",
+		ToolInput: []byte(`{"description":"list files","command":"ls","sandboxId":"my-sandbox"}`),
+		ToolDone:  true,
+	}}
+	if got, want := stripANSI(formatToolCollapsed(b, 80)), "▸ Bash[my-sandbox] - list files"; got != want {
+		t.Errorf("collapsed = %q, want %q", got, want)
+	}
+	b.meta.Expanded = true
+	if got, want := stripANSI(formatToolExpandedHeader(b)), "▾ Bash[my-sandbox] - list files"; got != want {
+		t.Errorf("expanded header = %q, want %q", got, want)
+	}
+}
+
+// TestSandboxTagAbsentWithoutSandboxId: a bash call with no sandboxId (the
+// common host-run case) must not show an empty "[]" tag.
+func TestSandboxTagAbsentWithoutSandboxId(t *testing.T) {
+	b := &Block{meta: BlockMeta{
+		ToolName:  "bash",
+		ToolInput: []byte(`{"description":"list files","command":"ls"}`),
+		ToolDone:  true,
+	}}
+	if got, want := stripANSI(formatToolCollapsed(b, 80)), "▸ Bash - list files"; got != want {
+		t.Errorf("collapsed = %q, want %q", got, want)
+	}
+}
+
+// TestSandboxTagOnBatchNestedCall: batch's expanded per-call lines are tool-
+// agnostic (same providerTagFromInput mechanism), so a nested bash call
+// carrying a sandboxId must show the tag there too.
+func TestSandboxTagOnBatchNestedCall(t *testing.T) {
+	input := []byte(`{"calls":[{"tool":"bash","input":{"description":"list files","command":"ls","sandboxId":"my-sandbox"}}]}`)
+	lines := batchExpandedCallLines(input, 80)
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d: %v", len(lines), lines)
+	}
+	if got, want := stripANSI(lines[0]), "  1. bash[my-sandbox] — list files"; got != want {
+		t.Errorf("batch nested line = %q, want %q", got, want)
+	}
+}

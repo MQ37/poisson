@@ -177,6 +177,53 @@ func TestSandboxCpTool_HostPathSensitiveRequiresApproval(t *testing.T) {
 	}
 }
 
+// TestSandboxCpTool_CopyDirectory copies a nested directory tree in, and
+// confirms a symlink inside it is skipped (not followed/copied) rather than
+// escaping the workspace.
+func TestSandboxCpTool_CopyDirectory(t *testing.T) {
+	dir := testutil.TempDir(t)
+	mgr := sandbox.NewManager(sandbox.NewFakeDriver())
+	sb := newTestSandbox(t, mgr)
+
+	src := filepath.Join(dir, "project")
+	if err := os.MkdirAll(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("A"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "sub", "b.txt"), []byte("B"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outsideTarget := filepath.Join(dir, "outside-secret.txt")
+	if err := os.WriteFile(outsideTarget, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideTarget, filepath.Join(src, "escape-link")); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewSandboxCpTool(dir, mgr, alwaysApprove)
+	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"sandboxId": sb.ID, "direction": "in", "hostPath": src, "workspacePath": "project",
+	}))
+	if res.Error != "" {
+		t.Fatalf("sandbox_cp directory in error: %s", res.Error)
+	}
+
+	got, err := os.ReadFile(filepath.Join(sb.HostPath, "project", "a.txt"))
+	if err != nil || string(got) != "A" {
+		t.Fatalf("a.txt not copied correctly: err=%v content=%q", err, got)
+	}
+	got, err = os.ReadFile(filepath.Join(sb.HostPath, "project", "sub", "b.txt"))
+	if err != nil || string(got) != "B" {
+		t.Fatalf("sub/b.txt not copied correctly: err=%v content=%q", err, got)
+	}
+	if _, err := os.Lstat(filepath.Join(sb.HostPath, "project", "escape-link")); err == nil {
+		t.Fatal("SECURITY: symlink inside the copied directory was copied instead of skipped")
+	}
+}
+
 func TestSandboxCpTool_ForeignSandboxID(t *testing.T) {
 	dir := testutil.TempDir(t)
 	mgr := sandbox.NewManager(sandbox.NewFakeDriver())

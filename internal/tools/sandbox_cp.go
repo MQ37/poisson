@@ -34,7 +34,7 @@ func NewSandboxCpTool(cwd string, mgr *sandbox.Manager, approvalFn ApprovalFn) *
 func (t *SandboxCpTool) Name() string { return "sandbox_cp" }
 
 func (t *SandboxCpTool) Description() string {
-	return "Copy a file between an arbitrary host path and a sandbox's own workspace. direction \"in\" copies hostPath -> the sandbox's workspacePath; \"out\" copies the sandbox's workspacePath -> hostPath. Only for moving things beyond the base workspace mount — files already under the sandbox's own hostPath (from create_sandbox) are already reachable directly via read/write/edit/grep/glob, no sandbox_cp needed for those. hostPath is gated the same as read/write (sensitive-path approval); workspacePath can never escape the sandbox's own workspace root."
+	return "Copy a file OR a directory (recursively) between an arbitrary host path and a sandbox's own workspace. direction \"in\" copies hostPath -> the sandbox's workspacePath; \"out\" copies the sandbox's workspacePath -> hostPath. Only for moving things beyond the base workspace mount — files already under the sandbox's own hostPath (from create_sandbox) are already reachable directly via read/write/edit/grep/glob, no sandbox_cp needed for those. hostPath is gated the same as read/write (sensitive-path approval); workspacePath can never escape the sandbox's own workspace root. Symlinks encountered inside a copied directory are skipped, never followed."
 }
 
 func (t *SandboxCpTool) Schema() json.RawMessage {
@@ -97,6 +97,22 @@ func (t *SandboxCpTool) Execute(ctx context.Context, input json.RawMessage) (Too
 		src, dst = wsPath, hostPath
 	}
 
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return ToolResult{Error: "cannot stat source: " + err.Error()}, nil
+	}
+	if srcInfo.IsDir() {
+		files, bytes, skipped, err := copyTree(src, dst)
+		if err != nil {
+			return ToolResult{Error: err.Error()}, nil
+		}
+		msg := fmt.Sprintf("copied %s -> %s (%d files, %d bytes)", src, dst, files, bytes)
+		if skipped > 0 {
+			msg += fmt.Sprintf(" [%d symlinks skipped]", skipped)
+		}
+		return ToolResult{Content: msg}, nil
+	}
+
 	data, err := os.ReadFile(src)
 	if err != nil {
 		return ToolResult{Error: "cannot read source: " + err.Error()}, nil
@@ -113,6 +129,54 @@ func (t *SandboxCpTool) Execute(ctx context.Context, input json.RawMessage) (Too
 	}
 
 	return ToolResult{Content: fmt.Sprintf("copied %s -> %s (%d bytes)", src, dst, len(data))}, nil
+}
+
+// copyTree recursively copies src (a directory) to dst, creating dst and any
+// intermediate directories as needed. Symlinks are never followed — an entry
+// of that kind inside the tree is skipped rather than copied — since
+// following one could read or write outside the two paths the caller (and
+// the sensitive-path/workspace-escape checks above it) already approved.
+// Every other entry keeps its source permission bits.
+func copyTree(src, dst string) (files int, bytesCopied int64, skipped int, err error) {
+	err = filepath.WalkDir(src, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+
+		if d.Type()&os.ModeSymlink != 0 {
+			skipped++
+			return nil
+		}
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(target, data, info.Mode().Perm()); err != nil {
+			return err
+		}
+		files++
+		bytesCopied += int64(len(data))
+		return nil
+	})
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("cannot copy directory %s -> %s: %w", src, dst, err)
+	}
+	return files, bytesCopied, skipped, nil
 }
 
 // resolveInWorkspace resolves p (a model-supplied path, possibly

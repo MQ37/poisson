@@ -64,6 +64,22 @@ func providerTagFromInput(input json.RawMessage) string {
 	return providerTag(in.Provider)
 }
 
+// sandboxTagFromInput reads the generic "sandboxId" field out of a tool
+// call's own input JSON — bash (and anything else routed through a sandbox)
+// carries it — so a call running inside a sandbox container shows
+// "Bash[my-sandbox]" instead of a bare "Bash", the same way providerTag
+// distinguishes which backend served a call. Same generic lookup as
+// providerTagFromInput so it also covers batch's nested per-call rendering.
+func sandboxTagFromInput(input json.RawMessage) string {
+	var in struct {
+		SandboxID string `json:"sandboxId"`
+	}
+	if len(input) == 0 || json.Unmarshal(input, &in) != nil || in.SandboxID == "" {
+		return ""
+	}
+	return "[" + previewText(in.SandboxID, 30) + "]"
+}
+
 func toolInputPreview(toolName string, input []byte) string {
 	if len(input) == 0 {
 		return "..."

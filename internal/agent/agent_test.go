@@ -1334,3 +1334,58 @@ func TestRunTurnsResetsAndCounts(t *testing.T) {
 		t.Fatalf("RunTurns after reset = %d, want 1 (not accumulated)", got)
 	}
 }
+
+// TestBuildRequestIsByteIdenticalAfterResume answers the "close px, come
+// back later, does the cache get reused or rewritten" question directly:
+// Anthropic's 1h prompt cache is looked up server-side purely by the exact
+// bytes of the request prefix (see applyPromptCache in
+// internal/provider/anthropic.go) — poisson has no cache-hit/miss logic of
+// its own. So whether a resumed turn is a cheap cache READ or a full-price
+// cache WRITE depends only on whether the 1h TTL happened to expire while
+// the process was closed, never on how the session was reloaded. This test
+// proves the reload side of that: a brand new *Agent (simulating a fresh
+// `px` process after /resume) rebuilds System and Tools as byte-identical
+// JSON to the original in-process agent, for the same session/config/cwd.
+// If it didn't, every resume would force a cache-invalidating rewrite
+// regardless of TTL, which would be the actual bug worth catching here.
+func TestBuildRequestIsByteIdenticalAfterResume(t *testing.T) {
+	s := newTestStore(t)
+	sessionID := newTestSession(t, s, "test-model")
+	cwd := testutil.TempDir(t)
+	cfg := newTestConfig()
+
+	live := NewAgent(s, newFakeProvider(), newTestRegistry(cwd), cfg, sessionID, nil, nil)
+	userContent, _ := contentBlocksToJSON([]provider.ContentBlock{{Type: "text", Text: "hello"}})
+	if err := s.AppendMessage(&store.Message{SessionID: sessionID, Role: "user", Content: userContent}); err != nil {
+		t.Fatalf("append user: %v", err)
+	}
+	before, err := live.buildRequest()
+	if err != nil {
+		t.Fatalf("buildRequest (live): %v", err)
+	}
+
+	// Simulate closing px and starting a fresh process that resumes the same
+	// session: a brand new Agent value over the same store/session/config,
+	// nothing carried over in memory.
+	resumed := NewAgent(s, newFakeProvider(), newTestRegistry(cwd), cfg, sessionID, nil, nil)
+	after, err := resumed.buildRequest()
+	if err != nil {
+		t.Fatalf("buildRequest (resumed): %v", err)
+	}
+
+	beforeSys, _ := json.Marshal(before.System)
+	afterSys, _ := json.Marshal(after.System)
+	if string(beforeSys) != string(afterSys) {
+		t.Fatalf("System not byte-identical after resume — every resume would force a cache-invalidating rewrite:\nbefore: %s\nafter:  %s", beforeSys, afterSys)
+	}
+	beforeTools, _ := json.Marshal(before.Tools)
+	afterTools, _ := json.Marshal(after.Tools)
+	if string(beforeTools) != string(afterTools) {
+		t.Fatalf("Tools not byte-identical after resume:\nbefore: %s\nafter:  %s", beforeTools, afterTools)
+	}
+	beforeMsgs, _ := json.Marshal(before.Messages)
+	afterMsgs, _ := json.Marshal(after.Messages)
+	if string(beforeMsgs) != string(afterMsgs) {
+		t.Fatalf("Messages not byte-identical after resume:\nbefore: %s\nafter:  %s", beforeMsgs, afterMsgs)
+	}
+}
