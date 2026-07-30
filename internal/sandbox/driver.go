@@ -31,10 +31,12 @@ type CreateOpts struct {
 }
 
 // Mount is one additional bind mount beyond CreateOpts.HostPath/workspace.
+// JSON tags let the create_sandbox tool unmarshal its input's "mounts"
+// array directly into a []Mount.
 type Mount struct {
-	HostPath      string
-	ContainerPath string
-	ReadOnly      bool
+	HostPath      string `json:"hostPath"`
+	ContainerPath string `json:"containerPath"`
+	ReadOnly      bool   `json:"readOnly"`
 }
 
 // Driver is the mechanical container-lifecycle operations a sandbox needs.

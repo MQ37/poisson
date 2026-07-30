@@ -23,6 +23,16 @@ type FakeDriver struct {
 	// ExecFn, when set, overrides the default echo-style Exec behavior —
 	// lets a test script a specific stdout/stderr/exitCode/err per call.
 	ExecFn func(ctx context.Context, id, cmd, workdir string) (stdout, stderr string, exitCode int, err error)
+	// CreateErr, when set, makes every Create fail with this error instead
+	// of succeeding — lets a test exercise a caller's failure/cleanup path
+	// (e.g. CreateSandboxTool removing its scratch workspace when
+	// Manager.Create fails).
+	CreateErr error
+	// CreateCalls records every CreateOpts this driver has been asked to
+	// create, in order — lets a test confirm what a caller actually passed
+	// through (image, mounts, env) without needing a real podman backend to
+	// inspect.
+	CreateCalls []CreateOpts
 }
 
 // NewFakeDriver returns a FakeDriver with no containers yet.
@@ -30,9 +40,13 @@ func NewFakeDriver() *FakeDriver {
 	return &FakeDriver{alive: make(map[string]bool)}
 }
 
-func (f *FakeDriver) Create(_ context.Context, _ CreateOpts) (string, error) {
+func (f *FakeDriver) Create(_ context.Context, opts CreateOpts) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.CreateCalls = append(f.CreateCalls, opts)
+	if f.CreateErr != nil {
+		return "", f.CreateErr
+	}
 	f.nextID++
 	id := "fake-" + strconv.Itoa(f.nextID)
 	f.alive[id] = true

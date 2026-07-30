@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/sandbox"
 	"github.com/mq37/poisson/internal/store"
 	"github.com/mq37/poisson/internal/testutil"
 )
@@ -106,6 +107,49 @@ func TestBuildRegistry_Child(t *testing.T) {
 	}
 	if _, ok := reg.Get("subagent"); ok {
 		t.Error("child registry must never expose subagent (would allow recursion)")
+	}
+}
+
+// TestBuildRegistry_NoSandboxManager_OmitsSandboxTools confirms a normal
+// session with no sandbox support configured doesn't even offer
+// create_sandbox/sandbox_cp/sandbox_destroy — reduces hallucination
+// surface rather than exposing tools that would just error every time.
+func TestBuildRegistry_NoSandboxManager_OmitsSandboxTools(t *testing.T) {
+	dir := testutil.TempDir(t)
+	reg := BuildRegistry(BuildOptions{Cwd: dir})
+	for _, name := range []string{"create_sandbox", "sandbox_cp", "sandbox_destroy"} {
+		if _, ok := reg.Get(name); ok {
+			t.Errorf("registry with no SandboxManager should not have %q", name)
+		}
+	}
+}
+
+// TestBuildRegistry_WithSandboxManager_ParentGetsAllSandboxTools confirms a
+// parent session with sandboxing enabled gets all three tools.
+func TestBuildRegistry_WithSandboxManager_ParentGetsAllSandboxTools(t *testing.T) {
+	dir := testutil.TempDir(t)
+	reg := BuildRegistry(BuildOptions{Cwd: dir, SandboxManager: sandbox.NewManager(sandbox.NewFakeDriver())})
+	for _, name := range []string{"create_sandbox", "sandbox_cp", "sandbox_destroy"} {
+		if _, ok := reg.Get(name); !ok {
+			t.Errorf("parent registry with SandboxManager missing %q", name)
+		}
+	}
+}
+
+// TestBuildRegistry_WithSandboxManager_ChildOmitsCreateSandbox: a subagent
+// may only use sandboxes its parent explicitly authorized (see
+// docs/sandbox-plan.md's subagent allow-list), never mint its own —
+// create_sandbox must be parent-only, same as the subagent tool itself.
+func TestBuildRegistry_WithSandboxManager_ChildOmitsCreateSandbox(t *testing.T) {
+	dir := testutil.TempDir(t)
+	reg := BuildRegistry(BuildOptions{Cwd: dir, Child: true, SandboxManager: sandbox.NewManager(sandbox.NewFakeDriver())})
+	if _, ok := reg.Get("create_sandbox"); ok {
+		t.Error("child registry must never expose create_sandbox (would let a subagent mint sandboxes unbounded)")
+	}
+	for _, name := range []string{"sandbox_cp", "sandbox_destroy"} {
+		if _, ok := reg.Get(name); !ok {
+			t.Errorf("child registry with SandboxManager missing %q", name)
+		}
 	}
 }
 

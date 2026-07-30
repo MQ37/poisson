@@ -39,11 +39,19 @@ type BuildOptions struct {
 	// available to children.
 	Child bool
 	// SandboxManager, when non-nil, is wired onto the bash tool so a
-	// sandboxId-carrying call routes through it instead of erroring. Nil by
-	// default (no sandbox support) — a subagent registry gets one only when
-	// its parent explicitly authorized specific sandboxIds for it (see
-	// docs/sandbox-plan.md's subagent allow-list).
+	// sandboxId-carrying call routes through it instead of erroring, and
+	// registers create_sandbox/sandbox_cp/sandbox_destroy. Nil by default (no
+	// sandbox support) — a subagent registry gets one only when its parent
+	// explicitly authorized specific sandboxIds for it (see
+	// docs/sandbox-plan.md's subagent allow-list, not yet implemented).
 	SandboxManager *sandbox.Manager
+	// SandboxApprovalFn gates create_sandbox requests that ask for mounts or
+	// env beyond the base workspace — a plain create_sandbox call with
+	// neither never asks. Distinct from ApprovalFn (LLM risk classification)
+	// and FileApprovalFn (sensitive-path pattern match): this is "does the
+	// request itself carry extra host access," decided before any of those
+	// even apply. Defaults to deny-all, matching the other two.
+	SandboxApprovalFn ApprovalFn
 }
 
 // BuildRegistry constructs the tool registry. A child (subagent) receives every
@@ -61,6 +69,10 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	if fileApproval == nil {
 		fileApproval = func(context.Context, string, string, string) (bool, string) { return false, "" }
 	}
+	sandboxApproval := opts.SandboxApprovalFn
+	if sandboxApproval == nil {
+		sandboxApproval = func(context.Context, string, string, string) (bool, string) { return false, "" }
+	}
 
 	bashTool := NewBashTool(opts.Cwd, approval)
 	if opts.SandboxManager != nil {
@@ -72,6 +84,20 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	reg.Register(NewEditTool(opts.Cwd, fileApproval))
 	reg.Register(NewGrepTool(opts.Cwd, fileApproval))
 	reg.Register(NewGlobTool(opts.Cwd, fileApproval))
+	if opts.SandboxManager != nil {
+		// create_sandbox is parent-only, same reasoning as the subagent tool
+		// below: a subagent may only use sandboxes its parent explicitly
+		// authorized (docs/sandbox-plan.md), never mint its own. sandbox_cp/
+		// sandbox_destroy stay available to a child for now — whether a
+		// subagent should be able to destroy a sandbox it didn't create is a
+		// real open question, deferred to the subagent allow-list step
+		// (docs/sandbox-plan.md "Subagents"), not decided here.
+		if !opts.Child {
+			reg.Register(NewCreateSandboxTool(opts.Cwd, opts.SandboxManager, sandboxApproval))
+		}
+		reg.Register(NewSandboxCpTool(opts.Cwd, opts.SandboxManager, fileApproval))
+		reg.Register(NewSandboxDestroyTool(opts.SandboxManager))
+	}
 	// web_search and fetch are re-registered with their provider-gated
 	// backends by agent.ReloadConfigDependentTools, which runs right after the
 	// agent knows its provider; here they get the always-available ones.

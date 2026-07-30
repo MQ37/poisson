@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -223,6 +224,36 @@ func TestManager_ConcurrentGetAndExecDoNotRace(t *testing.T) {
 		}
 	}
 	<-done
+}
+
+// TestFakeDriver_CreateCallsRecorded confirms a caller can inspect exactly
+// what CreateOpts a driver received, without a real podman backend —
+// needed by callers like a create_sandbox tool that must be tested against
+// what it actually passed through (image, mounts, env).
+func TestFakeDriver_CreateCallsRecorded(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+	opts := CreateOpts{Image: "ubuntu:26.04", HostPath: "/tmp/x/workspace", Env: []string{"A=1"}}
+	if _, err := driver.Create(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(driver.CreateCalls) != 1 {
+		t.Fatalf("CreateCalls = %d entries, want 1", len(driver.CreateCalls))
+	}
+	if driver.CreateCalls[0].Image != "ubuntu:26.04" || driver.CreateCalls[0].Env[0] != "A=1" {
+		t.Errorf("CreateCalls[0] = %+v, did not record what was passed", driver.CreateCalls[0])
+	}
+}
+
+// TestFakeDriver_CreateErr confirms a scripted failure actually fails
+// Create (and thus Manager.Create), not just gets silently ignored.
+func TestFakeDriver_CreateErr(t *testing.T) {
+	driver := NewFakeDriver()
+	driver.CreateErr = fmt.Errorf("boom")
+	m := NewManager(driver)
+	if _, err := m.Create(context.Background(), CreateOpts{}); err == nil {
+		t.Fatal("expected Create to fail when the driver's CreateErr is set")
+	}
 }
 
 // TestManager_ExecScriptedFailure exercises FakeDriver.ExecFn — a test can

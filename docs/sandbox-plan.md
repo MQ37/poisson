@@ -201,6 +201,16 @@ This means:
 
 ### Root access: matching-uid user + passwordless sudo
 
+**Deferred to the `podmanDriver` step, deliberately not guessed at here.**
+The current `create_sandbox` tool (built against `Driver`/`FakeDriver`
+only) does not run this bootstrap at all — `Driver.Exec` has no concept of
+"which user to exec as" yet, and designing that shape now, before a real
+podman backend exists to validate it against, would be guessing rather than
+engineering. Real bootstrap logic lands together with `podmanDriver`, where
+the actual `podman exec --user` mechanics can be built and tested against
+something real. The design below is the intended shape, recorded now so
+that step isn't starting from nothing:
+
 Tension: `apt-get install` needs root inside the container's own rootfs;
 the bind mount needs the container's process to write as the *same uid* as
 the host user, or host-side `write`/`edit` can't touch what it creates
@@ -327,6 +337,14 @@ memory with the parent.
 
 ### Lifecycle / cleanup
 
+**Not yet implemented — remaining work, tracked here, not started.** What
+exists today: `sandbox_destroy` (agent-driven, per-sandbox teardown) and
+`CreateSandboxTool`'s own cleanup-on-create-failure. The persistence +
+idle-reap half below (session-store table, launch-time sweep, slash
+commands) is still to be built as its own follow-up — deliberately not
+bundled into the same change as the three tools, to keep each piece
+reviewable on its own.
+
 A podman container isn't tied to poisson's process lifetime — it keeps
 running (CPU/memory/its overlay layer) after a crash, a closed terminal, or
 an abandoned session, exactly like the `/tmp` mirror directory sitting on
@@ -346,22 +364,32 @@ eventually real resource exhaustion.
 
 ## Tool schema changes
 
+Implemented, as actually shipped (two refinements from the original sketch:
+`env` not `secrets` — plain KEY=VALUE injection, no separate secrets-vault
+concept exists in this codebase; `workspacePath` not `containerPath` on
+`sandbox_cp` — it's always relative to the sandbox's own workspace root,
+never an arbitrary container path, matching the "file tools get a plain
+host path, not a sandboxId" decision):
+
 ```
 bash{command, description, workdir, timeout, sandboxId?}
-create_sandbox{image?, mounts?, secrets?} -> {sandboxId, hostPath}
-sandbox_cp{sandboxId, direction: in|out, hostPath, containerPath}
-sandbox_destroy{sandboxId} -> {ok}
+create_sandbox{image?, mounts?, env?} -> {sandboxId, hostPath}
+sandbox_cp{sandboxId, direction: in|out, hostPath, workspacePath}
+sandbox_destroy{sandboxId} -> ok/error content
 ```
 
-`sandbox_destroy` is the agent-driven complement to the idle-reap sweep and
-the `/sandbox kill` slash command (see "Lifecycle / cleanup"): the agent
-calls it itself once it's done with a sandbox, instead of relying solely on
-the TTL sweep to eventually notice. Always auto-approved — destroying a
-sandbox only discards disposable container/scratch-dir state, never host
-data, so there's no risk to gate. Kills the container, removes its
-`/tmp/poisson-sandbox-<id>` tree, and deletes its `sandboxes` row.
-Double-destroy or destroying a foreign/unowned id must still go through the
-same `Manager.Owns(id)` check as `bash` — a no-op error, not a crash.
+`sandbox_destroy` is the agent-driven complement to the (not yet built)
+idle-reap sweep and `/sandbox kill` slash command (see "Lifecycle /
+cleanup"): the agent calls it itself once it's done with a sandbox, instead
+of relying solely on a TTL sweep to eventually notice. Always auto-approved
+— destroying a sandbox only discards disposable container/scratch-dir
+state, never host data, so there's no risk to gate. Kills the container via
+`Manager.Kill` and removes the whole `<base>` scratch-workspace tree (not
+just `hostPath` itself — `hostPath` is `<base>/workspace`); there's no
+`sandboxes` store row to delete yet, since that table doesn't exist until
+the lifecycle/persistence follow-up lands. Double-destroy or destroying a
+foreign/unowned id goes through `Manager.Owns` (via `Manager.Get`) the same
+way `bash` does — a clean error, not a crash; tested.
 
 `read/write/edit/grep/glob` schemas are **unchanged**.
 
@@ -380,8 +408,36 @@ checks `Manager.Owns` before any Manager/Driver call; routes the command
 through `Manager.Exec` instead of a local `exec.Cmd`; skips `approvalFn`
 entirely; still attaches the same `cdWorkdirHint`/`dedicatedToolHint`
 advisory hints as the host path (no stale-dir self-heal, though — `workdir`
-there is a container-side path this process can't `os.Stat`). `create_sandbox`/
-`sandbox_cp`/`sandbox_destroy` themselves are still step 5, not yet built.
+there is a container-side path this process can't `os.Stat`).
+
+**Implemented** (`create_sandbox`/`sandbox_cp`/`sandbox_destroy` — step 5):
+`CreateSandboxTool` asks `SandboxApprovalFn` only when `mounts`/`env` are
+non-empty (env values are redacted to just their key in the approval
+prompt — secrets shouldn't be echoed back even to a human approval dialog),
+makes a fresh `os.MkdirTemp`-based scratch `<base>/workspace` tree (cleaned
+up if `Manager.Create` then fails), and calls `Manager.Create`. No
+bootstrap script runs yet — see "Root access" above for why that's
+deliberately deferred to the `podmanDriver` step rather than guessed at now.
+`SandboxCpTool` needs no `Driver`/`Manager.Exec` at all: a sandbox's
+workspace is already a plain host directory (`Manager.Get`'s `HostPath`),
+so moving a file between it and an arbitrary host path is an ordinary
+host-to-host copy, gated by the same `checkSensitivePath` read/write use.
+Its `workspacePath` is resolved via a new `resolveInWorkspace` helper that
+treats an absolute-looking path as workspace-relative (never a literal host
+path — the exact "`/etc/passwd` in a sandboxed call must never mean the
+real host `/etc/passwd`" concern from earlier) and re-resolves symlinks on
+both sides (`guard.ResolveSymlinkTarget`) so a symlink planted inside the
+workspace can't point a copy outside it — regression-tested directly.
+`SandboxDestroyTool` takes no `approvalFn` param at all (always allowed);
+kills via `Manager.Kill` then removes the whole scratch `<base>` tree via
+`Manager.Get`'s `HostPath`. All three are registered by `BuildRegistry`
+only when `opts.SandboxManager != nil`, so a session without sandbox
+support doesn't even see them as available tools; `create_sandbox`
+additionally excludes `Child` registries (a subagent may only use sandboxes
+its parent explicitly authorizes, never mint its own — the allow-list
+mechanism itself is still the next step, not built yet). Whether a subagent
+should also be excluded from `sandbox_cp`/`sandbox_destroy` is left an open
+question for that step, not decided here.
 
 Removed: `BashTool.sticky` field and `StickyCwd()` accessor,
 `internal/tools/bash_sticky.go` and `bash_sticky_test.go` in full
@@ -402,29 +458,40 @@ cwd/env "sticks across calls" gets rewritten; `cdWorkdirHint`'s trailing
 Written in this order, per the removal being staged before the new
 mechanism lands:
 
-1. **Characterization first**: current sticky isolation between the main
+1. ✅ **Characterization first**: current sticky isolation between the main
    agent's `BashTool` and a subagent's `BashTool` — regression lock proving
    today's process-boundary isolation, before any code changes. (Made moot
    once sticky is removed entirely, but locks in the process-isolation
    property the rest of this design still depends on.)
-2. Dead-code removal lands clean: `sandbox bool`/`BuildOptions.Sandbox` and
+2. ✅ Dead-code removal lands clean: `sandbox bool`/`BuildOptions.Sandbox` and
    all sticky code gone, existing test suite green with stateless bash.
-3. `internal/sandbox` with `fakeDriver` before any real podman code —
+3. ✅ `internal/sandbox` with `FakeDriver` before any real podman code —
    `Manager`/`bash` logic tested against the fake exclusively; a small
-   gated integration suite against real podman, opt-in only.
-4. Per-tool: sandboxed vs host `bash` behavior parity (approval skip,
-   hints).
-5. `batch` mixing a host `bash` call and one or more `sandboxId` calls in
+   gated integration suite against real podman, opt-in only (still pending
+   — lands with `podmanDriver`).
+4. ✅ Per-tool: sandboxed vs host `bash` behavior parity (approval skip,
+   hints) — plus `create_sandbox`/`sandbox_cp`/`sandbox_destroy`'s own
+   parity/error-path tests (no-manager-configured, foreign id, driver
+   failure, cleanup-on-failure).
+5. ✅ `batch` mixing a host `bash` call and one or more `sandboxId` calls in
    one round — real path an agent will hit.
-6. Ownership rejection: foreign/guessed `sandboxId` denied.
-7. Subagent: liveness-check on an authorized-but-now-dead sandboxId returns
+6. ✅ Ownership rejection: foreign/guessed `sandboxId` denied — for `bash`,
+   `sandbox_cp`, and `sandbox_destroy` alike.
+7. ⬜ Subagent: liveness-check on an authorized-but-now-dead sandboxId returns
    a tool error, not a crash; `POISSON_SUBAGENT_SANDBOXES` omitted when the
    parent has none (mirrors `TestBuildSpawnEnvOmitsUnsetFields`); a
-   subagent calling `create_sandbox` is rejected/absent from its registry.
-8. Symlink-escape regression: planted symlink inside `/workspace` pointing
-   at a sensitive host path still caught by host-side file tools.
-9. Idle-reap sweep: stale container + tmp dir actually removed on next
-   launch.
+   subagent calling `create_sandbox` is rejected/absent from its registry
+   (this last part is already true today — `TestBuildRegistry_
+   WithSandboxManager_ChildOmitsCreateSandbox` — the rest needs the
+   allow-list mechanism itself, not yet built).
+8. ✅ Symlink-escape regression: planted symlink inside a sandbox's workspace
+   pointing outside it still rejected by `sandbox_cp` (`TestSandboxCpTool_
+   SymlinkEscapeRejected`) — the file-tools half (read/write/edit/grep/glob
+   never needing their own check, since they were never sandbox-specific)
+   was already true by construction, nothing new to test there.
+9. ⬜ Idle-reap sweep: stale container + tmp dir actually removed on next
+   launch — needs the lifecycle/persistence follow-up (session-store
+   table, sweep, slash commands), not started.
 
 ## Open questions
 
