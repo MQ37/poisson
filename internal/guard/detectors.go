@@ -262,8 +262,8 @@ func touchesSensitivePath(tokens []string, workdir string) bool {
 // leading `cd <dir>` chain so relative path tokens in later segments are
 // resolved against the directory the shell would be in — the hole that
 // let `cd ~/.poisson && cat auth.json` auto-approve when only the bare
-// basename was checked. workdir is the bash tool's starting directory
-// (sticky/session cwd); may be "".
+// basename was checked. workdir is the bash tool's starting directory for
+// this call (session cwd, or an explicit workdir); may be "".
 func touchesSensitiveCommand(command, workdir string) bool {
 	cwd := workdir
 	for _, seg := range Segments(command) {

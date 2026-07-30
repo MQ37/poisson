@@ -16,18 +16,14 @@ import (
 	"github.com/mq37/poisson/internal/guard"
 )
 
-// BashTool executes bash commands, gated by the LLM risk classifier via approvalFn.
-//
-// Within one agent session the tool keeps a RAM-only sticky cwd + environment
-// so `cd` / `export` survive across calls (Grok-style continuity without a
-// persistent shell process). Subagents get their own BashTool via
-// BuildRegistry, so sticky state is never shared with the parent. Nothing is
-// written to the session DB — restart/resume starts clean at session cwd.
+// BashTool executes bash commands, gated by the LLM risk classifier via
+// approvalFn. Every call is stateless: no cwd or env persists from one call
+// to the next, in-process or across a restart — pass workdir explicitly on
+// any call that needs a directory other than the session root.
 type BashTool struct {
-	cwd        string // session workspace root (fallback when sticky empty)
+	cwd        string // session workspace root, used when workdir is empty
 	sandbox    bool
 	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)
-	sticky     bashSticky
 }
 
 // NewBashTool creates a bash tool. The approval function is called when a
@@ -40,7 +36,7 @@ func NewBashTool(cwd string, sandbox bool, approvalFn func(ctx context.Context, 
 func (t *BashTool) Name() string { return "bash" }
 
 func (t *BashTool) Description() string {
-	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n still runs (not refused) but comes back with a hint nudging you to 'read' next time — skips the approval gate, supports offset/limit. For several independent tool ops in one step use batch (not a bash pipeline of the same). Cwd and environment stick across bash calls in this session only (RAM; lost on restart; subagents isolated) — cd/export once and later calls see them. Optional workdir overrides sticky cwd for one call and then updates sticky to the resulting pwd."
+	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n still runs (not refused) but comes back with a hint nudging you to 'read' next time — skips the approval gate, supports offset/limit. For several independent tool ops in one step use batch (not a bash pipeline of the same). Every call is stateless — cd/export do not carry to the next call; pass workdir explicitly whenever you need a non-default directory."
 }
 
 func (t *BashTool) Schema() json.RawMessage {
@@ -49,7 +45,7 @@ func (t *BashTool) Schema() json.RawMessage {
   "properties": {
     "command": { "type": "string" },
     "description": { "type": "string", "description": "Short description of what the command does" },
-    "workdir": { "type": "string", "description": "Working directory for this call (default: sticky cwd from prior bash in this session, else session cwd). Absolute or relative to session cwd. Updates sticky cwd after the call." },
+    "workdir": { "type": "string", "description": "Working directory for this call (default: session cwd). Absolute or relative to session cwd. Does not persist to later calls." },
     "timeout": { "type": "integer", "description": "Timeout in seconds (default: 120)" }
   },
   "required": ["command", "description"]
@@ -97,45 +93,20 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		return ToolResult{Error: "blocked: refusing to run poisson/px with --yolo (nested auto-approve). Run --yolo yourself from a real shell if you need it."}, nil
 	}
 
-	// Snapshot sticky state under lock — briefly, not for the rest of this
-	// call. The lock only needs to guard the actual read/write of
-	// t.sticky.cwd/env; holding it across the approval wait and the
-	// subprocess run would serialize every bash tool_use in a round even
-	// though they're otherwise independent (a human can be mid-approval on
-	// one while another is free to run). Concurrent callers may still race
-	// on what sticky ends up as (whichever finishes last wins) — same as
-	// two real concurrent `cd`s in one shell have no well-defined
-	// "correct" outcome — but that's a business-logic ambiguity, not the
-	// data race this lock exists to prevent.
-	t.sticky.lock()
-	stickyCwd, stickyEnv := t.sticky.cwd, t.sticky.env
-	t.sticky.unlock()
-	dir := stickyStartDir(t.cwd, stickyCwd, in.Workdir)
+	dir := resolveWorkdir(t.cwd, in.Workdir)
 
-	// A stale dir (sticky cwd's directory got deleted/unmounted since the
-	// last call, or an explicit workdir that doesn't exist) must not reach
-	// exec.Cmd: Cmd.SysProcAttr is set below (needed for process-group
-	// kill), which disables Go's own friendly chdir-existence pre-check
-	// (os/exec_posix.go only stats Dir when Sys == nil). Without this check
-	// a missing dir fails deep inside the forked child's chdir(), and Go
-	// can only report it as "fork/exec <bash path>: no such file or
-	// directory" -- blaming the bash binary instead of the real cause.
-	// Worse, since the wrapper script never starts, readStickyDump never
-	// runs and t.sticky.cwd is never corrected -- every later call would
-	// repeat the same failure forever. Catch it here and self-heal instead.
+	// A missing dir must not reach exec.Cmd: Cmd.SysProcAttr is set below
+	// (needed for process-group kill), which disables Go's own friendly
+	// chdir-existence pre-check (os/exec_posix.go only stats Dir when Sys ==
+	// nil). Without this check a missing dir fails deep inside the forked
+	// child's chdir(), and Go can only report it as "fork/exec <bash path>:
+	// no such file or directory" -- blaming the bash binary instead of the
+	// real cause. Self-heal to the session root instead of wedging the call.
 	var hints []string
 	if dir != "" {
 		if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
-			bad := dir
+			hints = append(hints, fmt.Sprintf("workdir %q does not exist; ran in session root %q instead.", dir, t.cwd))
 			dir = t.cwd
-			if in.Workdir != "" {
-				hints = append(hints, fmt.Sprintf("workdir %q does not exist; ran in session root %q instead.", bad, t.cwd))
-			} else {
-				t.sticky.lock()
-				t.sticky.cwd = ""
-				t.sticky.unlock()
-				hints = append(hints, fmt.Sprintf("sticky working directory %q no longer exists (deleted/unmounted); reset to session root %q.", bad, t.cwd))
-			}
 		}
 	}
 
@@ -167,28 +138,13 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	childCtx, cancel := context.WithTimeout(ctx, timeoutDur)
 	defer cancel()
 
-	// State dump files: wrapper writes pwd + env -0 here after the user
-	// command so we can update sticky without scraping command output.
-	// User command lives in cmdFile and is eval'd in the same shell (nested
-	// bash -c would discard cd/export).
-	stateDir, err := os.MkdirTemp("", "poisson-bash-sticky-*")
-	if err != nil {
-		return ToolResult{Error: "cannot create sticky state dir: " + err.Error()}, nil
-	}
-	defer os.RemoveAll(stateDir)
-	cmdFile := filepath.Join(stateDir, "cmd")
-	cwdFile := filepath.Join(stateDir, "cwd")
-	envFile := filepath.Join(stateDir, "env")
-	if err := os.WriteFile(cmdFile, []byte(in.Command), 0o600); err != nil {
-		return ToolResult{Error: "cannot write sticky cmd file: " + err.Error()}, nil
-	}
-
-	wrapped := wrapBashForSticky(cmdFile, cwdFile, envFile)
-	cmd := exec.CommandContext(childCtx, "bash", "-c", wrapped)
+	cmd := exec.CommandContext(childCtx, "bash", "-c", in.Command)
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	cmd.Env = envForCmd(stickyEnv)
+	// cmd.Env left nil: exec.Cmd falls back to os.Environ() (no persisted
+	// env from a prior call — every call inherits the process environment
+	// fresh).
 	// Run in its own process group and kill the whole group on timeout/cancel,
 	// otherwise only the bash shell dies and its spawned children are orphaned.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -204,7 +160,7 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err = cmd.Run()
+	err := cmd.Run()
 	exitCode := 0
 	if err != nil {
 		switch {
@@ -228,16 +184,6 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		}
 	}
 
-	// Always try to refresh sticky from the dump when the wrapper got far
-	// enough to write it — including failed commands (cd good; false should
-	// still leave sticky in good). Missing dump (killed early) keeps prior.
-	if newCwd, newEnv, dumpErr := readStickyDump(cwdFile, envFile); dumpErr == nil {
-		t.sticky.lock()
-		t.sticky.cwd = newCwd
-		t.sticky.env = newEnv
-		t.sticky.unlock()
-	}
-
 	if !t.sandbox {
 		if h := cdWorkdirHint(in.Command, in.Workdir); h != "" {
 			hints = append(hints, h)
@@ -255,14 +201,6 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	}
 	data, _ := json.Marshal(out)
 	return ToolResult{Content: string(data)}, nil
-}
-
-// StickyCwd returns the current sticky working directory (empty if still at
-// the session default). Test/helper accessor; not part of the tool API.
-func (t *BashTool) StickyCwd() string {
-	t.sticky.lock()
-	defer t.sticky.unlock()
-	return t.sticky.cwd
 }
 
 // isCdSegment reports whether a command segment is just `cd <path>` (no
@@ -337,9 +275,8 @@ func segmentTokensHavePoissonYolo(tokens []string) bool {
 
 // cdWorkdirHint nudges the model toward the workdir param when the command
 // is a plain `cd DIR && rest` chain — same effect, without repeating the
-// path (and re-paying its tokens) on every call. With sticky cwd a plain
-// `cd DIR` (no &&) already persists; the hint still helps for one-liners
-// that prefix every command with cd.
+// path (and re-paying its tokens) on every call. Bash is stateless, so this
+// fires on every `cd DIR &&`-prefixed one-liner, not just the first.
 func cdWorkdirHint(command, workdir string) string {
 	if workdir != "" {
 		return ""
@@ -349,7 +286,7 @@ func cdWorkdirHint(command, workdir string) string {
 		return ""
 	}
 	dir := strings.Fields(strings.TrimSpace(segs[0]))[1]
-	return fmt.Sprintf("this command starts with 'cd %s \u0026\u0026' — pass workdir: %q instead next time (same effect, fewer tokens), or rely on sticky cwd after a plain cd.", dir, dir)
+	return fmt.Sprintf("this command starts with 'cd %s \u0026\u0026' — pass workdir: %q instead next time (same effect, fewer tokens).", dir, dir)
 }
 
 // dedicatedToolHint reports (advisory only — the command still runs either
@@ -393,6 +330,23 @@ func dedicatedToolHint(command string) string {
 		}
 	}
 	return ""
+}
+
+// resolveWorkdir picks the directory for one bash call: explicit workdir
+// wins (resolved against sessionRoot), else sessionRoot. No persisted state —
+// every call resolves independently.
+func resolveWorkdir(sessionRoot, workdir string) string {
+	if workdir == "" {
+		return sessionRoot
+	}
+	if filepath.IsAbs(workdir) {
+		return workdir
+	}
+	base := sessionRoot
+	if base == "" {
+		base = "."
+	}
+	return filepath.Join(base, workdir)
 }
 
 // resolvePath joins a path with the tool's cwd if it is relative.

@@ -45,8 +45,8 @@ px                                                   # launch the TUI
   `web_ask`, `fetch` (selectable backends, [details](docs/web-tools.md)),
   `recall` (cross-session full-text search), subagents,
   and 8 built-in skills ([below](#-built-in-skills)), user-extendable via
-  `~/.poisson/skills/`. `bash` keeps sticky cwd/env across calls in a
-  session.
+  `~/.poisson/skills/`. `bash` is stateless — pass `workdir` explicitly on
+  any call that needs a directory other than session cwd.
 - **Bash safety guard, two speeds** — Fast mode (default): a deterministic
   guard auto-approves read-only commands with zero LLM calls; anything else
   is LLM risk-classified, medium/high/unknown asks you. Paranoid mode

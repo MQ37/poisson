@@ -722,9 +722,9 @@ func TestBashTool_SanitizesOutput(t *testing.T) {
 }
 
 // Missing workdir self-heals to the session root instead of handing exec.Cmd
-// a dead Dir (see TestBashSticky_BadWorkdirSelfHeals for the full story: a
-// missing Dir with SysProcAttr set fails as an opaque "fork/exec bash: no
-// such file or directory", not a chdir error, so it's caught explicitly).
+// a dead Dir: a missing Dir with SysProcAttr set fails as an opaque
+// "fork/exec bash: no such file or directory", not a chdir error, so
+// Execute stats it explicitly first and falls back to the session root.
 func TestBashTool_WorkdirErrorInStderr(t *testing.T) {
 	dir := testutil.TempDir(t)
 	b := NewBashTool(dir, true, nil)
@@ -746,6 +746,96 @@ func TestBashTool_WorkdirErrorInStderr(t *testing.T) {
 	if !strings.Contains(out.Hint, "does not exist") {
 		t.Fatalf("output = %+v, want hint about missing workdir", out)
 	}
+}
+
+func bashOut(t *testing.T, res ToolResult) bashOutput {
+	t.Helper()
+	if res.Error != "" {
+		t.Fatalf("bash error: %s", res.Error)
+	}
+	var out bashOutput
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal: %v\ncontent=%q", err, res.Content)
+	}
+	return out
+}
+
+// TestBashTool_NoCwdPersistence is the positive confirmation of the
+// stateless contract: a `cd` in one call must not affect where the next
+// call on the same BashTool instance runs — bash keeps no RAM state across
+// calls at all now, unlike the removed sticky mechanism.
+func TestBashTool_NoCwdPersistence(t *testing.T) {
+	dir := testutil.TempDir(t)
+	sub := filepath.Join(dir, "nested")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	b := NewBashTool(dir, true, nil)
+
+	bashOut(t, mustExec(t, b, "cd nested", "enter nested"))
+
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command": "pwd", "description": "print cwd",
+	}))
+	out := bashOut(t, res)
+	pwd, _ := filepath.EvalSymlinks(strings.TrimSpace(out.Stdout))
+	root, _ := filepath.EvalSymlinks(dir)
+	if pwd != root {
+		t.Fatalf("pwd = %q, want session root %q (cd from the prior call must not persist)", pwd, dir)
+	}
+}
+
+// TestBashTool_NoEnvPersistence: same contract for export.
+func TestBashTool_NoEnvPersistence(t *testing.T) {
+	dir := testutil.TempDir(t)
+	b := NewBashTool(dir, true, nil)
+
+	bashOut(t, mustExec(t, b, "export POISSON_STATELESS_TEST=hello", "set env"))
+
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     `printf '%s' "${POISSON_STATELESS_TEST:-unset}"`,
+		"description": "read env",
+	}))
+	out := bashOut(t, res)
+	if out.Stdout != "unset" {
+		t.Fatalf("stdout = %q, want \"unset\" (export from the prior call must not persist)", out.Stdout)
+	}
+}
+
+// TestBashTool_SeparateInstancesAlwaysIsolated: main agent and each subagent
+// build their own BashTool (see BuildRegistry) — with no shared state left
+// at all, two instances can never interfere with each other by construction.
+func TestBashTool_SeparateInstancesAlwaysIsolated(t *testing.T) {
+	dir := testutil.TempDir(t)
+	sub := filepath.Join(dir, "only-parent")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	parent := NewBashTool(dir, true, nil)
+	child := NewBashTool(dir, true, nil)
+
+	bashOut(t, mustExec(t, parent, "cd only-parent", "parent cd"))
+
+	res, _ := child.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command": "pwd", "description": "child pwd",
+	}))
+	out := bashOut(t, res)
+	pwd, _ := filepath.EvalSymlinks(strings.TrimSpace(out.Stdout))
+	root, _ := filepath.EvalSymlinks(dir)
+	if pwd != root {
+		t.Fatalf("child pwd = %q, want session root %q (not parent's cwd)", pwd, dir)
+	}
+}
+
+func mustExec(t *testing.T, b *BashTool, cmd, desc string) ToolResult {
+	t.Helper()
+	res, err := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command": cmd, "description": desc,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
 }
 
 func TestBashTool_UnsafeDenied(t *testing.T) {
