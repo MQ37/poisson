@@ -65,8 +65,18 @@ type Driver interface {
     Exec(ctx context.Context, id, cmd, workdir string, timeout time.Duration) (stdout, stderr string, exitCode int, err error)
     Inspect(ctx context.Context, id string) (alive bool, err error)
     Kill(ctx context.Context, id string) error
+    List(ctx context.Context) ([]Info, error)
 }
 ```
+
+`List` was added in the crash-recovery step (see below): every live sandbox
+this Driver's backend knows about, regardless of which process created it.
+`CreateOpts` gained `Name` (agent-chosen, resolved through
+`ResolveSandboxName` — sanitized and `px-sandbox-`-prefixed, or a random
+fallback when empty) and `SessionID` (stamped by `Manager.Create` from its
+own `sessionID`, purely informational). `Create`'s returned `id` is now
+always that resolved name, not an opaque hash — the container's name *is*
+its id, so "know the exact name" is the whole access model.
 
 - `podmanDriver` — **implemented**, real implementation, shells out to the
   `podman` CLI (same style as `bash.go`/`grep.go` today — no REST API, no
@@ -429,32 +439,84 @@ lands together with the `podmanDriver` step, not before. Same deferral
 reasoning as the bootstrap script above: guessing at wiring before the
 real consumer exists would be designing against nothing.
 
-### Lifecycle / cleanup
+### Crash recovery / cross-session discovery
 
-**Not yet implemented — remaining work, tracked here, not started.** What
-exists today: `sandbox_destroy` (agent-driven, per-sandbox teardown) and
-`CreateSandboxTool`'s own cleanup-on-create-failure. The persistence +
-idle-reap half below (session-store table, launch-time sweep, slash
-commands) is still to be built as its own follow-up — deliberately not
-bundled into the same change as the three tools, to keep each piece
-reviewable on its own.
+**Implemented.** The problem: a podman container isn't tied to poisson's
+process lifetime — it keeps running (CPU/memory/its overlay layer) after a
+crash, a closed terminal, or an abandoned session, exactly like the `/tmp`
+mirror directory sitting on disk. A `Manager`'s in-memory ownership map was
+the *only* record of what a sandbox even was — a fresh process (after a
+crash, or just a different concurrent session) had no way to find or reuse
+one, only to leak it forever.
 
-A podman container isn't tied to poisson's process lifetime — it keeps
-running (CPU/memory/its overlay layer) after a crash, a closed terminal, or
-an abandoned session, exactly like the `/tmp` mirror directory sitting on
-disk. Left unmanaged, every forgotten session leaves one more container and
-one more `/tmp` dir behind, forever — `podman ps` clutters, disk fills,
-eventually real resource exhaustion.
+**Design: podman itself is the source of truth, not a new database table.**
+No `sandboxes` session-store table was added — every container this
+package creates already carries a `poisson.sandbox=1` label (and, when a
+`sessionID` is set, `poisson.session=<id>`), so `Driver.List` (`podman ps -a
+--filter label=poisson.sandbox=1` + one batched `podman inspect`) *is* the
+persistent record, for free, across any number of crashed/restarted
+processes. This is a deliberate simplification over this section's earlier
+sketch (session-store table + launch-time sweep reading it) — podman
+already durably remembers what exists; a second, potentially-stale copy of
+that fact in SQLite would just be another thing to keep in sync.
 
-- Session store gains a `sandboxes` table: `id, session_id, container_id,
-  host_path, created_at, last_used_at`.
-- On every `px` launch: a `sweepStaleSandboxes()` pass, same shape as the
-  existing `sweepStaleSpillFiles()` (`sync.Once`, TTL-based) — checks each
-  recorded container against `podman ps`, kills + removes the tmp dir for
-  anything past an idle TTL or whose session no longer exists.
-- Explicit `/sandbox ls` / `/sandbox kill <id>` surfaced to the user.
-- On clean session end: if any sandboxes are still alive, ask
-  "N sandboxes still running — kill them? (Recommended) / leave running".
+**Naming: agent-chosen, and the name *is* the id.** `create_sandbox` takes
+an optional `name` (e.g. `"api-testing-2"`); `ResolveSandboxName` sanitizes
+it and prefixes `px-sandbox-` (or generates a random `px-sandbox-<hex>` name
+when omitted). The resolved name is passed as the container's real `--name`
+*and* returned as `sandboxId` — there's no separate opaque handle. A
+colliding name fails `podman create` (and `FakeDriver.Create`) loudly and
+immediately; the agent picks another name or checks `list_sandboxes` first.
+Prefixing serves two purposes: keeps `podman ps` filtering unambiguous, and
+keeps a sandbox from ever colliding with an unrelated container already on
+the host.
+
+**Access model: open across sessions, gated only by knowing the exact
+name.** `Manager` gained `EnableDiscovery()`: when set, a local-map miss on
+`Get`/`Owns` falls back to `Driver.List`, and adopts a match by exact `id`
+that is still `Running` (a stopped/crashed match is refused, not silently
+adopted — same reasoning `Alive` already applies elsewhere). This is an
+explicit, deliberate loosening from the original "only this process's own
+Manager, or an explicitly Authorize'd one" model — the user's call: any
+session/instance can use any live sandbox it can name, nudged (not
+technically forced) by a prompt guideline to prefer reattaching to a
+recognized one over creating a duplicate, and to leave sandboxes that look
+like someone else's in-progress work alone. The residual risk (an agent
+guessing/hallucinating another session's exact live name) is accepted as
+low-probability and fail-loud (a wrong name either matches nothing, or
+matches something the agent would have had to already know the name of) —
+not fail-open onto a random container.
+
+**The subagent gate is unaffected, on purpose.** `EnableDiscovery` is called
+*only* by `cmd/px/main.go`'s `newSandboxManager` (a top-level session's own
+Manager) — `resolveChildSandboxManager` (a subagent's Manager) builds its
+`Manager` directly and never calls it, so a subagent's access remains
+exactly what its parent explicitly `Authorize`'d, nothing discoverable on
+its own. Locked in by `TestManager_DiscoverySubagentManagerNeverEnabled`.
+
+**`list_sandboxes` tool**: browses every live sandbox `Driver.List` reports
+— across every session, not just this one — showing `sandboxId`, `hostPath`,
+the creating session's id, `createdAt`, and `running`. Read-only: seeing an
+entry never grants access on its own, `Owns`/`Get` still gate
+`bash`/`sandbox_cp`/`sandbox_destroy` independently either way. Registered
+alongside the other sandbox tools whenever `SandboxManager != nil`,
+including for a child registry (browsing a subagent can't act on beyond
+what it was authorized for is harmless).
+
+**Still open, not started** (unaffected by the above — these are about
+*resource exhaustion*, not *discoverability*, which is now solved):
+
+- No idle-reap sweep yet: a forgotten, no-longer-wanted sandbox runs
+  forever until explicitly `sandbox_destroy`'d or manually `podman rm -f`'d.
+  A `sweepStaleSandboxes()` pass (same shape as `sweepStaleSpillFiles()`,
+  `sync.Once`, TTL-based) could now be built directly against `Driver.List`
+  + each `Info.CreatedAt`/a liveness heartbeat, with no session-store table
+  needed — but the TTL default (and whether it's `config.toml`-configurable)
+  is still an open question below.
+- No `/sandbox ls` / `/sandbox kill <id>` slash commands surfaced to a human
+  yet (the agent-facing `list_sandboxes`/`sandbox_destroy` tools exist;
+  these would be the equivalent for a human driving the TUI directly).
+- No "N sandboxes still running — kill them?" prompt on clean session end.
 
 ## Tool schema changes
 
@@ -467,9 +529,10 @@ host path, not a sandboxId" decision):
 
 ```
 bash{command, description, workdir, timeout, sandboxId?}
-create_sandbox{image?, mounts?, env?} -> {sandboxId, hostPath}
+create_sandbox{image?, name?, mounts?, env?} -> {sandboxId, hostPath}
 sandbox_cp{sandboxId, direction: in|out, hostPath, workspacePath}
 sandbox_destroy{sandboxId} -> ok/error content
+list_sandboxes{} -> [{sandboxId, hostPath, sessionId, createdAt, running}]
 subagent{task, name?, sandboxIds?} -> unchanged otherwise
 ```
 
@@ -597,8 +660,26 @@ mechanism lands:
    never needing their own check, since they were never sandbox-specific)
    was already true by construction, nothing new to test there.
 9. ⬜ Idle-reap sweep: stale container + tmp dir actually removed on next
-   launch — needs the lifecycle/persistence follow-up (session-store
-   table, sweep, slash commands), not started.
+   launch — needs a heartbeat mechanism (see "Open questions"), not started.
+10. ✅ Crash recovery / cross-session discovery: a foreign live sandbox is
+    invisible without `EnableDiscovery` (`TestManager_ForeignSandboxNotConfusedWithAnothersOwn`,
+    unchanged) but adopted with it (`TestManager_DiscoveryAttachesForeignLiveSandbox`);
+    a non-running match is refused, not adopted
+    (`TestManager_DiscoveryRefusesDeadSandbox`); a subagent's own Manager
+    never gets discovery even when the underlying container is right there
+    in the shared driver (`TestManager_DiscoverySubagentManagerNeverEnabled`);
+    `Manager.List` is a plain pass-through, browsing grants no access
+    (`TestManager_ListProxiesDriver`, `TestListSandboxesTool_BrowsingGrantsNoAccess`);
+    naming policy (`TestResolveSandboxName`), a duplicate name error, both at
+    the `Manager` and the `create_sandbox` tool layer
+    (`TestManager_CreateNameCollisionErrorsClearly`,
+    `TestCreateSandboxTool_NameCollisionErrorsClearly`); and cross-session
+    visibility end-to-end through the actual tool
+    (`TestListSandboxesTool_CrossSessionVisibility`). A real `-race`-caught
+    regression from this step: `Manager.Get` briefly dereferenced its
+    tracked `*Sandbox` after releasing `m.mu` — fixed by copying under the
+    lock before returning, same discipline the original `Get`/`Create`
+    value-copy design already established.
 
 ## Production wiring
 
@@ -606,17 +687,22 @@ mechanism lands:
 three `BuildRegistry` call sites now each get a real `sandbox.Manager`.
 
 - `runPrint` (headless `-p`) and `runREPL` (interactive TUI): each
-  constructs `newSandboxManager()` — `sandbox.NewManager(sandbox.NewPodmanDriver(nil, nil))`,
+  constructs `newSandboxManager(sessionID)` — `sandbox.NewManager(sandbox.NewPodmanDriver(nil, nil))`,
   no storage confinement (confinement is test-only, see the disk-wear
-  guard) — and passes it as `BuildOptions.SandboxManager`. A new
-  `sandboxApprovalFn`, mirroring `fileApprovalFn`'s exact shape (fixed
-  `BashRiskHigh`, asks the human directly — no LLM classification, since
-  "does this request carry extra mounts/env" is exactly as deterministic a
-  question as "is this path sensitive"), is passed as
-  `BuildOptions.SandboxApprovalFn`.
+  guard), `SetSessionID(sessionID)` and `EnableDiscovery()` (see "Crash
+  recovery" above — a top-level session is exactly the case that should be
+  able to find/reattach to any live sandbox by name) — and passes it as
+  `BuildOptions.SandboxManager`. A new `sandboxApprovalFn`, mirroring
+  `fileApprovalFn`'s exact shape (fixed `BashRiskHigh`, asks the human
+  directly — no LLM classification, since "does this request carry extra
+  mounts/env" is exactly as deterministic a question as "is this path
+  sensitive"), is passed as `BuildOptions.SandboxApprovalFn`.
 - `runChildMode` (subagent child): a new `resolveChildSandboxManager(envValue string) *sandbox.Manager`
   parses `POISSON_SUBAGENT_SANDBOXES` (`subagent.ParseAuthorizedSandboxes`)
-  and `Authorize`s each entry onto a fresh Manager — returning `nil` (not an
+  and `Authorize`s each entry onto a fresh Manager — built directly
+  (`sandbox.NewManager(sandbox.NewPodmanDriver(nil, nil))`), never via
+  `newSandboxManager`, specifically so `EnableDiscovery` can't be
+  accidentally inherited by a subagent's Manager — returning `nil` (not an
   empty-but-non-nil Manager) when there's nothing authorized or the value
   is malformed, so a plain subagent (the common case: most spawns authorize
   nothing) doesn't even get `sandbox_cp`/`sandbox_destroy` registered at
@@ -644,7 +730,13 @@ three `BuildRegistry` call sites now each get a real `sandbox.Manager`.
   the model to prefer `create_sandbox` + `bash(sandboxId=...)` over a host
   command that would need human approval, whenever `create_sandbox` is
   actually available (it simply won't be in the tool list otherwise, so
-  the guideline is safe to state unconditionally).
+  the guideline is safe to state unconditionally). Extended in the crash-
+  recovery step: name the sandbox descriptively (that name is its
+  `sandboxId`, reusable by any session later), check `list_sandboxes` before
+  creating a duplicate, and prefer reattaching to a recognized sandbox over
+  poking one that looks like someone else's in-progress work — the
+  technical access model is open (see "Crash recovery" above), so this
+  guideline is the only thing enforcing good manners between sessions.
 
 ## Open questions
 
@@ -659,3 +751,11 @@ three `BuildRegistry` call sites now each get a real `sandbox.Manager`.
    session cwd automatically? No longer a security question (sensitive-path
    approval applies either way, per "File tools") — now purely a UX/token-
    cost question.
+5. Idle-reap sweep, now that "Crash recovery" above has settled discovery:
+   `Driver.List`'s `Info.CreatedAt` alone isn't "last used" — a heartbeat
+   (e.g. mtime of a sentinel file under `hostPath`, touched on every
+   `Manager.Exec`) is the likely mechanism, still to be designed and built.
+6. Should a generic/very common agent-chosen name (e.g. "test", "scratch")
+   get an automatic disambiguating suffix, or is a clear collision error
+   (agent retries, or checks `list_sandboxes` first) good enough? No
+   evidence yet that collisions are a real friction point in practice.

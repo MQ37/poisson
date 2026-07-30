@@ -88,15 +88,18 @@ func BuildRegistry(opts BuildOptions) *Registry {
 		// create_sandbox is parent-only, same reasoning as the subagent tool
 		// below: a subagent may only use sandboxes its parent explicitly
 		// authorized (docs/sandbox-plan.md), never mint its own. sandbox_cp/
-		// sandbox_destroy stay available to a child for now — whether a
-		// subagent should be able to destroy a sandbox it didn't create is a
-		// real open question, deferred to the subagent allow-list step
-		// (docs/sandbox-plan.md "Subagents"), not decided here.
+		// sandbox_destroy/list_sandboxes stay available to a child for now —
+		// whether a subagent should be able to destroy a sandbox it didn't
+		// create is a real open question, deferred to the subagent allow-
+		// list step (docs/sandbox-plan.md "Subagents"), not decided here.
+		// list_sandboxes is read-only regardless (browsing grants no access
+		// on its own — see docs/sandbox-plan.md's "Crash recovery" section).
 		if !opts.Child {
 			reg.Register(NewCreateSandboxTool(opts.Cwd, opts.SandboxManager, sandboxApproval))
 		}
 		reg.Register(NewSandboxCpTool(opts.Cwd, opts.SandboxManager, fileApproval))
 		reg.Register(NewSandboxDestroyTool(opts.SandboxManager))
+		reg.Register(NewListSandboxesTool(opts.SandboxManager))
 	}
 	// web_search and fetch are re-registered with their provider-gated
 	// backends by agent.ReloadConfigDependentTools, which runs right after the

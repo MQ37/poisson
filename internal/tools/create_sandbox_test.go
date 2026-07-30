@@ -127,6 +127,47 @@ func TestCreateSandboxTool_EnvRequiresApprovalAndValuesAreRedacted(t *testing.T)
 	}
 }
 
+// TestCreateSandboxTool_NamePrefixedAndReturnedAsID confirms an agent-
+// supplied name becomes the sandboxId (px-sandbox-<name>), not just a hint
+// — that's the whole basis of naming a sandbox to find it again later (see
+// docs/sandbox-plan.md's "Crash recovery" section).
+func TestCreateSandboxTool_NamePrefixedAndReturnedAsID(t *testing.T) {
+	dir := testutil.TempDir(t)
+	mgr := sandbox.NewManager(sandbox.NewFakeDriver())
+	tool := NewCreateSandboxTool(dir, mgr, denyAll)
+
+	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]interface{}{"name": "api-testing-2"}))
+	if res.Error != "" {
+		t.Fatalf("create_sandbox error: %s", res.Error)
+	}
+	var out struct {
+		SandboxID string `json:"sandboxId"`
+	}
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.SandboxID != "px-sandbox-api-testing-2" {
+		t.Errorf("sandboxId = %q, want px-sandbox-api-testing-2", out.SandboxID)
+	}
+}
+
+// TestCreateSandboxTool_NameCollisionErrorsClearly confirms reusing a live
+// name surfaces a clear error the agent can act on (try another name, or
+// check list_sandboxes) instead of silently reusing/corrupting the first.
+func TestCreateSandboxTool_NameCollisionErrorsClearly(t *testing.T) {
+	dir := testutil.TempDir(t)
+	mgr := sandbox.NewManager(sandbox.NewFakeDriver())
+	tool := NewCreateSandboxTool(dir, mgr, denyAll)
+
+	if res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]interface{}{"name": "dup"})); res.Error != "" {
+		t.Fatalf("first create: %s", res.Error)
+	}
+	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]interface{}{"name": "dup"}))
+	if res.Error == "" {
+		t.Fatal("expected a clear error on a duplicate sandbox name")
+	}
+}
+
 func TestCreateSandboxTool_NoManagerConfigured(t *testing.T) {
 	dir := testutil.TempDir(t)
 	tool := NewCreateSandboxTool(dir, nil, alwaysApprove)

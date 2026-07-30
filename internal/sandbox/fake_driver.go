@@ -3,11 +3,20 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// fakeContainer is one container tracked by FakeDriver — enough state to
+// answer Exec/Inspect/Kill/List the way a real podman backend would,
+// without a subprocess.
+type fakeContainer struct {
+	hostPath  string
+	sessionID string
+	createdAt time.Time
+	alive     bool
+}
 
 // FakeDriver is an in-memory Driver test double — no subprocess, no real
 // podman. Same idiom as provider.FakeProvider (internal/provider/fake.go):
@@ -17,9 +26,8 @@ import (
 // packages' tests can construct one directly, the same way they already
 // import provider.FakeProvider.
 type FakeDriver struct {
-	mu     sync.Mutex
-	nextID int
-	alive  map[string]bool
+	mu         sync.Mutex
+	containers map[string]*fakeContainer
 	// ExecFn, when set, overrides the default echo-style Exec behavior —
 	// lets a test script a specific stdout/stderr/exitCode/err per call.
 	ExecFn func(ctx context.Context, id, cmd, workdir string) (stdout, stderr string, exitCode int, err error)
@@ -37,9 +45,13 @@ type FakeDriver struct {
 
 // NewFakeDriver returns a FakeDriver with no containers yet.
 func NewFakeDriver() *FakeDriver {
-	return &FakeDriver{alive: make(map[string]bool)}
+	return &FakeDriver{containers: make(map[string]*fakeContainer)}
 }
 
+// Create resolves opts.Name through ResolveSandboxName (same policy the real
+// podmanDriver uses) and rejects a name collision with a live container the
+// same way `podman create --name` would — a real, testable error path, not
+// just a happy-path echo.
 func (f *FakeDriver) Create(_ context.Context, opts CreateOpts) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -47,15 +59,26 @@ func (f *FakeDriver) Create(_ context.Context, opts CreateOpts) (string, error) 
 	if f.CreateErr != nil {
 		return "", f.CreateErr
 	}
-	f.nextID++
-	id := "fake-" + strconv.Itoa(f.nextID)
-	f.alive[id] = true
-	return id, nil
+	name, err := ResolveSandboxName(opts.Name)
+	if err != nil {
+		return "", err
+	}
+	if c, ok := f.containers[name]; ok && c.alive {
+		return "", fmt.Errorf("fakeDriver: name %q already in use", name)
+	}
+	f.containers[name] = &fakeContainer{
+		hostPath:  opts.HostPath,
+		sessionID: opts.SessionID,
+		createdAt: time.Now(),
+		alive:     true,
+	}
+	return name, nil
 }
 
 func (f *FakeDriver) Exec(ctx context.Context, id, cmd, workdir string, _ time.Duration) (string, string, int, error) {
 	f.mu.Lock()
-	alive := f.alive[id]
+	c, ok := f.containers[id]
+	alive := ok && c.alive
 	fn := f.ExecFn
 	f.mu.Unlock()
 	if !alive {
@@ -72,28 +95,57 @@ func (f *FakeDriver) Exec(ctx context.Context, id, cmd, workdir string, _ time.D
 func (f *FakeDriver) Inspect(_ context.Context, id string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.alive[id], nil
+	c, ok := f.containers[id]
+	return ok && c.alive, nil
 }
 
 func (f *FakeDriver) Kill(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if !f.alive[id] {
+	c, ok := f.containers[id]
+	switch {
+	case !ok:
 		return fmt.Errorf("fakeDriver: no such container %q", id)
+	case !c.alive:
+		return fmt.Errorf("fakeDriver: container %q already dead", id)
 	}
-	delete(f.alive, id)
+	delete(f.containers, id)
 	return nil
+}
+
+// List reports every tracked container, alive or MarkDead'd (a real podman
+// `ps -a` shows stopped containers too) — Kill removes the record entirely,
+// matching `podman rm -f` actually deleting it.
+func (f *FakeDriver) List(_ context.Context) ([]Info, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	infos := make([]Info, 0, len(f.containers))
+	for id, c := range f.containers {
+		infos = append(infos, Info{
+			ID:        id,
+			HostPath:  c.hostPath,
+			SessionID: c.sessionID,
+			CreatedAt: c.createdAt,
+			Running:   c.alive,
+		})
+	}
+	return infos, nil
 }
 
 // MarkDead simulates a container dying (or being reaped/killed) outside the
 // normal Kill path — e.g. a parent session's idle-reap sweep, or the
 // container crashing — without going through this driver's own Kill.
 // Manager.Owns still returns true afterward (ownership and liveness are
-// separate questions); Manager.Alive is what should go false. A test
-// exercising the subagent case ("authorized id, but now dead") uses this
-// directly on a FakeDriver shared between a parent's and a child's Manager.
+// separate questions); Manager.Alive is what should go false. The record
+// itself is kept (alive flips to false, not deleted) — same as a real
+// stopped-but-not-removed container still showing up in `podman ps -a`. A
+// test exercising the subagent case ("authorized id, but now dead") uses
+// this directly on a FakeDriver shared between a parent's and a child's
+// Manager.
 func (f *FakeDriver) MarkDead(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	delete(f.alive, id)
+	if c, ok := f.containers[id]; ok {
+		c.alive = false
+	}
 }

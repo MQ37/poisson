@@ -3,6 +3,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -84,6 +85,14 @@ func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, err
 		return "", fmt.Errorf("podman create: image is required")
 	}
 
+	// name is both the container's actual --name and the id this Create
+	// returns — a sandbox's name *is* its id, no separate opaque handle (see
+	// CreateOpts.Name / docs/sandbox-plan.md's "Crash recovery" section).
+	name, err := ResolveSandboxName(opts.Name)
+	if err != nil {
+		return "", err
+	}
+
 	// --userns=keep-id: without it, a uid that matches on both sides of the
 	// bind mount is a coincidence, not a guarantee — rootless podman's
 	// default user-namespace mapping means "uid 1000 inside the container"
@@ -91,7 +100,16 @@ func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, err
 	// keep-id aligns them. Confirmed empirically: bootstrapping a user at
 	// the host's numeric uid/gid without keep-id produced a container user
 	// that could not actually write to the bind-mounted workspace.
-	args := []string{"create", "--userns=keep-id"}
+	//
+	// --label poisson.sandbox=1 marks every container this package creates
+	// so List can filter podman's own container list down to just these —
+	// the mechanism a fresh process uses to rediscover a sandbox after a
+	// crash, or from a different session entirely. poisson.session is
+	// purely informational (list_sandboxes), added only when non-empty.
+	args := []string{"create", "--userns=keep-id", "--name", name, "--label", "poisson.sandbox=1"}
+	if opts.SessionID != "" {
+		args = append(args, "--label", "poisson.session="+opts.SessionID)
+	}
 	if opts.HostPath != "" {
 		args = append(args, "-v", opts.HostPath+":/workspace:Z")
 	}
@@ -107,30 +125,25 @@ func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, err
 	}
 	args = append(args, opts.Image, "sleep", "infinity")
 
-	stdout, stderr, err := d.run(ctx, args...)
-	if err != nil {
+	if _, stderr, err := d.run(ctx, args...); err != nil {
 		return "", fmt.Errorf("podman create: %w (%s)", err, strings.TrimSpace(stderr))
 	}
-	id := strings.TrimSpace(stdout)
-	if id == "" {
-		return "", fmt.Errorf("podman create: empty container id")
-	}
 
-	if _, stderr, err := d.run(ctx, "start", id); err != nil {
-		d.forceRemove(context.Background(), id)
+	if _, stderr, err := d.run(ctx, "start", name); err != nil {
+		d.forceRemove(context.Background(), name)
 		return "", fmt.Errorf("podman start: %w (%s)", err, strings.TrimSpace(stderr))
 	}
 
-	user, err := d.bootstrap(ctx, id)
+	user, err := d.bootstrap(ctx, name)
 	if err != nil {
-		d.forceRemove(context.Background(), id)
+		d.forceRemove(context.Background(), name)
 		return "", fmt.Errorf("bootstrap: %w", err)
 	}
 	d.mu.Lock()
-	d.execUser[id] = user
+	d.execUser[name] = user
 	d.mu.Unlock()
 
-	return id, nil
+	return name, nil
 }
 
 // bootstrapScript creates (or reuses an existing user at) the host's own
@@ -274,4 +287,55 @@ func (d *podmanDriver) forceRemove(ctx context.Context, id string) error {
 		return fmt.Errorf("podman rm: %w (%s)", err, strings.TrimSpace(stderr))
 	}
 	return nil
+}
+
+// List reports every container carrying the poisson.sandbox label,
+// regardless of which process created it — the mechanism behind cross-
+// session discovery and crash recovery (see Manager.EnableDiscovery). Two
+// podman calls: an id-only `ps -a` first (so an empty result short-circuits
+// before any inspect call), then one batched `inspect` for full detail
+// (name, labels, running state, the /workspace bind-mount source).
+func (d *podmanDriver) List(ctx context.Context) ([]Info, error) {
+	stdout, stderr, err := d.run(ctx, "ps", "-a", "--filter", "label=poisson.sandbox=1", "--format", "{{.ID}}")
+	if err != nil {
+		return nil, fmt.Errorf("podman ps: %w (%s)", err, strings.TrimSpace(stderr))
+	}
+	ids := strings.Fields(stdout)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	stdout, stderr, err = d.run(ctx, append([]string{"inspect"}, ids...)...)
+	if err != nil {
+		return nil, fmt.Errorf("podman inspect: %w (%s)", err, strings.TrimSpace(stderr))
+	}
+	var raw []struct {
+		Name    string
+		Created string
+		State   struct{ Running bool }
+		Config  struct{ Labels map[string]string }
+		Mounts  []struct{ Destination, Source string }
+	}
+	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
+		return nil, fmt.Errorf("parse podman inspect: %w", err)
+	}
+
+	infos := make([]Info, 0, len(raw))
+	for _, c := range raw {
+		info := Info{
+			ID:        strings.TrimPrefix(c.Name, "/"),
+			Running:   c.State.Running,
+			SessionID: c.Config.Labels["poisson.session"],
+		}
+		if t, err := time.Parse(time.RFC3339Nano, c.Created); err == nil {
+			info.CreatedAt = t
+		}
+		for _, m := range c.Mounts {
+			if m.Destination == "/workspace" {
+				info.HostPath = m.Source
+			}
+		}
+		infos = append(infos, info)
+	}
+	return infos, nil
 }

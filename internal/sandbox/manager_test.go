@@ -256,6 +256,144 @@ func TestFakeDriver_CreateErr(t *testing.T) {
 	}
 }
 
+// TestManager_DiscoveryAttachesForeignLiveSandbox is the crash-recovery
+// case: a second, independent Manager (as if a fresh px process after a
+// crash, or a different session) never created or Authorize'd the sandbox,
+// but with EnableDiscovery it can still find and use it by exact name,
+// since podman itself (the shared driver, here) is the real record of what
+// exists — not either Manager's own memory.
+func TestManager_DiscoveryAttachesForeignLiveSandbox(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+
+	owner := NewManager(driver)
+	sb, err := owner.Create(ctx, CreateOpts{Name: "api-testing", HostPath: "/tmp/x/workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fresh := NewManager(driver) // simulates a brand-new process
+	if fresh.Owns(sb.ID) {
+		t.Fatal("Owns true before EnableDiscovery — discovery must default off")
+	}
+	fresh.EnableDiscovery()
+	if !fresh.Owns(sb.ID) {
+		t.Fatal("Owns should discover a live sandbox by name once EnableDiscovery is called")
+	}
+	got, ok := fresh.Get(sb.ID)
+	if !ok || got.HostPath != "/tmp/x/workspace" {
+		t.Errorf("Get after discovery = %+v, %v, want matching HostPath", got, ok)
+	}
+	if _, _, _, err := fresh.Exec(ctx, sb.ID, "echo hi", "", time.Second); err != nil {
+		t.Fatalf("Exec after discovery: %v", err)
+	}
+}
+
+// TestManager_DiscoveryRefusesDeadSandbox confirms a non-running match is
+// not silently adopted — a crashed/stopped container is not a usable
+// sandbox even if podman still remembers it.
+func TestManager_DiscoveryRefusesDeadSandbox(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+
+	owner := NewManager(driver)
+	sb, err := owner.Create(ctx, CreateOpts{Name: "dead-one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	fresh := NewManager(driver)
+	fresh.EnableDiscovery()
+	if fresh.Owns(sb.ID) {
+		t.Fatal("discovery must not adopt a sandbox that exists but isn't running")
+	}
+}
+
+// TestManager_DiscoverySubagentManagerNeverEnabled locks in the security
+// property the whole design depends on: a subagent's own Manager (built the
+// same plain way as any other, via NewManager+Authorize, discovery never
+// turned on) must not be able to reach a sandbox it wasn't explicitly
+// Authorize'd for, even though the underlying live container is right there
+// in the shared driver.
+func TestManager_DiscoverySubagentManagerNeverEnabled(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+
+	parent := NewManager(driver)
+	sb, err := parent.Create(ctx, CreateOpts{Name: "parents-sandbox"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	child := NewManager(driver) // subagent's own Manager: no EnableDiscovery, ever
+	if child.Owns(sb.ID) {
+		t.Fatal("a subagent Manager must never auto-discover an unauthorized sandbox")
+	}
+}
+
+// TestManager_ListProxiesDriver confirms Manager.List is a plain pass-
+// through to the Driver — browsing is available regardless of discovery,
+// since it grants no access on its own (Owns/Get still gate everything).
+func TestManager_ListProxiesDriver(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+	m := NewManager(driver)
+	if _, err := m.Create(ctx, CreateOpts{Name: "listed-one"}); err != nil {
+		t.Fatal(err)
+	}
+	infos, err := m.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].ID != "px-sandbox-listed-one" {
+		t.Errorf("List() = %+v, want one entry named px-sandbox-listed-one", infos)
+	}
+}
+
+// TestResolveSandboxName covers the naming policy every Driver shares:
+// prefixed+sanitized when a name is requested, a random prefixed fallback
+// when not.
+func TestResolveSandboxName(t *testing.T) {
+	got, err := ResolveSandboxName("API Testing 2!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "px-sandbox-api-testing-2" {
+		t.Errorf("ResolveSandboxName(%q) = %q, want px-sandbox-api-testing-2", "API Testing 2!", got)
+	}
+
+	empty, err := ResolveSandboxName("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(empty, "px-sandbox-") || empty == "px-sandbox-" {
+		t.Errorf("ResolveSandboxName(\"\") = %q, want a non-empty random px-sandbox-* name", empty)
+	}
+
+	a, _ := ResolveSandboxName("")
+	b, _ := ResolveSandboxName("")
+	if a == b {
+		t.Error("two empty-name resolutions produced the same fallback name — collision risk")
+	}
+}
+
+// TestManager_CreateNameCollisionErrorsClearly confirms a second
+// create_sandbox call reusing a live name fails with a clear error instead
+// of silently reusing (or corrupting) the first sandbox's record — the
+// agent needs to see this to pick another name or list existing ones.
+func TestManager_CreateNameCollisionErrorsClearly(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+	m := NewManager(driver)
+	if _, err := m.Create(ctx, CreateOpts{Name: "dup"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Create(ctx, CreateOpts{Name: "dup"}); err == nil {
+		t.Fatal("expected a name collision error on the second Create")
+	}
+}
+
 // TestManager_ExecScriptedFailure exercises FakeDriver.ExecFn — a test can
 // script a specific exit code/stderr instead of the default echo, e.g. to
 // simulate a command failing inside the sandbox.

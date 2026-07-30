@@ -39,7 +39,7 @@ func NewCreateSandboxTool(cwd string, mgr *sandbox.Manager, approvalFn ApprovalF
 func (t *CreateSandboxTool) Name() string { return "create_sandbox" }
 
 func (t *CreateSandboxTool) Description() string {
-	return "Create a podman sandbox container for running untrusted/experimental bash commands with no approval gate — the container's own isolation is the safety boundary. Returns {sandboxId, hostPath}: pass sandboxId to bash's own sandboxId param to run commands in it, and use the existing read/write/edit/grep/glob tools with absolute paths under hostPath to inspect/edit its files (no sandboxId param on those — hostPath is just a plain host directory). Requesting mounts or env beyond the base workspace needs human approval; a plain create_sandbox call with neither does not."
+	return "Create a podman sandbox container for running untrusted/experimental bash commands with no approval gate — the container's own isolation is the safety boundary. Returns {sandboxId, hostPath}: pass sandboxId to bash's own sandboxId param to run commands in it, and use the existing read/write/edit/grep/glob tools with absolute paths under hostPath to inspect/edit its files (no sandboxId param on those — hostPath is just a plain host directory). Give it a descriptive name (e.g. \"api-testing-2\") so you — or another session, even after a crash — can find and reuse it later via list_sandboxes; sandboxId IS that name (prefixed px-sandbox-), not an opaque handle, and it's visible/usable across every session on this host, not just this one. A name already in use fails clearly; pick another or check list_sandboxes first. Requesting mounts or env beyond the base workspace needs human approval; a plain create_sandbox call with neither does not."
 }
 
 func (t *CreateSandboxTool) Schema() json.RawMessage {
@@ -47,6 +47,7 @@ func (t *CreateSandboxTool) Schema() json.RawMessage {
   "type": "object",
   "properties": {
     "image": { "type": "string", "description": "Container image (default: a pinned Ubuntu LTS)" },
+    "name": { "type": "string", "description": "Descriptive name for this sandbox (e.g. \"api-testing-2\") — becomes its sandboxId, prefixed px-sandbox-. Omit for a random name. Must be unique across every session on this host." },
     "mounts": {
       "type": "array",
       "description": "Extra host bind mounts beyond the base workspace (e.g. a second project, credentials) — requires human approval, showing the exact host paths.",
@@ -71,6 +72,7 @@ func (t *CreateSandboxTool) Schema() json.RawMessage {
 
 type createSandboxInput struct {
 	Image  string          `json:"image"`
+	Name   string          `json:"name"`
 	Mounts []sandbox.Mount `json:"mounts"`
 	Env    []string        `json:"env"`
 }
@@ -113,6 +115,7 @@ func (t *CreateSandboxTool) Execute(ctx context.Context, input json.RawMessage) 
 
 	sb, err := t.mgr.Create(ctx, sandbox.CreateOpts{
 		Image:    image,
+		Name:     in.Name,
 		HostPath: hostPath,
 		Mounts:   in.Mounts,
 		Env:      in.Env,

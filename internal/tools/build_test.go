@@ -117,7 +117,7 @@ func TestBuildRegistry_Child(t *testing.T) {
 func TestBuildRegistry_NoSandboxManager_OmitsSandboxTools(t *testing.T) {
 	dir := testutil.TempDir(t)
 	reg := BuildRegistry(BuildOptions{Cwd: dir})
-	for _, name := range []string{"create_sandbox", "sandbox_cp", "sandbox_destroy"} {
+	for _, name := range []string{"create_sandbox", "sandbox_cp", "sandbox_destroy", "list_sandboxes"} {
 		if _, ok := reg.Get(name); ok {
 			t.Errorf("registry with no SandboxManager should not have %q", name)
 		}
@@ -129,7 +129,7 @@ func TestBuildRegistry_NoSandboxManager_OmitsSandboxTools(t *testing.T) {
 func TestBuildRegistry_WithSandboxManager_ParentGetsAllSandboxTools(t *testing.T) {
 	dir := testutil.TempDir(t)
 	reg := BuildRegistry(BuildOptions{Cwd: dir, SandboxManager: sandbox.NewManager(sandbox.NewFakeDriver())})
-	for _, name := range []string{"create_sandbox", "sandbox_cp", "sandbox_destroy"} {
+	for _, name := range []string{"create_sandbox", "sandbox_cp", "sandbox_destroy", "list_sandboxes"} {
 		if _, ok := reg.Get(name); !ok {
 			t.Errorf("parent registry with SandboxManager missing %q", name)
 		}
@@ -146,7 +146,7 @@ func TestBuildRegistry_WithSandboxManager_ChildOmitsCreateSandbox(t *testing.T) 
 	if _, ok := reg.Get("create_sandbox"); ok {
 		t.Error("child registry must never expose create_sandbox (would let a subagent mint sandboxes unbounded)")
 	}
-	for _, name := range []string{"sandbox_cp", "sandbox_destroy"} {
+	for _, name := range []string{"sandbox_cp", "sandbox_destroy", "list_sandboxes"} {
 		if _, ok := reg.Get(name); !ok {
 			t.Errorf("child registry with SandboxManager missing %q", name)
 		}

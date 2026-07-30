@@ -31,8 +31,21 @@ import (
 // docs/sandbox-plan.md's disk-wear guard). Never fails eagerly: podman not
 // being installed only surfaces once a sandbox tool actually tries to use
 // it, the same way a missing `rg` only surfaces when grep is called.
-func newSandboxManager() *sandbox.Manager {
-	return sandbox.NewManager(sandbox.NewPodmanDriver(nil, nil))
+//
+// sessionID is stamped as a label on every sandbox this Manager creates
+// (list_sandboxes shows it); discovery is enabled unconditionally — a
+// top-level session (headless -p or the REPL) is exactly the case that
+// should be able to find and reattach to any live sandbox by name,
+// including one from a crashed process or a different session (see
+// docs/sandbox-plan.md's "Crash recovery" section). Only
+// resolveChildSandboxManager (a subagent's own Manager) must never call
+// EnableDiscovery — it builds its own Manager directly instead of calling
+// this, so that omission can't be accidentally inherited from here.
+func newSandboxManager(sessionID string) *sandbox.Manager {
+	mgr := sandbox.NewManager(sandbox.NewPodmanDriver(nil, nil))
+	mgr.SetSessionID(sessionID)
+	mgr.EnableDiscovery()
+	return mgr
 }
 
 // resolveChildSandboxManager parses envValue (POISSON_SUBAGENT_SANDBOXES, as
@@ -50,7 +63,10 @@ func resolveChildSandboxManager(envValue string) *sandbox.Manager {
 	if err != nil || len(authorized) == 0 {
 		return nil
 	}
-	mgr := newSandboxManager()
+	// Built directly, not via newSandboxManager: a subagent's Manager must
+	// never have discovery enabled — it may only ever use exactly what its
+	// parent Authorize'd below, never anything it could find on its own.
+	mgr := sandbox.NewManager(sandbox.NewPodmanDriver(nil, nil))
 	now := time.Now()
 	for _, sa := range authorized {
 		mgr.Authorize(sandbox.Sandbox{ID: sa.ID, HostPath: sa.HostPath, CreatedAt: now, LastUsed: now})
@@ -275,7 +291,7 @@ func runPrint(opts printOpts) {
 		Auth:              authStore,
 		ApprovalFn:        approvalFn,
 		FileApprovalFn:    fileApprovalFn,
-		SandboxManager:    newSandboxManager(),
+		SandboxManager:    newSandboxManager(sessionID),
 		SandboxApprovalFn: sandboxApprovalFn,
 	})
 
@@ -397,7 +413,7 @@ func runREPL(noSkills bool) {
 		ApprovalFn:        approvalFn,
 		FileApprovalFn:    fileApprovalFn,
 		SubApproval:       subApprovalFn,
-		SandboxManager:    newSandboxManager(),
+		SandboxManager:    newSandboxManager(sessionID),
 		SandboxApprovalFn: sandboxApprovalFn,
 	})
 

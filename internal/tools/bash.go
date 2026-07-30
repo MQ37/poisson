@@ -62,7 +62,7 @@ func (t *BashTool) Schema() json.RawMessage {
     "description": { "type": "string", "description": "Short description of what the command does" },
     "workdir": { "type": "string", "description": "Working directory for this call (default: session cwd). Absolute or relative to session cwd. Does not persist to later calls." },
     "timeout": { "type": "integer", "description": "Timeout in seconds (default: 120)" },
-    "sandboxId": { "type": "string", "description": "Run inside this sandbox container instead of on the host — no approval gate. Must be an id this session's own create_sandbox actually returned. workdir is then a path inside the container (default: its own default directory), not a host path." }
+    "sandboxId": { "type": "string", "description": "Run inside this sandbox container instead of on the host — no approval gate. Must be a real, running sandbox name — this session's own create_sandbox result, or one found via list_sandboxes (sandboxes are visible/usable across every session on this host, not scoped to the one that created them). workdir is then a path inside the container (default: its own default directory), not a host path." }
   },
   "required": ["command", "description"]
 }`)
