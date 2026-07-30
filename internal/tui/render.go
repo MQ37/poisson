@@ -46,7 +46,31 @@ func backendSuffix(provider string) string {
 	if provider == "" {
 		return ""
 	}
-	return " [" + previewText(provider, 20) + "]"
+	return " " + providerTag(provider)
+}
+
+// providerTag renders "[anthropic]" for a chosen backend, "" for the default —
+// same signal as backendSuffix but attached directly to a name (e.g. a batch
+// card's "N calls: web_ask[anthropic], bash" summary) instead of trailing a
+// query preview.
+func providerTag(provider string) string {
+	if provider == "" {
+		return ""
+	}
+	return "[" + previewText(provider, 20) + "]"
+}
+
+// providerTag reads the generic "provider" field out of a nested batch call's
+// own input JSON — batch is tool-agnostic, so this has to work for whichever
+// tool (web_ask/web_search/fetch today) the model picked, not just one name.
+func providerTagFromInput(input json.RawMessage) string {
+	var in struct {
+		Provider string `json:"provider"`
+	}
+	if len(input) == 0 || json.Unmarshal(input, &in) != nil {
+		return ""
+	}
+	return providerTag(in.Provider)
 }
 
 func toolInputPreview(toolName string, input []byte) string {
@@ -103,13 +127,14 @@ func toolInputPreview(toolName string, input []byte) string {
 		}
 		if json.Unmarshal(input, &in) == nil && len(in.Calls) > 0 {
 			var calls []struct {
-				Tool string `json:"tool"`
+				Tool  string          `json:"tool"`
+				Input json.RawMessage `json:"input"`
 			}
 			if json.Unmarshal(in.Calls, &calls) == nil && len(calls) > 0 {
 				names := make([]string, 0, len(calls))
 				for _, c := range calls {
 					if c.Tool != "" {
-						names = append(names, tools.CanonicalToolName(c.Tool))
+						names = append(names, tools.CanonicalToolName(c.Tool)+providerTagFromInput(c.Input))
 					}
 				}
 				if len(names) > 0 {

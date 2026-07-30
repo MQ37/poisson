@@ -42,6 +42,18 @@ func TestBatchExpandedLinesUseBareNames(t *testing.T) {
 	}
 }
 
+// TestBatchPreviewTagsProviderOnNestedCalls: a batch card's collapsed
+// "N calls: ..." summary is the default view (expanding is opt-in), so a
+// nested web_ask/web_search/fetch call using a non-default provider must
+// signal that on the summary itself, not only once expanded.
+func TestBatchPreviewTagsProviderOnNestedCalls(t *testing.T) {
+	input := []byte(`{"calls":[{"tool":"web_ask","input":{"query":"q","provider":"anthropic"}},{"tool":"bash","input":{"command":"ls"}}]}`)
+	got := toolInputPreview("batch", input)
+	if want := "2 calls: web_ask[anthropic], bash"; got != want {
+		t.Fatalf("preview = %q, want %q", got, want)
+	}
+}
+
 // TestTitleCaseToolStripsWirePrefix: a session recorded before the dispatch
 // path canonicalized names still has "mcp_Bash" on disk, and its card title
 // must not read "Mcp_Bash" after a resume.
