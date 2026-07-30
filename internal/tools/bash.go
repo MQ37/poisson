@@ -14,15 +14,24 @@ import (
 	"time"
 
 	"github.com/mq37/poisson/internal/guard"
+	"github.com/mq37/poisson/internal/sandbox"
 )
 
 // BashTool executes bash commands, gated by the LLM risk classifier via
 // approvalFn. Every call is stateless: no cwd or env persists from one call
 // to the next, in-process or across a restart — pass workdir explicitly on
 // any call that needs a directory other than the session root.
+//
+// A call carrying sandboxId routes through sandboxMgr instead of a local
+// exec.Cmd, and skips approvalFn entirely — the container is the safety
+// boundary for command risk in that case, not the approval gate (see
+// docs/sandbox-plan.md). sandboxMgr is nil until SetSandboxManager is
+// called, so a registry with no sandbox support just errors clearly on a
+// sandboxId instead of nil-panicking.
 type BashTool struct {
 	cwd        string // session workspace root, used when workdir is empty
 	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)
+	sandboxMgr *sandbox.Manager
 }
 
 // NewBashTool creates a bash tool. The approval function is called when a
@@ -32,10 +41,17 @@ func NewBashTool(cwd string, approvalFn func(ctx context.Context, command, descr
 	return &BashTool{cwd: cwd, approvalFn: approvalFn}
 }
 
+// SetSandboxManager wires the Manager that sandboxId-carrying calls route
+// through. Optional — a nil sandboxMgr (the default) makes any sandboxId
+// input fail with a clear error instead of a nil pointer panic.
+func (t *BashTool) SetSandboxManager(mgr *sandbox.Manager) {
+	t.sandboxMgr = mgr
+}
+
 func (t *BashTool) Name() string { return "bash" }
 
 func (t *BashTool) Description() string {
-	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n still runs (not refused) but comes back with a hint nudging you to 'read' next time — skips the approval gate, supports offset/limit. For several independent tool ops in one step use batch (not a bash pipeline of the same). Every call is stateless — cd/export do not carry to the next call; pass workdir explicitly whenever you need a non-default directory."
+	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n still runs (not refused) but comes back with a hint nudging you to 'read' next time — skips the approval gate, supports offset/limit. For several independent tool ops in one step use batch (not a bash pipeline of the same). Every call is stateless — cd/export do not carry to the next call; pass workdir explicitly whenever you need a non-default directory. Optional sandboxId runs the command inside that sandbox container instead of the host, with no approval gate at all — the sandbox's own isolation is the safety boundary; read/write/edit/grep/glob still take a plain host path (from create_sandbox's result), not a sandboxId."
 }
 
 func (t *BashTool) Schema() json.RawMessage {
@@ -45,7 +61,8 @@ func (t *BashTool) Schema() json.RawMessage {
     "command": { "type": "string" },
     "description": { "type": "string", "description": "Short description of what the command does" },
     "workdir": { "type": "string", "description": "Working directory for this call (default: session cwd). Absolute or relative to session cwd. Does not persist to later calls." },
-    "timeout": { "type": "integer", "description": "Timeout in seconds (default: 120)" }
+    "timeout": { "type": "integer", "description": "Timeout in seconds (default: 120)" },
+    "sandboxId": { "type": "string", "description": "Run inside this sandbox container instead of on the host — no approval gate. Must be an id this session's own create_sandbox actually returned. workdir is then a path inside the container (default: its own default directory), not a host path." }
   },
   "required": ["command", "description"]
 }`)
@@ -56,6 +73,7 @@ type bashInput struct {
 	Description string  `json:"description"`
 	Workdir     string  `json:"workdir"`
 	Timeout     FlexInt `json:"timeout"`
+	SandboxID   string  `json:"sandboxId"`
 }
 
 type bashOutput struct {
@@ -90,6 +108,10 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	// before any approval logic, so no caller can smuggle it through.
 	if invokesPoissonYolo(in.Command) {
 		return ToolResult{Error: "blocked: refusing to run poisson/px with --yolo (nested auto-approve). Run --yolo yourself from a real shell if you need it."}, nil
+	}
+
+	if in.SandboxID != "" {
+		return t.executeSandboxed(ctx, in)
 	}
 
 	dir := resolveWorkdir(t.cwd, in.Workdir)
@@ -191,6 +213,53 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	out := bashOutput{
 		Stdout:   sanitizeToolText(stdout.String()),
 		Stderr:   sanitizeToolText(stderr.String()),
+		ExitCode: exitCode,
+		Hint:     strings.Join(hints, " "),
+	}
+	data, _ := json.Marshal(out)
+	return ToolResult{Content: string(data)}, nil
+}
+
+// executeSandboxed runs in.Command inside in.SandboxID via t.sandboxMgr
+// instead of a local exec.Cmd — no guard, no risk classification, no
+// approvalFn call at all. Ownership is checked before any Manager/Driver
+// call runs: in.SandboxID is raw model input and must never be trusted just
+// because it's shaped like an id this process might recognize (see
+// Manager.Owns's own doc comment, and the "Ownership / validation" section
+// of docs/sandbox-plan.md).
+func (t *BashTool) executeSandboxed(ctx context.Context, in bashInput) (ToolResult, error) {
+	if t.sandboxMgr == nil {
+		return ToolResult{Error: "sandboxId given but no sandbox manager is available in this session"}, nil
+	}
+	if !t.sandboxMgr.Owns(in.SandboxID) {
+		return ToolResult{Error: fmt.Sprintf("sandbox %q not found — it may belong to a different session, have been destroyed, or never existed", in.SandboxID)}, nil
+	}
+
+	timeoutSec := 120
+	if in.Timeout > 0 {
+		timeoutSec = int(in.Timeout)
+	}
+	timeoutDur := time.Duration(timeoutSec) * time.Second
+
+	stdout, stderr, exitCode, err := t.sandboxMgr.Exec(ctx, in.SandboxID, in.Command, in.Workdir, timeoutDur)
+	if err != nil {
+		return ToolResult{Error: "sandbox exec failed: " + err.Error()}, nil
+	}
+
+	// Same advisory hints as the host path (workdir/dedicated-tool nudges);
+	// there is no stale-dir self-heal here — in.Workdir is a container-side
+	// path the Driver interprets, not something this process can os.Stat.
+	var hints []string
+	if h := cdWorkdirHint(in.Command, in.Workdir); h != "" {
+		hints = append(hints, h)
+	}
+	if h := dedicatedToolHint(in.Command); h != "" {
+		hints = append(hints, h)
+	}
+
+	out := bashOutput{
+		Stdout:   sanitizeToolText(stdout),
+		Stderr:   sanitizeToolText(stderr),
 		ExitCode: exitCode,
 		Hint:     strings.Join(hints, " "),
 	}

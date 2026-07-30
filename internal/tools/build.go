@@ -5,6 +5,7 @@ import (
 
 	"github.com/mq37/poisson/internal/auth"
 	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/sandbox"
 	"github.com/mq37/poisson/internal/store"
 )
 
@@ -37,6 +38,12 @@ type BuildOptions struct {
 	// subagents (recursion is bounded to one level). Every other tool remains
 	// available to children.
 	Child bool
+	// SandboxManager, when non-nil, is wired onto the bash tool so a
+	// sandboxId-carrying call routes through it instead of erroring. Nil by
+	// default (no sandbox support) — a subagent registry gets one only when
+	// its parent explicitly authorized specific sandboxIds for it (see
+	// docs/sandbox-plan.md's subagent allow-list).
+	SandboxManager *sandbox.Manager
 }
 
 // BuildRegistry constructs the tool registry. A child (subagent) receives every
@@ -55,7 +62,11 @@ func BuildRegistry(opts BuildOptions) *Registry {
 		fileApproval = func(context.Context, string, string, string) (bool, string) { return false, "" }
 	}
 
-	reg.Register(NewBashTool(opts.Cwd, approval))
+	bashTool := NewBashTool(opts.Cwd, approval)
+	if opts.SandboxManager != nil {
+		bashTool.SetSandboxManager(opts.SandboxManager)
+	}
+	reg.Register(bashTool)
 	reg.Register(NewReadTool(opts.Cwd, fileApproval))
 	reg.Register(NewWriteTool(opts.Cwd, fileApproval))
 	reg.Register(NewEditTool(opts.Cwd, fileApproval))

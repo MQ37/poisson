@@ -365,6 +365,24 @@ same `Manager.Owns(id)` check as `bash` — a no-op error, not a crash.
 
 `read/write/edit/grep/glob` schemas are **unchanged**.
 
+**Implemented** (`bash`'s `sandboxId` half — step 4): `BashTool` gets a
+`sandboxMgr *sandbox.Manager` field wired post-construction via
+`SetSandboxManager`, not a constructor param — same `Bind*`/`Set*` idiom
+`SubagentTool` already uses (`SetRuntime`, `SetProgressFn`, ...), chosen
+specifically to avoid re-touching the ~130 existing `NewBashTool(...)` call
+sites for a dependency most callers don't need. `BuildOptions.SandboxManager
+*sandbox.Manager` (nil by default) is the wiring point; `BuildRegistry`
+calls `SetSandboxManager` only when non-nil. `Execute` checks `in.SandboxID
+!= ""` right after the unconditional yolo-block check (so yolo can't be
+smuggled through a sandboxed call either) and branches to
+`executeSandboxed`, which: errors clearly if no Manager is configured;
+checks `Manager.Owns` before any Manager/Driver call; routes the command
+through `Manager.Exec` instead of a local `exec.Cmd`; skips `approvalFn`
+entirely; still attaches the same `cdWorkdirHint`/`dedicatedToolHint`
+advisory hints as the host path (no stale-dir self-heal, though — `workdir`
+there is a container-side path this process can't `os.Stat`). `create_sandbox`/
+`sandbox_cp`/`sandbox_destroy` themselves are still step 5, not yet built.
+
 Removed: `BashTool.sticky` field and `StickyCwd()` accessor,
 `internal/tools/bash_sticky.go` and `bash_sticky_test.go` in full
 (`bashSticky`, `wrapBashForSticky`, `readStickyDump`, `parseEnvNull`,
