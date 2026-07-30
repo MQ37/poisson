@@ -392,9 +392,9 @@ func newIntegEnv(t *testing.T, responses [][]provider.StreamEvent) *integEnv {
 	prov.SetResponses(responses)
 
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewReadTool(dir, true, nil))
-	reg.Register(tools.NewWriteTool(dir, true, nil))
-	reg.Register(tools.NewBashTool(dir, true, nil)) // sandbox=true (auto-approve)
+	reg.Register(tools.NewReadTool(dir, alwaysApprove))
+	reg.Register(tools.NewWriteTool(dir, alwaysApprove))
+	reg.Register(tools.NewBashTool(dir, alwaysApprove))
 
 	cfg := config.DefaultConfig()
 	cfg.Provider.Default = "fake"
@@ -573,8 +573,8 @@ func TestInteg_ToolCallFlow(t *testing.T) {
 	prov.SetResponses([][]provider.StreamEvent{first, second})
 
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewWriteTool(dir, true, nil))
-	reg.Register(tools.NewReadTool(dir, true, nil))
+	reg.Register(tools.NewWriteTool(dir, alwaysApprove))
+	reg.Register(tools.NewReadTool(dir, alwaysApprove))
 
 	cfg := config.DefaultConfig()
 	cfg.Provider.Default = "fake"
@@ -625,7 +625,7 @@ check:
 	}
 
 	// Verify the file was actually written.
-	r := tools.NewReadTool(dir, true, nil)
+	r := tools.NewReadTool(dir, alwaysApprove)
 	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "output.txt"}))
 	if !strings.Contains(res.Content, "hello world") {
 		t.Errorf("file content = %q, want 'hello world'", res.Content)
@@ -691,8 +691,8 @@ func TestInteg_ThinkingThenToolCall(t *testing.T) {
 	prov.SetResponses([][]provider.StreamEvent{first, second})
 
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewWriteTool(dir, true, nil))
-	reg.Register(tools.NewReadTool(dir, true, nil))
+	reg.Register(tools.NewWriteTool(dir, alwaysApprove))
+	reg.Register(tools.NewReadTool(dir, alwaysApprove))
 
 	cfg := config.DefaultConfig()
 	cfg.Provider.Default = "fake"
@@ -1069,8 +1069,8 @@ func TestInteg_MultiToolCallFlow(t *testing.T) {
 	prov.SetResponses([][]provider.StreamEvent{first, second})
 
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewWriteTool(dir, true, nil))
-	reg.Register(tools.NewReadTool(dir, true, nil))
+	reg.Register(tools.NewWriteTool(dir, alwaysApprove))
+	reg.Register(tools.NewReadTool(dir, alwaysApprove))
 
 	cfg := config.DefaultConfig()
 	cfg.Provider.Default = "fake"
@@ -1098,7 +1098,7 @@ func TestInteg_MultiToolCallFlow(t *testing.T) {
 	}
 
 	// Verify both files were written.
-	r := tools.NewReadTool(dir, true, nil)
+	r := tools.NewReadTool(dir, alwaysApprove)
 	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "a.txt"}))
 	if !strings.Contains(res.Content, "alpha") {
 		t.Errorf("a.txt content = %q", res.Content)
@@ -1133,7 +1133,7 @@ func TestInteg_ToolErrorHandling(t *testing.T) {
 	prov.SetResponses([][]provider.StreamEvent{first, second})
 
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewReadTool(dir, true, nil))
+	reg.Register(tools.NewReadTool(dir, alwaysApprove))
 
 	cfg := config.DefaultConfig()
 	cfg.Provider.Default = "fake"

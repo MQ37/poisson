@@ -22,15 +22,14 @@ import (
 // any call that needs a directory other than the session root.
 type BashTool struct {
 	cwd        string // session workspace root, used when workdir is empty
-	sandbox    bool
 	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)
 }
 
 // NewBashTool creates a bash tool. The approval function is called when a
-// command is not auto-safe and not in sandbox mode; if it returns false the
-// command is denied. Pass nil to auto-deny all unsafe commands.
-func NewBashTool(cwd string, sandbox bool, approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)) *BashTool {
-	return &BashTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
+// command is not auto-safe; if it returns false the command is denied. Pass
+// nil to auto-deny all unsafe commands.
+func NewBashTool(cwd string, approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)) *BashTool {
+	return &BashTool{cwd: cwd, approvalFn: approvalFn}
 }
 
 func (t *BashTool) Name() string { return "bash" }
@@ -87,8 +86,8 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	// Refuse spawning poisson itself with --yolo / -p --yolo. --yolo is a
 	// human footgun for headless scripting; an agent that shells out to
 	// `px -p --yolo ...` would silently auto-approve every nested command
-	// and defeat this process's own approval gate. Checked before the
-	// sandbox short-circuit so even test/sandbox callers can't smuggle it.
+	// and defeat this process's own approval gate. Checked unconditionally,
+	// before any approval logic, so no caller can smuggle it through.
 	if invokesPoissonYolo(in.Command) {
 		return ToolResult{Error: "blocked: refusing to run poisson/px with --yolo (nested auto-approve). Run --yolo yourself from a real shell if you need it."}, nil
 	}
@@ -112,19 +111,17 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 
 	// Every command is gated: approvalFn runs the LLM risk classifier, which
 	// auto-approves only an LLM "low" and routes everything else (including a
-	// failed classification) to the human. Sandbox mode skips the gate.
-	if !t.sandbox {
-		approved, reason := false, ""
-		if t.approvalFn != nil {
-			approved, reason = t.approvalFn(ctx, in.Command, in.Description, dir)
+	// failed classification) to the human.
+	approved, reason := false, ""
+	if t.approvalFn != nil {
+		approved, reason = t.approvalFn(ctx, in.Command, in.Description, dir)
+	}
+	if !approved {
+		msg := "command rejected by user"
+		if reason = strings.TrimSpace(reason); reason != "" {
+			msg += " - reason: " + reason
 		}
-		if !approved {
-			msg := "command rejected by user"
-			if reason = strings.TrimSpace(reason); reason != "" {
-				msg += " - reason: " + reason
-			}
-			return ToolResult{Error: msg}, nil
-		}
+		return ToolResult{Error: msg}, nil
 	}
 
 	// Determine timeout.
@@ -184,13 +181,11 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		}
 	}
 
-	if !t.sandbox {
-		if h := cdWorkdirHint(in.Command, in.Workdir); h != "" {
-			hints = append(hints, h)
-		}
-		if h := dedicatedToolHint(in.Command); h != "" {
-			hints = append(hints, h)
-		}
+	if h := cdWorkdirHint(in.Command, in.Workdir); h != "" {
+		hints = append(hints, h)
+	}
+	if h := dedicatedToolHint(in.Command); h != "" {
+		hints = append(hints, h)
 	}
 
 	out := bashOutput{
@@ -392,10 +387,7 @@ func sensitivePathDenyMsg(reason, denyReason string) string {
 // ("read"/"write"/"edit") labels the approval prompt. ok is false only when
 // the path is sensitive and was denied approval; callers should return
 // res (populated with the deny error) immediately in that case.
-func checkSensitivePath(ctx context.Context, cwd string, sandbox bool, verb, path string, approvalFn ApprovalFn) (res ToolResult, ok bool) {
-	if sandbox {
-		return ToolResult{}, true
-	}
+func checkSensitivePath(ctx context.Context, cwd string, verb, path string, approvalFn ApprovalFn) (res ToolResult, ok bool) {
 	reason := guard.SensitivePathReason(path)
 	if reason == "" {
 		return ToolResult{}, true

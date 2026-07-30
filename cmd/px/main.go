@@ -686,8 +686,6 @@ func runChildMode() {
 	// Child:true grants every tool except subagent, so a subagent gets the full
 	// tool set (read/write/edit/bash/web_search/web_ask/recall)
 	// but cannot spawn further subagents — recursion is bounded to one level.
-	// Sandbox is never set from ambient env: a POISSON_SANDBOX short-circuit
-	// used to auto-approve every bash command, which is the opposite of safe.
 	reg := tools.BuildRegistry(tools.BuildOptions{
 		Cwd:            cwd,
 		Store:          st,

@@ -17,12 +17,11 @@ import (
 // ReadTool reads the contents of a file.
 type ReadTool struct {
 	cwd        string
-	sandbox    bool
 	approvalFn ApprovalFn
 }
 
-func NewReadTool(cwd string, sandbox bool, approvalFn ApprovalFn) *ReadTool {
-	return &ReadTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
+func NewReadTool(cwd string, approvalFn ApprovalFn) *ReadTool {
+	return &ReadTool{cwd: cwd, approvalFn: approvalFn}
 }
 
 func (t *ReadTool) Name() string { return "read" }
@@ -145,7 +144,7 @@ func (t *ReadTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 
 	path := resolvePath(t.cwd, in.Path)
 
-	if res, ok := checkSensitivePath(ctx, t.cwd, t.sandbox, "read", path, t.approvalFn); !ok {
+	if res, ok := checkSensitivePath(ctx, t.cwd, "read", path, t.approvalFn); !ok {
 		return res, nil
 	}
 

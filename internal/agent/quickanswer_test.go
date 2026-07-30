@@ -231,7 +231,7 @@ func TestStreamQuickAnswerRunsReadOnlyTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewReadTool(dir, false, nil))
+	reg.Register(tools.NewReadTool(dir, nil))
 
 	fp := provider.NewFakeProvider("fake", nil)
 	first, second := provider.FakeToolCallResponse("read", map[string]string{"path": "note.txt"}, "the answer is 42")
@@ -300,15 +300,15 @@ func TestStreamQuickAnswerRunsReadOnlyTool(t *testing.T) {
 // never-persisted side channel, unlike bash which is now allowed and gated
 // by the normal approval mechanism instead of a blanket ban) is never
 // executed — the model gets a denial tool_result instead, and the
-// underlying tool's Execute never runs (proven by the sandboxed write's side
-// effect never happening).
+// underlying tool's Execute never runs (proven by the always-approved
+// write's side effect never happening).
 func TestStreamQuickAnswerDeniesDisallowedTool(t *testing.T) {
 	dir := testutil.TempDir(t)
 	marker := filepath.Join(dir, "marker.txt")
 	reg := tools.NewRegistry()
 	// approvalFn always denies too, as a second line of defense, but the
 	// point of this test is that Execute must never even be reached.
-	reg.Register(tools.NewWriteTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" }))
+	reg.Register(tools.NewWriteTool(dir, func(context.Context, string, string, string) (bool, string) { return true, "" }))
 
 	fp := provider.NewFakeProvider("fake", nil)
 	first, second := provider.FakeToolCallResponse("write", map[string]string{"path": marker, "content": "hi"}, "done")
@@ -374,7 +374,7 @@ func TestStreamQuickAnswerRunsGuardSafeBash(t *testing.T) {
 		return WrapRiskGatedApproval(agentRef, humanFn)(ctx, command, description, workdir)
 	}
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewBashTool(dir, false, approvalFn))
+	reg.Register(tools.NewBashTool(dir, approvalFn))
 
 	// grep, not cat: a bare `cat file` is still redirected to the dedicated
 	// `read` tool (bash.go's dedicatedToolHint) — real, but a different
@@ -440,7 +440,7 @@ func TestStreamQuickAnswerBashTaggedWithBTWOrigin(t *testing.T) {
 		return WrapRiskGatedApproval(agentRef, humanFn)(ctx, command, description, workdir)
 	}
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewBashTool(dir, false, approvalFn))
+	reg.Register(tools.NewBashTool(dir, approvalFn))
 
 	fp := provider.NewFakeProvider("fake", nil)
 	first, second := provider.FakeToolCallResponse("bash", map[string]string{"command": "echo hi", "description": "say hi"}, "done")
@@ -477,7 +477,7 @@ func TestStreamQuickAnswerCapsToolRounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewReadTool(dir, false, nil))
+	reg.Register(tools.NewReadTool(dir, nil))
 
 	fp := provider.NewFakeProvider("fake", nil)
 	// Script far more tool-call rounds than the cap allows; every response

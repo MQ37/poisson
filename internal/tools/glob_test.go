@@ -17,7 +17,7 @@ func TestGlob_BasenamePattern(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "sub", "b.go"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(dir, "c.txt"), []byte("x"), 0o644)
 
-	g := NewGlobTool(dir, true, nil)
+	g := NewGlobTool(dir, alwaysApprove)
 	res, _ := g.Execute(context.Background(), mustJSON(t, map[string]string{"pattern": "*.go"}))
 	if res.Error != "" {
 		t.Fatalf("error: %s", res.Error)
@@ -36,7 +36,7 @@ func TestGlob_DoubleStar(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "internal", "tools", "edit_test.go"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o644)
 
-	g := NewGlobTool(dir, true, nil)
+	g := NewGlobTool(dir, alwaysApprove)
 	res, _ := g.Execute(context.Background(), mustJSON(t, map[string]string{"pattern": "**/*_test.go"}))
 	if res.Error != "" {
 		t.Fatalf("error: %s", res.Error)
@@ -60,7 +60,7 @@ func TestGlob_SkipsGit(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, ".git", "objects", "x.go"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(dir, "ok.go"), []byte("x"), 0o644)
 
-	g := NewGlobTool(dir, true, nil)
+	g := NewGlobTool(dir, alwaysApprove)
 	res, _ := g.Execute(context.Background(), mustJSON(t, map[string]string{"pattern": "*.go"}))
 	if strings.Contains(res.Content, ".git") {
 		t.Fatalf("should skip .git: %q", res.Content)
@@ -72,7 +72,7 @@ func TestGlob_SkipsGit(t *testing.T) {
 
 func TestGlob_NoMatches(t *testing.T) {
 	dir := testutil.TempDir(t)
-	g := NewGlobTool(dir, true, nil)
+	g := NewGlobTool(dir, alwaysApprove)
 	res, _ := g.Execute(context.Background(), mustJSON(t, map[string]string{"pattern": "*.zzz"}))
 	if res.Content != "no matches" {
 		t.Fatalf("content = %q", res.Content)
@@ -87,13 +87,13 @@ func TestGlob_SensitivePathGated(t *testing.T) {
 	os.MkdirAll(sshDir, 0o755)
 	os.WriteFile(filepath.Join(sshDir, "id_rsa"), []byte("x"), 0o600)
 
-	denied := NewGlobTool(dir, false, nil)
+	denied := NewGlobTool(dir, nil)
 	res, _ := denied.Execute(context.Background(), mustJSON(t, map[string]string{"pattern": "*", "path": sshDir}))
 	if res.Error == "" {
 		t.Fatalf("expected sensitive path to be denied, got content: %q", res.Content)
 	}
 
-	approved := NewGlobTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" })
+	approved := NewGlobTool(dir, func(context.Context, string, string, string) (bool, string) { return true, "" })
 	res, _ = approved.Execute(context.Background(), mustJSON(t, map[string]string{"pattern": "*", "path": sshDir}))
 	if res.Error != "" || !strings.Contains(res.Content, "id_rsa") {
 		t.Fatalf("expected approved glob to succeed, got error=%q content=%q", res.Error, res.Content)

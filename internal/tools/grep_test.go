@@ -19,7 +19,7 @@ func TestGrep_FindsMatches(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\nfunc Foo() {}\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("Foo in text\n"), 0o644)
 
-	g := NewGrepTool(dir, true, nil)
+	g := NewGrepTool(dir, alwaysApprove)
 	res, err := g.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"pattern": "Foo",
 		"glob":    "*.go",
@@ -44,7 +44,7 @@ func TestGrep_NoMatches(t *testing.T) {
 	}
 	dir := testutil.TempDir(t)
 	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644)
-	g := NewGrepTool(dir, true, nil)
+	g := NewGrepTool(dir, alwaysApprove)
 	res, _ := g.Execute(context.Background(), mustJSON(t, map[string]string{"pattern": "zzz_no_such"}))
 	if res.Error != "" {
 		t.Fatalf("error = %q", res.Error)
@@ -55,7 +55,7 @@ func TestGrep_NoMatches(t *testing.T) {
 }
 
 func TestGrep_RequiresPattern(t *testing.T) {
-	g := NewGrepTool(".", true, nil)
+	g := NewGrepTool(".", alwaysApprove)
 	res, _ := g.Execute(context.Background(), mustJSON(t, map[string]string{}))
 	if res.Error == "" || !strings.Contains(res.Error, "pattern") {
 		t.Fatalf("error = %q", res.Error)
@@ -73,7 +73,7 @@ func TestGrep_SkipsNodeModulesWithoutGitignore(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "node_modules", "pkg", "skip.go"), []byte("package pkg\nfunc Hidden() {}\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc Visible() {}\n"), 0o644)
 
-	g := NewGrepTool(dir, true, nil)
+	g := NewGrepTool(dir, alwaysApprove)
 	res, _ := g.Execute(context.Background(), mustJSON(t, map[string]string{"pattern": "func "}))
 	if res.Error != "" {
 		t.Fatalf("error: %s", res.Error)
@@ -99,13 +99,13 @@ func TestGrep_SensitivePathGated(t *testing.T) {
 	os.MkdirAll(sshDir, 0o755)
 	os.WriteFile(filepath.Join(sshDir, "id_rsa"), []byte("PRIVATE KEY MATERIAL"), 0o600)
 
-	denied := NewGrepTool(dir, false, nil)
+	denied := NewGrepTool(dir, nil)
 	res, _ := denied.Execute(context.Background(), mustJSON(t, map[string]string{"pattern": "KEY", "path": sshDir}))
 	if res.Error == "" {
 		t.Fatalf("expected sensitive path to be denied, got content: %q", res.Content)
 	}
 
-	approved := NewGrepTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" })
+	approved := NewGrepTool(dir, func(context.Context, string, string, string) (bool, string) { return true, "" })
 	res, _ = approved.Execute(context.Background(), mustJSON(t, map[string]string{"pattern": "KEY", "path": sshDir}))
 	if res.Error != "" || !strings.Contains(res.Content, "PRIVATE KEY MATERIAL") {
 		t.Fatalf("expected approved grep to succeed, got error=%q content=%q", res.Error, res.Content)

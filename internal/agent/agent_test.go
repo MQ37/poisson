@@ -54,10 +54,15 @@ func newTestConfig() *config.Config {
 	}
 }
 
+// alwaysApprove is a shared ApprovalFn test double that unconditionally
+// approves — used wherever a test needs a tool's own approval gate out of
+// the way to exercise something else, not to test the gate itself.
+func alwaysApprove(context.Context, string, string, string) (bool, string) { return true, "" }
+
 func newTestRegistry(cwd string) *tools.Registry {
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewReadTool(cwd, true, nil))
-	reg.Register(tools.NewBashTool(cwd, true, nil)) // sandbox=true
+	reg.Register(tools.NewReadTool(cwd, alwaysApprove))
+	reg.Register(tools.NewBashTool(cwd, alwaysApprove))
 	return reg
 }
 

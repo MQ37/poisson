@@ -111,7 +111,7 @@ func TestBuildRegistry_Child(t *testing.T) {
 
 func TestRegistry_Unregister(t *testing.T) {
 	reg := NewRegistry()
-	reg.Register(NewReadTool(".", true, nil))
+	reg.Register(NewReadTool(".", alwaysApprove))
 	if _, ok := reg.Get("read"); !ok {
 		t.Fatal("read not registered")
 	}

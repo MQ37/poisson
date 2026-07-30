@@ -25,7 +25,6 @@ type BuildOptions struct {
 	// the same "xai" entry instead of racing two independent copies of
 	// ~/.poisson/auth.json. May be nil (web_ask then always uses exa).
 	Auth       auth.AuthStore
-	Sandbox    bool
 	ApprovalFn ApprovalFn
 	// FileApprovalFn gates read/write/edit against sensitive paths (.env*,
 	// SSH/cloud credentials, ~/.poisson secrets, ...). Unlike ApprovalFn it is
@@ -56,12 +55,12 @@ func BuildRegistry(opts BuildOptions) *Registry {
 		fileApproval = func(context.Context, string, string, string) (bool, string) { return false, "" }
 	}
 
-	reg.Register(NewBashTool(opts.Cwd, opts.Sandbox, approval))
-	reg.Register(NewReadTool(opts.Cwd, opts.Sandbox, fileApproval))
-	reg.Register(NewWriteTool(opts.Cwd, opts.Sandbox, fileApproval))
-	reg.Register(NewEditTool(opts.Cwd, opts.Sandbox, fileApproval))
-	reg.Register(NewGrepTool(opts.Cwd, opts.Sandbox, fileApproval))
-	reg.Register(NewGlobTool(opts.Cwd, opts.Sandbox, fileApproval))
+	reg.Register(NewBashTool(opts.Cwd, approval))
+	reg.Register(NewReadTool(opts.Cwd, fileApproval))
+	reg.Register(NewWriteTool(opts.Cwd, fileApproval))
+	reg.Register(NewEditTool(opts.Cwd, fileApproval))
+	reg.Register(NewGrepTool(opts.Cwd, fileApproval))
+	reg.Register(NewGlobTool(opts.Cwd, fileApproval))
 	// web_search and fetch are re-registered with their provider-gated
 	// backends by agent.ReloadConfigDependentTools, which runs right after the
 	// agent knows its provider; here they get the always-available ones.

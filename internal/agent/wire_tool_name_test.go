@@ -38,7 +38,7 @@ func TestWireNamedToolUseStillRuns(t *testing.T) {
 	prov.SetResponses([][]provider.StreamEvent{first, second})
 
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewWriteTool(dir, true, nil))
+	reg.Register(tools.NewWriteTool(dir, alwaysApprove))
 
 	cfg := config.DefaultConfig()
 	cfg.Provider.Default = "fake"

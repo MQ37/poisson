@@ -10,12 +10,11 @@ import (
 // WriteTool writes content to a file, creating parent directories.
 type WriteTool struct {
 	cwd        string
-	sandbox    bool
 	approvalFn ApprovalFn
 }
 
-func NewWriteTool(cwd string, sandbox bool, approvalFn ApprovalFn) *WriteTool {
-	return &WriteTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
+func NewWriteTool(cwd string, approvalFn ApprovalFn) *WriteTool {
+	return &WriteTool{cwd: cwd, approvalFn: approvalFn}
 }
 
 func (t *WriteTool) Name() string { return "write" }
@@ -51,7 +50,7 @@ func (t *WriteTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 
 	path := resolvePath(t.cwd, in.Path)
 
-	if res, ok := checkSensitivePath(ctx, t.cwd, t.sandbox, "write", path, t.approvalFn); !ok {
+	if res, ok := checkSensitivePath(ctx, t.cwd, "write", path, t.approvalFn); !ok {
 		return res, nil
 	}
 

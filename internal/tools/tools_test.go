@@ -24,6 +24,11 @@ func mustJSON(t *testing.T, v interface{}) json.RawMessage {
 	return data
 }
 
+// alwaysApprove is a shared ApprovalFn test double that unconditionally
+// approves — used wherever a test needs a tool's own approval gate out of
+// the way to exercise something else, not to test the gate itself.
+func alwaysApprove(context.Context, string, string, string) (bool, string) { return true, "" }
+
 // stubTool is a minimal Tool for registry ordering tests.
 type stubTool struct{ name string }
 
@@ -60,8 +65,8 @@ func TestDefinitionsStableSortedOrder(t *testing.T) {
 
 func TestWriteThenRead(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	r := NewReadTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	r := NewReadTool(dir, alwaysApprove)
 
 	path := "hello.txt"
 	content := "line1\nline2\nline3\n"
@@ -98,7 +103,7 @@ func TestWriteThenRead(t *testing.T) {
 
 func TestRead_LongSingleLine(t *testing.T) {
 	dir := testutil.TempDir(t)
-	r := NewReadTool(dir, true, nil)
+	r := NewReadTool(dir, alwaysApprove)
 	// A single line larger than the initial scan buffer (64KB) but under the
 	// giving-up cap — e.g. a minified bundle. Must not hard-fail.
 	line := strings.Repeat("x", 200*1024)
@@ -127,8 +132,8 @@ func TestRead_LongSingleLine(t *testing.T) {
 // separately in TestRead_OffsetLimit).
 func TestRead_LinesAreNumbered(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	r := NewReadTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	r := NewReadTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "alpha\nbeta\ngamma\n"}))
 
 	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt"}))
@@ -159,7 +164,7 @@ func TestRead_ImageBase64(t *testing.T) {
 	if err := os.WriteFile(path, png, 0644); err != nil {
 		t.Fatal(err)
 	}
-	r := NewReadTool(dir, true, nil)
+	r := NewReadTool(dir, alwaysApprove)
 	res, err := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "pixel.png"}))
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -194,7 +199,7 @@ func TestRead_ImageBase64(t *testing.T) {
 
 func TestWrite_CreatesParentDirs(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
 
 	res, _ := w.Execute(context.Background(), mustJSON(t, map[string]string{
 		"path":    "sub/dir/deep/file.txt",
@@ -215,7 +220,7 @@ func TestWrite_PreservesExistingMode(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old"), 0o755); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	w := NewWriteTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
 	res, _ := w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "script.sh", "content": "new"}))
 	if res.Error != "" {
 		t.Fatalf("write error: %s", res.Error)
@@ -231,8 +236,8 @@ func TestWrite_PreservesExistingMode(t *testing.T) {
 
 func TestRead_OffsetLimit(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	r := NewReadTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	r := NewReadTool(dir, alwaysApprove)
 
 	// Write a 10-line file.
 	var content strings.Builder
@@ -273,8 +278,8 @@ func TestRead_OffsetLimit(t *testing.T) {
 // with a raw Go unmarshal-type-mismatch error.
 func TestRead_OffsetLimitAsStrings(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	r := NewReadTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	r := NewReadTool(dir, alwaysApprove)
 
 	var content strings.Builder
 	for i := 1; i <= 10; i++ {
@@ -307,8 +312,8 @@ func TestRead_OffsetLimitAsStrings(t *testing.T) {
 // offset/limit as separate integers, but this one bad shape is rescued.
 func TestRead_OffsetAsRangeStringParsed(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	r := NewReadTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	r := NewReadTool(dir, alwaysApprove)
 	var content strings.Builder
 	for i := 1; i <= 200; i++ {
 		content.WriteString("line\n")
@@ -338,8 +343,8 @@ func TestRead_OffsetAsRangeStringParsed(t *testing.T) {
 // "json: cannot unmarshal string into Go struct field ... of type int".
 func TestRead_OffsetGarbageStillRejectedClearly(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	r := NewReadTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	r := NewReadTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "hi\n"}))
 
 	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -385,7 +390,7 @@ func TestRead_TruncationCountsLinesCorrectly(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	r := NewReadTool(dir, true, nil)
+	r := NewReadTool(dir, alwaysApprove)
 	res, _ := r.Execute(context.Background(), mustJSON(t, map[string]string{"path": "exact.txt"}))
 	if res.Error != "" {
 		t.Fatalf("read error: %s", res.Error)
@@ -400,8 +405,8 @@ func TestRead_TruncationCountsLinesCorrectly(t *testing.T) {
 
 func TestEdit(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 
 	content := "alpha\nbeta\ngamma\n"
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": content}))
@@ -428,8 +433,8 @@ func TestEdit(t *testing.T) {
 
 func TestEdit_NonUniqueFails(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 
 	content := "foo\nfoo\n"
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": content}))
@@ -450,8 +455,8 @@ func TestEdit_NonUniqueFails(t *testing.T) {
 
 func TestEdit_MissingFails(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "foo\n"}))
 
@@ -474,8 +479,8 @@ func TestEdit_MissingFails(t *testing.T) {
 // common real cause of a "not found" failure.
 func TestEdit_MissingHintsWhitespaceMismatch(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "func foo() {\n    return 1\n}\n"}))
 
@@ -498,8 +503,8 @@ func TestEdit_MissingHintsWhitespaceMismatch(t *testing.T) {
 // all (file changed since the model last read it).
 func TestEdit_MissingHintsStaleContent(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "alpha\nfindThisDistinctiveLine\ngamma\n"}))
 
@@ -523,7 +528,7 @@ func TestEdit_MultipleEditsUseOriginalFile(t *testing.T) {
 	if err := os.WriteFile(path, []byte("alpha\nbeta\ngamma\n"), 0o755); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	e := NewEditTool(dir, true, nil)
+	e := NewEditTool(dir, alwaysApprove)
 
 	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"path": "f.txt",
@@ -556,8 +561,8 @@ func TestEdit_MultipleEditsUseOriginalFile(t *testing.T) {
 // erroring, since the model isn't going to reliably remember to wrap it.
 func TestEdit_FlatSingleEditShorthand(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "alpha\nbeta\ngamma\n"}))
 
 	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -580,8 +585,8 @@ func TestEdit_FlatSingleEditShorthand(t *testing.T) {
 // edits array, recover it instead of failing with a raw Go unmarshal error.
 func TestEdit_StringEncodedEditsRecovered(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "alpha\nbeta\ngamma\n"}))
 
 	raw := `{"path": "f.txt", "edits": "[{\"oldText\": \"beta\", \"newText\": \"BETA\"}]"}`
@@ -601,7 +606,7 @@ func TestEdit_StringEncodedEditsRecovered(t *testing.T) {
 // raw Go json.Unmarshal type-mismatch message.
 func TestEdit_GarbledEditsGetsActionableError(t *testing.T) {
 	dir := testutil.TempDir(t)
-	e := NewEditTool(dir, true, nil)
+	e := NewEditTool(dir, alwaysApprove)
 
 	raw := `{"path": "f.txt", "edits": "[{\"oldText\">broken json"}`
 	res, _ := e.Execute(context.Background(), json.RawMessage(raw))
@@ -615,8 +620,8 @@ func TestEdit_GarbledEditsGetsActionableError(t *testing.T) {
 
 func TestEdit_OverlappingEditsFail(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "abcdef\n"}))
 
 	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -637,7 +642,7 @@ func TestEdit_OverlappingEditsFail(t *testing.T) {
 // Go's raw unmarshal-type-mismatch error.
 func TestBashTool_TimeoutAsString(t *testing.T) {
 	dir := testutil.TempDir(t)
-	b := NewBashTool(dir, true, nil)
+	b := NewBashTool(dir, alwaysApprove)
 
 	res, err := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "echo hi",
@@ -673,7 +678,7 @@ func TestBashTool_TimeoutAsString(t *testing.T) {
 func TestBashTool_NoAllowlist(t *testing.T) {
 	dir := testutil.TempDir(t)
 
-	denied := NewBashTool(dir, false, nil)
+	denied := NewBashTool(dir, nil)
 	res, _ := denied.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "echo hello",
 		"description": "print hello",
@@ -682,7 +687,7 @@ func TestBashTool_NoAllowlist(t *testing.T) {
 		t.Fatal("expected safe command to be gated (no allowlist), got auto-run")
 	}
 
-	b := NewBashTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" })
+	b := NewBashTool(dir, func(context.Context, string, string, string) (bool, string) { return true, "" })
 	res, _ = b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "echo hello",
 		"description": "print hello",
@@ -704,7 +709,7 @@ func TestBashTool_NoAllowlist(t *testing.T) {
 
 func TestBashTool_SanitizesOutput(t *testing.T) {
 	dir := testutil.TempDir(t)
-	b := NewBashTool(dir, true, nil)
+	b := NewBashTool(dir, alwaysApprove)
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     `printf '\033[31mred\033[0m\0done'`,
 		"description": "print colored text",
@@ -727,7 +732,7 @@ func TestBashTool_SanitizesOutput(t *testing.T) {
 // Execute stats it explicitly first and falls back to the session root.
 func TestBashTool_WorkdirErrorInStderr(t *testing.T) {
 	dir := testutil.TempDir(t)
-	b := NewBashTool(dir, true, nil)
+	b := NewBashTool(dir, alwaysApprove)
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "pwd",
 		"description": "print working dir",
@@ -770,7 +775,7 @@ func TestBashTool_NoCwdPersistence(t *testing.T) {
 	if err := os.Mkdir(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	b := NewBashTool(dir, true, nil)
+	b := NewBashTool(dir, alwaysApprove)
 
 	bashOut(t, mustExec(t, b, "cd nested", "enter nested"))
 
@@ -788,7 +793,7 @@ func TestBashTool_NoCwdPersistence(t *testing.T) {
 // TestBashTool_NoEnvPersistence: same contract for export.
 func TestBashTool_NoEnvPersistence(t *testing.T) {
 	dir := testutil.TempDir(t)
-	b := NewBashTool(dir, true, nil)
+	b := NewBashTool(dir, alwaysApprove)
 
 	bashOut(t, mustExec(t, b, "export POISSON_STATELESS_TEST=hello", "set env"))
 
@@ -811,8 +816,8 @@ func TestBashTool_SeparateInstancesAlwaysIsolated(t *testing.T) {
 	if err := os.Mkdir(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	parent := NewBashTool(dir, true, nil)
-	child := NewBashTool(dir, true, nil)
+	parent := NewBashTool(dir, alwaysApprove)
+	child := NewBashTool(dir, alwaysApprove)
 
 	bashOut(t, mustExec(t, parent, "cd only-parent", "parent cd"))
 
@@ -840,7 +845,7 @@ func mustExec(t *testing.T, b *BashTool, cmd, desc string) ToolResult {
 
 func TestBashTool_UnsafeDenied(t *testing.T) {
 	dir := testutil.TempDir(t)
-	b := NewBashTool(dir, false, nil) // no approvalFn → deny
+	b := NewBashTool(dir, nil) // no approvalFn → deny
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "rm -rf /",
@@ -854,7 +859,7 @@ func TestBashTool_UnsafeDenied(t *testing.T) {
 func TestBashTool_UnsafeApproved(t *testing.T) {
 	dir := testutil.TempDir(t)
 	approved := func(_ context.Context, command, desc, wd string) (bool, string) { return true, "" }
-	b := NewBashTool(dir, false, approved)
+	b := NewBashTool(dir, approved)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "touch approved.txt",
@@ -882,7 +887,7 @@ func TestBashTool_PromptsForApproval(t *testing.T) {
 		gotDesc = desc
 		return false, "" // deny, but we only care that it was asked
 	}
-	b := NewBashTool(dir, false, approvalFn)
+	b := NewBashTool(dir, approvalFn)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "rm -rf build",
@@ -909,7 +914,7 @@ func TestBashTool_DenialReasonReachesToolResult(t *testing.T) {
 	approvalFn := func(_ context.Context, command, desc, wd string) (bool, string) {
 		return false, "not right now, finish the other task first"
 	}
-	b := NewBashTool(dir, false, approvalFn)
+	b := NewBashTool(dir, approvalFn)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "rm -rf build",
@@ -928,7 +933,7 @@ func TestBashTool_DenialReasonReachesToolResult(t *testing.T) {
 func TestBashTool_DenialWithoutReason(t *testing.T) {
 	dir := testutil.TempDir(t)
 	approvalFn := func(_ context.Context, command, desc, wd string) (bool, string) { return false, "" }
-	b := NewBashTool(dir, false, approvalFn)
+	b := NewBashTool(dir, approvalFn)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "rm -rf build",
@@ -952,7 +957,7 @@ func TestBashTool_MissingDescRejected(t *testing.T) {
 		called = true
 		return true, ""
 	}
-	b := NewBashTool(dir, false, approvalFn)
+	b := NewBashTool(dir, approvalFn)
 
 	for _, desc := range []string{"", "   "} {
 		res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -968,50 +973,33 @@ func TestBashTool_MissingDescRejected(t *testing.T) {
 	}
 }
 
-func TestBashTool_Sandbox(t *testing.T) {
-	dir := testutil.TempDir(t)
-	b := NewBashTool(dir, true, nil) // sandbox bypasses guard
-
-	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
-		"command":     "echo safe_in_sandbox",
-		"description": "echo in sandbox",
-	}))
-	if res.Error != "" {
-		t.Fatalf("bash error: %s", res.Error)
-	}
-	var out bashOutput
-	json.Unmarshal([]byte(res.Content), &out)
-	if strings.TrimSpace(out.Stdout) != "safe_in_sandbox" {
-		t.Errorf("stdout = %q, want 'safe_in_sandbox'", out.Stdout)
-	}
-}
-
-// TestBashTool_SandboxSkipsDedicatedToolHint verifies sandbox mode also
-// skips the dedicated-tool nudge (like the approval gate) — a stand-in
-// command like `cat` runs and returns real content with no hint attached.
-func TestBashTool_SandboxSkipsDedicatedToolHint(t *testing.T) {
+// TestBashTool_DedicatedToolHintAlwaysFires verifies the dedicated-tool nudge
+// (e.g. "prefer read over cat") is unconditional now that the sandbox bool's
+// hint-skip is gone — a stand-in command like `cat` still runs and returns
+// real content, with the hint attached.
+func TestBashTool_DedicatedToolHintAlwaysFires(t *testing.T) {
 	dir := testutil.TempDir(t)
 	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hello\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	b := NewBashTool(dir, true, nil) // sandbox bypasses the approval gate and hints
+	b := NewBashTool(dir, alwaysApprove)
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "cat f.txt",
-		"description": "cat in sandbox",
+		"description": "cat a file",
 	}))
 	if res.Error != "" {
-		t.Fatalf("bash error: %s, want no error in sandbox mode", res.Error)
+		t.Fatalf("bash error: %s", res.Error)
 	}
 	var out bashOutput
 	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
 		t.Fatalf("unmarshal: %v (res=%+v)", err, res)
 	}
 	if strings.TrimSpace(out.Stdout) != "hello" {
-		t.Errorf("stdout = %q, want 'hello' (sandbox must still execute)", out.Stdout)
+		t.Errorf("stdout = %q, want 'hello'", out.Stdout)
 	}
-	if out.Hint != "" {
-		t.Errorf("hint = %q, want none in sandbox mode", out.Hint)
+	if !strings.Contains(out.Hint, "read") {
+		t.Errorf("hint = %q, want a nudge toward the read tool", out.Hint)
 	}
 }
 
@@ -1023,7 +1011,7 @@ func TestBashTool_SandboxSkipsDedicatedToolHint(t *testing.T) {
 // treated as a failed command.
 func TestBashTool_BackgroundProcessReportsSuccess(t *testing.T) {
 	dir := testutil.TempDir(t)
-	b := NewBashTool(dir, true, nil) // sandbox: isolate from the approval gate
+	b := NewBashTool(dir, alwaysApprove)
 
 	start := time.Now()
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -1081,7 +1069,7 @@ func TestBashTool_DedicatedToolHinted(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			approvalCalls := 0
-			b := NewBashTool(dir, false, func(context.Context, string, string, string) (bool, string) {
+			b := NewBashTool(dir, func(context.Context, string, string, string) (bool, string) {
 				approvalCalls++
 				return true, ""
 			})
@@ -1116,7 +1104,7 @@ func TestBashTool_DedicatedToolHinted(t *testing.T) {
 // leading `cd DIR &&` with no workdir param already set.
 func TestBashTool_CdWorkdirHint(t *testing.T) {
 	dir := testutil.TempDir(t)
-	b := NewBashTool(dir, false, func(context.Context, string, string, string) (bool, string) { return true, "" })
+	b := NewBashTool(dir, func(context.Context, string, string, string) (bool, string) { return true, "" })
 
 	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"command":     "cd sub && echo hi",
@@ -1146,7 +1134,7 @@ func TestBashTool_CdWorkdirHint(t *testing.T) {
 
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	r := NewRegistry()
-	w := NewWriteTool(testutil.TempDir(t), true, nil)
+	w := NewWriteTool(testutil.TempDir(t), alwaysApprove)
 	r.Register(w)
 
 	got, ok := r.Get("write")
@@ -1164,8 +1152,8 @@ func TestRegistry_RegisterAndGet(t *testing.T) {
 
 func TestRegistry_Definitions(t *testing.T) {
 	r := NewRegistry()
-	r.Register(NewReadTool("", true, nil))
-	r.Register(NewWriteTool("", true, nil))
+	r.Register(NewReadTool("", alwaysApprove))
+	r.Register(NewWriteTool("", alwaysApprove))
 
 	defs := r.Definitions()
 	if len(defs) != 2 {
@@ -1288,7 +1276,7 @@ func TestReadTool_TrimsLongLine(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "huge.txt"), []byte(strings.Repeat("x", maxBytes+100)), 0o644); err != nil {
 		t.Fatalf("write huge file: %v", err)
 	}
-	res, err := NewReadTool(dir, true, nil).Execute(context.Background(), mustJSON(t, map[string]interface{}{"path": "huge.txt"}))
+	res, err := NewReadTool(dir, alwaysApprove).Execute(context.Background(), mustJSON(t, map[string]interface{}{"path": "huge.txt"}))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -1305,9 +1293,10 @@ func TestReadTool_TrimsLongLine(t *testing.T) {
 
 func TestBashTool_BlocksPoissonYolo(t *testing.T) {
 	dir := testutil.TempDir(t)
-	// sandbox=true would normally skip the approval gate; the yolo block
-	// must still fire so an agent can't nest `px --yolo` under itself.
-	b := NewBashTool(dir, true, nil)
+	// alwaysApprove would normally let anything through; the yolo block
+	// must still fire regardless, so an agent can't nest `px --yolo` under
+	// itself even when nothing else would deny the command.
+	b := NewBashTool(dir, alwaysApprove)
 	for _, cmd := range []string{
 		"px --yolo -p 'do stuff'",
 		"px -p --yolo hi",

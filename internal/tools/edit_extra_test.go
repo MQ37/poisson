@@ -13,8 +13,8 @@ import (
 
 func TestEdit_ReplaceAll(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{
 		"path": "f.txt", "content": "foo\nbar foo\nfoo\n",
 	}))
@@ -39,8 +39,8 @@ func TestEdit_ReplaceAll(t *testing.T) {
 
 func TestEdit_ReplaceAllFalseStillRequiresUnique(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "foo\nfoo\n"}))
 
 	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
@@ -60,7 +60,7 @@ func TestEdit_CRLFRoundTrip(t *testing.T) {
 	if err := os.WriteFile(path, []byte("alpha\r\nbeta\r\ngamma\r\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e := NewEditTool(dir, true, nil)
+	e := NewEditTool(dir, alwaysApprove)
 	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"path": "f.txt", "oldText": "beta", "newText": "BETA",
 	}))
@@ -75,8 +75,8 @@ func TestEdit_CRLFRoundTrip(t *testing.T) {
 
 func TestEdit_SuccessIncludesLineAndSnippet(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{
 		"path": "f.txt", "content": "one\ntwo\nthree\nfour\n",
 	}))
@@ -96,8 +96,8 @@ func TestEdit_SuccessIncludesLineAndSnippet(t *testing.T) {
 
 func TestEdit_IdenticalOldNewRejected(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{"path": "f.txt", "content": "x\n"}))
 	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"path": "f.txt", "oldText": "x", "newText": "x",
@@ -111,8 +111,8 @@ func TestEdit_IdenticalOldNewRejected(t *testing.T) {
 // strings.Fields merged tokens (Foo(){ vs Foo() + {). stripWS must catch it.
 func TestEdit_MissingHintsDeletedSpaceNearPunct(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{
 		"path": "f.txt", "content": "func Foo() {\n\treturn 1\n}\n",
 	}))
@@ -140,7 +140,7 @@ func TestEdit_SuccessSnippetCappedOnMassReplaceAll(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e := NewEditTool(dir, true, nil)
+	e := NewEditTool(dir, alwaysApprove)
 	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"path":       "big.txt",
 		"oldText":    "foo",
@@ -176,7 +176,7 @@ func TestEdit_SuccessSnippetCappedOnGiantLine(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "fat.txt"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	e := NewEditTool(dir, true, nil)
+	e := NewEditTool(dir, alwaysApprove)
 	res, _ := e.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"path": "fat.txt", "oldText": "foo", "newText": "bar",
 	}))
@@ -195,8 +195,8 @@ func TestEdit_SuccessSnippetCappedOnGiantLine(t *testing.T) {
 // the generic re-read footer.
 func TestEdit_MissingHintsFuzzyNearMiss(t *testing.T) {
 	dir := testutil.TempDir(t)
-	w := NewWriteTool(dir, true, nil)
-	e := NewEditTool(dir, true, nil)
+	w := NewWriteTool(dir, alwaysApprove)
+	e := NewEditTool(dir, alwaysApprove)
 	w.Execute(context.Background(), mustJSON(t, map[string]string{
 		"path": "f.txt", "content": "alpha\nbar\ngamma\n",
 	}))

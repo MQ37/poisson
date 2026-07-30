@@ -62,13 +62,61 @@ type Driver interface {
 
 - `podmanDriver` — real implementation, shells out to the `podman` CLI
   (same style as `bash.go`/`grep.go` today — no REST API, no new
-  dependency).
+  dependency). Takes an optional `globalArgs []string` prefix, nil in
+  production (real `create_sandbox` uses whatever storage the host user has
+  configured) — only the integration suite below sets it.
 - `fakeDriver` — in-memory Go maps, no subprocess, same idiom as
   `provider.FakeProvider` (`internal/provider/fake.go`) and the `rgBin`
   override in `grep.go`. Used for the bulk of tests; no podman needed, runs
   in any CI.
 - A small number of real-podman integration tests, gated behind an env
   check (`PODMAN_INTEGRATION=1`) or build tag, skipped by default.
+
+  **Disk-wear guard for this suite**: rootless podman's graphroot (`--root`,
+  default `$XDG_DATA_HOME/containers/storage`) is where every image layer
+  and container overlay diff actually lands — real per-test write churn on
+  the real disk otherwise. Full confinement, **empirically verified** on the
+  dev box (real `podman pull`+`run`, before/after directory-state diff of
+  `~/.local/share/containers`, `~/.config/containers`,
+  `/run/user/$UID/{containers,libpod}` — identical, zero touch):
+
+  ```
+  tmpDir := mktemp -d /tmp/poisson-podman-test.XXXXXX   # confirmed tmpfs via findmnt
+  env: XDG_DATA_HOME=tmpDir/data XDG_CONFIG_HOME=tmpDir/config
+       XDG_RUNTIME_DIR=tmpDir/runtime (chmod 0700) TMPDIR=tmpDir/tmp
+  podman --root tmpDir/root --runroot tmpDir/run ...
+  ```
+
+  `--root`/`--runroot` alone cover images, container layers, volumes, and
+  CNI/netavark network configs (all under `graphroot`) — the per-test churn.
+  The `XDG_CONFIG_HOME`/`XDG_RUNTIME_DIR` overrides additionally catch
+  `containers.conf`/`storage.conf`/`registries.conf`/`policy.json` and
+  `auth.json`, which `--root` doesn't relocate — belt-and-suspenders beyond
+  what's strictly needed for the disk-wear concern (those are already
+  `/run/user/$UID` tmpfs and near-static even unconfined), but confirmed to
+  work cleanly with no downside. This is also podman's own upstream pattern:
+  the BATS system-test suite (`test/system/helpers.bash`) uses a
+  `mktemp`'d `PODMAN_TMPDIR` plus `--root`/`--runroot` overrides
+  (`_PODMAN_TEST_OPTS`) as its standard hermetic-test mechanism — not a
+  workaround, the maintainers' own approach.
+
+  A harness running somewhere other than this dev box should check
+  `findmnt -n -o FSTYPE /tmp` itself and skip loudly rather than silently
+  write to a disk-backed `/tmp`. Set `driver=overlay` explicitly for the
+  test root and fail loudly if it falls back to `vfs` (heavier, defeats the
+  point) instead of silently degrading.
+
+  **Cleanup gotcha, hit and confirmed live**: tearing down `tmpDir` after
+  the suite runs must **not** use a plain `os.RemoveAll`/`rm -rf` — rootless
+  podman's user-namespace uid mapping leaves files under the container
+  overlay diff owned by subordinate uids a plain unprivileged delete can't
+  touch (`Permission denied` on every file). Use `podman unshare rm -rf
+  tmpDir` instead (enters the same uid-mapped namespace podman itself
+  uses) — confirmed working. This is specific to the test harness blowing
+  away a whole confined storage root directly; it does **not** affect
+  normal `sandbox_destroy`/idle-reap teardown of a real container, which
+  goes through `podman rm -f <id>` and lets podman handle its own
+  uid-mapped layer cleanup internally.
 
 `Manager` wraps a `Driver` plus session-scoped bookkeeping:
 

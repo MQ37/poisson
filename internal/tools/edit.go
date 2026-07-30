@@ -13,12 +13,11 @@ import (
 // EditTool edits a file using exact text replacement.
 type EditTool struct {
 	cwd        string
-	sandbox    bool
 	approvalFn ApprovalFn
 }
 
-func NewEditTool(cwd string, sandbox bool, approvalFn ApprovalFn) *EditTool {
-	return &EditTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
+func NewEditTool(cwd string, approvalFn ApprovalFn) *EditTool {
+	return &EditTool{cwd: cwd, approvalFn: approvalFn}
 }
 
 func (t *EditTool) Name() string { return "edit" }
@@ -458,7 +457,7 @@ func (t *EditTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 
 	path := resolvePath(t.cwd, rawPath)
 
-	if res, ok := checkSensitivePath(ctx, t.cwd, t.sandbox, "edit", path, t.approvalFn); !ok {
+	if res, ok := checkSensitivePath(ctx, t.cwd, "edit", path, t.approvalFn); !ok {
 		return res, nil
 	}
 

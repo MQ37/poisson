@@ -16,7 +16,7 @@ import (
 
 func testBatchRegistry(t *testing.T, dir string) *Registry {
 	t.Helper()
-	return BuildRegistry(BuildOptions{Cwd: dir, Sandbox: true})
+	return BuildRegistry(BuildOptions{Cwd: dir, ApprovalFn: alwaysApprove, FileApprovalFn: alwaysApprove})
 }
 
 func TestBatch_MultipleReads(t *testing.T) {
@@ -98,7 +98,7 @@ func TestBatch_PartialFailure(t *testing.T) {
 
 func TestBatch_DeniesNestedBatch(t *testing.T) {
 	dir := testutil.TempDir(t)
-	reg := BuildRegistry(BuildOptions{Cwd: dir, Sandbox: true})
+	reg := BuildRegistry(BuildOptions{Cwd: dir, ApprovalFn: alwaysApprove, FileApprovalFn: alwaysApprove})
 
 	res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
 		"calls": []map[string]interface{}{
@@ -113,11 +113,12 @@ func TestBatch_DeniesNestedBatch(t *testing.T) {
 	}
 }
 
-// TestBatch_AllowsBash verifies bash may run inside batch (sandbox mode, so
-// no approval gate) and its real output reaches the batch step body.
+// TestBatch_AllowsBash verifies bash may run inside batch, gated by the
+// same ApprovalFn as a direct call, and its real output reaches the batch
+// step body.
 func TestBatch_AllowsBash(t *testing.T) {
 	dir := testutil.TempDir(t)
-	reg := BuildRegistry(BuildOptions{Cwd: dir, Sandbox: true})
+	reg := BuildRegistry(BuildOptions{Cwd: dir, ApprovalFn: alwaysApprove, FileApprovalFn: alwaysApprove})
 
 	res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
 		"calls": []map[string]interface{}{
@@ -162,8 +163,8 @@ func TestBatch_BashApprovalGateStillApplies(t *testing.T) {
 func TestBatch_AllowsSubagentAtTopLevel(t *testing.T) {
 	dir := testutil.TempDir(t)
 	reg := BuildRegistry(BuildOptions{
-		Cwd:     dir,
-		Sandbox: true,
+		Cwd:        dir,
+		ApprovalFn: alwaysApprove, FileApprovalFn: alwaysApprove,
 		SubApproval: func(string, string, string, string, string) (bool, string) {
 			return true, ""
 		},
@@ -189,9 +190,9 @@ func TestBatch_AllowsSubagentAtTopLevel(t *testing.T) {
 func TestBatch_SubagentNotRegisteredInChild(t *testing.T) {
 	dir := testutil.TempDir(t)
 	reg := BuildRegistry(BuildOptions{
-		Cwd:     dir,
-		Sandbox: true,
-		Child:   true,
+		Cwd:        dir,
+		ApprovalFn: alwaysApprove, FileApprovalFn: alwaysApprove,
+		Child: true,
 		SubApproval: func(string, string, string, string, string) (bool, string) {
 			return true, ""
 		},

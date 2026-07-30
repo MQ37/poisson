@@ -137,10 +137,7 @@ func buildSpawnArgs(input SpawnInput) []string {
 // effort or database whenever the corresponding input field is empty —
 // silently, and pointing at the wrong session's DB in the worst case.
 //
-// Deliberately does NOT set any "sandbox" env flag: an ambient
-// POISSON_SANDBOX=/IS_SANDBOX= used to short-circuit the bash guard to
-// always-safe, which is the opposite of isolation. Child approvals still
-// go through the parent broker.
+// Child approvals still go through the parent broker.
 func buildSpawnEnv(input SpawnInput) []string {
 	env := append(inheritedEnvWithoutSubagentVars(), input.ExtraEnv...)
 	env = append(env, "POISSON_SUBAGENT_CHILD=1")

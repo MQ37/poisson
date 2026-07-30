@@ -14,12 +14,11 @@ import (
 // GrepTool searches file contents via ripgrep.
 type GrepTool struct {
 	cwd        string
-	sandbox    bool
 	approvalFn ApprovalFn
 }
 
-func NewGrepTool(cwd string, sandbox bool, approvalFn ApprovalFn) *GrepTool {
-	return &GrepTool{cwd: cwd, sandbox: sandbox, approvalFn: approvalFn}
+func NewGrepTool(cwd string, approvalFn ApprovalFn) *GrepTool {
+	return &GrepTool{cwd: cwd, approvalFn: approvalFn}
 }
 
 func (t *GrepTool) Name() string { return "grep" }
@@ -82,7 +81,7 @@ func (t *GrepTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	if in.Path != "" {
 		searchPath = resolvePath(t.cwd, in.Path)
 	}
-	if res, ok := checkSensitivePath(ctx, t.cwd, t.sandbox, "grep", searchPath, t.approvalFn); !ok {
+	if res, ok := checkSensitivePath(ctx, t.cwd, "grep", searchPath, t.approvalFn); !ok {
 		return res, nil
 	}
 

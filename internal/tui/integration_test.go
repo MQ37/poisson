@@ -60,9 +60,9 @@ func newTUIIntegEnv(t *testing.T, responses [][]provider.StreamEvent) *tuiIntegE
 	}
 
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewReadTool(dir, true, nil))
-	reg.Register(tools.NewWriteTool(dir, true, nil))
-	reg.Register(tools.NewBashTool(dir, true, alwaysApprove))
+	reg.Register(tools.NewReadTool(dir, alwaysApprove))
+	reg.Register(tools.NewWriteTool(dir, alwaysApprove))
+	reg.Register(tools.NewBashTool(dir, alwaysApprove))
 
 	if err := st.CreateSession(&store.Session{
 		ID:        sid,
@@ -323,7 +323,7 @@ func TestTUIInteg_ToolCallFlow(t *testing.T) {
 	}
 
 	// Verify the file was actually written.
-	r := tools.NewReadTool(e.dir, true, nil)
+	r := tools.NewReadTool(e.dir, alwaysApprove)
 	res, _ := r.Execute(context.Background(), mustJSONTUI(t, map[string]string{"path": "output.txt"}))
 	if !strings.Contains(res.Content, "hello world") {
 		t.Errorf("file content = %q, want 'hello world'", res.Content)

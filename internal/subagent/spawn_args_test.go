@@ -137,11 +137,6 @@ func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
 			t.Errorf("%s = %q, want %q", key, got, want)
 		}
 	}
-	// Ambient sandbox flags must never be injected: they used to short-circuit
-	// the bash guard to always-safe.
-	if _, ok := envValue(env, "POISSON_SANDBOX"); ok {
-		t.Error("POISSON_SANDBOX must not be set on child env")
-	}
 }
 
 // TestBuildSpawnEnvOmitsUnsetFields guards against the reverse bug: an empty
@@ -152,7 +147,7 @@ func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
 // instead of leaving it alone.
 func TestBuildSpawnEnvOmitsUnsetFields(t *testing.T) {
 	env := buildSpawnEnv(SpawnInput{})
-	for _, key := range []string{"POISSON_SUBAGENT_PROVIDER", "POISSON_SUBAGENT_MODEL", "POISSON_SUBAGENT_CLASSIFIER_MODEL", "POISSON_SUBAGENT_EFFORT", "POISSON_SUBAGENT_NAME", "POISSON_SUBAGENT_DB", "POISSON_SANDBOX"} {
+	for _, key := range []string{"POISSON_SUBAGENT_PROVIDER", "POISSON_SUBAGENT_MODEL", "POISSON_SUBAGENT_CLASSIFIER_MODEL", "POISSON_SUBAGENT_EFFORT", "POISSON_SUBAGENT_NAME", "POISSON_SUBAGENT_DB"} {
 		if _, ok := envValue(env, key); ok {
 			t.Errorf("%s should be absent when unset, but was present", key)
 		}

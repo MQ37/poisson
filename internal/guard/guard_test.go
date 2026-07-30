@@ -467,16 +467,3 @@ func TestClassify_QuoteSmuggledSensitivePath(t *testing.T) {
 		}
 	}
 }
-
-func TestClassify_SandboxEnvDoesNotAutoApprove(t *testing.T) {
-	// Regression: ambient POISSON_SANDBOX/IS_SANDBOX used to make Classify
-	// return safe for everything, including rm -rf /.
-	t.Setenv("POISSON_SANDBOX", "1")
-	t.Setenv("IS_SANDBOX", "1")
-	if safe, _ := Classify("rm -rf /"); safe {
-		t.Error("Classify(rm -rf /) = safe under POISSON_SANDBOX=1; env must not short-circuit the guard")
-	}
-	if safe, _ := Classify("cd ~/.aws && cat credentials"); safe {
-		t.Error("Classify(secret read) = safe under sandbox env; env must not short-circuit the guard")
-	}
-}

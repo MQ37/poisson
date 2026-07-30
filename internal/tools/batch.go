@@ -15,8 +15,8 @@ import (
 // bash and subagent are allowed (see mutatingTools below for why subagent
 // runs serial) but stay fully gated: bash dispatched through batch reaches
 // the same BashTool.Execute as a direct call, so the LLM risk classifier and
-// human-approval prompt (or sandbox skip) still apply per call — batch has
-// no side channel that bypasses ApprovalFn. A subagent's own registry never
+// human-approval prompt still apply per call — batch has no side channel
+// that bypasses ApprovalFn. A subagent's own registry never
 // registers the subagent tool in the first place (BuildRegistry,
 // opts.Child), so a spawned child dispatching subagent through batch still
 // fails with "tool not registered": recursion stays bounded to one level

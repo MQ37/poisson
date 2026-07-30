@@ -28,9 +28,9 @@ func newRWAgent(t *testing.T, cwd string, st *store.Store, sid string, resp [][]
 	prov := provider.NewFakeProvider("ollama", []provider.Model{{ID: cfg.Ollama.Model, ContextWindow: 8192}})
 	prov.SetResponses(resp)
 	reg := tools.NewRegistry()
-	reg.Register(tools.NewReadTool(cwd, true, nil))
-	reg.Register(tools.NewEditTool(cwd, true, nil))
-	reg.Register(tools.NewWriteTool(cwd, true, nil))
+	reg.Register(tools.NewReadTool(cwd, alwaysApprove))
+	reg.Register(tools.NewEditTool(cwd, alwaysApprove))
+	reg.Register(tools.NewWriteTool(cwd, alwaysApprove))
 	a := NewAgent(st, prov, reg, cfg, sid, make(chan OutputEvent, 256), func(context.Context, string, string, string) (bool, string) { return true, "" })
 	a.SetModel(cfg.Ollama.Model)
 	return a
