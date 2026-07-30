@@ -61,8 +61,9 @@ px                                                   # launch the TUI
   needed. `sandbox_cp` moves files in/out, `sandbox_destroy` tears it down,
   `list_sandboxes` finds a live sandbox by name across every session on this
   host — including one from a crashed process, since podman itself (not
-  poisson's memory) is the record of what exists. Requires `podman` on
-  `PATH`. ([details](docs/sandbox-plan.md))
+  poisson's memory) is the record of what exists. `/sandbox ls` and
+  `/sandbox kill <id>` are the human-facing equivalent from the TUI.
+  Requires `podman` on `PATH`. ([details](docs/sandbox-plan.md))
 - **Sessions in SQLite** — every message/tool/API call persisted, full-text
   search (FTS5), resume any session, auto-compaction when context fills up.
 - **Exact cost & tokens**, live in the status bar and `/cost`, plus live

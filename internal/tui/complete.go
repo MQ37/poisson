@@ -48,7 +48,7 @@ var slashCommands = []string{
 	"/quit", "/clear", "/help", "/name", "/new", "/resume", "/sessions",
 	"/search", "/compact", "/model", "/effort", "/classifier-model",
 	"/providers", "/reload", "/cost", "/status", "/btw",
-	"/openai-reset-usage",
+	"/openai-reset-usage", "/sandbox",
 }
 
 // matchSlash returns slash commands matching partial (prefix or fuzzy).

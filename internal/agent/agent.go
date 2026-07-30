@@ -293,6 +293,13 @@ func effectiveEffort(cfg *config.Config, effort, providerID, model string) strin
 // Store returns the underlying store (for session/message queries).
 func (a *Agent) Store() *store.Store { return a.store }
 
+// Tools returns the session's tool registry, e.g. for looking up a specific
+// tool by name and calling it directly — the same pattern
+// ExpediteSubagents already uses for "subagent". The TUI's /sandbox ls and
+// /sandbox kill reuse list_sandboxes'/sandbox_destroy's exact tested logic
+// this way instead of duplicating it.
+func (a *Agent) Tools() *tools.Registry { return a.tools }
+
 // SessionID returns the current session ID.
 func (a *Agent) SessionID() string { return a.sessionID }
 

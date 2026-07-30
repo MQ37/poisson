@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,6 +11,7 @@ import (
 	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 // commandHost is the small interface the slash commands use. The TUI wraps
@@ -444,6 +447,111 @@ func cmdClassifierModel(h commandHost, args []string) error {
 	}
 	a.SetClassifierModel(target)
 	h.Out(styleSystem, fmt.Sprintf("bash-risk classifier model: %s/%s", prov, target))
+	return nil
+}
+
+// cmdSandbox is the human-facing equivalent of the agent's own
+// list_sandboxes/sandbox_destroy tools — /sandbox ls, /sandbox kill <id>.
+// Looks the actual tool instances up on the registry and calls Execute
+// directly (same pattern Agent.ExpediteSubagents uses for "subagent"),
+// reusing their exact tested logic instead of duplicating it.
+func cmdSandbox(h commandHost, args []string) error {
+	reg := h.Agent().Tools()
+	if reg == nil {
+		h.Out(styleSystem, "sandboxing is not available in this session")
+		return nil
+	}
+	if len(args) == 0 {
+		h.Out(styleSystem, "usage: /sandbox ls | /sandbox kill <sandboxId>")
+		return nil
+	}
+	switch args[0] {
+	case "ls":
+		return cmdSandboxLs(h, reg)
+	case "kill":
+		if len(args) < 2 {
+			h.Out(styleSystem, "usage: /sandbox kill <sandboxId>")
+			return nil
+		}
+		return cmdSandboxKill(h, reg, args[1])
+	default:
+		h.Out(styleSystem, "unknown /sandbox subcommand: "+args[0]+" (usage: ls | kill <sandboxId>)")
+		return nil
+	}
+}
+
+// sandboxListEntry mirrors internal/tools' unexported list_sandboxes entry
+// shape — decoded independently here rather than exported cross-package,
+// same as any other tool's JSON content is just a documented string
+// contract, not a shared Go type.
+type sandboxListEntry struct {
+	SandboxID string `json:"sandboxId"`
+	SessionID string `json:"sessionId"`
+	CreatedAt string `json:"createdAt"`
+	Running   bool   `json:"running"`
+}
+
+func cmdSandboxLs(h commandHost, reg *tools.Registry) error {
+	t, ok := reg.Get("list_sandboxes")
+	if !ok {
+		h.Out(styleSystem, "sandboxing is not available in this session")
+		return nil
+	}
+	res, err := t.Execute(context.Background(), nil)
+	if err != nil {
+		h.Out(styleError, "list sandboxes: "+err.Error())
+		return nil
+	}
+	if res.Error != "" {
+		h.Out(styleError, res.Error)
+		return nil
+	}
+	if res.Content == "" || res.Content == "no live sandboxes" {
+		h.Out(styleSystem, "no live sandboxes")
+		return nil
+	}
+	var entries []sandboxListEntry
+	if err := json.Unmarshal([]byte(res.Content), &entries); err != nil {
+		h.Out(styleSystem, res.Content) // fall back to the raw content rather than hide it
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("live sandboxes:\n")
+	for _, e := range entries {
+		state := "stopped"
+		if e.Running {
+			state = "running"
+		}
+		fmt.Fprintf(&b, "  %-32s %-8s", e.SandboxID, state)
+		if e.SessionID != "" {
+			fmt.Fprintf(&b, "  session=%s", e.SessionID)
+		}
+		if e.CreatedAt != "" {
+			fmt.Fprintf(&b, "  created=%s", e.CreatedAt)
+		}
+		b.WriteByte('\n')
+	}
+	h.Out(styleSystem, strings.TrimRight(b.String(), "\n"))
+	return nil
+}
+
+func cmdSandboxKill(h commandHost, reg *tools.Registry, id string) error {
+	t, ok := reg.Get("sandbox_destroy")
+	if !ok {
+		h.Out(styleSystem, "sandboxing is not available in this session")
+		return nil
+	}
+	input, _ := json.Marshal(map[string]string{"sandboxId": id})
+	res, err := t.Execute(context.Background(), input)
+	if err != nil {
+		h.Out(styleError, "kill sandbox: "+err.Error())
+		return nil
+	}
+	if res.Error != "" {
+		h.Out(styleError, res.Error)
+		return nil
+	}
+	h.Out(styleSystem, res.Content)
 	return nil
 }
 

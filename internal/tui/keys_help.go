@@ -49,6 +49,7 @@ func renderHelp() string {
   /cost        Show session cost
   /openai-reset-usage  Spend a free Codex reset credit to reset usage now
   /status      Session info + loaded context files & skills
+  /sandbox ls|kill <id>  List/kill podman sandboxes
   /btw <q>     Side question in floating box (or Ctrl+B popup)`, "\n"))
 	b.WriteString("\n\n")
 	for _, ln := range keybindingLines() {

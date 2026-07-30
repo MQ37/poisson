@@ -513,10 +513,22 @@ what it was authorized for is harmless).
   + each `Info.CreatedAt`/a liveness heartbeat, with no session-store table
   needed — but the TTL default (and whether it's `config.toml`-configurable)
   is still an open question below.
-- No `/sandbox ls` / `/sandbox kill <id>` slash commands surfaced to a human
-  yet (the agent-facing `list_sandboxes`/`sandbox_destroy` tools exist;
-  these would be the equivalent for a human driving the TUI directly).
 - No "N sandboxes still running — kill them?" prompt on clean session end.
+
+**`/sandbox ls` / `/sandbox kill <id>` — implemented.** `internal/tui/commands.go`'s
+`cmdSandbox` looks up the actual `list_sandboxes`/`sandbox_destroy` tool
+instances via a new `Agent.Tools()` accessor (`internal/agent/agent.go`,
+same pattern `ExpediteSubagents` already uses for `"subagent"`) and calls
+`Execute` directly — reusing their exact tested logic (cross-session
+listing, `Owns`-gated destroy, clean errors on unknown/foreign ids) rather
+than duplicating it against `Manager` directly. `/sandbox ls` pretty-prints
+the tool's JSON content (id, running, session, created); `/sandbox kill
+<id>` forwards `sandbox_destroy`'s own result text as-is. Registered in
+`liveSafeCommands` (safe mid-turn — podman ops don't touch turn/session
+state) and the usual completion/palette/help surfaces
+(`complete.go`/`overlay_palette.go`/`keys_help.go`). No manager configured
+(no `podman` / session without sandbox support) reports "sandboxing is not
+available in this session" the same way the agent-facing tools do.
 
 ## Tool schema changes
 

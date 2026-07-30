@@ -138,6 +138,10 @@ func (t *TUI) handleSlash(cmd string) error {
 	case "/cost":
 		cmdCost(h)
 		return nil
+	case "/sandbox":
+		// No busy guard: podman container ops don't touch turn/session
+		// state, safe to run mid-turn (see liveSafeCommands).
+		return cmdSandbox(h, parts[1:])
 	case "/openai-reset-usage":
 		if t.sessionBusyLocked() {
 			t.scroll.appendRaw(styleSystem, "cannot reset usage while agent is running or compacting")
