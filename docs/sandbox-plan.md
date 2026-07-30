@@ -123,18 +123,29 @@ type Driver interface {
 ```go
 type Manager struct { /* driver + session-scoped registry of owned sandboxes */ }
 
-func (m *Manager) Create(ctx context.Context, opts CreateOpts) (*Sandbox, error)
-func (m *Manager) Exec(ctx context.Context, id, cmd string, timeout time.Duration) (stdout, stderr string, exitCode int, err error)
+func (m *Manager) Create(ctx context.Context, opts CreateOpts) (Sandbox, error)
+func (m *Manager) Authorize(sb Sandbox) // subagent allow-list — see "Subagents"
+func (m *Manager) Get(id string) (Sandbox, bool)
+func (m *Manager) Exec(ctx context.Context, id, cmd, workdir string, timeout time.Duration) (stdout, stderr string, exitCode int, err error)
+func (m *Manager) Alive(ctx context.Context, id string) (bool, error) // Owns-checked, then delegates to Driver.Inspect
 func (m *Manager) Kill(ctx context.Context, id string) error
 func (m *Manager) Owns(id string) bool // session-scoped id check — see "Ownership/validation"
 
 type Sandbox struct {
-    ID        string // podman container id
+    ID        string // driver-assigned container id
     HostPath  string // /tmp/poisson-sandbox-<id>/workspace — handed to the agent verbatim
     CreatedAt time.Time
     LastUsed  time.Time
 }
 ```
+
+`Create`/`Authorize`/`Get` all deal in `Sandbox` values, never a pointer into
+the Manager's own tracked map — `Exec` mutates a sandbox's `LastUsed` under
+the Manager's mutex on every call, so a caller holding a raw pointer from an
+earlier `Get` would race the mutation the moment more than one goroutine
+touches the same sandboxId (real once concurrent `batch` calls route through
+the same sandboxId). Caught by `-race` during step 3 implementation, fixed
+before it could bite the later concurrency-heavy steps.
 
 File tools never call `Driver` or `Manager` at all — see below.
 
