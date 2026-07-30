@@ -40,8 +40,8 @@ type Mount struct {
 }
 
 // Driver is the mechanical container-lifecycle operations a sandbox needs.
-// podmanDriver (a later step) shells out to the real podman CLI; FakeDriver
-// is an in-memory test double requiring no podman install — see
+// podmanDriver shells out to the real podman CLI (see podman_driver.go);
+// FakeDriver is an in-memory test double requiring no podman install — see
 // fake_driver.go.
 type Driver interface {
 	// Create starts a new container per opts and returns its id.

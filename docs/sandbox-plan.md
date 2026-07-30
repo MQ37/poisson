@@ -46,6 +46,14 @@ raise.
 - No sticky cwd/env, for host or sandboxed bash — removed, not deferred.
 - No `sandboxId` param on file tools — dropped in favor of a plain host
   path handed back by `create_sandbox`.
+- No fully-correct timeout-kill for a hung sandboxed command —
+  `podmanDriver.Exec` kills the local `podman exec` client process on
+  timeout (stops poisson from hanging forever), but that doesn't guarantee
+  the process running inside the container's own pid namespace actually
+  dies, since it isn't a child of the local client the way a host bash
+  subprocess is. A full fix needs more machinery (tracking the remote pid,
+  a second targeted exec to kill it) — accepted as a known v1 gap, same
+  "ship the naive version first" principle as the line above.
 
 ## Architecture
 
@@ -60,11 +68,19 @@ type Driver interface {
 }
 ```
 
-- `podmanDriver` — real implementation, shells out to the `podman` CLI
-  (same style as `bash.go`/`grep.go` today — no REST API, no new
-  dependency). Takes an optional `globalArgs []string` prefix, nil in
-  production (real `create_sandbox` uses whatever storage the host user has
-  configured) — only the integration suite below sets it.
+- `podmanDriver` — **implemented**, real implementation, shells out to the
+  `podman` CLI (same style as `bash.go`/`grep.go` today — no REST API, no
+  new dependency). Takes an optional `globalArgs []string` prefix (e.g.
+  `--root`/`--runroot`) and `extraEnv []string` (e.g. the confining
+  `XDG_*`/`TMPDIR` overrides), both nil in production (real `create_sandbox`
+  uses whatever storage the host user has configured) — only the
+  integration suite below sets them, and always per-`exec.Cmd`, never via
+  `os.Setenv`/ambient export (see the disk-wear guard's env-var-hygiene
+  note below for why that distinction matters). Not yet wired into
+  `cmd/px/main.go` — this step ships the driver itself plus its gated
+  integration suite; actually constructing one in production (making
+  `create_sandbox` a real, usable feature rather than inert scaffolding) is
+  a deliberately separate next step.
 - `fakeDriver` — in-memory Go maps, no subprocess, same idiom as
   `provider.FakeProvider` (`internal/provider/fake.go`) and the `rgBin`
   override in `grep.go`. Used for the bulk of tests; no podman needed, runs
@@ -106,17 +122,44 @@ type Driver interface {
   test root and fail loudly if it falls back to `vfs` (heavier, defeats the
   point) instead of silently degrading.
 
-  **Cleanup gotcha, hit and confirmed live**: tearing down `tmpDir` after
-  the suite runs must **not** use a plain `os.RemoveAll`/`rm -rf` — rootless
-  podman's user-namespace uid mapping leaves files under the container
-  overlay diff owned by subordinate uids a plain unprivileged delete can't
-  touch (`Permission denied` on every file). Use `podman unshare rm -rf
-  tmpDir` instead (enters the same uid-mapped namespace podman itself
-  uses) — confirmed working. This is specific to the test harness blowing
-  away a whole confined storage root directly; it does **not** affect
-  normal `sandbox_destroy`/idle-reap teardown of a real container, which
-  goes through `podman rm -f <id>` and lets podman handle its own
-  uid-mapped layer cleanup internally.
+  **Cleanup gotcha, hit and confirmed live — twice, with a correction.**
+  Tearing down `tmpDir` after the suite runs must **not** use a plain
+  `os.RemoveAll`/`rm -rf` immediately — rootless podman's user-namespace uid
+  mapping leaves files under the container overlay diff owned by
+  subordinate uids a plain unprivileged delete can't touch (`Permission
+  denied`). First fix tried, `podman unshare rm -rf tmpDir`, worked in
+  isolation but turned out unreliable in practice: it can partially delete
+  the tree (including `tmpDir`'s own `runtime`/`tmp` scaffolding) before
+  hitting a still-busy overlay/netns mount and aborting, which then breaks
+  `podman unshare` itself on any retry (it needs that scaffolding to
+  initialize) — a self-inflicted, unrecoverable failure mode, not a race
+  that a retry loop can close. **What actually works, used by
+  `podman_integration_test.go`'s `confinedDriver` cleanup**: `podman --root
+  X --runroot Y system reset --force` (with the exact same `--root`/
+  `--runroot` used for everything else against that confined root) *before*
+  ever touching the directory tree directly — it waits out the container's
+  own async overlay/netns teardown properly, and a plain `rm -rf` afterward
+  (no `podman unshare` needed at all) then succeeds cleanly. This is
+  specific to the test harness blowing away a whole confined storage root
+  directly; it does **not** affect normal `sandbox_destroy`/idle-reap
+  teardown of a real container, which goes through `podman rm -f -t 0 <id>`
+  (`-t 0`: skip the SIGTERM grace period — `sleep infinity` doesn't handle
+  SIGTERM, so without this every teardown pays a needless ~10s wait before
+  podman escalates to SIGKILL, confirmed empirically) and lets podman handle
+  its own uid-mapped layer cleanup internally.
+
+  **Env-var hygiene, also caught empirically**: `XDG_DATA_HOME`/
+  `XDG_CONFIG_HOME`/`XDG_RUNTIME_DIR`/`TMPDIR` must be set *per invocation*
+  (`Cmd.Env` on each individual `exec.Command`, as `podmanDriver` actually
+  does), never `export`ed/ambient across a whole shell session or process —
+  an exported override that leaks into one unrelated later `podman`
+  invocation (even just `podman unshare`, whose own setup can lazily touch
+  storage at whatever XDG path is ambient) was enough to create a small
+  stray `containers/storage` directory outside the intended confined root
+  during manual verification. `podmanDriver` avoids this by construction
+  (each `exec.Cmd` gets its own explicit `Env`, never `os.Setenv`), but it's
+  worth naming as a way to accidentally defeat the whole confinement
+  guarantee if this is ever reimplemented differently.
 
 `Manager` wraps a `Driver` plus session-scoped bookkeeping:
 
@@ -201,43 +244,56 @@ This means:
 
 ### Root access: matching-uid user + passwordless sudo
 
-**Deferred to the `podmanDriver` step, deliberately not guessed at here.**
-The current `create_sandbox` tool (built against `Driver`/`FakeDriver`
-only) does not run this bootstrap at all — `Driver.Exec` has no concept of
-"which user to exec as" yet, and designing that shape now, before a real
-podman backend exists to validate it against, would be guessing rather than
-engineering. Real bootstrap logic lands together with `podmanDriver`, where
-the actual `podman exec --user` mechanics can be built and tested against
-something real. The design below is the intended shape, recorded now so
-that step isn't starting from nothing:
+**Implemented in `podmanDriver` (step 7), empirically verified against real
+podman — including a correction to this section's own earlier claim.**
 
 Tension: `apt-get install` needs root inside the container's own rootfs;
 the bind mount needs the container's process to write as the *same uid* as
-the host user, or host-side `write`/`edit` can't touch what it creates
-(container's default root user, unmapped, writes as `uid 0`, or under
-`--userns=keep-id` root still maps to an unrelated subordinate uid — either
-way, not the host user). One flat "run as root" or one flat "run as
-host-uid" can't satisfy both at once.
+the host user, or host-side `write`/`edit` can't touch what it creates.
+One flat "run as root" or one flat "run as host-uid" can't satisfy both at
+once.
 
-Resolution — bootstrap once at `create_sandbox` time, before returning
-`sandboxId`:
+**Correction**: an earlier version of this section claimed
+`--userns=keep-id` was unnecessary — "explicit matching uid is easier to
+reason about." That was wrong, caught only by actually running it: without
+`keep-id`, "uid 1000 inside the container" and "uid 1000 on the host" are
+different real identities (rootless podman's default namespace remapping),
+so bootstrapping a user at the same *number* does not give it the same
+real *identity* as the host user — a bootstrapped user wrote to
+`/workspace` and got `Permission denied`. `Create` now always passes
+`--userns=keep-id`, which is what actually makes container-side and
+host-side uids the same identity. Second-order effect, also caught
+empirically: `--userns=keep-id` changes `podman exec`'s own *default* user
+too — a plain `podman exec` with no `--user` flag then defaults to the
+keep-id-mapped identity, not root, so bootstrap's own `useradd`/
+`apt-get install sudo` need an explicit `--user root` or they fail with
+permission errors (confirmed: `apt-get update` failed with
+`/var/lib/apt/lists/partial ... Permission denied` before this fix).
 
-1. `groupadd -g $HOST_GID poisson; useradd -u $HOST_UID -g $HOST_GID -m poisson`
-   — a container user whose numeric uid/gid literally match the host
-   invoking user (poisson knows its own `os.Getuid()`/`os.Getgid()`).
-2. Install `sudo`, grant it passwordless:
-   `echo "poisson ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/poisson`.
-3. Every `bash(sandboxId=...)` execs as that user:
-   `podman exec --user poisson <id> bash -c ...` — never root by default.
+Bootstrap, run once at `Create` time via `podman exec --user root`, before
+returning the container id:
+
+1. **Reuse an existing user at the host's uid/gid if one exists, don't
+   assume a fresh user gets created.** `ubuntu:26.04` (and most other
+   cloud-oriented base images) ships a pre-existing `ubuntu:x:1000:1000`
+   user, and uid 1000 is the near-universal default for the first regular
+   user on Linux — a naive `useradd` collides with it (`UID 1000 is not
+   unique`) far more often than not. The script checks
+   `getent passwd $HOST_UID` first; only runs `groupadd`/`useradd` (with a
+   `poisson` username) when nothing already occupies that uid. Either way,
+   the *resolved* username (`ubuntu`, or `poisson` if freshly created) is
+   printed as the script's only stdout output and recorded per-container —
+   never hardcoded as `poisson`.
+2. Install `sudo` if not already present (`command -v sudo || apt-get
+   install -y sudo`), grant it passwordless for the resolved user:
+   `echo "$RESOLVED_USER ALL=(ALL) NOPASSWD:ALL" >/etc/sudoers.d/poisson-sandbox`.
+3. Every ordinary `Exec` call after that uses the recorded resolved user
+   (`podman exec --user $RESOLVED_USER ...`) — never root by default.
 
 Ordinary commands (build, test, script) land owned by the host uid
 automatically, so host `read/write/edit/grep/glob` work on them with zero
 special-casing. Anything needing real root — `sudo apt-get install foo` —
 the agent just prefixes `sudo`.
-
-No `--userns=keep-id` needed: it was solving the same problem implicitly
-and less legibly. Explicit matching uid is easier to reason about and
-debug.
 
 **Edge cases:**
 - This is plumbing, not a security boundary. NOPASSWD sudo means the
@@ -507,9 +563,12 @@ mechanism lands:
 2. ✅ Dead-code removal lands clean: `sandbox bool`/`BuildOptions.Sandbox` and
    all sticky code gone, existing test suite green with stateless bash.
 3. ✅ `internal/sandbox` with `FakeDriver` before any real podman code —
-   `Manager`/`bash` logic tested against the fake exclusively; a small
-   gated integration suite against real podman, opt-in only (still pending
-   — lands with `podmanDriver`).
+   `Manager`/`bash` logic tested against the fake exclusively; gated
+   integration suite (`PODMAN_INTEGRATION=1`) against real podman, run for
+   real: full create→bootstrap→exec-as-resolved-user→sudo→kill lifecycle,
+   plus an automated before/after snapshot proving the confined root
+   touches nothing outside `/tmp` — both passing against the real `podman`
+   CLI on this dev box, not simulated.
 4. ✅ Per-tool: sandboxed vs host `bash` behavior parity (approval skip,
    hints) — plus `create_sandbox`/`sandbox_cp`/`sandbox_destroy`'s own
    parity/error-path tests (no-manager-configured, foreign id, driver
