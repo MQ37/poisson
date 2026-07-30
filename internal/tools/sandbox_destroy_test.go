@@ -17,17 +17,21 @@ func TestSandboxDestroyTool_Basic(t *testing.T) {
 	mgr := sandbox.NewManager(sandbox.NewFakeDriver())
 	destroy := NewSandboxDestroyTool(mgr)
 
-	// Go through the real create_sandbox scratch-workspace layout so this
-	// test also proves the whole <base> tree (not just hostPath itself)
-	// gets removed, matching newScratchWorkspace's <base>/workspace shape.
+	// hostPath here is a real, agent-owned directory (e.g. a project the
+	// agent explicitly mounted) — the central safety property under test
+	// below is that destroy kills only the container and never touches it.
+	ws := testutil.TempDir(t)
+	if err := os.WriteFile(filepath.Join(ws, "keep.txt"), []byte("do not delete me"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	create := NewCreateSandboxTool(dir, mgr, alwaysApprove)
-	res, _ := create.Execute(context.Background(), mustJSON(t, map[string]interface{}{}))
+	res, _ := create.Execute(context.Background(), mustJSON(t, map[string]interface{}{"hostPath": ws}))
 	if res.Error != "" {
 		t.Fatalf("create_sandbox: %s", res.Error)
 	}
 	var created struct {
 		SandboxID string `json:"sandboxId"`
-		HostPath  string `json:"hostPath"`
 	}
 	if err := json.Unmarshal([]byte(res.Content), &created); err != nil {
 		t.Fatal(err)
@@ -42,9 +46,11 @@ func TestSandboxDestroyTool_Basic(t *testing.T) {
 	if mgr.Owns(created.SandboxID) {
 		t.Error("Manager should no longer own the sandbox after destroy")
 	}
-	base := filepath.Dir(created.HostPath)
-	if _, err := os.Stat(base); !os.IsNotExist(err) {
-		t.Errorf("expected the whole scratch base %q to be removed, stat err = %v", base, err)
+	// SECURITY: hostPath is the agent's own directory, never poisson's to
+	// delete — destroy must leave it (and its contents) completely intact.
+	got, err := os.ReadFile(filepath.Join(ws, "keep.txt"))
+	if err != nil || string(got) != "do not delete me" {
+		t.Fatalf("sandbox_destroy touched the agent-supplied hostPath: err=%v content=%q", err, got)
 	}
 }
 

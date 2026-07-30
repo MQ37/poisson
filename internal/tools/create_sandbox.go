@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/mq37/poisson/internal/sandbox"
@@ -24,11 +22,11 @@ const defaultSandboxImage = "ubuntu:26.04"
 // (docs/sandbox-plan.md), not guessed at against a driver that doesn't
 // exist yet.
 type CreateSandboxTool struct {
-	cwd string // session root; scratch workspace dirs are still made under os.TempDir(), this is only used in approval prompts
+	cwd string // session root; only used in approval prompts
 	mgr *sandbox.Manager
-	// approvalFn is asked only when the request includes mounts or env
-	// beyond the base workspace — the base workspace itself never needs
-	// approval (see docs/sandbox-plan.md's "Approval" section).
+	// approvalFn is asked only when the request includes a hostPath, extra
+	// mounts, or env — a plain create_sandbox call with none of those never
+	// needs approval (see docs/sandbox-plan.md's "Approval" section).
 	approvalFn ApprovalFn
 }
 
@@ -39,7 +37,7 @@ func NewCreateSandboxTool(cwd string, mgr *sandbox.Manager, approvalFn ApprovalF
 func (t *CreateSandboxTool) Name() string { return "create_sandbox" }
 
 func (t *CreateSandboxTool) Description() string {
-	return "Create a podman sandbox container for running untrusted/experimental bash commands with no approval gate — the container's own isolation is the safety boundary. Returns {sandboxId, hostPath}: pass sandboxId to bash's own sandboxId param to run commands in it, and use the existing read/write/edit/grep/glob tools with absolute paths under hostPath to inspect/edit its files (no sandboxId param on those — hostPath is just a plain host directory). Give it a descriptive name (e.g. \"api-testing-2\") so you — or another session, even after a crash — can find and reuse it later via list_sandboxes; sandboxId IS that name (prefixed px-sandbox-), not an opaque handle, and it's visible/usable across every session on this host, not just this one. A name already in use fails clearly; pick another or check list_sandboxes first. Requesting mounts or env beyond the base workspace needs human approval; a plain create_sandbox call with neither does not."
+	return "Create a podman sandbox container for running untrusted/experimental bash commands with no approval gate — the container's own isolation is the safety boundary. Returns {sandboxId, hostPath}: pass sandboxId to bash's own sandboxId param to run commands in it. There is no default workspace — pass hostPath yourself (any host directory you want bind-mounted as /workspace inside the container) if you want one; omit it for an isolated container with no host-backed directory at all. Whatever hostPath you give is used as-is, never copied or auto-created — use the existing read/write/edit/grep/glob tools with absolute paths under it to inspect/edit its files (no sandboxId param on those). Give the sandbox a descriptive name (e.g. \"api-testing-2\") so you — or another session, even after a crash — can find and reuse it later via list_sandboxes; sandboxId IS that name (prefixed px-sandbox-), not an opaque handle, and it's visible/usable across every session on this host, not just this one. A name already in use fails clearly; pick another or check list_sandboxes first. Requesting hostPath, extra mounts, or env needs human approval, showing the exact paths; a plain create_sandbox call with none of those does not."
 }
 
 func (t *CreateSandboxTool) Schema() json.RawMessage {
@@ -48,6 +46,7 @@ func (t *CreateSandboxTool) Schema() json.RawMessage {
   "properties": {
     "image": { "type": "string", "description": "Container image (default: a pinned Ubuntu LTS)" },
     "name": { "type": "string", "description": "Descriptive name for this sandbox (e.g. \"api-testing-2\") — becomes its sandboxId, prefixed px-sandbox-. Omit for a random name. Must be unique across every session on this host." },
+    "hostPath": { "type": "string", "description": "Host directory to bind-mount as /workspace inside the container (used as-is — never auto-created, never a default /tmp dir). Omit for no workspace at all. Requires human approval, showing the exact path." },
     "mounts": {
       "type": "array",
       "description": "Extra host bind mounts beyond the base workspace (e.g. a second project, credentials) — requires human approval, showing the exact host paths.",
@@ -71,10 +70,11 @@ func (t *CreateSandboxTool) Schema() json.RawMessage {
 }
 
 type createSandboxInput struct {
-	Image  string          `json:"image"`
-	Name   string          `json:"name"`
-	Mounts []sandbox.Mount `json:"mounts"`
-	Env    []string        `json:"env"`
+	Image    string          `json:"image"`
+	Name     string          `json:"name"`
+	HostPath string          `json:"hostPath"`
+	Mounts   []sandbox.Mount `json:"mounts"`
+	Env      []string        `json:"env"`
 }
 
 func (t *CreateSandboxTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
@@ -88,11 +88,12 @@ func (t *CreateSandboxTool) Execute(ctx context.Context, input json.RawMessage) 
 		}
 	}
 
-	if len(in.Mounts) > 0 || len(in.Env) > 0 {
-		desc := describeSandboxRequest(in.Mounts, in.Env)
+	hostPath := strings.TrimSpace(in.HostPath)
+	if hostPath != "" || len(in.Mounts) > 0 || len(in.Env) > 0 {
+		desc := describeSandboxRequest(hostPath, in.Mounts, in.Env)
 		approved, reason := false, ""
 		if t.approvalFn != nil {
-			approved, reason = t.approvalFn(ctx, desc, "create_sandbox requests host access beyond its own scratch workspace", t.cwd)
+			approved, reason = t.approvalFn(ctx, desc, "create_sandbox requests host directory access", t.cwd)
 		}
 		if !approved {
 			msg := "sandbox creation rejected by user"
@@ -108,11 +109,6 @@ func (t *CreateSandboxTool) Execute(ctx context.Context, input json.RawMessage) 
 		image = defaultSandboxImage
 	}
 
-	hostPath, cleanup, err := newScratchWorkspace()
-	if err != nil {
-		return ToolResult{Error: "cannot create sandbox workspace: " + err.Error()}, nil
-	}
-
 	sb, err := t.mgr.Create(ctx, sandbox.CreateOpts{
 		Image:    image,
 		Name:     in.Name,
@@ -121,7 +117,6 @@ func (t *CreateSandboxTool) Execute(ctx context.Context, input json.RawMessage) 
 		Env:      in.Env,
 	})
 	if err != nil {
-		cleanup()
 		return ToolResult{Error: "create sandbox: " + err.Error()}, nil
 	}
 
@@ -132,9 +127,12 @@ func (t *CreateSandboxTool) Execute(ctx context.Context, input json.RawMessage) 
 // describeSandboxRequest renders the exact host paths/mode a create_sandbox
 // call is asking for, so the human approval prompt shows precisely what's
 // being requested — never just "mounts requested: yes".
-func describeSandboxRequest(mounts []sandbox.Mount, env []string) string {
+func describeSandboxRequest(hostPath string, mounts []sandbox.Mount, env []string) string {
 	var b strings.Builder
 	b.WriteString("create_sandbox")
+	if hostPath != "" {
+		fmt.Fprintf(&b, " --workspace %s:/workspace:rw", hostPath)
+	}
 	for _, m := range mounts {
 		mode := "rw"
 		if m.ReadOnly {
@@ -150,25 +148,4 @@ func describeSandboxRequest(mounts []sandbox.Mount, env []string) string {
 		fmt.Fprintf(&b, " --env %s=<redacted>", key)
 	}
 	return b.String()
-}
-
-// newScratchWorkspace creates a fresh, private (0700, os.MkdirTemp's
-// default) host directory tree for one sandbox's base workspace mount:
-// <base>/workspace is what's bind-mounted and handed to the agent as
-// hostPath; <base> itself exists so a later teardown can remove the whole
-// tree in one os.RemoveAll rather than needing to know sibling-directory
-// layout. cleanup removes the whole tree — call it if sandbox creation
-// fails after the directory was already made.
-func newScratchWorkspace() (hostPath string, cleanup func(), err error) {
-	base, err := os.MkdirTemp("", "poisson-sandbox-*")
-	if err != nil {
-		return "", nil, err
-	}
-	cleanup = func() { os.RemoveAll(base) }
-	ws := filepath.Join(base, "workspace")
-	if err := os.Mkdir(ws, 0o755); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	return ws, cleanup, nil
 }

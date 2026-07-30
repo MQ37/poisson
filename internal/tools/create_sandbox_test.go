@@ -13,10 +13,14 @@ import (
 	"github.com/mq37/poisson/internal/testutil"
 )
 
+// TestCreateSandboxTool_Basic: a plain call with no hostPath/mounts/env gets
+// an isolated container with no host-backed workspace at all — there is no
+// default /tmp scratch dir anymore. approvalFn must never even be
+// consulted, since nothing here touches the host filesystem.
 func TestCreateSandboxTool_Basic(t *testing.T) {
 	dir := testutil.TempDir(t)
 	mgr := sandbox.NewManager(sandbox.NewFakeDriver())
-	tool := NewCreateSandboxTool(dir, mgr, denyAll) // no mounts/env → approvalFn must never even be consulted
+	tool := NewCreateSandboxTool(dir, mgr, denyAll)
 
 	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]interface{}{}))
 	if res.Error != "" {
@@ -29,14 +33,50 @@ func TestCreateSandboxTool_Basic(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
 		t.Fatalf("unmarshal: %v (content=%q)", err, res.Content)
 	}
-	if out.SandboxID == "" || out.HostPath == "" {
-		t.Fatalf("expected both sandboxId and hostPath, got %+v", out)
+	if out.SandboxID == "" {
+		t.Fatalf("expected a sandboxId, got %+v", out)
+	}
+	if out.HostPath != "" {
+		t.Errorf("expected no hostPath without an explicit one, got %q", out.HostPath)
 	}
 	if !mgr.Owns(out.SandboxID) {
 		t.Error("Manager should own the id create_sandbox just created")
 	}
-	if info, err := os.Stat(out.HostPath); err != nil || !info.IsDir() {
-		t.Errorf("hostPath %q should be a real, existing directory", out.HostPath)
+}
+
+// TestCreateSandboxTool_HostPathRequiresApprovalAndIsUsedAsIs: hostPath is
+// agent-supplied, gated the same as mounts, and passed through verbatim —
+// never copied into a poisson-managed location.
+func TestCreateSandboxTool_HostPathRequiresApprovalAndIsUsedAsIs(t *testing.T) {
+	dir := testutil.TempDir(t)
+	ws := testutil.TempDir(t)
+	mgr := sandbox.NewManager(sandbox.NewFakeDriver())
+
+	denied := NewCreateSandboxTool(dir, mgr, denyAll)
+	res, _ := denied.Execute(context.Background(), mustJSON(t, map[string]interface{}{"hostPath": ws}))
+	if res.Error == "" {
+		t.Fatal("expected a hostPath request to be denied when approvalFn denies")
+	}
+
+	var gotCommand string
+	spy := func(_ context.Context, command, _, _ string) (bool, string) {
+		gotCommand = command
+		return true, ""
+	}
+	approved := NewCreateSandboxTool(dir, mgr, spy)
+	res, _ = approved.Execute(context.Background(), mustJSON(t, map[string]interface{}{"hostPath": ws}))
+	if res.Error != "" {
+		t.Fatalf("expected approval to let the request through: %s", res.Error)
+	}
+	if !strings.Contains(gotCommand, ws) {
+		t.Errorf("approval prompt %q should show the exact hostPath", gotCommand)
+	}
+	var out struct {
+		HostPath string `json:"hostPath"`
+	}
+	json.Unmarshal([]byte(res.Content), &out)
+	if out.HostPath != ws {
+		t.Errorf("hostPath = %q, want the exact path given (%q), never rewritten", out.HostPath, ws)
 	}
 }
 
@@ -177,36 +217,33 @@ func TestCreateSandboxTool_NoManagerConfigured(t *testing.T) {
 	}
 }
 
-func TestCreateSandboxTool_CleansUpWorkspaceOnDriverFailure(t *testing.T) {
+// TestCreateSandboxTool_NeverTouchesOsTempDir is the regression this whole
+// change is about: create_sandbox must never provision anything under
+// os.TempDir() on its own — a hostPath is only ever what the agent supplies.
+func TestCreateSandboxTool_NeverTouchesOsTempDir(t *testing.T) {
+	dir := testutil.TempDir(t)
+	mgr := sandbox.NewManager(sandbox.NewFakeDriver())
+	tool := NewCreateSandboxTool(dir, mgr, alwaysApprove)
+
+	before, _ := filepath.Glob(filepath.Join(os.TempDir(), "poisson-sandbox-*"))
+	if res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]interface{}{})); res.Error != "" {
+		t.Fatalf("create_sandbox: %s", res.Error)
+	}
+	after, _ := filepath.Glob(filepath.Join(os.TempDir(), "poisson-sandbox-*"))
+	if len(after) > len(before) {
+		t.Errorf("create_sandbox left something under os.TempDir(): before=%v, after=%v", before, after)
+	}
+}
+
+func TestCreateSandboxTool_DriverFailureErrorsCleanly(t *testing.T) {
 	dir := testutil.TempDir(t)
 	driver := sandbox.NewFakeDriver()
 	driver.CreateErr = errors.New("boom: driver refused to create")
 	mgr := sandbox.NewManager(driver)
 	tool := NewCreateSandboxTool(dir, mgr, alwaysApprove)
 
-	before, _ := filepath.Glob(filepath.Join(os.TempDir(), "poisson-sandbox-*"))
 	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]interface{}{}))
 	if res.Error == "" {
 		t.Fatal("expected an error when the driver fails to create the container")
-	}
-	after, _ := filepath.Glob(filepath.Join(os.TempDir(), "poisson-sandbox-*"))
-	if len(after) > len(before) {
-		t.Errorf("scratch workspace leaked in os.TempDir(): before=%v, after=%v", before, after)
-	}
-}
-
-// TestNewScratchWorkspace_CleanupRemovesTree is the direct unit test for the
-// helper's cleanup contract, independent of any tool wiring.
-func TestNewScratchWorkspace_CleanupRemovesTree(t *testing.T) {
-	hostPath, cleanup, err := newScratchWorkspace()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info, err := os.Stat(hostPath); err != nil || !info.IsDir() {
-		t.Fatalf("workspace dir should exist: %v", err)
-	}
-	cleanup()
-	if _, err := os.Stat(hostPath); !os.IsNotExist(err) {
-		t.Errorf("workspace tree should be gone after cleanup, stat err = %v", err)
 	}
 }

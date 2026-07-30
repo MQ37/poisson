@@ -184,7 +184,7 @@ func (m *Manager) Owns(id string) bool // session-scoped id check — see "Owner
 
 type Sandbox struct {
     ID        string // driver-assigned container id
-    HostPath  string // /tmp/poisson-sandbox-<id>/workspace — handed to the agent verbatim
+    HostPath  string // whatever the caller passed as CreateOpts.HostPath, verbatim ("" if none — see "Amendment" below)
     CreatedAt time.Time
     LastUsed  time.Time
 }
@@ -749,6 +749,44 @@ three `BuildRegistry` call sites now each get a real `sandbox.Manager`.
   poking one that looks like someone else's in-progress work — the
   technical access model is open (see "Crash recovery" above), so this
   guideline is the only thing enforcing good manners between sessions.
+
+## Amendment: no more auto-provisioned `/tmp` workspace
+
+The original design (above) had `create_sandbox` always secretly provision a
+fresh scratch directory under `os.TempDir()` and bind-mount it as
+`/workspace`, auto-approved because poisson owned and disposed of it itself.
+Once `mounts` (arbitrary agent-chosen host bind mounts, already
+approval-gated) existed as a real, working mechanism, that auto-provisioned
+default became redundant complexity — the agent can always mount whatever
+directory it actually needs, explicitly.
+
+**Changed**: `create_sandbox` gained a top-level `hostPath` field (bind-mounted
+as `/workspace`, same as before) that is now **agent-supplied and optional**,
+never auto-created. Omitting it gives a fully isolated container with no
+host-backed directory at all — useful for pure-compute sandboxes (e.g. running
+an untrusted script that needs no host files). `newScratchWorkspace` and its
+`os.MkdirTemp("", "poisson-sandbox-*")` call are gone entirely; `hostPath` is
+used exactly as given, never copied elsewhere.
+
+**Approval**: unchanged in spirit, widened to cover the new field — a request
+needs human approval whenever it carries a `hostPath`, extra `mounts`, or
+`env`; a plain call with none of those stays auto-approved. `hostPath` is
+shown in the approval prompt as `--workspace <path>:/workspace:rw`, same
+`describeSandboxRequest` mechanism `mounts`/`env` already used.
+
+**Critical corollary — `sandbox_destroy` no longer deletes any host
+directory.** The old code assumed `sb.HostPath` was always poisson's own
+disposable `<base>/workspace` scratch tree and did
+`os.RemoveAll(filepath.Dir(sb.HostPath))` on destroy. Now that `hostPath` is
+routinely a real, agent-owned directory (a project checkout, anything), that
+assumption is actively dangerous — `sandbox_destroy` now only calls
+`Manager.Kill` and never touches the filesystem. Regression-tested
+(`TestSandboxDestroyTool_Basic`): a file inside a mounted `hostPath` survives
+destroy.
+
+`Manager`/`CreateOpts`/`Driver` themselves are unchanged — `CreateOpts.HostPath`
+already accepted an arbitrary path; only `CreateSandboxTool` (the agent-facing
+layer that used to invent one) changed.
 
 ## Open questions
 
