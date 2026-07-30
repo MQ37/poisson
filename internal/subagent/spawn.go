@@ -194,10 +194,9 @@ func buildSpawnEnv(input SpawnInput) []string {
 // ParseAuthorizedSandboxes decodes the POISSON_SUBAGENT_SANDBOXES env value
 // (as built by buildSpawnEnv) back into the list the parent authorized.
 // envValue == "" (unset) returns nil, nil — the common case, no sandboxes
-// authorized. Not yet called from runChildMode: constructing a working
-// sandbox.Manager for the child needs a real Driver, which doesn't exist
-// yet (see docs/sandbox-plan.md's podmanDriver step) — wiring this into an
-// actual child registry lands together with that.
+// authorized. Called from cmd/px/main.go's runChildMode (via
+// resolveChildSandboxManager) to Authorize each entry onto the child's own
+// sandbox.Manager.
 func ParseAuthorizedSandboxes(envValue string) ([]SandboxAuth, error) {
 	if envValue == "" {
 		return nil, nil

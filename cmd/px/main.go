@@ -17,11 +17,46 @@ import (
 	"github.com/mq37/poisson/internal/auth"
 	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/sandbox"
 	"github.com/mq37/poisson/internal/skills"
 	"github.com/mq37/poisson/internal/store"
+	"github.com/mq37/poisson/internal/subagent"
 	"github.com/mq37/poisson/internal/tools"
 	"github.com/mq37/poisson/internal/tui"
 )
+
+// newSandboxManager returns a Manager backed by the real podman CLI, no
+// storage confinement (production uses whatever podman storage the host
+// user already has configured — confinement is a test-only concern, see
+// docs/sandbox-plan.md's disk-wear guard). Never fails eagerly: podman not
+// being installed only surfaces once a sandbox tool actually tries to use
+// it, the same way a missing `rg` only surfaces when grep is called.
+func newSandboxManager() *sandbox.Manager {
+	return sandbox.NewManager(sandbox.NewPodmanDriver(nil, nil))
+}
+
+// resolveChildSandboxManager parses envValue (POISSON_SUBAGENT_SANDBOXES, as
+// built by subagent.buildSpawnEnv) and returns a Manager with each
+// authorized sandbox recorded via Authorize, or nil when there's nothing to
+// authorize — a subagent given no sandboxes (the common case: most spawns
+// carry none) must not even see sandbox_cp/sandbox_destroy as available
+// tools, same reasoning as a session with no sandbox support at all (see
+// build.go). A malformed value is treated the same as empty: never lets a
+// subagent attempt to use sandboxing off of unparseable input. Pulled out of
+// runChildMode as its own function for the same testability reason
+// subagent.buildSpawnArgs/buildSpawnEnv were pulled out of Spawn.
+func resolveChildSandboxManager(envValue string) *sandbox.Manager {
+	authorized, err := subagent.ParseAuthorizedSandboxes(envValue)
+	if err != nil || len(authorized) == 0 {
+		return nil
+	}
+	mgr := newSandboxManager()
+	now := time.Now()
+	for _, sa := range authorized {
+		mgr.Authorize(sandbox.Sandbox{ID: sa.ID, HostPath: sa.HostPath, CreatedAt: now, LastUsed: now})
+	}
+	return mgr
+}
 
 const version = "v0.1.0"
 
@@ -228,7 +263,21 @@ func runPrint(opts printOpts) {
 	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
 		return humanApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
 	}
-	reg := tools.BuildRegistry(tools.BuildOptions{Cwd: cwd, Store: st, Auth: authStore, ApprovalFn: approvalFn, FileApprovalFn: fileApprovalFn})
+	// create_sandbox asking for mounts/env beyond its own scratch workspace
+	// is exactly the same "sensitive, ask the human directly" shape as
+	// fileApprovalFn — see docs/sandbox-plan.md's "Approval" section.
+	sandboxApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
+		return humanApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
+	}
+	reg := tools.BuildRegistry(tools.BuildOptions{
+		Cwd:               cwd,
+		Store:             st,
+		Auth:              authStore,
+		ApprovalFn:        approvalFn,
+		FileApprovalFn:    fileApprovalFn,
+		SandboxManager:    newSandboxManager(),
+		SandboxApprovalFn: sandboxApprovalFn,
+	})
 
 	outputChan := make(chan agent.OutputEvent, 256)
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
@@ -334,14 +383,22 @@ func runREPL(noSkills bool) {
 	subApprovalFn := func(command, description, workdir, agentName, risk string) (bool, string) {
 		return humanApproval(command, description, workdir, agent.ParseBashRisk(risk), agent.SubagentOrigin(agentName))
 	}
+	// create_sandbox asking for mounts/env beyond its own scratch workspace
+	// is exactly the same "sensitive, ask the human directly" shape as
+	// fileApprovalFn — see docs/sandbox-plan.md's "Approval" section.
+	sandboxApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
+		return humanApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
+	}
 
 	reg := tools.BuildRegistry(tools.BuildOptions{
-		Cwd:            cwd,
-		Store:          st,
-		Auth:           authStore,
-		ApprovalFn:     approvalFn,
-		FileApprovalFn: fileApprovalFn,
-		SubApproval:    subApprovalFn,
+		Cwd:               cwd,
+		Store:             st,
+		Auth:              authStore,
+		ApprovalFn:        approvalFn,
+		FileApprovalFn:    fileApprovalFn,
+		SubApproval:       subApprovalFn,
+		SandboxManager:    newSandboxManager(),
+		SandboxApprovalFn: sandboxApprovalFn,
 	})
 
 	// Set up agent.
@@ -683,6 +740,12 @@ func runChildMode() {
 		return humanChildApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginMain)
 	}
 
+	// A subagent never mints its own sandbox (create_sandbox is excluded
+	// from a Child registry regardless — see build.go), it can only use
+	// ones its parent explicitly authorized via POISSON_SUBAGENT_SANDBOXES
+	// (see docs/sandbox-plan.md's subagent allow-list).
+	childSandboxMgr := resolveChildSandboxManager(os.Getenv("POISSON_SUBAGENT_SANDBOXES"))
+
 	// Child:true grants every tool except subagent, so a subagent gets the full
 	// tool set (read/write/edit/bash/web_search/web_ask/recall)
 	// but cannot spawn further subagents — recursion is bounded to one level.
@@ -693,6 +756,7 @@ func runChildMode() {
 		ApprovalFn:     approvalFn,
 		FileApprovalFn: fileApprovalFn,
 		Child:          true,
+		SandboxManager: childSandboxMgr,
 	})
 
 	// Run agent with a nil outputChan (we write events ourselves).

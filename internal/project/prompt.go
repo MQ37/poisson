@@ -181,7 +181,8 @@ func BuildSystemPrompt(opts BuildSystemPromptOptions) string {
 	b.WriteString("- Read files in full before wide-ranging changes\n")
 	b.WriteString("- Prefer dedicated tools over bash: read (not cat/head/tail/sed -n), grep (not rg/grep), glob (not find -name), edit/write (not sed -i). They skip the approval gate and are cheaper.\n")
 	b.WriteString("- Emit multiple tool calls in one turn when the provider supports it. If the model only does one tool_use per turn, pack independent calls into batch (not bash pipelines). batch has no dataflow between steps.\n")
-	b.WriteString("- Bash is stateless: cd/export do not carry to the next bash call, pass workdir explicitly each time you need a directory other than session cwd. read/write/edit/grep/glob paths are always relative to the session cwd.\n\n")
+	b.WriteString("- Bash is stateless: cd/export do not carry to the next bash call, pass workdir explicitly each time you need a directory other than session cwd. read/write/edit/grep/glob paths are always relative to the session cwd.\n")
+	b.WriteString("- If create_sandbox is available, prefer it for installs, experiments, or any command that would otherwise need human approval: create_sandbox once, then bash(sandboxId=...) runs freely with no approval gate at all — the container is the safety boundary. read/write/edit/grep/glob need no sandboxId; use the hostPath create_sandbox returns directly. sandbox_destroy when done.\n\n")
 
 	b.WriteString(cavemanStyle)
 	b.WriteString("\n\n")

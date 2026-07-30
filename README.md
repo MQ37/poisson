@@ -52,6 +52,13 @@ px                                                   # launch the TUI
   is LLM risk-classified, medium/high/unknown asks you. Paranoid mode
   (Shift+Tab) asks for every command. Installs, destructive ops, and
   `npx`/`dlx`-style commands never auto-approve.
+- **Podman sandboxes** — `create_sandbox` spins up an isolated container
+  (passwordless sudo inside, matching-uid workspace mount); `bash` with a
+  `sandboxId` then runs there with **no approval gate at all** — the
+  container is the safety boundary, not the prompt. `read`/`write`/`edit`/
+  `grep`/`glob` just use the plain host path it returns, no sandboxId
+  needed. `sandbox_cp` moves files in/out, `sandbox_destroy` tears it down.
+  Requires `podman` on `PATH`. ([details](docs/sandbox-plan.md))
 - **Sessions in SQLite** — every message/tool/API call persisted, full-text
   search (FTS5), resume any session, auto-compaction when context fills up.
 - **Exact cost & tokens**, live in the status bar and `/cost`, plus live

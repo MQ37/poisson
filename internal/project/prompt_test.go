@@ -179,6 +179,9 @@ func TestBuildSystemPromptPrefersDedicatedTools(t *testing.T) {
 	if !strings.Contains(prompt, "session cwd") {
 		t.Errorf("missing session-cwd file-tool guideline: %q", prompt)
 	}
+	if !strings.Contains(prompt, "create_sandbox") || !strings.Contains(prompt, "no approval gate") {
+		t.Errorf("missing sandbox-preference guideline: %q", prompt)
+	}
 }
 
 func TestBuildSystemPromptNoContext(t *testing.T) {

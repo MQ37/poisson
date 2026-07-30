@@ -76,11 +76,9 @@ type Driver interface {
   uses whatever storage the host user has configured) — only the
   integration suite below sets them, and always per-`exec.Cmd`, never via
   `os.Setenv`/ambient export (see the disk-wear guard's env-var-hygiene
-  note below for why that distinction matters). Not yet wired into
-  `cmd/px/main.go` — this step ships the driver itself plus its gated
-  integration suite; actually constructing one in production (making
-  `create_sandbox` a real, usable feature rather than inert scaffolding) is
-  a deliberately separate next step.
+  note below for why that distinction matters). **Now wired into
+  `cmd/px/main.go`** (see "Production wiring" below) — `create_sandbox` is a
+  real, usable feature as of that step, not inert scaffolding.
 - `fakeDriver` — in-memory Go maps, no subprocess, same idiom as
   `provider.FakeProvider` (`internal/provider/fake.go`) and the `rgBin`
   override in `grep.go`. Used for the bulk of tests; no podman needed, runs
@@ -601,6 +599,52 @@ mechanism lands:
 9. ⬜ Idle-reap sweep: stale container + tmp dir actually removed on next
    launch — needs the lifecycle/persistence follow-up (session-store
    table, sweep, slash commands), not started.
+
+## Production wiring
+
+**Implemented.** The feature is live, not just built-and-tested: `cmd/px/main.go`'s
+three `BuildRegistry` call sites now each get a real `sandbox.Manager`.
+
+- `runPrint` (headless `-p`) and `runREPL` (interactive TUI): each
+  constructs `newSandboxManager()` — `sandbox.NewManager(sandbox.NewPodmanDriver(nil, nil))`,
+  no storage confinement (confinement is test-only, see the disk-wear
+  guard) — and passes it as `BuildOptions.SandboxManager`. A new
+  `sandboxApprovalFn`, mirroring `fileApprovalFn`'s exact shape (fixed
+  `BashRiskHigh`, asks the human directly — no LLM classification, since
+  "does this request carry extra mounts/env" is exactly as deterministic a
+  question as "is this path sensitive"), is passed as
+  `BuildOptions.SandboxApprovalFn`.
+- `runChildMode` (subagent child): a new `resolveChildSandboxManager(envValue string) *sandbox.Manager`
+  parses `POISSON_SUBAGENT_SANDBOXES` (`subagent.ParseAuthorizedSandboxes`)
+  and `Authorize`s each entry onto a fresh Manager — returning `nil` (not an
+  empty-but-non-nil Manager) when there's nothing authorized or the value
+  is malformed, so a plain subagent (the common case: most spawns authorize
+  nothing) doesn't even get `sandbox_cp`/`sandbox_destroy` registered at
+  all, same "don't offer a dead-end tool" reasoning used everywhere else in
+  this design. Pulled out of `runChildMode` as its own function for the
+  same testability reason `subagent.buildSpawnArgs`/`buildSpawnEnv` were
+  pulled out of `Spawn` — `runChildMode` itself can't be unit-tested
+  (`os.Exit` paths, real stdin/stdout), but the parsing+authorization logic
+  now can be, independent of it.
+- **Why this "just works" across the parent/child process boundary with no
+  extra plumbing**: real podman state isn't process-local. A child process
+  constructing its own fresh `podmanDriver` (no shared Go state with the
+  parent at all) and calling `Exec`/`Kill`/`Inspect` against a real
+  container id the *parent* created reaches that same real container,
+  because the shared state is podman's own on-disk/kernel state, not
+  anything this package holds in memory — `Manager.Authorize` only needs to
+  supply the `{id, hostPath}` record so the child's own ownership check
+  (`Owns`) passes; the routing itself needs nothing further.
+- `cmd/cost-eval/main.go` (a benchmarking harness, not a real session —
+  already deny-all for every approval by design) is deliberately left
+  unwired: giving it sandbox support would be inconsistent with its
+  bounded-cost-measurement purpose and would spin up real containers
+  during automated cost runs.
+- `internal/project/prompt.go`'s system prompt gained a guideline nudging
+  the model to prefer `create_sandbox` + `bash(sandboxId=...)` over a host
+  command that would need human approval, whenever `create_sandbox` is
+  actually available (it simply won't be in the tool list otherwise, so
+  the guideline is safe to state unconditionally).
 
 ## Open questions
 
