@@ -32,6 +32,24 @@ type SpawnInput struct {
 	NoSkills        bool // mirrors the parent's SkillsEnabled(): true disables skills in the child too
 	ExtraEnv        []string
 	DBPath          string // ephemeral DB path for the child (empty = parent's DB)
+	// AuthorizedSandboxes are sandboxes the parent explicitly authorized this
+	// specific child to use (see docs/sandbox-plan.md's subagent allow-list)
+	// — a subagent can never mint its own sandbox (no create_sandbox tool in
+	// a child registry), only use ones named here. Empty means none.
+	AuthorizedSandboxes []SandboxAuth
+}
+
+// SandboxAuth is the minimal information a child process needs to use a
+// sandbox its parent already created: enough for the child's own
+// sandbox.Manager to Authorize the id (so Owns/Exec/Alive work) and for
+// sandbox_cp/read/write-style tools to resolve paths under HostPath. Not
+// internal/sandbox.Sandbox itself — this package intentionally carries only
+// what it needs (not CreatedAt/LastUsed, which are irrelevant to spawning a
+// child and would just be a coupling to internal/sandbox's full shape for
+// no benefit).
+type SandboxAuth struct {
+	ID       string `json:"id"`
+	HostPath string `json:"hostPath"`
 }
 
 // ChildProcess wraps a spawned Poisson child process.
@@ -159,7 +177,36 @@ func buildSpawnEnv(input SpawnInput) []string {
 	if input.DBPath != "" {
 		env = append(env, fmt.Sprintf("POISSON_SUBAGENT_DB=%s", input.DBPath))
 	}
+	if len(input.AuthorizedSandboxes) > 0 {
+		// JSON, not a hand-rolled delimited list: HostPath is a real
+		// filesystem path and could in principle contain a comma, and a
+		// small stdlib-encoded payload is simpler and more robust than a
+		// custom separator/escaping scheme for what's already
+		// process-internal control-plane data (same trust level as
+		// POISSON_SUBAGENT_DB already carrying a filesystem path).
+		if data, err := json.Marshal(input.AuthorizedSandboxes); err == nil {
+			env = append(env, fmt.Sprintf("POISSON_SUBAGENT_SANDBOXES=%s", data))
+		}
+	}
 	return env
+}
+
+// ParseAuthorizedSandboxes decodes the POISSON_SUBAGENT_SANDBOXES env value
+// (as built by buildSpawnEnv) back into the list the parent authorized.
+// envValue == "" (unset) returns nil, nil — the common case, no sandboxes
+// authorized. Not yet called from runChildMode: constructing a working
+// sandbox.Manager for the child needs a real Driver, which doesn't exist
+// yet (see docs/sandbox-plan.md's podmanDriver step) — wiring this into an
+// actual child registry lands together with that.
+func ParseAuthorizedSandboxes(envValue string) ([]SandboxAuth, error) {
+	if envValue == "" {
+		return nil, nil
+	}
+	var out []SandboxAuth
+	if err := json.Unmarshal([]byte(envValue), &out); err != nil {
+		return nil, fmt.Errorf("parse POISSON_SUBAGENT_SANDBOXES: %w", err)
+	}
+	return out, nil
 }
 
 // subagentEnvPrefix names the variables that exist purely to configure a child

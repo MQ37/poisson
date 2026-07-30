@@ -323,17 +323,57 @@ memory with the parent.
   bookkeeping (a subagent runs against its own ephemeral
   `POISSON_SUBAGENT_DB`). Same shape as the existing rule that a subagent
   never gets the `subagent` tool itself.
-- New env var, same pattern as every other `POISSON_SUBAGENT_*` var in
-  `buildSpawnEnv` (`spawn.go:145-163`): `POISSON_SUBAGENT_SANDBOXES`,
-  comma-separated container-id list, **omitted entirely when empty**
-  (mirrors `TestBuildSpawnEnvOmitsUnsetFields`).
-- The child must still verify liveness before use — `Manager.Inspect` /
-  `podman inspect` against the id — not blindly trust the env string: the
-  parent (or the idle reaper) may have killed it between spawn and use.
-  An exec against a dead container is an ordinary tool-error, not a crash;
-  needs a test.
+- The parent's `subagent` tool call itself carries a `sandboxIds` array in
+  its own schema — the calling model explicitly names which sandboxes
+  (already created via its own `create_sandbox` calls) to share with a
+  given child, resolved against this session's own `Manager` before
+  spawning anything (a foreign/hallucinated id fails the whole spawn
+  loudly, same discipline as `bash`'s own sandboxId handling — not silently
+  dropped).
+- Env var, same pattern as every other `POISSON_SUBAGENT_*` var in
+  `buildSpawnEnv`: `POISSON_SUBAGENT_SANDBOXES`, **omitted entirely when
+  empty** (mirrors `TestBuildSpawnEnvOmitsUnsetFields`) — **implemented as
+  a JSON array of `{id, hostPath}` objects, not the originally-sketched
+  comma-separated id list**: `HostPath` is needed too (a subagent's own
+  `sandbox_cp` would otherwise resolve paths against an empty root), and a
+  filesystem path can in principle contain a comma — JSON via the stdlib is
+  simpler and more robust than a hand-rolled delimited format with escaping
+  edge cases, for what's already process-internal control-plane data (same
+  trust level `POISSON_SUBAGENT_DB` already carrying a filesystem path has).
+- The child must still verify liveness before use — `Manager.Alive`
+  (`Owns`-checked, then `Driver.Inspect`) — not blindly trust the env
+  string: the parent (or the idle reaper) may have killed it between spawn
+  and use. An exec against a dead container is an ordinary tool-error, not
+  a crash — already proven at the `Manager`/`BashTool` layer
+  (`TestManager_AuthorizedSandboxCanGoDeadUnderneathAChild`,
+  `TestBashTool_SandboxedExecFailurePropagates`, both from earlier steps);
+  nothing new to test here specifically for the subagent case, since the
+  mechanism is identical once a child's `Manager` has the record.
 - No sticky state to propagate (removed entirely, see top) — the allow-list
   is a pure permission check, nothing else crosses the process boundary.
+
+**Implemented**: `internal/subagent.SpawnInput.AuthorizedSandboxes
+[]SandboxAuth` (`{ID, HostPath}` — deliberately not `sandbox.Sandbox`
+itself, to avoid coupling a generic process-spawning package to the full
+sandbox-package shape for fields it doesn't need); `buildSpawnEnv` JSON-
+encodes it into `POISSON_SUBAGENT_SANDBOXES`; `ParseAuthorizedSandboxes`
+decodes it back (round-trip tested). `SubagentTool` gained
+`sandboxMgr`/`SetSandboxManager` (same `Set*` idiom as `BashTool`'s own),
+a `sandboxIds` schema field, and pre-spawn validation (`Manager.Get` per
+id, fail the whole call on any miss) — wired onto the tool by
+`BuildRegistry` whenever `opts.SandboxManager != nil`. Proven end-to-end
+with a real spawned process (fake shell "child" script, same pattern as
+`TestSubagentToolRelaysRetryingStatusEndToEnd`): an owned sandboxId
+resolves, survives the env-var round trip, and the child process's real
+environment shows exactly the authorized `{id, hostPath}`.
+
+**Not yet implemented**: `runChildMode` (`cmd/px/main.go`) does not parse
+`POISSON_SUBAGENT_SANDBOXES` or construct a `Manager` for the child's own
+registry yet — doing so needs a real `Driver` to back it (there's nothing
+for `Manager.Exec`/`Kill`/`Inspect` to route through otherwise), so this
+lands together with the `podmanDriver` step, not before. Same deferral
+reasoning as the bootstrap script above: guessing at wiring before the
+real consumer exists would be designing against nothing.
 
 ### Lifecycle / cleanup
 
@@ -376,6 +416,7 @@ bash{command, description, workdir, timeout, sandboxId?}
 create_sandbox{image?, mounts?, env?} -> {sandboxId, hostPath}
 sandbox_cp{sandboxId, direction: in|out, hostPath, workspacePath}
 sandbox_destroy{sandboxId} -> ok/error content
+subagent{task, name?, sandboxIds?} -> unchanged otherwise
 ```
 
 `sandbox_destroy` is the agent-driven complement to the (not yet built)
@@ -477,13 +518,22 @@ mechanism lands:
    one round — real path an agent will hit.
 6. ✅ Ownership rejection: foreign/guessed `sandboxId` denied — for `bash`,
    `sandbox_cp`, and `sandbox_destroy` alike.
-7. ⬜ Subagent: liveness-check on an authorized-but-now-dead sandboxId returns
-   a tool error, not a crash; `POISSON_SUBAGENT_SANDBOXES` omitted when the
-   parent has none (mirrors `TestBuildSpawnEnvOmitsUnsetFields`); a
-   subagent calling `create_sandbox` is rejected/absent from its registry
-   (this last part is already true today — `TestBuildRegistry_
-   WithSandboxManager_ChildOmitsCreateSandbox` — the rest needs the
-   allow-list mechanism itself, not yet built).
+7. ✅ Subagent: `POISSON_SUBAGENT_SANDBOXES` omitted when the parent has none
+   (`TestBuildSpawnEnvOmitsUnsetFields`) and round-trips correctly when
+   present (`TestBuildSpawnEnvPropagatesAuthorizedSandboxes`); `subagent`
+   tool rejects a foreign/hallucinated sandboxId and errors clearly with no
+   `Manager` configured (`TestSubagentTool_SandboxIdsRejectsForeignID`,
+   `TestSubagentTool_SandboxIdsRequireManagerConfigured`); a real spawned
+   process actually receives the authorized `{id, hostPath}` in its own
+   environment (`TestSubagentTool_SandboxIdsPropagateToChildEnvironment`);
+   `create_sandbox` absent from a child registry
+   (`TestBuildRegistry_WithSandboxManager_ChildOmitsCreateSandbox`, from the
+   prior step). Liveness-check-on-a-now-dead-sandboxId itself was already
+   proven at the `Manager`/`BashTool` layer in earlier steps — the
+   mechanism is identical once a child's `Manager` holds the record, so
+   nothing new to test there. `runChildMode` actually wiring a `Manager`
+   for the child registry remains for the `podmanDriver` step (see
+   "Subagents" above).
 8. ✅ Symlink-escape regression: planted symlink inside a sandbox's workspace
    pointing outside it still rejected by `sandbox_cp` (`TestSandboxCpTool_
    SymlinkEscapeRejected`) — the file-tools half (read/write/edit/grep/glob

@@ -147,13 +147,48 @@ func TestBuildSpawnEnvPropagatesProviderModelEffort(t *testing.T) {
 // instead of leaving it alone.
 func TestBuildSpawnEnvOmitsUnsetFields(t *testing.T) {
 	env := buildSpawnEnv(SpawnInput{})
-	for _, key := range []string{"POISSON_SUBAGENT_PROVIDER", "POISSON_SUBAGENT_MODEL", "POISSON_SUBAGENT_CLASSIFIER_MODEL", "POISSON_SUBAGENT_EFFORT", "POISSON_SUBAGENT_NAME", "POISSON_SUBAGENT_DB"} {
+	for _, key := range []string{"POISSON_SUBAGENT_PROVIDER", "POISSON_SUBAGENT_MODEL", "POISSON_SUBAGENT_CLASSIFIER_MODEL", "POISSON_SUBAGENT_EFFORT", "POISSON_SUBAGENT_NAME", "POISSON_SUBAGENT_DB", "POISSON_SUBAGENT_SANDBOXES"} {
 		if _, ok := envValue(env, key); ok {
 			t.Errorf("%s should be absent when unset, but was present", key)
 		}
 	}
 	if _, ok := envValue(env, "POISSON_SUBAGENT_CHILD"); !ok {
 		t.Error("POISSON_SUBAGENT_CHILD must always be set")
+	}
+}
+
+// TestBuildSpawnEnvPropagatesAuthorizedSandboxes proves the wire format
+// round-trips: what a parent authorizes is exactly what ParseAuthorizedSandboxes
+// recovers on the other side of the process boundary.
+func TestBuildSpawnEnvPropagatesAuthorizedSandboxes(t *testing.T) {
+	want := []SandboxAuth{
+		{ID: "abc123", HostPath: "/tmp/poisson-sandbox-abc123/workspace"},
+		{ID: "def456", HostPath: "/tmp/poisson-sandbox-def456/workspace"},
+	}
+	env := buildSpawnEnv(SpawnInput{AuthorizedSandboxes: want})
+	raw, ok := envValue(env, "POISSON_SUBAGENT_SANDBOXES")
+	if !ok {
+		t.Fatal("POISSON_SUBAGENT_SANDBOXES should be present when AuthorizedSandboxes is non-empty")
+	}
+	got, err := ParseAuthorizedSandboxes(raw)
+	if err != nil {
+		t.Fatalf("ParseAuthorizedSandboxes: %v", err)
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("round-trip mismatch: got %+v, want %+v", got, want)
+	}
+}
+
+// TestParseAuthorizedSandboxes_EmptyIsNilNotError covers the common case
+// (no sandboxes authorized): the env var is simply absent, and parsing an
+// empty string must return (nil, nil), not an error.
+func TestParseAuthorizedSandboxes_EmptyIsNilNotError(t *testing.T) {
+	got, err := ParseAuthorizedSandboxes("")
+	if err != nil {
+		t.Fatalf("ParseAuthorizedSandboxes(\"\") = err %v, want nil", err)
+	}
+	if got != nil {
+		t.Errorf("ParseAuthorizedSandboxes(\"\") = %+v, want nil", got)
 	}
 }
 

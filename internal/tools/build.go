@@ -109,7 +109,15 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	// Parent-only: a subagent must never receive the subagent tool, or it could
 	// spawn subagents without bound.
 	if !opts.Child && opts.SubApproval != nil {
-		reg.Register(NewSubagentTool(opts.Cwd, opts.SubApproval))
+		subagentTool := NewSubagentTool(opts.Cwd, opts.SubApproval)
+		if opts.SandboxManager != nil {
+			// Lets this session's own subagent calls authorize specific
+			// sandboxIds for a spawned child (see docs/sandbox-plan.md's
+			// subagent allow-list) — validated against this same Manager,
+			// never a foreign one.
+			subagentTool.SetSandboxManager(opts.SandboxManager)
+		}
+		reg.Register(subagentTool)
 	}
 	// batch last so it can dispatch into every tool already registered.
 	// Denied inside batch: batch itself (no recursion) — bash and subagent

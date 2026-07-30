@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/sandbox"
 	"github.com/mq37/poisson/internal/store"
 	"github.com/mq37/poisson/internal/subagent"
 )
@@ -71,6 +72,20 @@ type SubagentTool struct {
 	// whole px instance instead of stopping at the process boundary. nil (or
 	// an empty result) leaves the child to resolve its own.
 	classifierModelFn func() string
+
+	// sandboxMgr, when non-nil, lets this call authorize specific sandboxIds
+	// for the spawned child (see docs/sandbox-plan.md's subagent allow-list).
+	// nil (the default) means sandboxing isn't available in this session at
+	// all — a sandboxIds request then fails clearly instead of silently
+	// being ignored.
+	sandboxMgr *sandbox.Manager
+}
+
+// SetSandboxManager wires the Manager that a sandboxIds request validates
+// against. Optional — nil (the default) makes any non-empty sandboxIds
+// input fail with a clear error instead of a nil pointer panic.
+func (t *SubagentTool) SetSandboxManager(mgr *sandbox.Manager) {
+	t.sandboxMgr = mgr
 }
 
 // NewSubagentTool creates a subagent tool.
@@ -144,7 +159,7 @@ func (t *SubagentTool) SetClassifierModelFn(fn func() string) {
 func (t *SubagentTool) Name() string { return "subagent" }
 
 func (t *SubagentTool) Description() string {
-	return "Spawn a one-shot child Poisson agent to complete a specific task. The child has every tool you do (read, write, edit, bash, web_search, web_ask, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. The child returns its final output when done. It cannot ask questions — give it a complete, self-contained task."
+	return "Spawn a one-shot child Poisson agent to complete a specific task. The child has every tool you do (read, write, edit, bash, web_search, web_ask, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. The child returns its final output when done. It cannot ask questions — give it a complete, self-contained task. Optional sandboxIds shares specific sandboxes (from create_sandbox) with the child — it can only use ones named here, it cannot create its own."
 }
 
 func (t *SubagentTool) Schema() json.RawMessage {
@@ -152,7 +167,8 @@ func (t *SubagentTool) Schema() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"task": {"type": "string", "description": "Complete, self-contained task for the subagent. Include context, file paths, and expected output format."},
-			"name": {"type": "string", "description": "Display name for the subagent. If omitted, a name is chosen automatically."}
+			"name": {"type": "string", "description": "Display name for the subagent. If omitted, a name is chosen automatically."},
+			"sandboxIds": {"type": "array", "items": {"type": "string"}, "description": "Sandboxes (from create_sandbox) to let this child use — each id must be one this session actually created. The child cannot create its own sandboxes."}
 		},
 		"required": ["task"]
 	}`)
@@ -160,8 +176,9 @@ func (t *SubagentTool) Schema() json.RawMessage {
 
 func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
 	var params struct {
-		Task string `json:"task"`
-		Name string `json:"name"`
+		Task       string   `json:"task"`
+		Name       string   `json:"name"`
+		SandboxIDs []string `json:"sandboxIds"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return ToolResult{Error: "invalid input: " + err.Error()}, nil
@@ -173,6 +190,25 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	agentName := params.Name
 	if agentName == "" {
 		agentName = "subagent"
+	}
+
+	// Resolve every requested sandboxId against this session's own Manager
+	// before spawning anything — same untrusted-input discipline as bash's
+	// own sandboxId handling: a hallucinated or foreign id must fail loudly,
+	// not be silently dropped or discovered as a confusing error inside the
+	// child later.
+	var authorizedSandboxes []subagent.SandboxAuth
+	if len(params.SandboxIDs) > 0 {
+		if t.sandboxMgr == nil {
+			return ToolResult{Error: "sandboxIds given but sandboxing is not available in this session"}, nil
+		}
+		for _, id := range params.SandboxIDs {
+			sb, ok := t.sandboxMgr.Get(id)
+			if !ok {
+				return ToolResult{Error: fmt.Sprintf("sandbox %q not found — it may belong to a different session, have been destroyed, or never existed", id)}, nil
+			}
+			authorizedSandboxes = append(authorizedSandboxes, subagent.SandboxAuth{ID: sb.ID, HostPath: sb.HostPath})
+		}
 	}
 
 	// A subagent must always run the same provider + model as the main
@@ -209,16 +245,17 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	defer removeDBFiles(dbPath)
 
 	child, err := subagent.Spawn(subagent.SpawnInput{
-		Task:            params.Task,
-		Cwd:             t.cwd,
-		SessionID:       childSessionID,
-		Name:            agentName,
-		Provider:        prov,
-		Model:           model,
-		Effort:          effort,
-		ClassifierModel: classifierModel,
-		NoSkills:        t.skillsEnabledFn != nil && !t.skillsEnabledFn(),
-		DBPath:          dbPath,
+		Task:                params.Task,
+		Cwd:                 t.cwd,
+		SessionID:           childSessionID,
+		Name:                agentName,
+		Provider:            prov,
+		Model:               model,
+		Effort:              effort,
+		ClassifierModel:     classifierModel,
+		NoSkills:            t.skillsEnabledFn != nil && !t.skillsEnabledFn(),
+		DBPath:              dbPath,
+		AuthorizedSandboxes: authorizedSandboxes,
 	})
 	if err != nil {
 		return ToolResult{Error: "failed to spawn subagent: " + err.Error()}, nil
