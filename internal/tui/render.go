@@ -38,21 +38,11 @@ func bashInputPreview(command string) string {
 	return out
 }
 
-// backendSuffix annotates a web tool's preview with the backend it was asked
-// to use (" [anthropic]"), empty for the default — which backend ran is the
-// difference between a free scrape and a billed API call, so it belongs on the
-// card the user actually reads.
-func backendSuffix(provider string) string {
-	if provider == "" {
-		return ""
-	}
-	return " " + providerTag(provider)
-}
-
-// providerTag renders "[anthropic]" for a chosen backend, "" for the default —
-// same signal as backendSuffix but attached directly to a name (e.g. a batch
-// card's "N calls: web_ask[anthropic], bash" summary) instead of trailing a
-// query preview.
+// providerTag renders "[anthropic]" for a chosen backend, "" for the
+// default — which backend ran is the difference between a free scrape and a
+// billed API call, so it belongs right after the tool's name wherever that
+// name is shown (a card title, a batch summary entry, an expanded batch
+// line), not buried in a query preview that can get truncated away.
 func providerTag(provider string) string {
 	if provider == "" {
 		return ""
@@ -60,9 +50,10 @@ func providerTag(provider string) string {
 	return "[" + previewText(provider, 20) + "]"
 }
 
-// providerTag reads the generic "provider" field out of a nested batch call's
-// own input JSON — batch is tool-agnostic, so this has to work for whichever
-// tool (web_ask/web_search/fetch today) the model picked, not just one name.
+// providerTagFromInput reads the generic "provider" field out of a tool
+// call's own input JSON — used generically since batch is tool-agnostic, so
+// this has to work for whichever tool (web_ask/web_search/fetch today) the
+// model picked, not just one name.
 func providerTagFromInput(input json.RawMessage) string {
 	var in struct {
 		Provider string `json:"provider"`
@@ -149,7 +140,7 @@ func toolInputPreview(toolName string, input []byte) string {
 			Provider string `json:"provider"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.URL != "" {
-			return previewText(in.URL, 100) + backendSuffix(in.Provider)
+			return previewText(in.URL, 100)
 		}
 	case "web_search", "web_ask":
 		var in struct {
@@ -157,7 +148,7 @@ func toolInputPreview(toolName string, input []byte) string {
 			Provider string `json:"provider"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Query != "" {
-			return previewText(in.Query, 100) + backendSuffix(in.Provider)
+			return previewText(in.Query, 100)
 		}
 	case "@image":
 		var in struct {

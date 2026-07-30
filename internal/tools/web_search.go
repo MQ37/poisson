@@ -65,6 +65,12 @@ func (t *WebSearchTool) SetUsageFn(fn WebUsageFn) { t.usage = fn }
 
 func (t *WebSearchTool) Name() string { return "web_search" }
 
+// ResolveDefaultProvider implements DefaultProviderResolver — web_search's
+// default is always duckduckgo, whether or not the anthropic backend is
+// even wired for this session (that only affects whether provider=anthropic
+// is accepted, not the default).
+func (t *WebSearchTool) ResolveDefaultProvider() string { return "duckduckgo" }
+
 func (t *WebSearchTool) Description() string {
 	desc := "Search the web via DuckDuckGo. Returns a plain list of links with titles and short descriptions — no AI summary. Fast, free, no account. Use web_ask instead when you want a synthesized answer with sources."
 	if t.anthropic != nil {

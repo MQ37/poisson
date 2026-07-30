@@ -212,6 +212,9 @@ func (t *FetchTool) defaultBackend() string {
 	return fetchViaCurl
 }
 
+// ResolveDefaultProvider implements DefaultProviderResolver — see there.
+func (t *FetchTool) ResolveDefaultProvider() string { return t.defaultBackend() }
+
 // fetchViaAnthropicBackend fetches the page through the same guarded direct
 // path as provider=curl, then hands the extracted markdown to Anthropic's
 // small model. The fetch stays local (matching Claude Code's WebFetch), so

@@ -1123,8 +1123,35 @@ roundLoop:
 		// eventually return, since a turn can loop over many rounds.
 		cancel()
 
+		// A model that leaves "provider" out of a web_ask/web_search/fetch
+		// call (or one nested inside batch) still runs on SOME backend —
+		// resolve it now for persistence and the TUI, so a card shows the
+		// backend that actually ran instead of an empty field that reads as
+		// "no backend" when it really means "whichever one is default right
+		// now". This is a DISPLAY-only copy, deliberately never fed to
+		// Execute below: some tools tell an explicit "provider" the model
+		// typed apart from an auto-picked default by literally checking
+		// whether their own input JSON's "provider" field is already set
+		// (web_ask falls back grok -> exa only when it self-selected grok as
+		// the default; an explicit provider=grok request instead surfaces
+		// the real error). Rewriting toolCalls[i].Input itself before
+		// dispatch would erase that distinction — Execute would see
+		// "provider":"grok" and treat every resolved-default call as if the
+		// model had demanded grok specifically, silently turning a
+		// graceful exa fallback into a hard failure on any transient xAI
+		// hiccup. So the dispatch loop further down still runs on the
+		// original, unresolved toolCalls.
+		displayToolCalls := toolCalls
+		if a.tools != nil {
+			displayToolCalls = make([]provider.ToolCall, len(toolCalls))
+			for i, tc := range toolCalls {
+				tc.Input = tools.InjectResolvedProviders(a.tools, tc.Name, tc.Input)
+				displayToolCalls[i] = tc
+			}
+		}
+
 		if err := ctx.Err(); err != nil {
-			a.persistPartialTurnOnCancel(textBuilder.String(), thinkingBuilder.String(), thinkingSig.String(), redactedThinking, toolCalls)
+			a.persistPartialTurnOnCancel(textBuilder.String(), thinkingBuilder.String(), thinkingSig.String(), redactedThinking, displayToolCalls)
 			return a.endTurn(err)
 		}
 
@@ -1142,7 +1169,7 @@ roundLoop:
 		// COMMIT: append assistant message.
 		assistantBlocks := buildAssistantBlocks(
 			thinkingBuilder.String(), thinkingSig.String(), redactedThinking,
-			textBuilder.String(), toolCalls)
+			textBuilder.String(), displayToolCalls)
 		if len(assistantBlocks) == 0 {
 			// Model returned nothing (no text, thinking, or tool calls). This is
 			// a transient provider glitch (notably Anthropic), so retry the same
@@ -1214,8 +1241,9 @@ roundLoop:
 			break
 		}
 
-		// TOOLS: notify TUI of tool starts.
-		for _, tc := range toolCalls {
+		// TOOLS: notify TUI of tool starts. Uses displayToolCalls (resolved
+		// providers) — the card the user sees, not the raw dispatch input.
+		for _, tc := range displayToolCalls {
 			a.sendEvent(OutputEvent{
 				Type:       OutputToolStart,
 				ToolName:   tc.Name,

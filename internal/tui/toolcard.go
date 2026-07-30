@@ -180,7 +180,7 @@ func formatToolCollapsed(b *Block, width int) string {
 	if name == "" {
 		name = "tool"
 	}
-	title := titleCaseTool(name)
+	title := titleCaseTool(name) + providerTagFromInput(b.meta.ToolInput)
 	reason := toolCollapsedReason(name, b.meta.ToolInput)
 	if reason == "" {
 		reason = "…"
@@ -233,7 +233,7 @@ func formatToolExpandedHeader(b *Block) string {
 	if name == "" {
 		name = "tool"
 	}
-	title := titleCaseTool(name)
+	title := titleCaseTool(name) + providerTagFromInput(b.meta.ToolInput)
 	reason := toolCollapsedReason(name, b.meta.ToolInput)
 
 	mark := "▾"
@@ -386,9 +386,9 @@ func batchExpandedCallLines(input []byte, inner int) []string {
 	for i, c := range calls {
 		// Bare name, not the wire spelling the model may have echoed: it also
 		// decides which per-tool preview below applies.
-		name := tools.CanonicalToolName(c.Tool)
+		name := tools.CanonicalToolName(c.Tool) + providerTagFromInput(c.Input)
 		line := fmt.Sprintf("%d. %s", i+1, name)
-		if reason := toolCollapsedReason(name, c.Input); reason != "" {
+		if reason := toolCollapsedReason(tools.CanonicalToolName(c.Tool), c.Input); reason != "" {
 			line += " — " + reason
 		}
 		for _, chunk := range wrapLine(line, inner) {

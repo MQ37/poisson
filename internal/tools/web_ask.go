@@ -29,6 +29,16 @@ func (t *WebAskTool) SetUsageFn(fn WebUsageFn) { t.usage = fn }
 
 func (t *WebAskTool) Name() string { return "web_ask" }
 
+// ResolveDefaultProvider implements DefaultProviderResolver — mirrors
+// Execute's own default: grok when this session holds xAI OAuth
+// credentials, else exa.
+func (t *WebAskTool) ResolveDefaultProvider() string {
+	if hasXAIAuth(t.auth) {
+		return "grok"
+	}
+	return "exa"
+}
+
 func (t *WebAskTool) Description() string {
 	return "Ask the web a question and get an AI-synthesized answer with sources. " +
 		"provider=grok (default when logged in via `px login xai`) uses xAI Grok's " +
