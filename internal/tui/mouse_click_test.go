@@ -26,7 +26,7 @@ func TestClickBlockAtTool(t *testing.T) {
 	s := newScrollback(1024)
 	long := strings.Repeat("z", 600)
 	s.appendToolCall(1, "", "bash", toolInputJSON("bash", map[string]string{"command": "echo"}))
-	s.completeToolCall("", `{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", 10)
+	s.completeToolCall("", `{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", "", 10)
 	if !s.clickBlockAt(10, 50, 0) {
 		t.Fatal("click expand failed")
 	}
@@ -203,7 +203,7 @@ func TestFocusedToolMouseWheelScrollDirection(t *testing.T) {
 	tui.cols = 40
 	long := strings.Repeat("line\n", 100)
 	tui.scroll.appendToolCall(1, "", "read", toolInputJSON("read", map[string]string{"path": "f"}))
-	tui.scroll.completeToolCall("", `{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", 10)
+	tui.scroll.completeToolCall("", `{"stdout":"`+long+`","stderr":"","exitCode":0}`, "", "", 10)
 	tui.scroll.blocks[0].meta.Expanded = true
 	tui.scroll.focusedToolID = tui.scroll.blocks[0].id
 	tui.scroll.blocks[0].meta.ToolScroll = 10

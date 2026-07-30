@@ -52,7 +52,7 @@ func TestWrapRiskGatedApproval_NeverAutoApprovesObfuscatedDestructiveCommand(t *
 			a.SetModel("m")
 
 			asked := false
-			approve := WrapRiskGatedApproval(a, func(_, _, _ string, risk BashRisk, _ ApprovalOrigin) (bool, string) {
+			approve := WrapRiskGatedApproval(a, func(_ context.Context, _, _, _ string, risk BashRisk, _ ApprovalOrigin) (bool, string) {
 				asked = true
 				if risk != BashRiskHigh && risk != BashRiskMedium {
 					t.Errorf("risk seen by human callback = %q, want high or medium (never low/unknown for a known-dangerous command)", risk)

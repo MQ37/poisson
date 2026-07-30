@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -129,7 +130,7 @@ func TestApproveBufferedAnswerBeforeReceive(t *testing.T) {
 	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, _ := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 	deadline := time.Now().Add(500 * time.Millisecond)

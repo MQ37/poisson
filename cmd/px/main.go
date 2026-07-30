@@ -264,26 +264,26 @@ func runPrint(opts printOpts) {
 
 	yolo := opts.yolo
 	var agentRef *agent.Agent
-	humanApproval := func(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
-		return yolo, "" // headless: only --yolo approves escalated commands
+	humanApproval := func(ctx context.Context, command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
+		return yolo, "" // headless: only --yolo approves escalated commands; no live human to mark
 	}
 	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
 		if agentRef != nil {
 			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(ctx, command, description, workdir)
 		}
-		return humanApproval(command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginMain)
+		return humanApproval(ctx, command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginMain)
 	}
 	// Sensitive files (.env*, SSH/cloud credentials, ~/.poisson secrets, ...)
 	// are deterministically flagged by guard.SensitivePathReason, so this asks
 	// the human directly — no LLM risk classification needed.
 	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
-		return humanApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
+		return humanApproval(ctx, action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
 	}
 	// create_sandbox asking for mounts/env beyond its own scratch workspace
 	// is exactly the same "sensitive, ask the human directly" shape as
 	// fileApprovalFn — see docs/sandbox-plan.md's "Approval" section.
 	sandboxApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
-		return humanApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
+		return humanApproval(ctx, action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
 	}
 	reg := tools.BuildRegistry(tools.BuildOptions{
 		Cwd:               cwd,
@@ -377,9 +377,9 @@ func runREPL(noSkills bool) {
 	// terminal runs raw with a nonblocking Ctrl+C poller otherwise.
 	var approveUI tui.Approver
 	var agentRef *agent.Agent
-	humanApproval := func(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
+	humanApproval := func(ctx context.Context, command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
 		if approveUI != nil {
-			return approveUI.Approve(command, description, workdir, risk, origin)
+			return approveUI.Approve(ctx, command, description, workdir, risk, origin)
 		}
 		return false, ""
 	}
@@ -387,23 +387,29 @@ func runREPL(noSkills bool) {
 		if agentRef != nil {
 			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(ctx, command, description, workdir)
 		}
-		return humanApproval(command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginFromContext(ctx))
+		return humanApproval(ctx, command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginFromContext(ctx))
 	}
 	// Sensitive files (.env*, SSH/cloud credentials, ~/.poisson secrets, ...)
 	// are deterministically flagged by guard.SensitivePathReason, so this asks
 	// the human directly — no LLM risk classification needed.
 	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
-		return humanApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
+		return humanApproval(ctx, action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
 	}
 
+	// No ctx here — the relay from a subagent child has no in-flight Go
+	// context tied to a toolCallID in this process's registry, so it carries
+	// no ApprovalRecord either. RecordApproval degrades to a no-op, matching
+	// that a subagent's internal commands never get their own tool card in
+	// the main conversation (only the aggregate subagent widget) — nothing
+	// to mark.
 	subApprovalFn := func(command, description, workdir, agentName, risk string) (bool, string) {
-		return humanApproval(command, description, workdir, agent.ParseBashRisk(risk), agent.SubagentOrigin(agentName))
+		return humanApproval(context.Background(), command, description, workdir, agent.ParseBashRisk(risk), agent.SubagentOrigin(agentName))
 	}
 	// create_sandbox asking for mounts/env beyond its own scratch workspace
 	// is exactly the same "sensitive, ask the human directly" shape as
 	// fileApprovalFn — see docs/sandbox-plan.md's "Approval" section.
 	sandboxApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
-		return humanApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
+		return humanApproval(ctx, action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
 	}
 
 	reg := tools.BuildRegistry(tools.BuildOptions{
@@ -724,7 +730,7 @@ func runChildMode() {
 	// approval as coming from a subagent, via the "agent" field already sent
 	// below and read back into agent.SubagentOrigin by subApprovalFn in the
 	// parent's own main().
-	humanChildApproval := func(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
+	humanChildApproval := func(ctx context.Context, command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
 		event := map[string]interface{}{
 			"type":        "approval_request",
 			"command":     command,
@@ -750,10 +756,10 @@ func runChildMode() {
 		if childAgentRef != nil {
 			return agent.WrapRiskGatedApproval(childAgentRef, humanChildApproval)(ctx, command, description, workdir)
 		}
-		return humanChildApproval(command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginMain)
+		return humanChildApproval(ctx, command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginMain)
 	}
 	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
-		return humanChildApproval(action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginMain)
+		return humanChildApproval(ctx, action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginMain)
 	}
 
 	// A subagent never mints its own sandbox (create_sandbox is excluded

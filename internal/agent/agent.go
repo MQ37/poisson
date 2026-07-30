@@ -69,28 +69,33 @@ const (
 // OutputEvent is a serialized terminal rendering event. The TUI goroutine
 // drains these from the agent's outputChan and renders them.
 type OutputEvent struct {
-	Type                 string          // text | tool_start | tool_result | status | approval | error | compacting
-	Text                 string          // text | error | compacting
-	ToolName             string          // tool_start | tool_result
-	ToolCallID           string          // tool_start | tool_result (provider call id)
-	ToolInput            json.RawMessage // tool_start
-	ToolResultContent    string          // tool_result
-	ToolError            string          // tool_result
-	ContextPct           float64         // status
-	ContextTokens        int             // status, subagent_progress
-	ContextWindow        int             // status, subagent_progress
-	Cost                 float64         // status
-	Model                string          // status
-	OutputTokens         int             // status, inference_speed (this round's exact output tokens)
-	CacheReadTokens      int             // status
-	CacheWriteTokens     int             // status
-	CallCount            int             // status
-	ToolCalls            int             // status
-	ToolErrors           int             // status
-	Effort               string          // status
-	SubagentTurns        int             // subagent_progress
-	TokensPerSec         float64         // inference_speed
-	SubagentTokensPerSec float64         // subagent_progress (child's own inference speed)
+	Type              string          // text | tool_start | tool_result | status | approval | error | compacting
+	Text              string          // text | error | compacting
+	ToolName          string          // tool_start | tool_result
+	ToolCallID        string          // tool_start | tool_result (provider call id)
+	ToolInput         json.RawMessage // tool_start
+	ToolResultContent string          // tool_result
+	ToolError         string          // tool_result
+	// HumanApproval reports whether a live human was actually asked to
+	// approve this call, and what they decided — "" (never asked, the
+	// common case: guard/LLM auto-approved), "approved", or "denied". See
+	// tools.ApprovalRecord.
+	HumanApproval        string  // tool_result
+	ContextPct           float64 // status
+	ContextTokens        int     // status, subagent_progress
+	ContextWindow        int     // status, subagent_progress
+	Cost                 float64 // status
+	Model                string  // status
+	OutputTokens         int     // status, inference_speed (this round's exact output tokens)
+	CacheReadTokens      int     // status
+	CacheWriteTokens     int     // status
+	CallCount            int     // status
+	ToolCalls            int     // status
+	ToolErrors           int     // status
+	Effort               string  // status
+	SubagentTurns        int     // subagent_progress
+	TokensPerSec         float64 // inference_speed
+	SubagentTokensPerSec float64 // subagent_progress (child's own inference speed)
 
 	CompactionTokensBefore int  // compacted
 	CompactionTokensAfter  int  // compacted
@@ -1261,14 +1266,28 @@ roundLoop:
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
+				// approvalRec is attached to callCtx below, before Execute —
+				// nil here covers the memoized-read and pre-Execute-panic
+				// emit() calls further down, which never reached an approval
+				// gate at all, so they correctly report no marker.
+				var approvalRec *tools.ApprovalRecord
 				emit := func(res tools.ToolResult) {
 					results[idx] = res
+					humanApproval := ""
+					if approvalRec != nil && approvalRec.Asked {
+						if approvalRec.Allowed {
+							humanApproval = "approved"
+						} else {
+							humanApproval = "denied"
+						}
+					}
 					a.sendEvent(OutputEvent{
 						Type:              OutputToolResult,
 						ToolName:          call.Name,
 						ToolCallID:        call.ID,
 						ToolResultContent: res.Content,
 						ToolError:         res.Error,
+						HumanApproval:     humanApproval,
 					})
 				}
 				// A panic anywhere below (inside a.tools.Execute, a memo
@@ -1300,6 +1319,7 @@ roundLoop:
 					}
 				}
 				callCtx := tools.WithToolCallID(ctx, call.ID)
+				callCtx, approvalRec = tools.WithApprovalRecord(callCtx)
 				res, err := a.tools.Execute(callCtx, call.Name, call.Input)
 				if err != nil {
 					res = tools.TrimToolResult(tools.ToolResult{Error: err.Error()})

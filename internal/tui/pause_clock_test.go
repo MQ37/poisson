@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -91,7 +92,7 @@ func TestApproveFreezesBlockTimers(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, _ := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 
@@ -117,7 +118,7 @@ func TestApproveFreezesBlockTimers(t *testing.T) {
 	}
 
 	// And the wait must not land in the card's final duration either.
-	tui.scroll.completeToolCall("call-1", "ok", "", 0)
+	tui.scroll.completeToolCall("call-1", "ok", "", "", 0)
 	if got := live.meta.DurationMs; got > 100 {
 		t.Errorf("final DurationMs = %dms, want the approval wait excluded", got)
 	}

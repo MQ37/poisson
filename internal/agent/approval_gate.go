@@ -10,10 +10,14 @@ import (
 const approvalRiskTimeout = 45 * time.Second
 
 // HumanApprovalFunc prompts the user after risk assessment when auto-allow
-// does not apply. reason is an optional human-supplied explanation when
-// denied. origin identifies where the command came from (main conversation,
-// /btw, or a named subagent) so the prompt can say so — see ApprovalOrigin.
-type HumanApprovalFunc func(command, description, workdir string, risk BashRisk, origin ApprovalOrigin) (allowed bool, reason string)
+// does not apply. ctx carries the dispatch's tool-call correlation (see
+// tools.WithApprovalRecord) so the implementation can report whether it
+// actually asked a live human, for the conversation view's approved/denied
+// marker — a no-op for any implementation that doesn't care. reason is an
+// optional human-supplied explanation when denied. origin identifies where
+// the command came from (main conversation, /btw, or a named subagent) so
+// the prompt can say so — see ApprovalOrigin.
+type HumanApprovalFunc func(ctx context.Context, command, description, workdir string, risk BashRisk, origin ApprovalOrigin) (allowed bool, reason string)
 
 // WrapRiskGatedApproval returns an approval callback with two speeds,
 // selected by a.ApprovalMode() (see ApprovalMode):
@@ -38,7 +42,7 @@ func WrapRiskGatedApproval(a *Agent, ask HumanApprovalFunc) func(ctx context.Con
 			if ask == nil {
 				return false, ""
 			}
-			return ask(command, description, workdir, BashRiskUnknown, origin)
+			return ask(ctx, command, description, workdir, BashRiskUnknown, origin)
 		}
 		if a != nil {
 			if safe, _ := guard.ClassifyInDir(command, workdir); safe {
@@ -57,6 +61,6 @@ func WrapRiskGatedApproval(a *Agent, ask HumanApprovalFunc) func(ctx context.Con
 		if ask == nil {
 			return false, ""
 		}
-		return ask(command, description, workdir, risk, origin)
+		return ask(ctx, command, description, workdir, risk, origin)
 	}
 }

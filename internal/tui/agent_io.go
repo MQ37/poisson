@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mq37/poisson/internal/agent"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 func (t *TUI) submit(text string) error {
@@ -290,7 +291,7 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 			t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
 			break
 		}
-		t.scroll.completeToolCall(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
+		t.scroll.completeToolCall(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, ev.HumanApproval, 0)
 	case agent.OutputApproval:
 	case agent.OutputError:
 		t.scroll.appendRaw(styleError, "error: "+ev.Text)
@@ -349,7 +350,15 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 // very much open. Checking activeOverlay's type on every loop pass would
 // misread that flicker as "already closed" and let this call through to
 // destroy the panel once it's restored.
-func (t *TUI) Approve(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
+func (t *TUI) Approve(ctx context.Context, command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (allowed bool, reason string) {
+	// Reported once, however this returns: any current or future approval
+	// path reaching this method (bash's risk gate, the sensitive-path file
+	// gate, sandbox mounts/env, subagent relay) gets the conversation view's
+	// approved/denied marker for free — see tools.RecordApproval. A no-op
+	// when ctx carries no record (e.g. a /btw side question, which has no
+	// tool card of its own to mark).
+	defer func() { tools.RecordApproval(ctx, allowed) }()
+
 	if origin != agent.ApprovalOriginBTW {
 		t.mu.Lock()
 		b := t.currentBTW

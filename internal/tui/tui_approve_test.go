@@ -30,7 +30,7 @@ func TestApproveLifecycle(t *testing.T) {
 	tui := newTestTUIHelper()
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, _ := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 
@@ -95,7 +95,7 @@ func TestApproveWhileAgentRunning(t *testing.T) {
 	tui.status.Thinking = true
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, _ := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -197,7 +197,7 @@ func TestApproveCancelsRiskAssessment(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("git push origin main", "danger", "/tmp", agent.BashRiskUnknown, agent.ApprovalOriginMain)
+		allowed, _ := tui.Approve(context.Background(), "git push origin main", "danger", "/tmp", agent.BashRiskUnknown, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 
@@ -249,7 +249,7 @@ func TestApproveCancelledByRunCancel(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, _ := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 
@@ -390,7 +390,7 @@ func TestApproveEndToEndDenyReason(t *testing.T) {
 	}
 	result := make(chan outcome, 1)
 	go func() {
-		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, reason := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- outcome{allowed, reason}
 	}()
 
@@ -441,7 +441,7 @@ func TestApproveEndToEndDenyEmptyReason(t *testing.T) {
 	}
 	result := make(chan outcome, 1)
 	go func() {
-		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, reason := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- outcome{allowed, reason}
 	}()
 
@@ -492,7 +492,7 @@ func TestDenyWithReasonLeavesRunRunning(t *testing.T) {
 	}
 	result := make(chan outcome, 1)
 	go func() {
-		allowed, reason := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, reason := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- outcome{allowed, reason}
 	}()
 
@@ -544,7 +544,7 @@ func TestDenyWithEmptyReasonCancelsRun(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, _ := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 

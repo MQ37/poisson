@@ -248,7 +248,7 @@ func run(in runInput) result {
 	// not rate "low" is denied. The classification call still happens, which
 	// is exactly the spend being measured.
 	var agentRef *agent.Agent
-	deny := func(command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
+	deny := func(ctx context.Context, command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
 		return false, ""
 	}
 	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {

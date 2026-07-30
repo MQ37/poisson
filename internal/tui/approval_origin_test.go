@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -26,7 +27,7 @@ func TestApprove_BTWOriginKeepsOverlayAliveAndRestoresIt(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf /tmp/x", "cleanup", "/tmp", agent.BashRiskHigh, agent.ApprovalOriginBTW)
+		allowed, _ := tui.Approve(context.Background(), "rm -rf /tmp/x", "cleanup", "/tmp", agent.BashRiskHigh, agent.ApprovalOriginBTW)
 		result <- allowed
 	}()
 
@@ -87,7 +88,7 @@ func TestApprove_MainOriginParksBehindOpenBTWInstead(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, _ := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		result <- allowed
 	}()
 
@@ -159,7 +160,7 @@ func TestApprove_BTWOwnApprovalNotBlockedByParkedMainApproval(t *testing.T) {
 
 	mainResult := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		allowed, _ := tui.Approve(context.Background(), "rm -rf x", "danger", "", agent.BashRiskHigh, agent.ApprovalOriginMain)
 		mainResult <- allowed
 	}()
 
@@ -176,7 +177,7 @@ func TestApprove_BTWOwnApprovalNotBlockedByParkedMainApproval(t *testing.T) {
 	// deadlock against the parked main-origin call above.
 	btwResult := make(chan bool, 1)
 	go func() {
-		allowed, _ := tui.Approve("ls", "list", "", agent.BashRiskLow, agent.ApprovalOriginBTW)
+		allowed, _ := tui.Approve(context.Background(), "ls", "list", "", agent.BashRiskLow, agent.ApprovalOriginBTW)
 		btwResult <- allowed
 	}()
 

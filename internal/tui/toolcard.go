@@ -12,6 +12,24 @@ import (
 
 const toolCardSpinnerSlot = "◌" // replaced at paint time with animated spinner
 
+// humanApprovalGlyph renders the approved/denied marker for a tool card that
+// actually asked a live human — "" (no glyph) for the common case where the
+// guard fast path or the LLM risk classifier auto-approved without ever
+// reaching one. ● (filled, went through the gate) vs ○ (hollow, stopped at
+// it) is deliberately distinct from the ✓/✗ run-result mark that follows: a
+// human-approved command can still fail, and a denied one never runs at
+// all — collapsing both onto ✓/✗ would hide which happened.
+func humanApprovalGlyph(humanApproval string) string {
+	switch humanApproval {
+	case "approved":
+		return fgGreen + "●" + reset + " "
+	case "denied":
+		return fgRed + "○" + reset + " "
+	default:
+		return ""
+	}
+}
+
 // layoutToolCard renders a tool invocation. bash/read and other non-diff tools
 // collapse to a single thinking-style line; edit/write always show a borderless
 // full diff (green/red background + syntax highlight + line numbers).
@@ -119,8 +137,9 @@ func formatDiffToolHeader(b *Block, width int) string {
 		}
 		meta += toolCardSpeedSuffix(b)
 	}
+	approval := humanApprovalGlyph(b.meta.HumanApproval)
 	preview, _ := diffToolHeaderPreview(b, width)
-	return dim + italic + mark + " " + title + " · " + reset + dim + preview + meta + reset
+	return approval + dim + italic + mark + " " + title + " · " + reset + dim + preview + meta + reset
 }
 
 // diffToolHeaderPreview computes the write/edit header's path preview,
@@ -141,8 +160,10 @@ func diffToolHeaderPreview(b *Block, width int) (preview string, truncated bool)
 		meta += toolCardSpeedSuffix(b)
 	}
 	// "✓ Write · " prefix + trailing " (N bytes)"/duration eats into width —
-	// 2 covers the mark glyph + space not otherwise accounted for below.
-	avail := width - visibleWidth(titleCaseTool(name)+" · ") - visibleWidth(suffix+meta) - 2
+	// 2 covers the mark glyph + space not otherwise accounted for below;
+	// the approval glyph (see humanApprovalGlyph), when present, adds its
+	// own visible width on top since it prefixes the same header line.
+	avail := width - visibleWidth(titleCaseTool(name)+" · ") - visibleWidth(suffix+meta) - 2 - visibleWidth(humanApprovalGlyph(b.meta.HumanApproval))
 	if avail < 8 {
 		avail = 8
 	}
@@ -189,10 +210,12 @@ func formatToolCollapsed(b *Block, width int) string {
 		meta = " (" + strings.Join(metaParts, ", ") + ")"
 	}
 
+	approval := humanApprovalGlyph(b.meta.HumanApproval)
+
 	// "▸ Bash - reason (meta)" — trim reason to fit width.
 	prefix := mark + " " + title + " - "
 	suffix := meta
-	avail := width - visibleWidth(prefix) - visibleWidth(suffix)
+	avail := width - visibleWidth(approval) - visibleWidth(prefix) - visibleWidth(suffix)
 	if avail < 8 {
 		avail = 8
 	}
@@ -202,7 +225,7 @@ func formatToolCollapsed(b *Block, width int) string {
 	if b.meta.ToolError != "" {
 		style = fgRed + italic
 	}
-	return style + prefix + reason + suffix + reset
+	return approval + style + prefix + reason + suffix + reset
 }
 
 func formatToolExpandedHeader(b *Block) string {
@@ -244,7 +267,7 @@ func formatToolExpandedHeader(b *Block) string {
 	if b.meta.ToolError != "" {
 		style = fgRed + italic
 	}
-	return style + head + meta + reset
+	return humanApprovalGlyph(b.meta.HumanApproval) + style + head + meta + reset
 }
 
 // toolCollapsedReason is the short purpose shown on the collapsed line:
@@ -460,8 +483,9 @@ func (s *scrollback) appendImageRefCard(id int64, name, mediaType string, size i
 
 // completeToolCall attaches a result to the matching open tool card.
 // When providerCallID is set, pair by id so parallel results can arrive out of order.
-// Otherwise fall back to oldest open card (FIFO).
-func (s *scrollback) completeToolCall(providerCallID, result, err string, durationMs int64) {
+// Otherwise fall back to oldest open card (FIFO). humanApproval is "" (never
+// asked), "approved", or "denied" — see agent.OutputEvent.HumanApproval.
+func (s *scrollback) completeToolCall(providerCallID, result, err, humanApproval string, durationMs int64) {
 	for i := range s.blocks {
 		if s.blocks[i].kind != blockToolCall || s.blocks[i].meta.ToolDone {
 			continue
@@ -474,6 +498,7 @@ func (s *scrollback) completeToolCall(providerCallID, result, err string, durati
 		b.meta.ToolDone = true
 		b.meta.ToolResult = result
 		b.meta.ToolError = err
+		b.meta.HumanApproval = humanApproval
 		// Diff tools stay expanded; everything else collapses to one line.
 		if isDiffTool(b.meta.ToolName) {
 			b.meta.Expanded = true

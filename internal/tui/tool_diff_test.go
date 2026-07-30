@@ -324,7 +324,7 @@ func TestDiffToolNoExpandToggle(t *testing.T) {
 			{"oldText": "func old() {\n\treturn 1\n}", "newText": "func new() {\n\treturn 2\n}"},
 		},
 	}))
-	s.completeToolCall("", "edited main.go (1 edit(s) applied)", "", 10)
+	s.completeToolCall("", "edited main.go (1 edit(s) applied)", "", "", 10)
 
 	if !s.blocks[0].meta.Expanded {
 		t.Fatal("edit must be expanded")
@@ -356,7 +356,7 @@ func TestDiffToolLongPathExpandsToRevealFullPath(t *testing.T) {
 		"path":    longPath,
 		"content": "package foo\n",
 	}))
-	s.completeToolCall("", "wrote "+longPath, "", 10)
+	s.completeToolCall("", "wrote "+longPath, "", "", 10)
 
 	width := 60
 	rows := layoutToolCard(&s.blocks[0], width, 0)

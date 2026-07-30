@@ -363,7 +363,7 @@ func TestStreamQuickAnswerRunsGuardSafeBash(t *testing.T) {
 		t.Fatal(err)
 	}
 	var agentRef *Agent
-	humanFn := func(command, description, workdir string, risk BashRisk, origin ApprovalOrigin) (bool, string) {
+	humanFn := func(ctx context.Context, command, description, workdir string, risk BashRisk, origin ApprovalOrigin) (bool, string) {
 		t.Fatal("human approval should never be reached for a guard-safe command")
 		return false, ""
 	}
@@ -428,7 +428,7 @@ func TestStreamQuickAnswerRunsGuardSafeBash(t *testing.T) {
 func TestStreamQuickAnswerBashTaggedWithBTWOrigin(t *testing.T) {
 	dir := testutil.TempDir(t)
 	var gotOrigin ApprovalOrigin
-	humanFn := func(command, description, workdir string, risk BashRisk, origin ApprovalOrigin) (bool, string) {
+	humanFn := func(ctx context.Context, command, description, workdir string, risk BashRisk, origin ApprovalOrigin) (bool, string) {
 		gotOrigin = origin
 		return true, ""
 	}

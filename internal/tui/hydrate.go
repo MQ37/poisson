@@ -186,7 +186,9 @@ func (t *TUI) hydrateScrollbackLocked() {
 					// Try the subagent widget first; only fall back to a tool card
 					// (which appends an orphan line if unmatched) when it isn't one.
 					if !t.scroll.completeSubagentCard(b.ToolCallID, content, errMsg, -1) {
-						t.scroll.completeToolCall(b.ToolCallID, content, errMsg, 0)
+						// "" — a resumed session never replays the live approval
+						// prompt, same as TokensPerSec/DurationMs (see BlockMeta).
+						t.scroll.completeToolCall(b.ToolCallID, content, errMsg, "", 0)
 					}
 				}
 			}

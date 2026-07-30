@@ -40,9 +40,15 @@ type BlockMeta struct {
 	Expediting            bool    // subagent widget: user pressed Ctrl+G, child is wrapping up
 	ToolResult            string
 	ToolError             string
-	ToolDone              bool
-	Expanded              bool // tool result body expanded (PR-16)
-	ToolScroll            int  // scroll offset inside expanded result
+	// HumanApproval is "" (never asked a human — guard/LLM auto-approved, the
+	// common case), "approved", or "denied", set once the tool call finishes
+	// — see agent.OutputEvent.HumanApproval. Not reconstructed on session
+	// resume (same as TokensPerSec/DurationMs): the live approval prompt
+	// only exists for the session that actually saw it.
+	HumanApproval string
+	ToolDone      bool
+	Expanded      bool // tool result body expanded (PR-16)
+	ToolScroll    int  // scroll offset inside expanded result
 	// PathExpanded is write/edit-only: the diff body always renders in full
 	// regardless of Expanded, so the one thing left to reveal on toggle is a
 	// long path truncated in the header — see toggleToolExpandBlock and
