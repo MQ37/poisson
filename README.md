@@ -8,8 +8,7 @@
 
 <p align="center">
   <img alt="Go 1.25" src="https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white">
-  <img alt="pure Go" src="https://img.shields.io/badge/CGO-disabled-2f81f7">
-  <img alt="single binary" src="https://img.shields.io/badge/build-single%20static%20binary-238636">
+  <img alt="single binary" src="https://img.shields.io/badge/build-single%20static%20binary%20(no%20CGO)-238636">
   <img alt="dependencies" src="https://img.shields.io/badge/direct%20deps-3-3fb950">
   <img alt="storage" src="https://img.shields.io/badge/storage-SQLite%20%2B%20FTS5-orange">
 </p>
@@ -19,10 +18,9 @@
 **poisson** is a small, fast coding agent you run in your terminal. It streams
 a real conversation, calls tools (bash, file read/write/edit, subagents),
 tracks every token and dollar, and keeps your whole history in a local SQLite
-database you own. No cloud account for the app itself, no telemetry, no
-Electron — just one static binary and your terminal.
+database you own — just one static binary and your terminal.
 
-It talks to **Anthropic** (Claude), **OpenAI** (GPT-5.5, ChatGPT subscription),
+It talks to **Anthropic** (Claude), **OpenAI** (ChatGPT subscription),
 **xAI** (Grok, SuperGrok), **Ollama** (local + cloud), and **llama.cpp**
 (local `llama-server`) — paste images, search past sessions full-text,
 compact context, approve risky shell commands from a popup.
@@ -46,33 +44,27 @@ px                                                   # launch the TUI
   work, `batch` for independent calls in one step, plus `web_search`,
   `web_ask`, `fetch` (selectable backends, [details](docs/web-tools.md)),
   `recall` (cross-session full-text search), subagents,
-  and 8 built-in skills ([below](#-built-in-skills)), user-extendable via
+  and 10 built-in skills ([below](#-built-in-skills)), user-extendable via
   `~/.poisson/skills/`. `bash` is stateless — pass `workdir` explicitly on
   any call that needs a directory other than session cwd.
 - **Bash safety guard, two speeds** — Fast mode (default): a deterministic
   guard auto-approves read-only commands with zero LLM calls; anything else
-  is LLM risk-classified, medium/high/unknown asks you. Paranoid mode
-  (Shift+Tab) asks for every command. Installs, destructive ops, and
-  `npx`/`dlx`-style commands never auto-approve.
-- **Podman sandboxes** — `create_sandbox` spins up an isolated container
-  (passwordless sudo inside, matching-uid workspace mount), name it (e.g.
-  "api-testing-2") and that name is its `sandboxId`; `bash` with a
-  `sandboxId` then runs there with **no approval gate at all** — the
-  container is the safety boundary, not the prompt. `read`/`write`/`edit`/
-  `grep`/`glob` just use the plain host path it returns, no sandboxId
-  needed. `sandbox_cp` moves files in/out, `sandbox_destroy` tears it down,
-  `list_sandboxes` finds a live sandbox by name across every session on this
-  host — including one from a crashed process, since podman itself (not
-  poisson's memory) is the record of what exists. `/sandbox ls` and
-  `/sandbox kill <id>` are the human-facing equivalent from the TUI.
-  Requires `podman` on `PATH`. ([details](docs/sandbox-plan.md))
+  is LLM risk-classified — low auto-approves too, medium/high/unknown asks
+  you. Paranoid mode (Shift+Tab) asks for every command. Installs,
+  destructive ops, and `npx`/`dlx`-style commands are always high risk and
+  never auto-approve.
+- **Podman sandboxes** — `create_sandbox` gives an isolated, named container
+  (passwordless sudo, matching-uid mount); `bash` calls that pass its
+  `sandboxId` then run with **no approval gate at all** — the container is
+  the safety boundary, not the prompt. `sandbox_cp`/`sandbox_destroy`/
+  `list_sandboxes` manage it from any session, even after a crash; `/sandbox
+  ls`/`kill <id>` are the TUI equivalent. Requires `podman` on `PATH`.
+  ([details](docs/sandbox-plan.md))
 - **Sessions in SQLite** — every message/tool/API call persisted, full-text
   search (FTS5), resume any session, auto-compaction when context fills up.
 - **Exact cost & tokens**, live in the status bar and `/cost`, plus live
   usage-limit tracking for Anthropic/OpenAI subscription accounts.
 - **Image input** — paste (Ctrl+V) or `@screenshot.png`. ([details](docs/images.md))
-- **Multi-provider** — Anthropic, OpenAI, xAI, Ollama, llama.cpp. Switch
-  model/effort live.
 - **Message queueing** — type while the agent works; sent at the next turn
   boundary instead of waiting for the whole turn to finish.
 
@@ -80,7 +72,7 @@ px                                                   # launch the TUI
 
 ## 🧰 Built-in skills
 
-Nine skills ship baked into the `px` binary — no setup, no config directory
+Ten skills ship baked into the `px` binary — no setup, no config directory
 needed. The `skill` tool loads one by name and works the same for subagents
 as it does in the main session.
 
@@ -95,25 +87,21 @@ as it does in the main session.
 | `council` | Convenes parallel subagent personas (Torvalds, Hotz, Davis, ...) to critique code/architecture and synthesizes a ranked verdict. |
 | `create-issue` | Drafts a tight, single-focus issue or bug report. |
 | `create-pr` | Picks a conventional-commit title, writes a What/Why/Testing description, self-reviews the diff before pushing. |
+| `sandbox` | Sets up an isolated podman sandbox for a work session — right directory mounted from the start, build/test through the container, commit only from host. |
 
 Add your own under `~/.poisson/skills/<name>/SKILL.md` — a user skill with the
 same name as a built-in one overrides it, so you can customize any of the
-nine without touching the binary. `/reload` rediscovers user skills without
+ten without touching the binary. `/reload` rediscovers user skills without
 restarting.
 
 ---
 
 ## 🚀 Install & run
 
-Requires **Go 1.25+**. Everything else is vendored by the module graph.
-
-```bash
-go install github.com/mq37/poisson/cmd/px@latest   # -> $(go env GOPATH)/bin/px
-```
-
-Make sure `$(go env GOPATH)/bin` is on your `PATH`. Building from a local
-clone instead (e.g. to hack on it) still works: `./build.sh` (compiles
-`CGO_ENABLED=0` -> `./px`).
+Requires **Go 1.25+**. Everything else is vendored by the module graph. The
+quickstart's `go install` above puts `px` at `$(go env GOPATH)/bin/px` — make
+sure that's on your `PATH`. Building from a local clone instead (e.g. to hack
+on it) still works: `./build.sh` (compiles `CGO_ENABLED=0` -> `./px`).
 
 Authenticate a provider (stored in `~/.poisson/auth.json`, mode `0600`):
 
@@ -146,13 +134,13 @@ px -p --yolo "run the test suite and fix failures"
 
 | Provider | Model | Auth | Vision |
 |---|---|---|---|
-| `anthropic` | `claude-opus-5` | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
+| `anthropic` | `claude-opus-5` *(default)* | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
 | `anthropic` | `claude-sonnet-5` | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
 | `openai` | `gpt-5.6-terra` *(default)* — balanced | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `openai` | `gpt-5.6-sol` — frontier | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `openai` | `gpt-5.6-luna` — cost-optimized | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `openai` | `gpt-5.5` — previous generation | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
-| `xai` | `grok-build` | OAuth (SuperGrok) | ✅ |
+| `xai` | `grok-build` *(default)* | OAuth (SuperGrok) | ✅ |
 | `xai` | `grok-4.5` | OAuth (SuperGrok) | ✅ |
 | `ollama` | `glm-5.2:cloud` *(default)* | local daemon / Ollama cloud | ❌ |
 | `ollama` | `minimax-m3:cloud` | local daemon / Ollama cloud | ✅ |
@@ -223,6 +211,9 @@ via `/providers` without naming a model):
 # base_url = "http://localhost:11212"     # local llama-server instance
 # model = "unsloth/Laguna-S-2.1-GGUF"
 
+[classifier]
+# model = ""                         # fallback bash-risk classifier (bare = all providers, "provider/model" = one)
+
 [compaction]
 # threshold = 0.85                   # compact when context passes this fraction
 # reserve_tokens = 16384             # ...or this much headroom is left, whichever is hit first
@@ -292,6 +283,8 @@ Bottom-bar keys (input focus):
 ```
 Enter send · Ctrl+V image · Ctrl+F find · Ctrl+P palette
 Ctrl+L effort · Ctrl+T fold thinking · Ctrl+E expand tool
+Ctrl+M model picker · Ctrl+S session picker · Ctrl+B /btw prompt
+Ctrl+R/Ctrl+N step input history · Ctrl+G finish subagents now
 Shift+Tab fast/paranoid approval mode
 Esc cancel running turn · Ctrl+C clear input (twice to exit)
 ```
@@ -302,8 +295,8 @@ because most terminals already claim Ctrl+Shift+C for their own copy action.
 
 Slash commands: `/help` `/status` `/model` `/effort` `/classifier-model`
 `/providers` `/sessions` `/resume` `/search` `/new` `/clear` `/name`
-`/compact` `/cost` `/reload` `/btw` `/openai-reset-usage` `/quit`. Type `@`
-to fuzzy-attach a file (or `@image.png` for an image).
+`/compact` `/cost` `/reload` `/sandbox` `/btw` `/openai-reset-usage` `/quit`.
+Type `@` to fuzzy-attach a file (or `@image.png` for an image).
 
 `/classifier-model` picks which model rates bash-command risk for the
 approval gate, for the currently selected provider — usually worth pointing
@@ -343,14 +336,10 @@ pulled in only by those three. The rest is stdlib: hand-rolled ANSI TUI,
 | **`golang.org/x/term`** | Correct raw-mode terminal handling for the REPL/TUI across platforms. The standard library has no portable equivalent. |
 | **`golang.org/x/image`** | Quality image downscaling (CatmullRom resampling) + WebP decoding for pasted/attached images. Stdlib decodes PNG/JPEG/GIF but ships no resampler and no WebP decoder. |
 
-### Transitive (pulled in by the three above, not by us)
+### Transitive
 
-| Dependency | Comes from |
-|---|---|
-| `modernc.org/libc`, `modernc.org/memory`, `modernc.org/mathutil` | `modernc.org/sqlite` (its pure-Go C runtime) |
-| `github.com/remyoudompheng/bigfft`, `github.com/ncruces/go-strftime` | `modernc.org/sqlite` |
-| `github.com/google/uuid`, `github.com/mattn/go-isatty`, `github.com/dustin/go-humanize` | `modernc.org/sqlite` |
-| `golang.org/x/sys` | `golang.org/x/term` |
+Everything else in `go.sum` is pulled in by those three, not by us — mostly
+`modernc.org/sqlite`'s pure-Go C runtime shims. See `go.mod` for the full list.
 
 **What we deliberately *don't* depend on:** no TUI framework, no web framework,
 no HTTP client library, no JSON library, no CLI/flags library, no TOML library,
@@ -369,8 +358,8 @@ codebase one person can hold in their head.
 - **Local-first & private** — your data lives in `~/.poisson/poisson.db`. No
   telemetry, no analytics, no phone-home.
 - **Suckless-ish** — simplicity over features, delete-before-add, readable code.
-- **Tested without the network** — the suite (750+ tests) mocks every provider;
-  it never makes a real API call, and runs clean under `-race`.
+- **Tested without the network** — the suite (1,200+ tests) mocks every
+  provider; it never makes a real API call.
 
 ---
 
