@@ -230,9 +230,22 @@ func (t *BatchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 				select {
 				case <-ctx.Done():
 					for j := i; j < len(in.Calls); j++ {
+						name := strings.TrimSpace(in.Calls[j].Tool)
 						outs[j] = batchStepOut{
-							content: fmt.Sprintf("%d. %s — error: cancelled", j+1, strings.TrimSpace(in.Calls[j].Tool)),
+							content: fmt.Sprintf("%d. %s — error: cancelled", j+1, name),
 							isErr:   true,
+						}
+						// A batched subagent call gets its own live TUI
+						// widget the moment agent.go pre-renders it, before
+						// this call ever runs (see SetSubagentDoneFn's doc
+						// comment) — one that was never reached because the
+						// batch was cancelled first must still be told so,
+						// or its widget spins forever with no tool_result
+						// ever emitted for it. runOne fires this same
+						// callback on every real completion; a cancelled,
+						// never-started call needs the identical signal.
+						if name == "subagent" && hasOuterID && t.subagentDoneFn != nil {
+							t.subagentDoneFn(BatchCallID(outerID, j), ToolResult{Error: "cancelled"})
 						}
 					}
 					return summarizeBatch(outs), nil

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mq37/poisson/internal/testutil"
 )
@@ -358,6 +359,82 @@ func TestBatch_NotifiesSubagentDoneFn(t *testing.T) {
 	}
 	if gotRes.Content != "child done" {
 		t.Fatalf("result content = %q, want %q", gotRes.Content, "child done")
+	}
+}
+
+// blockingSubagentTool blocks its Execute until ctx is cancelled — used to
+// hold a batch's serial subagent loop mid-flight so a cancel can be fired
+// while later calls in the same batch are still queued, never started.
+type blockingSubagentTool struct {
+	started chan struct{}
+}
+
+func (t blockingSubagentTool) Name() string            { return "subagent" }
+func (t blockingSubagentTool) Description() string     { return "blocks until ctx done" }
+func (t blockingSubagentTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t blockingSubagentTool) Execute(ctx context.Context, _ json.RawMessage) (ToolResult, error) {
+	close(t.started)
+	<-ctx.Done()
+	return ToolResult{Error: "cancelled"}, ctx.Err()
+}
+
+// TestBatch_CancelNotifiesSubagentDoneFnForSkippedCalls is the regression
+// guard for the orphaned-widget bug: batch's serial loop (forced by
+// subagent being in mutatingTools) used to mark every not-yet-started call
+// "cancelled" in its own output text on ctx cancellation, but never told
+// subagentDoneFn about them — so a batched subagent's TUI widget (which only
+// flips to done via that callback, see SetSubagentDoneFn) spun forever for
+// every subagent queued behind the one actually running when the user hit
+// Esc. All three calls here must be notified, not just the first.
+func TestBatch_CancelNotifiesSubagentDoneFnForSkippedCalls(t *testing.T) {
+	started := make(chan struct{})
+	reg := NewRegistry()
+	reg.Register(blockingSubagentTool{started: started})
+	bt := NewBatchTool(reg)
+	reg.Register(bt)
+
+	var mu sync.Mutex
+	notified := map[string]bool{}
+	bt.SetSubagentDoneFn(func(toolCallID string, res ToolResult) {
+		mu.Lock()
+		notified[toolCallID] = true
+		mu.Unlock()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = WithToolCallID(ctx, "outer-3")
+
+	execDone := make(chan struct{})
+	go func() {
+		bt.Execute(ctx, mustJSON(t, map[string]interface{}{
+			"calls": []map[string]interface{}{
+				{"tool": "subagent", "input": map[string]string{"task": "a"}},
+				{"tool": "subagent", "input": map[string]string{"task": "b"}},
+				{"tool": "subagent", "input": map[string]string{"task": "c"}},
+			},
+		}))
+		close(execDone)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first subagent call never started")
+	}
+	cancel()
+
+	select {
+	case <-execDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("batch Execute never returned after cancel")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, id := range []string{"outer-3.0", "outer-3.1", "outer-3.2"} {
+		if !notified[id] {
+			t.Errorf("subagentDoneFn never called for %q — its TUI widget would spin forever", id)
+		}
 	}
 }
 

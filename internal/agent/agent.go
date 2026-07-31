@@ -842,6 +842,30 @@ const maxTurnContinuations = 8
 // response run at once — see the dispatch loop in runTurn.
 const maxConcurrentToolCalls = 8
 
+// approvalGatedTools are tool names whose Execute may ask a human for
+// approval: bash's risk gate, edit/write/sandbox_cp's sensitive-path gate,
+// create_sandbox's mount/env gate, and subagent's relayed child approvals.
+// Every one of these funnels through the same single-flight TUI.Approve
+// call (see its doc comment), which has no ordering guarantee across
+// concurrent goroutines — a plain sync.Mutex hands out its lock in
+// whatever order the Go scheduler happens to wake blocked goroutines, not
+// necessarily the model's submission order. Two gated calls dispatched
+// concurrently can therefore show their approval prompts (and run) out of
+// order — e.g. a `create_sandbox` call submitted after a `bash` call
+// prompting/finishing first, even though the sandbox may depend on the
+// bash command. The dispatch loop below pulls these out of the concurrent
+// pool and runs them one at a time, in submission order, so two of them can
+// never be in flight together — the race is structurally impossible rather
+// than merely unlikely. Every other tool call keeps full concurrency.
+var approvalGatedTools = map[string]bool{
+	"bash":           true,
+	"edit":           true,
+	"write":          true,
+	"subagent":       true,
+	"create_sandbox": true,
+	"sandbox_cp":     true,
+}
+
 // emptyResponseBackoff is a var so tests can shorten it.
 var emptyResponseBackoff = 500 * time.Millisecond
 
@@ -1279,6 +1303,12 @@ roundLoop:
 
 		// Dispatch concurrently; emit each tool_result to the TUI as it finishes
 		// so cards stop spinning without waiting for slower siblings (e.g. bash approval).
+		//
+		// approvalGatedTools calls are pulled out of this concurrent pool and
+		// run one at a time, in the model's own submission order, by the
+		// sequential walker below instead — see approvalGatedTools' doc
+		// comment for why. Every other call keeps full concurrency exactly
+		// as before.
 		dispatchCwd := a.cwd()
 		results := make([]tools.ToolResult, len(toolCalls))
 		var wg sync.WaitGroup
@@ -1286,80 +1316,143 @@ roundLoop:
 		// response with an unusually large number of parallel tool_use
 		// blocks (buggy, or steered by injected content) would otherwise
 		// spawn that many subprocesses/connections (bash, grep, fetch, ...)
-		// simultaneously with no ceiling.
+		// simultaneously with no ceiling. Shared by the concurrent pool and
+		// the sequential gated walker below, so the combined in-flight total
+		// still never exceeds it.
 		sem := make(chan struct{}, maxConcurrentToolCalls)
+
+		// cancelledResult emits an immediate "cancelled" tool_result for a
+		// call that never got to run at all — used when the turn's ctx is
+		// already done before a queued call (concurrent-pool or gated) gets
+		// its turn. Without this, a call still waiting for a semaphore slot,
+		// or still queued behind an earlier gated call, would otherwise
+		// either block past cancellation or (for a batched subagent's TUI
+		// widget) never resolve at all.
+		cancelledResult := func(idx int, call tools.ToolCall) {
+			results[idx] = tools.ToolResult{Error: "cancelled"}
+			a.sendEvent(OutputEvent{
+				Type:       OutputToolResult,
+				ToolName:   call.Name,
+				ToolCallID: call.ID,
+				ToolError:  "cancelled",
+			})
+		}
+
+		runTool := func(idx int, call tools.ToolCall) {
+			// approvalRec is attached to callCtx below, before Execute —
+			// nil here covers the memoized-read and pre-Execute-panic
+			// emit() calls further down, which never reached an approval
+			// gate at all, so they correctly report no marker.
+			var approvalRec *tools.ApprovalRecord
+			emit := func(res tools.ToolResult) {
+				results[idx] = res
+				humanApproval := ""
+				if approvalRec != nil && approvalRec.Asked {
+					if approvalRec.Allowed {
+						humanApproval = "approved"
+					} else {
+						humanApproval = "denied"
+					}
+				}
+				a.sendEvent(OutputEvent{
+					Type:              OutputToolResult,
+					ToolName:          call.Name,
+					ToolCallID:        call.ID,
+					ToolResultContent: res.Content,
+					ToolError:         res.Error,
+					HumanApproval:     humanApproval,
+				})
+			}
+			// A panic anywhere below (inside a.tools.Execute, a memo
+			// lookup, etc.) would otherwise kill this goroutine
+			// unrecovered — which kills the ENTIRE process (interactive
+			// session or subagent child alike), abandoning every other
+			// tool call still in flight this round and losing the
+			// conversation. Recovering here turns it into an ordinary
+			// failed tool_result instead: the model sees a real error
+			// for THIS call and the turn, and the agent, continue
+			// normally — exactly like any other tool returning an error.
+			// The full stack trace goes to the log (a developer concern);
+			// the model only needs the short message.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("tool %q panicked: %v\n%s", call.Name, r, debug.Stack())
+					emit(tools.TrimToolResult(tools.ToolResult{
+						Error: fmt.Sprintf("tool %q panicked: %v", call.Name, r),
+					}))
+				}
+			}()
+			// A `read` at the same (or a narrower) range as an earlier,
+			// still-unchanged read in this session doesn't need to hit
+			// the filesystem again — see read_memo.go.
+			if call.Name == "read" {
+				if stub, ok := a.tryMemoizedRead(dispatchCwd, call.Input); ok {
+					emit(tools.ToolResult{Content: stub})
+					return
+				}
+			}
+			callCtx := tools.WithToolCallID(ctx, call.ID)
+			callCtx, approvalRec = tools.WithApprovalRecord(callCtx)
+			res, err := a.tools.Execute(callCtx, call.Name, call.Input)
+			if err != nil {
+				res = tools.TrimToolResult(tools.ToolResult{Error: err.Error()})
+			}
+			switch {
+			case call.Name == "read" && res.Error == "":
+				a.recordRead(dispatchCwd, call.Input, res.Content)
+			case call.Name == "edit" || call.Name == "write":
+				a.invalidateReadMemo(dispatchCwd, call.Input)
+			}
+			emit(res)
+		}
+
+		var gatedIdx []int
 		for i, tc := range toolCalls {
+			if approvalGatedTools[tc.Name] {
+				gatedIdx = append(gatedIdx, i)
+				continue
+			}
 			wg.Add(1)
 			go func(idx int, call tools.ToolCall) {
 				defer wg.Done()
-				sem <- struct{}{}
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					// Queued behind the cap when the turn was cancelled —
+					// resolve now instead of waiting on a slot a finished
+					// sibling may never free promptly.
+					cancelledResult(idx, call)
+					return
+				}
 				defer func() { <-sem }()
-				// approvalRec is attached to callCtx below, before Execute —
-				// nil here covers the memoized-read and pre-Execute-panic
-				// emit() calls further down, which never reached an approval
-				// gate at all, so they correctly report no marker.
-				var approvalRec *tools.ApprovalRecord
-				emit := func(res tools.ToolResult) {
-					results[idx] = res
-					humanApproval := ""
-					if approvalRec != nil && approvalRec.Asked {
-						if approvalRec.Allowed {
-							humanApproval = "approved"
-						} else {
-							humanApproval = "denied"
-						}
-					}
-					a.sendEvent(OutputEvent{
-						Type:              OutputToolResult,
-						ToolName:          call.Name,
-						ToolCallID:        call.ID,
-						ToolResultContent: res.Content,
-						ToolError:         res.Error,
-						HumanApproval:     humanApproval,
-					})
-				}
-				// A panic anywhere below (inside a.tools.Execute, a memo
-				// lookup, etc.) would otherwise kill this goroutine
-				// unrecovered — which kills the ENTIRE process (interactive
-				// session or subagent child alike), abandoning every other
-				// tool call still in flight this round and losing the
-				// conversation. Recovering here turns it into an ordinary
-				// failed tool_result instead: the model sees a real error
-				// for THIS call and the turn, and the agent, continue
-				// normally — exactly like any other tool returning an error.
-				// The full stack trace goes to the log (a developer concern);
-				// the model only needs the short message.
-				defer func() {
-					if r := recover(); r != nil {
-						log.Printf("tool %q panicked: %v\n%s", call.Name, r, debug.Stack())
-						emit(tools.TrimToolResult(tools.ToolResult{
-							Error: fmt.Sprintf("tool %q panicked: %v", call.Name, r),
-						}))
-					}
-				}()
-				// A `read` at the same (or a narrower) range as an earlier,
-				// still-unchanged read in this session doesn't need to hit
-				// the filesystem again — see read_memo.go.
-				if call.Name == "read" {
-					if stub, ok := a.tryMemoizedRead(dispatchCwd, call.Input); ok {
-						emit(tools.ToolResult{Content: stub})
-						return
-					}
-				}
-				callCtx := tools.WithToolCallID(ctx, call.ID)
-				callCtx, approvalRec = tools.WithApprovalRecord(callCtx)
-				res, err := a.tools.Execute(callCtx, call.Name, call.Input)
-				if err != nil {
-					res = tools.TrimToolResult(tools.ToolResult{Error: err.Error()})
-				}
-				switch {
-				case call.Name == "read" && res.Error == "":
-					a.recordRead(dispatchCwd, call.Input, res.Content)
-				case call.Name == "edit" || call.Name == "write":
-					a.invalidateReadMemo(dispatchCwd, call.Input)
-				}
-				emit(res)
+				runTool(idx, call)
 			}(i, tc)
+		}
+		if len(gatedIdx) > 0 {
+			wg.Add(1)
+			go func(idxs []int) {
+				defer wg.Done()
+				for _, idx := range idxs {
+					call := toolCalls[idx]
+					if ctx.Err() != nil {
+						// The whole turn is already cancelled — every
+						// remaining gated call (e.g. every not-yet-started
+						// subagent in this round) must resolve immediately,
+						// not sit spinning forever with no tool_result ever
+						// emitted for it.
+						cancelledResult(idx, call)
+						continue
+					}
+					select {
+					case sem <- struct{}{}:
+					case <-ctx.Done():
+						cancelledResult(idx, call)
+						continue
+					}
+					runTool(idx, call)
+					<-sem
+				}
+			}(gatedIdx)
 		}
 		wg.Wait()
 

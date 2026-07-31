@@ -132,6 +132,143 @@ func TestInteg_ParallelToolsRunConcurrently(t *testing.T) {
 	}
 }
 
+// TestInteg_GatedToolsRunSequentially is the regression guard for the
+// approval-ordering bug: two tool calls whose names are in
+// approvalGatedTools (here "bash" and "create_sandbox", standing in for the
+// reported bash-then-create_sandbox scenario) must never run concurrently —
+// the second must not even start until the first's Execute has fully
+// returned. Two approval-gated calls dispatched concurrently could
+// otherwise show their human-approval prompts out of the model's
+// submission order, since TUI.Approve's underlying lock has no FIFO
+// guarantee.
+func TestInteg_GatedToolsRunSequentially(t *testing.T) {
+	st := newTestStore(t)
+	sid := "itest-gated-seq"
+	if err := st.CreateSession(&store.Session{ID: sid, Cwd: testutil.TempDir(t), Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	prov := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	prov.SetResponses(twoToolTurn("bash", "create_sandbox", "done"))
+
+	var firstDone atomic.Bool
+	secondSawFirstDone := make(chan bool, 1)
+
+	reg := tools.NewRegistry()
+	reg.Register(barrierTool{name: "bash", run: func(ctx context.Context) (tools.ToolResult, error) {
+		time.Sleep(20 * time.Millisecond) // gives "create_sandbox" a real chance to start early if it wrongly could
+		firstDone.Store(true)
+		return tools.ToolResult{Content: "BASH_DONE"}, nil
+	}})
+	reg.Register(barrierTool{name: "create_sandbox", run: func(ctx context.Context) (tools.ToolResult, error) {
+		secondSawFirstDone <- firstDone.Load()
+		return tools.ToolResult{Content: "SANDBOX_DONE"}, nil
+	}})
+
+	cfg := config.DefaultConfig()
+	cfg.Provider.Default = "fake"
+	a := NewAgent(st, prov, reg, cfg, sid, make(chan OutputEvent, 256), nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.PromptWithContext(ctx, "run both"); err != nil {
+		t.Fatalf("PromptWithContext: %v", err)
+	}
+
+	select {
+	case saw := <-secondSawFirstDone:
+		if !saw {
+			t.Error("create_sandbox started before bash finished — gated calls ran concurrently, want strictly sequential")
+		}
+	default:
+		t.Fatal("create_sandbox never ran")
+	}
+}
+
+// TestInteg_GatedToolCancelResolvesQueuedCalls is the regression guard for
+// the orphaned-widget half of the same bug class: when the turn is
+// cancelled while the first approval-gated call is still in flight, every
+// other gated call still queued behind it (never even dispatched) must
+// still get an immediate tool_result — not hang forever with no result
+// ever emitted (which, for a subagent, means its TUI widget spins forever).
+func TestInteg_GatedToolCancelResolvesQueuedCalls(t *testing.T) {
+	st := newTestStore(t)
+	sid := "itest-gated-cancel"
+	if err := st.CreateSession(&store.Session{ID: sid, Cwd: testutil.TempDir(t), Provider: "fake", Model: "m", CreatedAt: time.Now().Unix()}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	arg := json.RawMessage(`{}`)
+	turn := []provider.StreamEvent{
+		{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_1", Name: "bash", Input: arg}},
+		{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_1", Name: "bash", Input: arg}},
+		{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_2", Name: "edit", Input: arg}},
+		{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_2", Name: "edit", Input: arg}},
+		{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_3", Name: "write", Input: arg}},
+		{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_3", Name: "write", Input: arg}},
+		{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+	}
+	prov := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	prov.SetResponses([][]provider.StreamEvent{turn})
+
+	bashStarted := make(chan struct{})
+	var editRan, writeRan atomic.Bool
+
+	reg := tools.NewRegistry()
+	reg.Register(barrierTool{name: "bash", run: func(ctx context.Context) (tools.ToolResult, error) {
+		close(bashStarted)
+		<-ctx.Done() // simulates a still-pending human approval when the user cancels
+		return tools.ToolResult{}, ctx.Err()
+	}})
+	reg.Register(barrierTool{name: "edit", run: func(ctx context.Context) (tools.ToolResult, error) {
+		editRan.Store(true)
+		return tools.ToolResult{Content: "EDIT_DONE"}, nil
+	}})
+	reg.Register(barrierTool{name: "write", run: func(ctx context.Context) (tools.ToolResult, error) {
+		writeRan.Store(true)
+		return tools.ToolResult{Content: "WRITE_DONE"}, nil
+	}})
+
+	cfg := config.DefaultConfig()
+	cfg.Provider.Default = "fake"
+	a := NewAgent(st, prov, reg, cfg, sid, make(chan OutputEvent, 256), nil)
+	a.SetModel("m")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.PromptWithContext(ctx, "run three") }()
+
+	select {
+	case <-bashStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bash never started")
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("PromptWithContext never returned after cancel — a queued gated call is hanging")
+	}
+
+	if editRan.Load() || writeRan.Load() {
+		t.Error("edit/write ran after the turn was cancelled — should have been resolved as cancelled instead")
+	}
+
+	msgs, _ := st.GetMessages(sid)
+	// user, assistant(tool_use x3), tool_result(bash), tool_result(edit), tool_result(write)
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages, got %d", len(msgs))
+	}
+	for i, want := range []string{"cancelled", "cancelled"} {
+		msg := msgs[3+i]
+		if msg.Role != "tool" || !strings.Contains(msg.Content, want) {
+			t.Errorf("msg[%d] = %q, want a %q tool_result", 3+i, msg.Content, want)
+		}
+	}
+}
+
 // TestInteg_ToolDispatchCapsConcurrency is the regression guard for
 // maxConcurrentToolCalls: a model response with more tool_use blocks than
 // the cap must never run them all at once — each one still forks a real
