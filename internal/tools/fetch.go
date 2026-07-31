@@ -71,6 +71,11 @@ const (
 	// fetchViaAnthropic fetches like curl, then answers `prompt` against the
 	// page with Anthropic's small model — Claude Code's WebFetch, ported.
 	fetchViaAnthropic = "anthropic"
+	// fetchViaFirecrawl scrapes through Firecrawl's keyless remote MCP server
+	// (see internal/mcpclient and firecrawlMCPURL) — its own JS-rendering and
+	// extraction, often better than curl's plain HTTP GET on JS-heavy pages.
+	// Always available, no account.
+	fetchViaFirecrawl = "firecrawl"
 )
 
 // FetchTool fetches a URL and returns its readable content. Three backends:
@@ -112,6 +117,7 @@ func (t *FetchTool) Description() string {
 	if t.anthropic != nil {
 		desc += " provider=anthropic answers `prompt` against the page with a small model instead of returning the whole page — cheaper context when you only need one fact out of a long document."
 	}
+	desc += " provider=firecrawl is a free, keyless option that scrapes via Firecrawl's own renderer/extractor — try it when provider=curl comes back empty on a JS-heavy page."
 	return desc
 }
 
@@ -120,7 +126,7 @@ func (t *FetchTool) Schema() json.RawMessage {
 		"type": "object",
 		"properties": {
 			"url": {"type": "string", "description": "URL to fetch"},
-			"provider": {"type": "string", "description": "curl | ollama | anthropic (default: ollama when an Ollama session is active, else curl). ollama needs an Ollama session, anthropic an Anthropic session."},
+			"provider": {"type": "string", "description": "curl | ollama | anthropic | firecrawl (default: ollama when an Ollama session is active, else curl). ollama needs an Ollama session, anthropic an Anthropic session."},
 			"prompt": {"type": "string", "description": "anthropic only: question to answer against the page (default: summarize it)"}
 		},
 		"required": ["url"]
@@ -155,12 +161,18 @@ func (t *FetchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 		return t.fetchDirect(ctx, params.URL)
 	case fetchViaAnthropic:
 		return t.fetchViaAnthropicBackend(ctx, params.URL, params.Prompt)
+	case fetchViaFirecrawl:
+		out, err := execFirecrawlScrape(ctx, params.URL)
+		if err != nil {
+			return ToolResult{Error: err.Error()}, nil
+		}
+		return ToolResult{Content: out}, nil
 	case fetchViaOllama:
 		if t.ollamaBaseURL == "" {
 			return ToolResult{Error: "provider=ollama needs a reachable Ollama session (switch with /model ollama/<model>); use provider=curl instead"}, nil
 		}
 	default:
-		return ToolResult{Error: fmt.Sprintf("unknown provider %q (use curl, ollama or anthropic)", params.Provider)}, nil
+		return ToolResult{Error: fmt.Sprintf("unknown provider %q (use curl, ollama, anthropic or firecrawl)", params.Provider)}, nil
 	}
 
 	body, _ := json.Marshal(map[string]string{"url": params.URL})

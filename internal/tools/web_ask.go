@@ -43,7 +43,9 @@ func (t *WebAskTool) Description() string {
 	return "Ask the web a question and get an AI-synthesized answer with sources. " +
 		"provider=grok (default when logged in via `px login xai`) uses xAI Grok's " +
 		"server-side web_search + synthesis; provider=exa (default fallback, always " +
-		"available, no account) uses exa.ai's free keyless search + summary. " +
+		"available, no account) uses exa.ai's free keyless search + summary; " +
+		"provider=tavily is another free, keyless option (Tavily's own LLM-synthesized " +
+		"answer plus ranked sources) — try it if exa is rate-limited or unavailable. " +
 		"Use web_search instead when you just want a plain list of links."
 }
 
@@ -53,7 +55,7 @@ func (t *WebAskTool) Schema() json.RawMessage {
 		"properties": {
 			"query": {"type": "string", "description": "Question or search query"},
 			"num": {"type": "integer", "description": "Number of results (default: 10, max: 100 for exa)"},
-			"provider": {"type": "string", "description": "grok | exa (default: grok if logged in, else exa)"},
+			"provider": {"type": "string", "description": "grok | exa | tavily (default: grok if logged in, else exa)"},
 			"type": {"type": "string", "description": "exa only: keyword | neural (default: keyword)"},
 			"verbose": {"type": "boolean", "description": "exa only: include full text excerpts (default: false)"}
 		},
@@ -109,8 +111,16 @@ func (t *WebAskTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 		return ToolResult{Content: result}, nil
 	}
 
+	if provider == "tavily" {
+		result, err := execTavilySearch(ctx, params.Query, params.Num)
+		if err != nil {
+			return ToolResult{Error: err.Error()}, nil
+		}
+		return ToolResult{Content: result}, nil
+	}
+
 	if provider != "exa" {
-		return ToolResult{Error: fmt.Sprintf("unknown provider %q (use grok or exa)", provider)}, nil
+		return ToolResult{Error: fmt.Sprintf("unknown provider %q (use grok, exa or tavily)", provider)}, nil
 	}
 	result, err := execExaSearch(ctx, params.Query, params.Num, params.Type, params.Verbose)
 	if err != nil {

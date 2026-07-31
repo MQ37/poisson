@@ -76,6 +76,7 @@ func (t *WebSearchTool) Description() string {
 	if t.anthropic != nil {
 		desc += " provider=anthropic uses Anthropic's server-side web search instead (links plus a synthesized summary, billed to the Anthropic account); available only while the session runs on Anthropic."
 	}
+	desc += " provider=firecrawl is another free, keyless option (Firecrawl's search API, ranked web/news/image results) — try it if duckduckgo is rate-limited. provider=you is a third free, keyless option (you.com's Search API, IP-throttled to ~100 queries/day)."
 	return desc
 }
 
@@ -85,7 +86,7 @@ func (t *WebSearchTool) Schema() json.RawMessage {
 		"properties": {
 			"query": {"type": "string", "description": "Search query"},
 			"num": {"type": "integer", "description": "Number of results (default: 10)"},
-			"provider": {"type": "string", "description": "duckduckgo | anthropic (default: duckduckgo; anthropic requires an Anthropic session)"}
+			"provider": {"type": "string", "description": "duckduckgo | anthropic | firecrawl | you (default: duckduckgo; anthropic requires an Anthropic session)"}
 		},
 		"required": ["query"]
 	}`)
@@ -130,8 +131,20 @@ func (t *WebSearchTool) Execute(ctx context.Context, input json.RawMessage) (Too
 			return ToolResult{Error: err.Error()}, nil
 		}
 		return ToolResult{Content: out}, nil
+	case "firecrawl":
+		out, err := execFirecrawlSearch(ctx, params.Query, params.Num)
+		if err != nil {
+			return ToolResult{Error: err.Error()}, nil
+		}
+		return ToolResult{Content: out}, nil
+	case "you":
+		out, err := execYouSearch(ctx, params.Query)
+		if err != nil {
+			return ToolResult{Error: err.Error()}, nil
+		}
+		return ToolResult{Content: out}, nil
 	default:
-		return ToolResult{Error: fmt.Sprintf("unknown provider %q (use duckduckgo or anthropic)", params.Provider)}, nil
+		return ToolResult{Error: fmt.Sprintf("unknown provider %q (use duckduckgo, anthropic, firecrawl or you)", params.Provider)}, nil
 	}
 
 	results, err := doWebSearch(ctx, params.Query, params.Num)
