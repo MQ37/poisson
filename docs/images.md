@@ -19,16 +19,9 @@ provider-native image blocks.
 Why 1024: legible for screenshots/code, ~800–1000 vision tokens, under every
 provider's own downscale cap so token cost is predictable.
 
-## Model vision capability (`ModelSettings.Vision`)
-
-| Model | Vision |
-|---|---|
-| anthropic/claude-opus-5 | ✅ |
-| xai/grok-build | ✅ |
-| xai/grok-4.5 | ✅ |
-| ollama/minimax-m3:cloud | ✅ |
-| ollama/kimi-k2.7-code:cloud | ✅ |
-| ollama/glm-5.2:cloud | ❌ |
+Vision support is per-model, not per-provider (`ModelSettings.Vision` in
+`internal/provider/models.go`) — see README's Providers & models table for the
+current list.
 
 ## Data model
 
@@ -43,7 +36,7 @@ cheap). Providers read the file and encode at request-build time; a missing file
 ```
 Ctrl+V ──► grabClipboardImage() ─┐
 @file  ──► imaging.ProcessFile() ─┼─► /tmp png (≤1024) ─► pendingAttachment (chip)
-clipboard bytes ─ imaging.Process()┘
+clipboard bytes ──► imaging.Process()┘
 
 submit ─► vision? ── no ──► warn + drop
              │ yes
@@ -61,29 +54,17 @@ submit ─► vision? ── no ──► warn + drop
 - **clipboard read** (`internal/tui`): Wayland `wl-paste`, X11 `xclip`
   (image/png then image/jpeg). Injectable in the TUI (`grabImage` field) so
   tests never spawn a real command.
-- **token estimate**: flat per-image estimate (`imageTokenEstimate ≈ 800`), not
-  the tiny path string.
+- **token estimate**: flat per-image estimate (`imageTokenEstimate` in
+  `internal/agent/tokens.go`), not the tiny path string.
 - **compaction**: image blocks fed to the summarizer are replaced with a
   `[image]` text placeholder (never send base64/data URLs to it).
 
 ## Chips (UI)
 
-Pending attachments render as a dim row above the editor:
-`🖼 shot.png · png · 24KB`. Cleared on submit (or when the input is cleared).
-
-## Tests (all mocked — FakeProvider, `testutil.TempDir/TempHome`, `/tmp`)
-
-- imaging: downscale (long edge/aspect), no upscale, jpeg→png, temp file exists.
-- persistence: image `ContentBlock` JSON round-trip.
-- providers: anthropic base64 source; ollama/xai `image_url` data-URL array.
-- agent: `PromptWithContext` with images → stored msg has image+text blocks;
-  vision gate drops for glm-5.2.
-- TUI: `@shot.png` → attachment (+ text files still inline); Ctrl+V via injected
-  fake grabber → chip added; chip render output; submit to non-vision warns+drops
-  (FakeProvider `LastRequest` has no image block).
+Pending attachments render as a dim row above the editor: `🖼 shot.png · 24.0 KB`.
+Cleared on submit (or when the input is cleared).
 
 ## Out of scope (follow-ups)
 
 - Rendering images inline in the terminal (Kitty/iTerm2 protocols).
-- `read` tool returning a real image block (today it must not dump base64 text).
 - Persisting attachments across reboot / a cleanup/prune story for `/tmp`.

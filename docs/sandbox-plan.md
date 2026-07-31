@@ -33,7 +33,9 @@ raise.
   Sensitive-path approval and the symlink guard keep running unconditionally
   — sandboxing never bypasses file-identity checks, only command-risk ones.
 - Only `create_sandbox` needs human approval, and only when it's given a
-  host mount beyond its own scratch workspace, or an injected secret.
+  `hostPath`, extra `mounts`, or an injected secret/`env` (see "Amendment"
+  below: there is no default scratch workspace to mount, so a plain call
+  with none of those stays auto-approved).
 
 ## Non-goals (for v1)
 
@@ -209,11 +211,13 @@ aren't a real concern.
 
 ### The bind mount
 
-`create_sandbox` bind-mounts a host-side scratch directory into the
-container as its workspace:
+`create_sandbox` optionally bind-mounts an agent-supplied `hostPath` into
+the container as `/workspace` (see "Amendment" below — there is no
+auto-provisioned scratch directory; omitting `hostPath` gives a fully
+isolated container with no host-backed directory at all):
 
 ```
-podman create -v /tmp/poisson-sandbox-<id>/workspace:/workspace:Z \
+podman create -v <hostPath>:/workspace:Z,nosuid,nodev \
   ubuntu:26.04 sleep infinity
 ```
 
@@ -347,10 +351,11 @@ Mitigations:
   workspace mount and every extra `opts.Mounts` entry — an earlier version
   of this doc claimed this while the code only actually set `:Z`; fixed to
   match (audit-caught doc/code mismatch, no other behavior change).
-- Host-side scratch dir created `0700`, owned by the invoking user, before
-  `podman create` — on a shared/multi-user host, a world-writable
-  `/tmp/poisson-sandbox-*` would let another local user race or tamper
-  with it while the sandbox runs.
+- `hostPath` is always a directory the agent/user already owns — poisson
+  no longer creates or owns any scratch directory on its behalf (see
+  "Amendment" below), so there's no poisson-created world-writable
+  `/tmp/poisson-sandbox-*` path for another local user to race or tamper
+  with.
 - Policy: never bind-mount credentials or other host-sensitive directories
   directly into `/workspace` — those go through the approval-gated
   extra-volume path on `create_sandbox`, kept separate from the
@@ -389,11 +394,11 @@ guessed id must be rejected the same way a bad `workdir` is today.
 
 ### Approval
 
-- `create_sandbox`: auto-approved when it requests no host mount beyond
-  its own scratch workspace and no secret/env injection. Requires human
-  approval — showing the exact extra host paths/mode — when the agent
-  asks for an additional bind mount (e.g. `~/.ssh`, a second project dir)
-  or an injected secret/token.
+- `create_sandbox`: auto-approved for a plain call with no `hostPath`,
+  `mounts`, or `env` (see "Amendment" below — there's no default scratch
+  workspace, so a bare call mounts nothing). Requires human approval —
+  showing the exact host paths/mode — whenever the agent supplies a
+  `hostPath`, an additional `mounts` entry, or an injected `env` secret.
 - `bash` with `sandboxId` set: no approval, no risk classification.
 - File tools: always the existing sensitive-path/symlink checks, sandboxed
   target or not — see "File tools."
@@ -575,12 +580,13 @@ subagent{task, name?, sandboxIds?} -> unchanged otherwise
 idle-reap sweep and `/sandbox kill` slash command (see "Lifecycle /
 cleanup"): the agent calls it itself once it's done with a sandbox, instead
 of relying solely on a TTL sweep to eventually notice. Always auto-approved
-— destroying a sandbox only discards disposable container/scratch-dir
-state, never host data, so there's no risk to gate. Kills the container via
-`Manager.Kill` and removes the whole `<base>` scratch-workspace tree (not
-just `hostPath` itself — `hostPath` is `<base>/workspace`); there's no
-`sandboxes` store row to delete yet, since that table doesn't exist until
-the lifecycle/persistence follow-up lands. Double-destroy or destroying a
+— destroying a sandbox only discards the disposable container itself,
+never host data, so there's no risk to gate. Kills the container via
+`Manager.Kill` and **never touches the filesystem** — `hostPath` is
+whatever the agent supplied (see "Amendment" below), so `sandbox_destroy`
+must not delete it; there's no `sandboxes` store row to delete yet either,
+since that table doesn't exist until the lifecycle/persistence follow-up
+lands. Double-destroy or destroying a
 foreign/unowned id goes through `Manager.Owns` (via `Manager.Get`) the same
 way `bash` does — a clean error, not a crash; tested.
 

@@ -43,27 +43,6 @@ encodings, Ctrl+J newline, paste, arrows). Those assertions really belong at the
   byte-parsing helpers.
 - Verify afterwards with `deadcode ./...`.
 
-### Provider registry: scattered, no single source of truth
-
-Adding the `llamacpp` provider required touching 4 independent hardcoded
-lists that all needed to agree, and one (`overlay_picker.go`) was missed on
-the first pass — `/providers` silently didn't show it until a follow-up fix:
-
-- `internal/provider/factory.go` — `IsConfigured`/`NewProvider`/`DefaultModel` switches
-- `internal/config/config.go` — `Config` struct field, `defaultConfig()`,
-  `setProviderModel` switch + its error message string, TOML template text
-- `internal/tui/overlay_picker.go` — `pickerProviderItems`'s own hardcoded
-  `[]struct{id, desc}` list (this one was missed)
-- `internal/pricing/pricing.go` — `builtIn` fallback map (redundant with
-  `config.go`'s default `Pricing` map, which already covers the real
-  runtime path — but a second place that has to agree regardless)
-
-Nothing enumerates "the list of providers" from one place; every consumer
-keeps its own copy. Should collapse to a single registry (e.g. an ordered
-`[]ProviderMeta{ID, Desc, NeedsAuth}` in `internal/provider`) that
-`factory.go`, the picker, and config validation all read from, instead of
-four independently-maintained lists.
-
 ### Long sessions: expensive compaction + repeated re-reads
 
 Analysis of real host conversations (`~/.poisson/poisson.db`) found one marathon

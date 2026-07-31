@@ -42,7 +42,9 @@ backend (not `api.openai.com`):
   `https://api.openai.com/auth.chatgpt_account_id`), `originator: poisson`,
   `OpenAI-Beta: responses=experimental`.
 - Body: `{model, store:false, stream:true, instructions, input, tools,
-  tool_choice:"auto", parallel_tool_calls:true, reasoning:{effort, summary}}`.
+  tool_choice:"auto", parallel_tool_calls:true, reasoning:{effort, summary},
+  prompt_cache_key}` — the cache key is what keeps repeat turns cheap against
+  the subscription's usage limit.
 
 Poisson message blocks map onto Responses `input` items:
 
@@ -55,8 +57,9 @@ Poisson message blocks map onto Responses `input` items:
 | tool result | `function_call_output` (`call_id`, `output`) |
 
 SSE `response.*` events map to Poisson stream events: `output_text.delta` →
-text, `reasoning_summary_text.delta` → thinking, `function_call_arguments.*` →
-tool-use start/delta/stop (keyed by `output_index`), `response.completed` →
+text, `reasoning_summary_text.delta` → thinking, `response.output_item.added`
+→ tool-use start, `function_call_arguments.delta`/`response.output_item.done`
+→ tool-use delta/stop (keyed by `output_index`), `response.completed` →
 usage/done.
 
 ## Model

@@ -2,8 +2,8 @@
 
 Poisson talks to Ollama through its **OpenAI-compatible** endpoint
 (`{baseURL}/v1/chat/completions`, default `http://localhost:11434`). This
-covers both local models and Ollama Cloud/Turbo `:cloud` models (the default
-`glm-5.2:cloud`, `minimax-m3:cloud`, `kimi-k2.7-code:cloud`).
+covers both local models and Ollama Cloud/Turbo `:cloud` models (default
+`glm-5.2:cloud`, plus `minimax-m3:cloud` and `kimi-k2.7-code:cloud`).
 
 ## Prompt caching — nothing to implement
 

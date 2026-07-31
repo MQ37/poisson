@@ -28,9 +28,9 @@ resume) and hands them only the backends the current provider supports:
   answers on it.
 
 An unavailable backend is refused loudly (`provider=anthropic needs an
-Anthropic session ...`) rather than silently falling back, so the model never
-believes an extraction or search ran that didn't. Unavailable backends are also
-left out of the tool description, so they aren't advertised where they can't work.
+Anthropic session ...`) rather than silently falling back, and left out of the
+tool description entirely — so the model is never invited to call what can't
+work, and never believes an extraction or search ran that didn't.
 
 ## `web_search`
 
@@ -94,8 +94,8 @@ Model Context Protocol client written for exactly this — `tools/call` only, no
 general-purpose SDK. The [2026-07-28 MCP spec](https://blog.modelcontextprotocol.io/posts/2026-07-28/)
 drops the `initialize`/`initialized` handshake and `Mcp-Session-Id` entirely,
 making every request self-contained; `mcp.firecrawl.dev` was probed live and
-doesn't speak it yet (`HTTP 400: Unsupported protocol version: 2026-07-28`,
-supported versions top out at `2025-11-25`). Its keyless tier already accepts
+only negotiates up to `2025-06-18`/`2025-11-25` (HTTP 400 on `2026-07-28`:
+`"Bad Request: Unsupported protocol version"`). Its keyless tier already accepts
 a bare `tools/call` POST with no prior `initialize` and no session ID under the
 older spec, though, so the client skips both anyway — one POST per call,
 matching the new spec's spirit without needing its version number yet. Update
