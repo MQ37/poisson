@@ -110,15 +110,26 @@ func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, err
 	if opts.SessionID != "" {
 		args = append(args, "--label", "poisson.session="+opts.SessionID)
 	}
+	// --memory: a shared-kernel resource limit (20% of host total, see
+	// memlimit.go) — a sandbox with no cap can otherwise OOM the whole host,
+	// not just itself. Omitted, not a hard error, when total memory can't be
+	// determined (e.g. no /proc/meminfo).
+	if limit, ok := sandboxMemoryLimit(); ok {
+		args = append(args, "--memory", limit)
+	}
+	// nosuid,nodev on every bind mount: defense-in-depth against a planted
+	// setuid binary or device node in the mounted tree mattering if it's ever
+	// executed/opened outside the sandbox (see docs/sandbox-plan.md's "Mount
+	// safety" section).
 	if opts.HostPath != "" {
-		args = append(args, "-v", opts.HostPath+":/workspace:Z")
+		args = append(args, "-v", opts.HostPath+":/workspace:Z,nosuid,nodev")
 	}
 	for _, m := range opts.Mounts {
 		mode := "rw"
 		if m.ReadOnly {
 			mode = "ro"
 		}
-		args = append(args, "-v", fmt.Sprintf("%s:%s:%s", m.HostPath, m.ContainerPath, mode))
+		args = append(args, "-v", fmt.Sprintf("%s:%s:%s,nosuid,nodev", m.HostPath, m.ContainerPath, mode))
 	}
 	for _, e := range opts.Env {
 		args = append(args, "-e", e)

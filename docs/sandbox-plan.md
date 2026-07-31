@@ -343,6 +343,10 @@ the mount, but real.
 Mitigations:
 - Mount flags `:Z,nosuid,nodev` (SELinux relabel + defense-in-depth against
   a planted setuid binary or device node mattering if ever run on host).
+  **Implemented** in `podmanDriver.Create` on both the base `HostPath`
+  workspace mount and every extra `opts.Mounts` entry — an earlier version
+  of this doc claimed this while the code only actually set `:Z`; fixed to
+  match (audit-caught doc/code mismatch, no other behavior change).
 - Host-side scratch dir created `0700`, owned by the invoking user, before
   `podman create` — on a shared/multi-user host, a world-writable
   `/tmp/poisson-sandbox-*` would let another local user race or tamper
@@ -354,6 +358,25 @@ Mitigations:
 - The symlink guard (already unconditional, see "File tools") is the
   backstop for "container plants a symlink to `/etc/passwd`, host tool
   later follows it" — no new code needed, just confirm it isn't bypassed.
+
+### Resource limits
+
+**Implemented.** Containers share the host kernel — with no cap, a fork
+bomb or a runaway/malicious build inside one sandbox can OOM or starve the
+whole host, not just itself. `podmanDriver.Create` passes
+`--memory <20% of total system memory>`, computed by `memlimit.go` from
+`/proc/meminfo`'s `MemTotal` (Linux only, matching every other place this
+package already assumes a real Linux podman host). If total memory can't be
+determined, `--memory` is silently omitted rather than failing sandbox
+creation over a missing limit — same "degrade, don't crash" pattern as the
+rest of this package.
+
+Deliberately out of scope for this pass (network isolation was reviewed and
+accepted as-is — sandboxed code gets normal outbound network access, no
+`--network=none`): no `--cpus`/`--pids-limit` yet. Same "ship the smallest
+real fix first" reasoning as everything else marked "not yet implemented"
+in this doc — open if a fork bomb (PID exhaustion, not memory) turns out to
+matter in practice.
 
 ### Ownership / validation
 
