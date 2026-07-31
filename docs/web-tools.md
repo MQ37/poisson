@@ -7,9 +7,14 @@ from.
 
 | Tool | Backends | Default |
 |---|---|---|
-| `web_search` | `duckduckgo`, `anthropic` | `duckduckgo` |
-| `fetch` | `curl`, `ollama`, `anthropic` | `ollama` when an Ollama session can use it, else `curl` |
-| `web_ask` | `grok`, `exa` | `grok` when logged in to xAI, else `exa` |
+| `web_search` | `duckduckgo`, `anthropic`, `firecrawl`, `you` | `duckduckgo` |
+| `fetch` | `curl`, `ollama`, `anthropic`, `firecrawl` | `ollama` when an Ollama session can use it, else `curl` |
+| `web_ask` | `grok`, `exa`, `tavily` | `grok` when logged in to xAI, else `exa` |
+
+`firecrawl`, `you`, and `tavily` are free, keyless, always-available backends —
+no login, no config, opt-in only via `provider=` (none of them changed any
+default above). They exist as alternatives when the always-on default hits a
+rate limit or bot challenge (DuckDuckGo, exa).
 
 ## Provider gating
 
@@ -45,6 +50,14 @@ left out of the tool description, so they aren't advertised where they can't wor
 
   Billed to the Anthropic account as `usage.server_tool_use.web_search_requests`,
   and immune to DDG's challenge. `num` trims the link list.
+- `firecrawl` — Firecrawl's search API, called through a minimal MCP client
+  (`internal/mcpclient`) against Firecrawl's hosted, keyless remote server
+  (`https://mcp.firecrawl.dev/v2/mcp`). No account, no API key; rate-limited
+  per IP. Returns Firecrawl's own JSON verbatim (ranked web/news/image result
+  groups) — no synthesis, same passthrough convention as `exa`.
+- `you` — you.com's Search API keyless tier (no account, no API key,
+  IP-throttled to roughly 100 queries/day). Returns you.com's own JSON verbatim
+  (`web`/`news` result arrays) — no synthesis.
 
 ## `fetch`
 
@@ -57,7 +70,12 @@ left out of the tool description, so they aren't advertised where they can't wor
   against the extracted Markdown with Anthropic's small model. Returns just the
   answer, so a long document costs a few hundred context tokens instead of the
   whole page. `prompt` defaults to "What does this page say?", and is rejected
-  on the other two backends rather than silently dropped.
+  on the other backends rather than silently dropped.
+- `firecrawl` — scrapes through the same keyless Firecrawl MCP server as the
+  `web_search` backend above (`firecrawl_scrape`, `formats: ["markdown"]`).
+  Its own JS rendering/extraction often succeeds where `curl`'s plain HTTP GET
+  returns an empty or unrendered page. `prompt` is not supported (rejected,
+  like `curl`/`ollama`).
 
 Subagents get the same backends as their parent: the child process re-registers
 both tools for its own provider (`cmd/px/main.go`, after `SetSkills`).
@@ -68,6 +86,21 @@ and unspecified addresses — a model-supplied (or prompt-injected) URL cannot
 reach cloud metadata endpoints or services on the host. Choosing
 `provider=anthropic` does not move the fetch off the machine, so that guard
 still applies.
+
+## Firecrawl's MCP client
+
+`firecrawl` (both tools) goes through `internal/mcpclient`, a minimal
+Model Context Protocol client written for exactly this — `tools/call` only, no
+general-purpose SDK. The [2026-07-28 MCP spec](https://blog.modelcontextprotocol.io/posts/2026-07-28/)
+drops the `initialize`/`initialized` handshake and `Mcp-Session-Id` entirely,
+making every request self-contained; `mcp.firecrawl.dev` was probed live and
+doesn't speak it yet (`HTTP 400: Unsupported protocol version: 2026-07-28`,
+supported versions top out at `2025-11-25`). Its keyless tier already accepts
+a bare `tools/call` POST with no prior `initialize` and no session ID under the
+older spec, though, so the client skips both anyway — one POST per call,
+matching the new spec's spirit without needing its version number yet. Update
+`protocolVersion` in `client.go` once Firecrawl (or another server this talks
+to) advertises `2026-07-28`.
 
 ## Where this came from
 
@@ -112,8 +145,9 @@ Pricing differs by backend:
 - Grok (`web_ask`): xAI's Responses API returns its own exact
   `cost_in_usd_ticks` per call (1e10 ticks = $1, tool fees and cache discounts
   already included), recorded verbatim instead of re-priced locally.
-- exa (`web_ask` fallback) and DuckDuckGo (`web_search` default) are free and
-  record nothing.
+- exa (`web_ask` fallback), tavily (`web_ask`), DuckDuckGo (`web_search`
+  default), firecrawl (`web_search`/`fetch`), and you (`web_search`) are all
+  free, keyless backends and record nothing.
 
 A row is only ever banked with real tokens or a real cost attached — a helper
 call that errored before any HTTP request went out (e.g. missing xAI
