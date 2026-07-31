@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/mq37/poisson/internal/store"
 )
 
 func TestWindowTitleFor(t *testing.T) {
@@ -13,8 +15,9 @@ func TestWindowTitleFor(t *testing.T) {
 		want                string
 	}{
 		{"my great session", "s-a3f9c1d2", false, false, "px - my great session"},
-		{"", "s-a3f9c1d2", false, false, "px - s-a3f9c1"}, // truncated to windowTitleIDLen
-		{"", "s-ab", false, false, "px - s-ab"},           // shorter than the cap: used whole
+		{"", "s-a3f9c1d2", false, false, "px - s-a3f9c1d2"},            // fits DisplaySessionIDMaxLen whole
+		{"", "s-ab", false, false, "px - s-ab"},                        // shorter than the cap: used whole
+		{"", "some-unusually-long-legacy-session-id", false, false, "px - some-unusual…"}, // over the cap: truncated with an ellipsis
 		{"", "", false, false, "px"},
 		{"my great session", "s-a3f9c1d2", true, false, "O px - my great session"},
 		{"", "", true, false, "O px"},
@@ -92,7 +95,7 @@ func TestTUIInteg_WindowTitleReflectsSessionNameAndID(t *testing.T) {
 	}
 
 	raw := rawPaint()
-	if !strings.Contains(raw, "px - "+e.sid[:windowTitleIDLen]) {
+	if !strings.Contains(raw, "px - "+store.DisplaySessionID(e.sid)) {
 		t.Errorf("window title should default to the session id prefix, got:\n%q", raw)
 	}
 

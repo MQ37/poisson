@@ -62,11 +62,7 @@ func (t *RecallTool) Execute(ctx context.Context, input json.RawMessage) (ToolRe
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d result(s):\n\n", len(results)))
 	for _, r := range results {
-		sid := r.SessionID
-		if len(sid) > 8 {
-			sid = sid[:8]
-		}
-		sb.WriteString(fmt.Sprintf("[session: %s] %s:\n  %s\n\n", sid, r.Role, r.Snippet))
+		sb.WriteString(fmt.Sprintf("[session: %s] %s:\n  %s\n\n", store.DisplaySessionID(r.SessionID), r.Role, r.Snippet))
 	}
 	return ToolResult{Content: sb.String()}, nil
 }

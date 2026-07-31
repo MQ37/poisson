@@ -210,6 +210,35 @@ func TestCmdResumeNoArg(t *testing.T) {
 	}
 }
 
+// TestResumeAtStartup verifies the `px resume <id>` entry point (main.go)
+// switches session/provider/model and hydrates scrollback exactly like the
+// live /resume slash command does — it's a thin wrapper over cmdResume,
+// meant to be called once before Run().
+func TestResumeAtStartup(t *testing.T) {
+	s, a, sessionID := newTestStoreAndAgent(t)
+	tui := newTUIWithAgent(a, sessionID)
+
+	otherID := "startup-resume-session"
+	if err := s.CreateSession(&store.Session{
+		ID: otherID, Cwd: ".", Provider: "xai", Model: a.Config().XAI.Model,
+		CreatedAt: time.Now().Unix(), UpdatedAt: time.Now().Unix(),
+	}); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	tui.ResumeAtStartup(otherID)
+
+	if tui.sessionID != otherID {
+		t.Errorf("sessionID = %q, want %q", tui.sessionID, otherID)
+	}
+	if got := a.Provider().ID(); got != "xai" {
+		t.Errorf("provider = %q, want xai", got)
+	}
+	if out := testScrollOutput(tui); !strings.Contains(out, "resumed session") {
+		t.Errorf("expected resume message, got %q", out)
+	}
+}
+
 // --- /search ---
 
 func TestCmdSearch(t *testing.T) {

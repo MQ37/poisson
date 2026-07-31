@@ -33,6 +33,8 @@ px login anthropic                                  # or: px login openai | xai 
 px                                                   # launch the TUI
 ```
 
+> ⚠️ **Experimental.** poisson is under active, fast-moving development — commands, flags, and behavior can change without notice between versions.
+
 ---
 
 ## ✨ Features
@@ -128,6 +130,7 @@ Then just:
 ```bash
 px                  # interactive TUI
 px sessions         # list past sessions
+px resume <id>      # open the TUI resumed straight into a past session
 px cost             # total spend
 px version
 

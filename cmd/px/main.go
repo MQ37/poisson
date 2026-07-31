@@ -131,7 +131,7 @@ func main() {
 	}
 
 	if len(cmdArgs) == 0 {
-		runREPL(noSkills)
+		runREPL(noSkills, "")
 		return
 	}
 
@@ -146,6 +146,12 @@ func main() {
 		cmdSessions()
 	case "cost":
 		cmdCost(cmdArgs[1:])
+	case "resume":
+		if len(cmdArgs) < 2 || strings.TrimSpace(cmdArgs[1]) == "" {
+			fmt.Fprintln(os.Stderr, "usage: Poisson resume <session-id>")
+			os.Exit(2)
+		}
+		runREPL(noSkills, cmdArgs[1])
 	default:
 		fmt.Println("poisson", version)
 		fmt.Println("usage: Poisson [command] [options]")
@@ -153,6 +159,7 @@ func main() {
 		fmt.Println("  Poisson login <provider>    OAuth login")
 		fmt.Println("  Poisson logout <provider>   clear stored tokens")
 		fmt.Println("  Poisson sessions            list sessions")
+		fmt.Println("  Poisson resume <session-id> resume a session in the TUI")
 		fmt.Println("  Poisson cost [session-id]   show cost")
 		fmt.Println("  Poisson -v                  print version")
 	}
@@ -335,8 +342,14 @@ func runPrint(opts printOpts) {
 	}
 }
 
-// runREPL starts the interactive REPL.
-func runREPL(noSkills bool) {
+// runREPL starts the interactive TUI. When resumeSessionID is non-empty
+// (from `px resume <id>`), it must already exist in the store — checked
+// here, before any provider/agent setup, so a typo fails fast with a clean
+// exit(1) instead of opening a REPL around an ephemeral throwaway session.
+// The actual switch (provider/model, session id, scrollback hydration) is
+// done post-construction via TUI.ResumeAtStartup, reusing the same
+// cmdResume path the /resume slash command already exercises.
+func runREPL(noSkills bool, resumeSessionID string) {
 	// Load config.
 	cfg, err := config.Load()
 	if err != nil {
@@ -352,6 +365,13 @@ func runREPL(noSkills bool) {
 		os.Exit(1)
 	}
 	defer st.Close()
+
+	if resumeSessionID != "" {
+		if _, err := st.GetSession(resumeSessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "error: session not found: %s\n", resumeSessionID)
+			os.Exit(1)
+		}
+	}
 
 	// Load auth.
 	authStore, _ := auth.Load()
@@ -447,6 +467,9 @@ func runREPL(noSkills bool) {
 	// Run TUI.
 	t := tui.NewTUI(a, sessionID, outputChan)
 	t.InstallStartupIntro(version, provName, model)
+	if resumeSessionID != "" {
+		t.ResumeAtStartup(resumeSessionID)
+	}
 	approveUI = t
 	// A message queued while a turn is running is spliced into that same
 	// turn's next iteration (see agent.SetPendingInputFn's doc comment)
@@ -480,11 +503,7 @@ func cmdSessions() {
 	for _, s := range sessions {
 		date := time.Unix(s.CreatedAt, 0).Format("2006-01-02")
 		msgs, _ := st.GetMessages(s.ID)
-		short := s.ID
-		if len(short) > 8 {
-			short = short[:8]
-		}
-		fmt.Printf("  %s  %s  %d msgs  %s/%s\n", short, date, len(msgs), s.Provider, s.Model)
+		fmt.Printf("  %s  %s  %d msgs  %s/%s\n", store.DisplaySessionID(s.ID), date, len(msgs), s.Provider, s.Model)
 	}
 }
 

@@ -1,9 +1,6 @@
 package tui
 
-// windowTitleIDLen caps how much of an unnamed session's ID appears in the
-// window title — long enough to tell tabs/windows apart, short enough to fit
-// comfortably in a terminal tab bar.
-const windowTitleIDLen = 8
+import "github.com/mq37/poisson/internal/store"
 
 // windowTitleFor computes the window/tab title text for a session: "px -
 // <title>" once the user has named it (/name), otherwise "px - <short
@@ -25,10 +22,7 @@ const windowTitleIDLen = 8
 func windowTitleFor(title, sessionID string, pendingApproval, processing bool) string {
 	label := title
 	if label == "" {
-		label = sessionID
-		if len(label) > windowTitleIDLen {
-			label = label[:windowTitleIDLen]
-		}
+		label = store.DisplaySessionID(sessionID)
 	}
 	base := "px"
 	if label != "" {

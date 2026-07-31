@@ -149,8 +149,8 @@ func pickerSessionItems(h commandHost) ([]pickerItem, error) {
 		label := sess.ID
 		if named {
 			label = *sess.Title
-		} else if len(label) > 12 {
-			label = label[:12] + "…"
+		} else {
+			label = store.DisplaySessionID(label)
 		}
 		hint := fmt.Sprintf("%s  %d msgs  %s/%s", date, msgCount, sess.Provider, sess.Model)
 		if sess.CompactionSummary != nil && strings.TrimSpace(*sess.CompactionSummary) != "" {
@@ -165,10 +165,7 @@ func pickerSessionItems(h commandHost) ([]pickerItem, error) {
 	}
 	if curID != "" && !curFound {
 		if _, err := a.Store().GetSession(curID); errors.Is(err, store.ErrNotFound) {
-			label := curID
-			if len(label) > 12 {
-				label = label[:12] + "…"
-			}
+			label := store.DisplaySessionID(curID)
 			items = append([]pickerItem{{
 				id:    curID,
 				label: label,

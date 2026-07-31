@@ -102,6 +102,16 @@ func cmdResume(h commandHost, args []string) error {
 	return nil
 }
 
+// ResumeAtStartup switches a freshly constructed TUI to sessionID before
+// Run() starts (single-threaded at that point, same convention as
+// InstallStartupIntro — no lock needed). Reuses cmdResume so `px resume
+// <id>` gets exactly the same provider/model switch and scrollback
+// hydration as typing /resume live. Never call this once Run() is up; use
+// the /resume slash command for that.
+func (t *TUI) ResumeAtStartup(sessionID string) {
+	cmdResume(tuiCmdHost{t}, []string{sessionID})
+}
+
 // cmdSearch searches message content.
 func cmdSearch(h commandHost, args []string) error {
 	if len(args) == 0 {
@@ -119,11 +129,7 @@ func cmdSearch(h commandHost, args []string) error {
 	}
 	var b strings.Builder
 	for _, r := range results {
-		short := r.SessionID
-		if len(short) > 6 {
-			short = short[:6]
-		}
-		b.WriteString(fmt.Sprintf("  [%s] %s: %s\n", short, r.Role, r.Snippet))
+		b.WriteString(fmt.Sprintf("  [%s] %s: %s\n", store.DisplaySessionID(r.SessionID), r.Role, r.Snippet))
 	}
 	h.Out(styleSystem, b.String())
 	return nil
