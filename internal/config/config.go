@@ -370,12 +370,17 @@ func defaultConfigToml() string {
 	return strings.ReplaceAll(defaultConfigTomlTemplate, "{{PROVIDERS}}", strings.Join(ProviderIDs(), " | "))
 }
 
-// ConfigDir returns the path to ~/.poisson/, creating it (mode 0700) if missing.
+// ConfigDir returns the path to ~/.poisson/, creating it (mode 0700) if
+// missing. Exits the process if the home directory can't be resolved —
+// silently substituting the working directory here would scatter config/db
+// state per-invocation-directory instead of failing loudly (e.g. under
+// cron/systemd with $HOME unset), and every caller of this function assumes
+// it always names the same real, stable location.
 func ConfigDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		// Fall back to a relative ".poisson" rather than panicking.
-		home = "."
+		fmt.Fprintf(os.Stderr, "poisson: cannot resolve home directory: %v\n", err)
+		os.Exit(1)
 	}
 	dir := filepath.Join(home, ".poisson")
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {

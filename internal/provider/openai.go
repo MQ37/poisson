@@ -163,7 +163,16 @@ type openaiRespRequest struct {
 	ParallelToolCalls bool             `json:"parallel_tool_calls"`
 	Reasoning         *openaiReasoning `json:"reasoning,omitempty"`
 	PromptCacheKey    string           `json:"prompt_cache_key,omitempty"`
+	MaxOutputTokens   int              `json:"max_output_tokens,omitempty"`
 }
+
+// openaiMaxOutputTokens caps a turn's output when the caller leaves
+// Request.MaxTokens unset (0) — mirrors anthropicMaxOutputTokens (same
+// value) and defaultOllamaMaxTokens. Without this, every real Codex turn
+// went out with no client-side ceiling at all: a misbehaving/looping
+// reasoning run (effort up to xhigh/max) could run indefinitely, unlike its
+// sibling providers which explicitly guard against exactly that.
+const openaiMaxOutputTokens = 64000
 
 // openaiPromptCacheKeyMax is the Responses API limit for prompt_cache_key.
 const openaiPromptCacheKeyMax = 64
@@ -314,6 +323,10 @@ func (p *OpenAIProvider) buildRequest(req *Request) openaiRespRequest {
 		// store:false, so full context is resent each turn — caching is the only
 		// lever to cut the tokens counted against the usage limit.
 		PromptCacheKey: clampPromptCacheKey(req.CacheKey),
+	}
+	body.MaxOutputTokens = req.MaxTokens
+	if body.MaxOutputTokens == 0 {
+		body.MaxOutputTokens = openaiMaxOutputTokens
 	}
 	if effort := mapOpenAIEffort(req.Effort); effort != "" {
 		body.Reasoning = &openaiReasoning{Effort: effort, Summary: "auto"}

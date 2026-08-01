@@ -83,36 +83,7 @@ func main() {
 		return
 	}
 
-	noSkills := false
-	var opts printOpts
-	var cmdArgs []string
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--no-skills":
-			noSkills = true
-		case "--yolo":
-			opts.yolo = true
-		case "-p", "--print":
-			opts.print = true
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				opts.prompt = args[i+1]
-				i++
-			}
-		case "--model":
-			if i+1 < len(args) {
-				opts.model = args[i+1]
-				i++
-			}
-		case "--session":
-			if i+1 < len(args) {
-				opts.sessionID = args[i+1]
-				i++
-			}
-		default:
-			cmdArgs = append(cmdArgs, args[i])
-		}
-	}
+	opts, noSkills, cmdArgs := parseArgs(os.Args[1:])
 
 	if opts.print {
 		opts.noSkills = noSkills
@@ -165,6 +136,61 @@ func main() {
 	}
 }
 
+// parseArgs parses the top-level CLI flags/args, returning the accumulated
+// printOpts, the --no-skills toggle, and every unrecognized argument (the
+// subcommand and its own args, e.g. "login", "anthropic"). --model/--session
+// consume the following argument as their value only when it doesn't itself
+// look like a flag (mirrors -p/--print's existing guard) — without this, a
+// following flag like "--no-skills" is silently swallowed as the value
+// instead of being parsed as its own flag (e.g. "px --session --no-skills"
+// would create a session literally named "--no-skills" and never actually
+// disable skills).
+func parseArgs(args []string) (opts printOpts, noSkills bool, cmdArgs []string) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--no-skills":
+			noSkills = true
+		case "--yolo":
+			opts.yolo = true
+		case "-p", "--print":
+			opts.print = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				opts.prompt = args[i+1]
+				i++
+			}
+		case "--model":
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				opts.model = args[i+1]
+				i++
+			}
+		case "--session":
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				opts.sessionID = args[i+1]
+				i++
+			}
+		default:
+			cmdArgs = append(cmdArgs, args[i])
+		}
+	}
+	return opts, noSkills, cmdArgs
+}
+
+// loadConfigOrDefault loads config.toml, warning on stderr and falling back
+// to config.DefaultConfig() if it can't be read or parsed. Shared by every
+// entry point (runPrint, runREPL, runChildMode) — runPrint and runChildMode
+// previously discarded the error silently, so a typo'd config.toml produced
+// no diagnostic at all in headless (-p) or subagent runs, unlike the REPL.
+func loadConfigOrDefault() *config.Config {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not load config: %v\n", err)
+	}
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	return cfg
+}
+
 // printOpts configures headless single-prompt (-p) mode.
 type printOpts struct {
 	print     bool
@@ -214,10 +240,7 @@ func resolvePrintRuntime(modelArg string, sess *store.Session, cfg *config.Confi
 // stdout and tool activity to stderr, then exits. Read-only tools auto-run;
 // risky bash is denied unless --yolo. Used for scripting and pipelines.
 func runPrint(opts printOpts) {
-	cfg, err := config.Load()
-	if err != nil || cfg == nil {
-		cfg = config.DefaultConfig()
-	}
+	cfg := loadConfigOrDefault()
 	dbPath := filepath.Join(config.ConfigDir(), "poisson.db")
 	st, err := store.Open(dbPath)
 	if err != nil {
@@ -351,11 +374,7 @@ func runPrint(opts printOpts) {
 // cmdResume path the /resume slash command already exercises.
 func runREPL(noSkills bool, resumeSessionID string) {
 	// Load config.
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: could not load config: %v\n", err)
-		cfg = config.DefaultConfig()
-	}
+	cfg := loadConfigOrDefault()
 
 	// Open store.
 	dbPath := filepath.Join(config.ConfigDir(), "poisson.db")
@@ -676,10 +695,7 @@ func runChildMode() {
 	}
 
 	// Load config + open store.
-	cfg, _ := config.Load()
-	if cfg == nil {
-		cfg = config.DefaultConfig()
-	}
+	cfg := loadConfigOrDefault()
 	// Subagents run against an ephemeral DB (POISSON_SUBAGENT_DB) so their
 	// conversation is never persisted to the user's real DB.
 	dbPath := os.Getenv("POISSON_SUBAGENT_DB")

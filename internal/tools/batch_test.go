@@ -504,6 +504,58 @@ func TestBatch_ParallelSubagentsRunConcurrently(t *testing.T) {
 	}
 }
 
+// TestBatch_ConcurrentDispatchCappedAtBatchMaxConcurrent is the regression
+// guard for the fan-out resource-exhaustion gap the "run parallel subagents
+// concurrently" fix (2f4c160) opened: batch's own concurrent dispatch had
+// no ceiling at all, so a single batch call (up to batchMaxCalls=20 steps)
+// could launch that many subagent processes simultaneously — unlike the
+// model's native parallel tool_use path, which agent.go already bounds via
+// maxConcurrentToolCalls (8). Uses all batchMaxCalls (20) steps — more than
+// batchMaxConcurrent (8) — so serialization would show up as maxInFlight <
+// batchMaxConcurrent, and a missing cap would show up as maxInFlight == 20.
+func TestBatch_ConcurrentDispatchCappedAtBatchMaxConcurrent(t *testing.T) {
+	const n = batchMaxCalls
+	reg := NewRegistry()
+
+	var inFlight, maxInFlight int32
+	release := make(chan struct{})
+	reg.Register(ctxBarrierTool{name: "probe", run: func(ctx context.Context) (ToolResult, error) {
+		nf := atomic.AddInt32(&inFlight, 1)
+		defer atomic.AddInt32(&inFlight, -1)
+		for {
+			m := atomic.LoadInt32(&maxInFlight)
+			if nf <= m || atomic.CompareAndSwapInt32(&maxInFlight, m, nf) {
+				break
+			}
+		}
+		<-release
+		return ToolResult{Content: "ok"}, nil
+	}})
+	bt := NewBatchTool(reg)
+	reg.Register(bt)
+
+	calls := make([]map[string]interface{}, n)
+	for i := range calls {
+		calls[i] = map[string]interface{}{"tool": "probe", "input": map[string]string{}}
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		bt.Execute(context.Background(), mustJSON(t, map[string]interface{}{"calls": calls}))
+	}()
+
+	// Give every goroutine a chance to start and hit the barrier, then let
+	// them all finish.
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	<-done
+
+	if got := atomic.LoadInt32(&maxInFlight); got != batchMaxConcurrent {
+		t.Errorf("max concurrent batch executions = %d, want exactly %d (batchMaxConcurrent)", got, batchMaxConcurrent)
+	}
+}
+
 // barrierStepTool is a fully-controllable test tool for proving execution
 // order — run is called synchronously inside Execute.
 type barrierStepTool struct {

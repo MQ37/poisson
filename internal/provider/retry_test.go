@@ -128,6 +128,74 @@ func TestDoWithRetrySucceedsAfterNetworkErrors(t *testing.T) {
 	}
 }
 
+// TestRetryAfterDelayParsesSecondsAndDate verifies retryAfterDelay reads
+// both Retry-After spellings (delay-seconds, HTTP-date), caps at
+// retryAfterMaxDelay, and returns 0 for anything empty/unparseable/elapsed
+// so the caller falls back to its own exponential backoff.
+func TestRetryAfterDelayParsesSecondsAndDate(t *testing.T) {
+	if got := retryAfterDelay(""); got != 0 {
+		t.Errorf("empty = %v, want 0", got)
+	}
+	if got := retryAfterDelay("not-a-number"); got != 0 {
+		t.Errorf("garbage = %v, want 0", got)
+	}
+	if got := retryAfterDelay("5"); got != 5*time.Second {
+		t.Errorf("\"5\" = %v, want 5s", got)
+	}
+	if got := retryAfterDelay("-1"); got != 0 {
+		t.Errorf("negative seconds = %v, want 0", got)
+	}
+	if got := retryAfterDelay("999999"); got != retryAfterMaxDelay {
+		t.Errorf("huge seconds = %v, want capped at %v", got, retryAfterMaxDelay)
+	}
+	future := time.Now().Add(10 * time.Second).UTC().Format(http.TimeFormat)
+	if got := retryAfterDelay(future); got <= 0 || got > 10*time.Second {
+		t.Errorf("HTTP-date 10s out = %v, want (0, 10s]", got)
+	}
+	past := time.Now().Add(-10 * time.Second).UTC().Format(http.TimeFormat)
+	if got := retryAfterDelay(past); got != 0 {
+		t.Errorf("HTTP-date in the past = %v, want 0", got)
+	}
+}
+
+// TestDoWithRetryHonorsRetryAfterHeader verifies a 429's Retry-After header
+// overrides the computed exponential backoff delay — previously ignored
+// entirely, so DoWithRetry always retried on its own fixed schedule
+// regardless of what the server asked for.
+func TestDoWithRetryHonorsRetryAfterHeader(t *testing.T) {
+	shrinkRetryTiming(t)
+	oldSleep := retrySleep
+	retrySleep = func(ctx context.Context, d time.Duration) bool { return true } // don't actually wait 1s
+	defer func() { retrySleep = oldSleep }()
+	var delays []time.Duration
+	trace := &RetryTrace{
+		OnRetry: func(attempt int, delay time.Duration, reason string) {
+			delays = append(delays, delay)
+		},
+	}
+	ctx := WithRetryTrace(context.Background(), trace)
+
+	calls := 0
+	resp, err := DoWithRetry(ctx, DefaultRetryableStatus, func(ctx context.Context) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			r := statusResp(429)
+			r.Header = http.Header{"Retry-After": []string{"1"}}
+			return r, nil
+		}
+		return statusResp(200), nil
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+	if len(delays) != 1 || delays[0] != 1*time.Second {
+		t.Errorf("delays = %v, want [1s] (from Retry-After, not the shrunk exponential backoff)", delays)
+	}
+}
+
 func TestDoWithRetryNonRetryableStatusReturnsImmediately(t *testing.T) {
 	shrinkRetryTiming(t)
 	calls := 0

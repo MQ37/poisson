@@ -300,5 +300,14 @@ func convertXAIUsage(u *openaiSSEUsage) *Usage {
 	if totalOutput := u.TotalTokens - u.PromptTokens; totalOutput > output {
 		output = totalOutput
 	}
-	return &Usage{InputTokens: u.PromptTokens, OutputTokens: output}
+	// prompt_tokens_details.cached_tokens was previously never read here, so
+	// cache hits were always counted as full-price input — matches the
+	// convention convertOpenAIRespUsage already uses (InputTokens excludes
+	// the cached portion, reported separately as CacheReadTokens).
+	cacheRead := u.PromptTokensDetails.CachedTokens
+	input := u.PromptTokens - cacheRead
+	if input < 0 {
+		input = 0
+	}
+	return &Usage{InputTokens: input, CacheReadTokens: cacheRead, OutputTokens: output}
 }

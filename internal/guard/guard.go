@@ -16,6 +16,23 @@ func Tokenize(seg string) []string { return tokenize(seg) }
 // lowercases a token — exported for the same reason as Tokenize.
 func NormalizeToken(token string) string { return normalizeToken(token) }
 
+// PipesIntoDangerousShell reports whether raw pipes output into a shell
+// interpreter (bash, sh, zsh, python, …) — e.g. "curl ... | bash". Exported
+// so agent.AssessBashRisk can fast-path this straight to BashRiskHigh: the
+// content that shell will execute arrives over stdin, which no static
+// argv-token check (isDestructiveCommand's descendShellScript included) can
+// ever inspect, so there is no safe way to classify it as anything but
+// unconditionally dangerous.
+func PipesIntoDangerousShell(raw string) bool { return pipesIntoDangerousShell(raw) }
+
+// HasCommandSubstitution reports whether raw contains $(...) or backtick
+// (or <(...) process) substitution outside a quoted string. Exported for
+// the same reason as PipesIntoDangerousShell: substituted content is
+// opaque to any argv-token-based fast-path check, so a command containing
+// it must be fast-pathed to BashRiskHigh rather than left to a single LLM
+// call with no deterministic floor.
+func HasCommandSubstitution(raw string) bool { return hasCommandSubstitution(raw) }
+
 // Classify runs the full classification pipeline and returns whether the
 // command is safe, and a reason if it is not. Equivalent to
 // ClassifyInDir(command, "") — relative-path sensitivity/symlink checks

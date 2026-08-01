@@ -455,6 +455,13 @@ func ghApiIsMutating(tokens []string) bool {
 		case "-f", "-F":
 			hasFieldParam = true
 		default:
+			// Glued short form ("-fname=value", "-Fname=value") — gh's
+			// flag parsing (pflag) accepts this identically to a separate
+			// "-f name=value" argument; a literal "-f"/"-F" token check
+			// alone misses it.
+			if strings.HasPrefix(t, "-f") || strings.HasPrefix(t, "-F") {
+				hasFieldParam = true
+			}
 			if matchesFlag(t, "", "--raw-field") || matchesFlag(t, "", "--field") {
 				hasFieldParam = true
 			}
@@ -524,11 +531,13 @@ func gitSubIsMutating(tokens []string) bool {
 	return false
 }
 
-// gitHasOutputFlag detects flags that write output: -o, --output, --output-file.
+// gitHasOutputFlag detects flags that write output: -o, --output,
+// --output-file — including glued (-oFILE), "="-joined (--output=FILE), and
+// GNU-abbreviated (--out=FILE) forms, which real git accepts identically to
+// the space-separated spelling but a literal-token check misses entirely.
 func gitHasOutputFlag(tokens []string) bool {
 	for _, t := range tokens {
-		switch t {
-		case "-o", "--output", "--output-file":
+		if matchesFlag(t, "-o", "--output") || matchesFlag(t, "", "--output-file") {
 			return true
 		}
 	}
@@ -566,7 +575,12 @@ func sedHasDangerousFlag(tokens []string) bool {
 }
 
 // sedScriptIsDangerous detects dangerous sed scripts: w (write to file), e
-// (execute command).
+// (execute command). Scripts arrive either as a bare positional argument, a
+// "-e"-prefixed (short, possibly glued) argument, or a "--expression"/
+// "--expr" (GNU abbreviation) long flag — the last form was previously
+// unhandled entirely, since it starts with "--" rather than "-e" and isn't a
+// bare positional token either, so "sed --expression='w /etc/passwd' f" slid
+// straight past this check.
 func sedScriptIsDangerous(tokens []string) bool {
 	for _, t := range tokens {
 		if strings.HasPrefix(t, "-e") || !strings.HasPrefix(t, "-") {
@@ -574,6 +588,14 @@ func sedScriptIsDangerous(tokens []string) bool {
 			if containsSedDangerousCmd(t) {
 				return true
 			}
+			continue
+		}
+		if matchesFlag(t, "", "--expression") {
+			if eq := strings.IndexByte(t, '='); eq >= 0 && containsSedDangerousCmd(t[eq+1:]) {
+				return true
+			}
+			// Bare "--expression" (no "="): its value is the next token,
+			// which — having no leading "-" — is already scanned above.
 		}
 	}
 	return false

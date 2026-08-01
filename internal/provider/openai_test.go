@@ -151,6 +151,24 @@ func TestBuildRequestResponsesFormat(t *testing.T) {
 	}
 }
 
+// TestBuildRequestMaxOutputTokens verifies buildRequest caps output tokens
+// with openaiMaxOutputTokens when the caller leaves Request.MaxTokens unset
+// (the common case — real turns never set it, see risk.go), and passes an
+// explicit MaxTokens through unchanged otherwise. Before this, no field for
+// it existed on the wire body at all: every live Codex turn had no
+// client-side output-token ceiling.
+func TestBuildRequestMaxOutputTokens(t *testing.T) {
+	p := &OpenAIProvider{}
+	body := p.buildRequest(&Request{Model: "gpt-5.5"})
+	if body.MaxOutputTokens != openaiMaxOutputTokens {
+		t.Errorf("MaxOutputTokens = %d, want default %d", body.MaxOutputTokens, openaiMaxOutputTokens)
+	}
+	body = p.buildRequest(&Request{Model: "gpt-5.5", MaxTokens: 500})
+	if body.MaxOutputTokens != 500 {
+		t.Errorf("MaxOutputTokens = %d, want explicit 500", body.MaxOutputTokens)
+	}
+}
+
 func TestBuildRequestPromptCacheKey(t *testing.T) {
 	p := &OpenAIProvider{}
 	// A normal session id is emitted verbatim as prompt_cache_key.

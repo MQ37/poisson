@@ -219,6 +219,25 @@ func TestXAISSEParseUsageOnlyChunk(t *testing.T) {
 	}
 }
 
+// TestConvertXAIUsageSplitsCachedTokens verifies convertXAIUsage reads
+// prompt_tokens_details.cached_tokens (previously never parsed — cache hits
+// were always counted as full-price input) and subtracts it from
+// InputTokens, matching the convention convertOpenAIRespUsage already uses.
+func TestConvertXAIUsageSplitsCachedTokens(t *testing.T) {
+	u := &openaiSSEUsage{PromptTokens: 1000, CompletionTokens: 50, TotalTokens: 1050}
+	u.PromptTokensDetails.CachedTokens = 900
+	got := convertXAIUsage(u)
+	if got.InputTokens != 100 || got.CacheReadTokens != 900 || got.OutputTokens != 50 {
+		t.Errorf("usage = %+v, want input=100 cacheRead=900 output=50", got)
+	}
+	// No cache info at all: behaves exactly as before (input unchanged, no
+	// cache read reported).
+	plain := convertXAIUsage(&openaiSSEUsage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12})
+	if plain.InputTokens != 10 || plain.CacheReadTokens != 0 {
+		t.Errorf("usage = %+v, want input=10 cacheRead=0", plain)
+	}
+}
+
 func TestXAISSEParseToolCall(t *testing.T) {
 	sse := "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"main.go\\\"}\"}}]},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":10}}\n\ndata: [DONE]\n\n"
 

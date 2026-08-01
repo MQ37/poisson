@@ -6,6 +6,8 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -76,6 +78,46 @@ func backoffDelay(n int) time.Duration {
 		d = 0
 	}
 	return d
+}
+
+// retryAfterMaxDelay caps how long a server-supplied Retry-After header is
+// allowed to stall a retry loop — honoring it verbatim would let a
+// misbehaving or malicious endpoint suspend an interactive session (whose
+// own retry budget is otherwise unlimited, see RetryTrace.MaxElapsed) for
+// an arbitrary amount of time.
+const retryAfterMaxDelay = 2 * time.Minute
+
+// retryAfterDelay parses an HTTP Retry-After header value — either
+// delay-seconds ("120") or an HTTP-date — into a duration, capped at
+// retryAfterMaxDelay. Returns 0 for an empty, unparseable, or
+// already-elapsed value, telling the caller to fall back to its own
+// exponential backoff instead.
+func retryAfterDelay(v string) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		d := time.Duration(secs) * time.Second
+		if d > retryAfterMaxDelay {
+			d = retryAfterMaxDelay
+		}
+		return d
+	}
+	if t, err := http.ParseTime(v); err == nil {
+		d := time.Until(t)
+		if d <= 0 {
+			return 0
+		}
+		if d > retryAfterMaxDelay {
+			d = retryAfterMaxDelay
+		}
+		return d
+	}
+	return 0
 }
 
 // DefaultRetryableStatus is the shared retryable-status predicate used by
@@ -247,7 +289,10 @@ func (b *cancelOnCloseBody) Close() error {
 // produced it, unchanged from what a single, non-retrying call would give.
 //
 // retryableStatus may be nil (equivalent to never retrying on status, only
-// on transport errors).
+// on transport errors). A retryable response's own Retry-After header, when
+// present and parseable, overrides the computed exponential delay (capped
+// at retryAfterMaxDelay) — the server's stated wait takes precedence over a
+// guess.
 func DoWithRetry(ctx context.Context, retryableStatus func(code int) bool, attempt func(ctx context.Context) (*http.Response, error)) (*http.Response, error) {
 	trace := RetryTraceFromContext(ctx)
 	n := 0
@@ -293,11 +338,15 @@ func DoWithRetry(ctx context.Context, retryableStatus func(code int) bool, attem
 				retryStart = time.Now()
 			}
 			reason := resp.Status
+			retryAfter := resp.Header.Get("Retry-After")
 			resp.Body.Close()
 			if trace != nil && trace.MaxElapsed > 0 && time.Since(retryStart) > trace.MaxElapsed {
 				return gaveUp(reason)
 			}
 			delay := backoffDelay(n)
+			if ra := retryAfterDelay(retryAfter); ra > 0 {
+				delay = ra
+			}
 			if trace != nil && trace.OnRetry != nil {
 				trace.OnRetry(n, delay, reason)
 			}

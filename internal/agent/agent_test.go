@@ -348,7 +348,14 @@ func TestSubagentSessionAutoCompacts(t *testing.T) {
 	}
 
 	cfg := newTestConfig()
-	cfg.Compaction.Threshold = 0.001 // 0.001 * 8192 ≈ 8 tokens: the tool turn's 20 trips it.
+	// 0.02 * 8192 ≈ 163 tokens. Round 1's lone "look around" message alone
+	// already estimates to ~9 tokens (JSON content-block overhead, not the
+	// literal 11 characters) — auto-compaction now runs unconditionally on
+	// every round, including the first, so the threshold must clear that
+	// baseline or round 1 itself would trigger compaction before the tool
+	// call this test is actually about ever happens. The tool round's ~245
+	// extra tokens (bash call + result) still clears 163 comfortably.
+	cfg.Compaction.Threshold = 0.02
 
 	prov := newFakeProvider()
 	first, second := provider.FakeToolCallResponse("bash", map[string]string{"command": "ls", "description": "look around"}, "done exploring")

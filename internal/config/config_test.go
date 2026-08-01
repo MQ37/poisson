@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -269,6 +270,36 @@ func TestLoadCreatesConfigIfMissing(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Fatal("created config is empty")
+	}
+}
+
+// TestConfigDirExitsLoudlyWithoutHome verifies ConfigDir fails fast with a
+// clear stderr message and exit(1) when os.UserHomeDir() can't resolve a
+// home directory, instead of silently substituting "." — which previously
+// scattered config/db state into whatever the current directory happened
+// to be (e.g. under cron/systemd with $HOME unset). os.UserHomeDir's
+// failure depends on process-wide environment variables, so this must run
+// in a subprocess rather than mutating this test binary's own env.
+func TestConfigDirExitsLoudlyWithoutHome(t *testing.T) {
+	if os.Getenv("POISSON_TEST_CONFIGDIR_SUBPROCESS") == "1" {
+		ConfigDir() // expected to os.Exit(1) before returning
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	cmd := exec.Command(exe, "-test.run=TestConfigDirExitsLoudlyWithoutHome", "-test.v")
+	cmd.Env = []string{"POISSON_TEST_CONFIGDIR_SUBPROCESS=1"} // no HOME/USERPROFILE at all
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("subprocess exited 0, want non-zero; output: %s", out)
+	}
+	if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+		t.Errorf("exit error = %v, want ExitError with code 1", err)
+	}
+	if !strings.Contains(string(out), "cannot resolve home directory") {
+		t.Errorf("output = %q, want a clear \"cannot resolve home directory\" message", out)
 	}
 }
 

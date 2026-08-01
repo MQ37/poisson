@@ -19,6 +19,12 @@ type openaiSSEUsage struct {
 	CompletionTokensDetails struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
 	} `json:"completion_tokens_details"`
+	// PromptTokensDetails.CachedTokens is xAI's prompt-cache-hit count
+	// (https://docs.x.ai — same shape as OpenAI's chat-completions API).
+	// Ollama shares this struct but never populates the field; harmless.
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
 }
 
 // openaiSSEConfig tunes provider-specific behavior for the shared SSE pump.

@@ -42,6 +42,10 @@ func TestFindHasDangerousFlag(t *testing.T) {
 
 func TestGhApiIsMutating(t *testing.T) {
 	mutating := []string{
+		// Glued short form ("-fname=value") — gh's flag parsing (pflag)
+		// accepts this identically to a separate "-f name=value" argument.
+		"gh api repos/x/y/issues -fname=value",
+		"gh api gists -Fpublic=true",
 		"gh api repos/x/y/issues --method POST -f title=x",
 		"gh api repos/x/y/issues -X POST",
 		"gh api repos/x/y -X DELETE",
@@ -164,6 +168,21 @@ func TestGitHasOutputFlag(t *testing.T) {
 	if gitHasOutputFlag(tokenize("git log --oneline")) {
 		t.Error("expected --oneline to not be flagged")
 	}
+	// Glued short (-oFILE), "="-joined, and GNU-abbreviated long forms — real
+	// git accepts all of these identically to the space-separated spelling,
+	// but a literal-token-only check misses them entirely.
+	glued := []string{
+		"git diff -o/tmp/pwned",
+		"git diff --output=/tmp/pwned",
+		"git diff --output-file=/tmp/pwned",
+		"git show --output=/tmp/pwned",
+		"git log --output=/tmp/pwned",
+	}
+	for _, cmd := range glued {
+		if !gitHasOutputFlag(tokenize(cmd)) {
+			t.Errorf("gitHasOutputFlag(%q) = false, want true", cmd)
+		}
+	}
 }
 
 func TestRgHasDangerousFlag(t *testing.T) {
@@ -244,6 +263,22 @@ func TestSedScriptIsDangerous(t *testing.T) {
 		if sedScriptIsDangerous(tokenize(cmd)) {
 			t.Errorf("sedScriptIsDangerous(%q) = true, want false", cmd)
 		}
+	}
+	// Regression: "--expression"/"--expr" (GNU abbreviation) long-flag forms
+	// carry a script exactly like "-e" but start with "--", so they were
+	// previously skipped entirely.
+	glued := []string{
+		`sed --expression=w /etc/passwd`,
+		`sed --expr='1w out.txt' file.txt`,
+		`sed --expression='1e whoami' file.txt`,
+	}
+	for _, cmd := range glued {
+		if !sedScriptIsDangerous(tokenize(cmd)) {
+			t.Errorf("sedScriptIsDangerous(%q) = false, want true", cmd)
+		}
+	}
+	if sedScriptIsDangerous(tokenize(`sed --expression=s/a/b/ file.txt`)) {
+		t.Error(`sedScriptIsDangerous("sed --expression=s/a/b/ file.txt") = true, want false`)
 	}
 }
 

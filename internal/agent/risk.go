@@ -114,12 +114,28 @@ No explanation. One word only.`
 // consults the deterministic guard for a LOW verdict: on failure or ambiguous
 // output it returns BashRiskUnknown, which the approval gate treats as "must
 // ask the human". Destructive commands (rm, rmdir, shred, find -delete, a
-// dangerous git subcommand such as commit/rm/push --force/reset --hard, …)
-// and untrusted-exec commands (npx, pnpm dlx, …) are fast-pathed to
-// BashRiskHigh; package-install commands are fast-pathed to BashRiskMedium —
-// all without an LLM call, so a misclassification can never auto-approve any
-// of them (WrapRiskGatedApproval only auto-approves BashRiskLow).
+// dangerous git subcommand such as commit/rm/push --force/reset --hard, …),
+// untrusted-exec commands (npx, pnpm dlx, …), pipes into a shell interpreter
+// (curl … | bash), and $(...)/backtick command substitution are fast-pathed
+// to BashRiskHigh; package-install commands are fast-pathed to
+// BashRiskMedium — all without an LLM call, so a misclassification can
+// never auto-approve any of them (WrapRiskGatedApproval only auto-approves
+// BashRiskLow).
 func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdir string) BashRisk {
+	// A pipe into a shell interpreter or $(...)/backtick substitution hands
+	// the actual command to run through stdin or an opaque substituted
+	// string — content no argv-token-based check below can ever inspect
+	// (isDestructiveCommand's descendShellScript only sees literal argument
+	// text). guard.ClassifyInDir already refuses to auto-approve either
+	// shape, but without this fast path that refusal only demoted the
+	// command to a single non-deterministic LLM call with no guaranteed
+	// floor under it — unlike every other obfuscation trick here, which
+	// does get one. There is no safe way to classify unknowable content
+	// except unconditionally high, the same policy already used below for
+	// npx/pnpm dlx/etc.
+	if guard.PipesIntoDangerousShell(command) || guard.HasCommandSubstitution(command) {
+		return BashRiskHigh
+	}
 	if isDestructiveCommand(command) {
 		return BashRiskHigh
 	}

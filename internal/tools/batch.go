@@ -28,6 +28,14 @@ var batchDenied = map[string]bool{
 const (
 	batchMaxCalls     = 20
 	batchStepMaxBytes = 8 * 1024 // per-step body in the aggregate result
+	// batchMaxConcurrent bounds how many of a batch's own calls run at
+	// once — mirrors agent.maxConcurrentToolCalls (same value), which caps
+	// the model's native parallel tool_use path for the identical reason:
+	// a batch call, including one whose steps are themselves subagent
+	// spawns, previously had no ceiling at all here, so up to batchMaxCalls
+	// (20) child px processes could launch simultaneously from a single
+	// tool_use.
+	batchMaxConcurrent = 8
 )
 
 // BatchTool runs multiple independent tool calls in one invocation — a
@@ -281,10 +289,13 @@ func (t *BatchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 	} else {
 		var wg sync.WaitGroup
 		wg.Add(len(in.Calls))
+		sem := make(chan struct{}, batchMaxConcurrent)
 		for i := range in.Calls {
 			i := i
+			sem <- struct{}{}
 			go func() {
 				defer wg.Done()
+				defer func() { <-sem }()
 				runOne(i)
 			}()
 		}

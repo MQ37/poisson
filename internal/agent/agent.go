@@ -1083,8 +1083,14 @@ roundLoop:
 
 		// Compact before building every request. A model switch can reduce the
 		// context window below the active conversation size; waiting until after
-		// a tool round would send one already-oversized request first.
-		if _, err := a.store.GetLastAPICall(a.sessionID); err == nil && a.shouldCompact() {
+		// a tool round would send one already-oversized request first. Checked
+		// unconditionally, even before any api_calls row exists for this
+		// session — estimateActiveContextTokens already falls back to a full
+		// char/4 estimate with no prior call to anchor on, so an oversized
+		// first turn (huge first message, or a subagent whose task prompt
+		// alone is enormous) still triggers compaction instead of always
+		// skipping the very turn where it matters most.
+		if a.shouldCompact() {
 			if err := a.compact(ctx, true, true); err != nil {
 				if !errors.Is(err, ErrNothingToCompact) {
 					log.Printf("warning: auto-compaction failed: %v", err)
