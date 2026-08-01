@@ -125,7 +125,9 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	}
 	// batch last so it can dispatch into every tool already registered.
 	// Denied inside batch: batch itself (no recursion) — bash and subagent
-	// are allowed but subagent runs serial (see batch.go).
+	// are both allowed; subagent runs fully concurrently with sibling
+	// subagent calls, bash stays serial against other gated tools (see
+	// batch.go's mutatingTools).
 	reg.Register(NewBatchTool(reg))
 	return reg
 }

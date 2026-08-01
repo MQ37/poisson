@@ -3,12 +3,14 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -363,33 +365,38 @@ func TestBatch_NotifiesSubagentDoneFn(t *testing.T) {
 }
 
 // blockingSubagentTool blocks its Execute until ctx is cancelled — used to
-// hold a batch's serial subagent loop mid-flight so a cancel can be fired
-// while later calls in the same batch are still queued, never started.
+// prove every concurrently-dispatched subagent call in a batch still gets
+// noticed (subagentDoneFn) once ctx is cancelled, even though none of them
+// ever completes normally. startedOnce/started signal that at least one
+// call has entered Execute — a *sync.Once (not a bare close) because
+// subagent no longer forces the batch serial (see mutatingTools), so all N
+// calls may reach this same Execute concurrently and would otherwise
+// double-close started.
 type blockingSubagentTool struct {
-	started chan struct{}
+	startedOnce *sync.Once
+	started     chan struct{}
 }
 
 func (t blockingSubagentTool) Name() string            { return "subagent" }
 func (t blockingSubagentTool) Description() string     { return "blocks until ctx done" }
 func (t blockingSubagentTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
 func (t blockingSubagentTool) Execute(ctx context.Context, _ json.RawMessage) (ToolResult, error) {
-	close(t.started)
+	t.startedOnce.Do(func() { close(t.started) })
 	<-ctx.Done()
 	return ToolResult{Error: "cancelled"}, ctx.Err()
 }
 
 // TestBatch_CancelNotifiesSubagentDoneFnForSkippedCalls is the regression
-// guard for the orphaned-widget bug: batch's serial loop (forced by
-// subagent being in mutatingTools) used to mark every not-yet-started call
-// "cancelled" in its own output text on ctx cancellation, but never told
-// subagentDoneFn about them — so a batched subagent's TUI widget (which only
-// flips to done via that callback, see SetSubagentDoneFn) spun forever for
-// every subagent queued behind the one actually running when the user hit
-// Esc. All three calls here must be notified, not just the first.
+// guard for the orphaned-widget bug: every call cancelled mid-flight must
+// still tell subagentDoneFn about itself — a batched subagent's TUI widget
+// (which only flips to done via that callback, see SetSubagentDoneFn) would
+// otherwise spin forever. All three calls here run concurrently (subagent
+// is no longer in mutatingTools — see TestBatch_ParallelSubagentsRunConcurrently)
+// and all three must still be notified once ctx is cancelled.
 func TestBatch_CancelNotifiesSubagentDoneFnForSkippedCalls(t *testing.T) {
 	started := make(chan struct{})
 	reg := NewRegistry()
-	reg.Register(blockingSubagentTool{started: started})
+	reg.Register(blockingSubagentTool{startedOnce: &sync.Once{}, started: started})
 	bt := NewBatchTool(reg)
 	reg.Register(bt)
 
@@ -419,7 +426,7 @@ func TestBatch_CancelNotifiesSubagentDoneFnForSkippedCalls(t *testing.T) {
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
-		t.Fatal("first subagent call never started")
+		t.Fatal("no subagent call ever started")
 	}
 	cancel()
 
@@ -438,6 +445,65 @@ func TestBatch_CancelNotifiesSubagentDoneFnForSkippedCalls(t *testing.T) {
 	}
 }
 
+// TestBatch_ParallelSubagentsRunConcurrently is the regression guard for the
+// "only the first scout's turn count moves" bug's second half: subagent used
+// to sit in mutatingTools, which forces every call present in that set
+// through batch's serial for-loop for the WHOLE batch — so N subagent calls
+// wrapped in a single `batch` invocation (the only way a model that emits
+// just one tool_use per turn can spawn several at once — see BatchTool's own
+// Description) ran one at a time regardless of agent.go's top-level
+// approvalGatedTools fix, which only ever sees the single outer "batch"
+// tool_use, never what's nested inside it. Each fake subagent call signals
+// it has started and waits for every sibling's start signal, so all N must
+// be in flight simultaneously to proceed — serial dispatch would deadlock
+// (caught by the timeout + maxInFlight assertion).
+func TestBatch_ParallelSubagentsRunConcurrently(t *testing.T) {
+	const n = 5
+	reg := NewRegistry()
+
+	var startedCount, inFlight, maxInFlight int32
+	allStarted := make(chan struct{})
+	reg.Register(ctxBarrierTool{name: "subagent", run: func(ctx context.Context) (ToolResult, error) {
+		nf := atomic.AddInt32(&inFlight, 1)
+		defer atomic.AddInt32(&inFlight, -1)
+		for {
+			m := atomic.LoadInt32(&maxInFlight)
+			if nf <= m || atomic.CompareAndSwapInt32(&maxInFlight, m, nf) {
+				break
+			}
+		}
+		if atomic.AddInt32(&startedCount, 1) == n {
+			close(allStarted)
+		}
+		select {
+		case <-allStarted: // serial dispatch would deadlock here
+		case <-ctx.Done():
+			return ToolResult{}, ctx.Err()
+		}
+		return ToolResult{Content: "scout done"}, nil
+	}})
+	bt := NewBatchTool(reg)
+	reg.Register(bt)
+
+	calls := make([]map[string]interface{}, n)
+	for i := range calls {
+		calls[i] = map[string]interface{}{"tool": "subagent", "input": map[string]string{"task": "scout"}}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := bt.Execute(ctx, mustJSON(t, map[string]interface{}{"calls": calls}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(res.Content, fmt.Sprintf("%d ok", n)) {
+		t.Fatalf("expected all %d calls to succeed, got: %q", n, res.Content)
+	}
+	if got := atomic.LoadInt32(&maxInFlight); got != n {
+		t.Errorf("max concurrent subagent executions = %d, want %d (ran serially?)", got, n)
+	}
+}
+
 // barrierStepTool is a fully-controllable test tool for proving execution
 // order — run is called synchronously inside Execute.
 type barrierStepTool struct {
@@ -451,6 +517,21 @@ func (t barrierStepTool) Schema() json.RawMessage { return json.RawMessage(`{"ty
 func (t barrierStepTool) Execute(ctx context.Context, _ json.RawMessage) (ToolResult, error) {
 	t.run()
 	return ToolResult{Content: "ok"}, nil
+}
+
+// ctxBarrierTool is barrierStepTool but its run gets the call's context and
+// controls the whole ToolResult/error — used where a test needs to observe
+// or react to cancellation (see TestBatch_ParallelSubagentsRunConcurrently).
+type ctxBarrierTool struct {
+	name string
+	run  func(ctx context.Context) (ToolResult, error)
+}
+
+func (t ctxBarrierTool) Name() string            { return t.name }
+func (t ctxBarrierTool) Description() string     { return "test barrier" }
+func (t ctxBarrierTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t ctxBarrierTool) Execute(ctx context.Context, _ json.RawMessage) (ToolResult, error) {
+	return t.run(ctx)
 }
 
 // TestBatch_ApprovalGatedToolsForceSerial is the regression guard for
