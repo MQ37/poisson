@@ -31,33 +31,31 @@ func (t *TUI) openBTWPrompt() {
 func (t *TUI) runBTW(ctx context.Context, o *btwOverlay, question string) {
 	onStatus := func(text string) {
 		o.setStatus(text)
-		t.mu.Lock()
-		t.dirty.markFull()
-		t.mu.Unlock()
+		t.withLock(func() { t.dirty.markFull() })
 	}
 	textCh, errCh, err := t.agent.StreamQuickAnswer(ctx, question, onStatus)
 	if err != nil {
-		t.mu.Lock()
-		o.finish(err)
-		t.dirty.markFull()
-		t.mu.Unlock()
+		t.withLock(func() {
+			o.finish(err)
+			t.dirty.markFull()
+		})
 		return
 	}
 	for chunk := range textCh {
-		t.mu.Lock()
-		o.appendText(chunk)
-		t.dirty.markFull()
-		t.mu.Unlock()
+		t.withLock(func() {
+			o.appendText(chunk)
+			t.dirty.markFull()
+		})
 	}
 	var streamErr error
 	select {
 	case streamErr = <-errCh:
 	default:
 	}
-	t.mu.Lock()
-	o.finish(streamErr)
-	t.dirty.markFull()
-	t.mu.Unlock()
+	t.withLock(func() {
+		o.finish(streamErr)
+		t.dirty.markFull()
+	})
 }
 
 // openModelPicker shows an interactive model picker overlay.

@@ -677,13 +677,15 @@ func (t *TUI) markInputDirty() {
 }
 
 func (t *TUI) markSpinnerTick() {
-	t.mu.Lock()
-	lay := t.prepareLayout()
-	rows := t.offsetConvDirtyRows(t.toolSpinnerRows(lay))
-	runningSub := t.scroll.hasRunningSubagent()
-	thinking := t.status.Thinking
-	compacting := t.compacting.Load()
-	t.mu.Unlock()
+	var rows []int
+	var runningSub, thinking, compacting bool
+	t.withLock(func() {
+		lay := t.prepareLayout()
+		rows = t.offsetConvDirtyRows(t.toolSpinnerRows(lay))
+		runningSub = t.scroll.hasRunningSubagent()
+		thinking = t.status.Thinking
+		compacting = t.compacting.Load()
+	})
 	// While a subagent runs, repaint the whole scroll region so the pinned
 	// running-agent lines (spinner + live timer) update each tick.
 	if runningSub {

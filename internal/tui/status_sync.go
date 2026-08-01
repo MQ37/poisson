@@ -14,9 +14,7 @@ func (t *TUI) refreshProviderUsageLimits(ctx context.Context) {
 	}
 	t.agent.RefreshAnthropicUsageLimits(ctx)
 	t.agent.RefreshOpenAIUsageLimits(ctx)
-	t.mu.Lock()
-	t.syncHeaderFromAgentLocked()
-	t.mu.Unlock()
+	t.withLock(t.syncHeaderFromAgentLocked)
 	t.dirty.markStatus()
 }
 
@@ -30,9 +28,7 @@ func (t *TUI) refreshProviderUsageLimitsForce(ctx context.Context) {
 	}
 	t.agent.RefreshAnthropicUsageLimitsForce(ctx)
 	t.agent.RefreshOpenAIUsageLimitsForce(ctx)
-	t.mu.Lock()
-	t.syncHeaderFromAgentLocked()
-	t.mu.Unlock()
+	t.withLock(t.syncHeaderFromAgentLocked)
 	t.dirty.markStatus()
 }
 

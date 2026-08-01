@@ -105,28 +105,28 @@ func (t *TUI) startTurn(segments []agent.TextSegment, images ...agent.ImageAttac
 			t.cancelMu.Unlock()
 			cancel()
 			if r := recover(); r != nil {
-				t.mu.Lock()
-				t.scroll.appendRaw(styleError, fmt.Sprintf("agent panic: %v", r))
-				t.mu.Unlock()
+				t.withLock(func() {
+					t.scroll.appendRaw(styleError, fmt.Sprintf("agent panic: %v", r))
+				})
 			}
-			t.mu.Lock()
-			t.status.Thinking = false
-			t.dirty.markStatus()
-			// The footer hint line (Enter:send vs Enter:queue message) is painted
-			// inside the input region, not the status region — markStatus() alone
-			// leaves it showing the stale "busy" hint until some unrelated
-			// keypress happens to dirty the input region too (confirmed bug, fixed
-			// here). Deliberately NOT markFull(): a full repaint sends a much
-			// bigger single burst of escape sequences, and terminals (kitty has a
-			// documented history of this exact bug class: dropped/duplicated
-			// output when an app in raw mode sends large chunks of cursor-move +
-			// print sequences in one write, e.g. kovidgoyal/kitty#6306) can
-			// mis-render large bursts. Keep this repaint as small as the bug fix
-			// actually requires.
-			t.dirty.markInput()
-			// Send anything queued during this turn as one combined follow-up.
-			t.drainQueueLocked()
-			t.mu.Unlock()
+			t.withLock(func() {
+				t.status.Thinking = false
+				t.dirty.markStatus()
+				// The footer hint line (Enter:send vs Enter:queue message) is painted
+				// inside the input region, not the status region — markStatus() alone
+				// leaves it showing the stale "busy" hint until some unrelated
+				// keypress happens to dirty the input region too (confirmed bug, fixed
+				// here). Deliberately NOT markFull(): a full repaint sends a much
+				// bigger single burst of escape sequences, and terminals (kitty has a
+				// documented history of this exact bug class: dropped/duplicated
+				// output when an app in raw mode sends large chunks of cursor-move +
+				// print sequences in one write, e.g. kovidgoyal/kitty#6306) can
+				// mis-render large bursts. Keep this repaint as small as the bug fix
+				// actually requires.
+				t.dirty.markInput()
+				// Send anything queued during this turn as one combined follow-up.
+				t.drainQueueLocked()
+			})
 		}()
 		_ = t.agent.PromptSegmentsWithContext(ctx, segments, images...)
 	}()
@@ -360,9 +360,8 @@ func (t *TUI) Approve(ctx context.Context, command, description, workdir string,
 	defer func() { tools.RecordApproval(ctx, allowed) }()
 
 	if origin != agent.ApprovalOriginBTW {
-		t.mu.Lock()
-		b := t.currentBTW
-		t.mu.Unlock()
+		var b *btwOverlay
+		t.withLock(func() { b = t.currentBTW })
 		for b != nil {
 			select {
 			case <-b.closedCh():
@@ -371,9 +370,7 @@ func (t *TUI) Approve(ctx context.Context, command, description, workdir string,
 			}
 			// b itself is done; check whether a (possibly different) /btw
 			// session has since been opened.
-			t.mu.Lock()
-			b = t.currentBTW
-			t.mu.Unlock()
+			t.withLock(func() { b = t.currentBTW })
 		}
 	}
 
@@ -409,28 +406,29 @@ drained:
 		}
 	}()
 
-	t.mu.Lock()
-	t.clearCompletionLocked()
 	var resumeBTW *btwOverlay
-	if origin == agent.ApprovalOriginBTW {
-		if b, ok := t.activeOverlay.(*btwOverlay); ok {
-			resumeBTW = b // keep its stream alive; restore it once answered
+	var overlay *approvalOverlay
+	t.withLock(func() {
+		t.clearCompletionLocked()
+		if origin == agent.ApprovalOriginBTW {
+			if b, ok := t.activeOverlay.(*btwOverlay); ok {
+				resumeBTW = b // keep its stream alive; restore it once answered
+			}
 		}
-	}
-	if resumeBTW == nil {
-		// The park loop above already ensures activeOverlay isn't a foreign
-		// /btw panel at this point (bar an astronomically small race between
-		// the check and acquiring approvalMu) — safe to cancel unconditionally,
-		// same as any other overlay.
-		t.cancelOverlayWork()
-	}
-	overlay := newApprovalOverlay(command, description, workdir, origin)
-	if r := bashRiskLabel(risk); r != "" {
-		overlay.setRisk(r)
-	}
-	t.activeOverlay = overlay
-	t.dirty.markFull()
-	t.mu.Unlock()
+		if resumeBTW == nil {
+			// The park loop above already ensures activeOverlay isn't a foreign
+			// /btw panel at this point (bar an astronomically small race between
+			// the check and acquiring approvalMu) — safe to cancel unconditionally,
+			// same as any other overlay.
+			t.cancelOverlayWork()
+		}
+		overlay = newApprovalOverlay(command, description, workdir, origin)
+		if r := bashRiskLabel(risk); r != "" {
+			overlay.setRisk(r)
+		}
+		t.activeOverlay = overlay
+		t.dirty.markFull()
+	})
 
 	t.cancelMu.Lock()
 	runCtx := t.cancelCtx
@@ -464,20 +462,20 @@ drained:
 	select {
 	case reply = <-t.approvalAnswer:
 	case <-t.done:
-		t.mu.Lock()
-		restoreOverlay()
-		t.lastOverlayLines = 0
-		t.mu.Unlock()
+		t.withLock(func() {
+			restoreOverlay()
+			t.lastOverlayLines = 0
+		})
 		return false, ""
 	case <-cancelCh:
 		reply = approvalReply{Allowed: false}
 	}
 
-	t.mu.Lock()
-	restoreOverlay()
-	t.lastOverlayLines = 0
-	t.markScrollDirty()
-	t.mu.Unlock()
+	t.withLock(func() {
+		restoreOverlay()
+		t.lastOverlayLines = 0
+		t.markScrollDirty()
+	})
 	return reply.Allowed, reply.Reason
 }
 

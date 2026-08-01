@@ -76,17 +76,18 @@ func (t *TUI) Run() error {
 			case <-stop:
 				return
 			case <-tick.C:
-				t.mu.Lock()
-				animate := needsSpinner(t.status.Thinking, t.activeTools, t.compacting.Load())
-				if !animate {
-					// The /btw panel spins while it streams its answer, even when the
-					// main agent is idle.
-					if bo, ok := t.activeOverlay.(*btwOverlay); ok {
-						_, _, _, processing, _, _ := bo.snapshot()
-						animate = processing
+				var animate bool
+				t.withLock(func() {
+					animate = needsSpinner(t.status.Thinking, t.activeTools, t.compacting.Load())
+					if !animate {
+						// The /btw panel spins while it streams its answer, even when the
+						// main agent is idle.
+						if bo, ok := t.activeOverlay.(*btwOverlay); ok {
+							_, _, _, processing, _, _ := bo.snapshot()
+							animate = processing
+						}
 					}
-				}
-				t.mu.Unlock()
+				})
 				if animate {
 					t.renderFrame++
 					t.markSpinnerTick()
@@ -173,9 +174,8 @@ func (t *TUI) Run() error {
 					continue
 				}
 				// Don't scroll scrollback behind modal overlays or approval.
-				t.mu.Lock()
-				blockBG := t.blocksBackgroundInput()
-				t.mu.Unlock()
+				var blockBG bool
+				t.withLock(func() { blockBG = t.blocksBackgroundInput() })
 				// Approval keeps the conversation visible above the prompt, so allow
 				// wheel-scrolling it too (other full-screen overlays stay blocked).
 				if !blockBG || t.approving.Load() {
@@ -200,10 +200,11 @@ func (t *TUI) Run() error {
 						// Let the user review the conversation while deciding: Tab
 						// toggles conversation focus and scroll keys move the
 						// conversation, all with the approval still pending.
-						t.mu.Lock()
-						convFocus := t.focusRegion == focusConv
-						routes := approvalRoutesToHandler(k, convFocus, t.scrollRows)
-						t.mu.Unlock()
+						var convFocus, routes bool
+						t.withLock(func() {
+							convFocus = t.focusRegion == focusConv
+							routes = approvalRoutesToHandler(k, convFocus, t.scrollRows)
+						})
 						if routes {
 							if quit, err := t.feedKey(k); err != nil {
 								t.appendError(err)
@@ -215,16 +216,16 @@ func (t *TUI) Run() error {
 						}
 						// Input focus: arrows scroll the (possibly long) command panel.
 						if !convFocus && (k.isNavUp() || k.isNavDown()) {
-							t.mu.Lock()
-							if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
-								delta := 1
-								if k.isNavUp() {
-									delta = -1
+							t.withLock(func() {
+								if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
+									delta := 1
+									if k.isNavUp() {
+										delta = -1
+									}
+									ao.scrollBy(delta)
+									t.dirty.markInput()
 								}
-								ao.scrollBy(delta)
-								t.dirty.markInput()
-							}
-							t.mu.Unlock()
+							})
 							continue
 						}
 						allowed, ok := keyApprovalAnswer(k)
@@ -237,12 +238,12 @@ func (t *TUI) Run() error {
 							// Denying commits to the deny, but doesn't send it yet: show an
 							// optional reason prompt first. feedDenyReasonKey (above) takes
 							// over from here until Enter/Esc finalizes it.
-							t.mu.Lock()
-							if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
-								ao.beginDenyReason()
-								t.dirty.markInput()
-							}
-							t.mu.Unlock()
+							t.withLock(func() {
+								if ao, ok := t.activeOverlay.(*approvalOverlay); ok {
+									ao.beginDenyReason()
+									t.dirty.markInput()
+								}
+							})
 						}
 						continue
 					}
@@ -272,10 +273,10 @@ func (t *TUI) Run() error {
 				t.output = nil
 				continue
 			}
-			t.mu.Lock()
-			t.handleEvent(ev)
-			t.markAfterEvent(ev)
-			t.mu.Unlock()
+			t.withLock(func() {
+				t.handleEvent(ev)
+				t.markAfterEvent(ev)
+			})
 		}
 	}
 }
@@ -328,27 +329,35 @@ func (t *TUI) approvalDenyAndMaybeCancelRun(reason string) {
 // Returns false when there's no pending reason prompt, so the caller falls
 // through to its normal approval-key handling.
 func (t *TUI) feedDenyReasonKey(k Key) bool {
-	t.mu.Lock()
-	ao, ok := t.activeOverlay.(*approvalOverlay)
-	if !ok || !ao.denying {
-		t.mu.Unlock()
-		return false
+	// approvalDenyAndMaybeCancelRun (below) can call t.cancelActiveRun,
+	// which itself takes t.mu — so the Enter/Escape finalize path must run
+	// AFTER this function's own lock releases, same reasoning as
+	// handleOneMouseEvent's deferred handleScrollDelta call.
+	var handled, doFinalize bool
+	var finalizeReason string
+	t.withLock(func() {
+		ao, ok := t.activeOverlay.(*approvalOverlay)
+		if !ok || !ao.denying {
+			return
+		}
+		handled = true
+		if k.Kind == KeyEnter || k.Kind == KeyEscape {
+			finalizeReason = ao.reasonText()
+			doFinalize = true
+			return
+		}
+		// Same editor the main input box uses, so every key (word-wise
+		// Alt+Backspace/Alt+Arrow, Ctrl+W, Home/End, paste, ...) behaves
+		// identically here. The quit signal applyKey returns for Ctrl+D on an
+		// empty buffer means nothing in a reason prompt — ignored, not acted on.
+		if ao.reasonEditor.wrapWidth < 1 && t.cols > 0 {
+			ao.reasonEditor.wrapWidth = inputWrapWidth(t.cols)
+		}
+		ao.reasonEditor.applyKey(k)
+		t.dirty.markInput()
+	})
+	if doFinalize {
+		t.approvalDenyAndMaybeCancelRun(finalizeReason)
 	}
-	if k.Kind == KeyEnter || k.Kind == KeyEscape {
-		reason := ao.reasonText()
-		t.mu.Unlock()
-		t.approvalDenyAndMaybeCancelRun(reason)
-		return true
-	}
-	// Same editor the main input box uses, so every key (word-wise
-	// Alt+Backspace/Alt+Arrow, Ctrl+W, Home/End, paste, ...) behaves
-	// identically here. The quit signal applyKey returns for Ctrl+D on an
-	// empty buffer means nothing in a reason prompt — ignored, not acted on.
-	if ao.reasonEditor.wrapWidth < 1 && t.cols > 0 {
-		ao.reasonEditor.wrapWidth = inputWrapWidth(t.cols)
-	}
-	ao.reasonEditor.applyKey(k)
-	t.dirty.markInput()
-	t.mu.Unlock()
-	return true
+	return handled
 }

@@ -232,9 +232,7 @@ func (t *TUI) setEphemeralHintLocked(msg string, d time.Duration) {
 }
 
 func (t *TUI) setEphemeralHint(msg string, d time.Duration) {
-	t.mu.Lock()
-	t.setEphemeralHintLocked(msg, d)
-	t.mu.Unlock()
+	t.withLock(func() { t.setEphemeralHintLocked(msg, d) })
 }
 
 func (t *TUI) maybeClearHint() {
@@ -278,9 +276,7 @@ func (t *TUI) flashCompletionHintLocked() {
 }
 
 func (t *TUI) cancelActiveRun() {
-	t.mu.Lock()
-	t.cancelActiveRunLocked()
-	t.mu.Unlock()
+	t.withLock(t.cancelActiveRunLocked)
 }
 
 func (t *TUI) flashApprovalHint() {
@@ -307,14 +303,11 @@ func (t *TUI) prepareShutdownLocked() {
 
 // waitForAgentStop blocks briefly until the agent goroutine finishes after shutdown.
 func (t *TUI) waitForAgentStop() {
-	t.mu.Lock()
-	t.prepareShutdownLocked()
-	t.mu.Unlock()
+	t.withLock(t.prepareShutdownLocked)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		t.mu.Lock()
-		busy := t.status.Thinking || t.activeTools > 0
-		t.mu.Unlock()
+		var busy bool
+		t.withLock(func() { busy = t.status.Thinking || t.activeTools > 0 })
 		if !busy {
 			return
 		}

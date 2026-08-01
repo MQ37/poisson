@@ -58,78 +58,80 @@ func consumeMouseEvents(data []byte) (events []MouseEvent, rest []byte) {
 // left-button press/drag/release (click or text selection), or an ignored
 // button/state.
 func (t *TUI) handleOneMouseEvent(ev MouseEvent) {
-	t.mu.Lock()
+	// The two "scroll the conversation" exits below must run
+	// handleScrollDelta AFTER the lock releases (it takes t.mu itself, and
+	// t.mu is non-reentrant) — so the locked decision logic below just
+	// records that intent via wantScroll/scrollDelta instead of calling it
+	// directly, and the call happens once, unlocked, after withLock returns.
+	var scrollDelta int
+	var wantScroll bool
 
-	if delta, ok := mouseWheelDelta(ev.Button); ok {
-		if t.approving.Load() {
-			// The approval panel only occupies the bottom input region — the
-			// conversation stays visible above it (same as PgUp/PgDn, see
-			// approvalRoutesToHandler). A wheel event landing on the panel
-			// itself scrolls the (possibly long) command text; anywhere
-			// above that, in the still-visible conversation, it must scroll
-			// the conversation instead — previously every wheel tick during
-			// an approval was routed to the panel unconditionally, so
-			// scrolling the mouse over the conversation while a prompt was
-			// pending silently did nothing (users had to reach for PgUp/PgDn).
-			panelTop := t.headerRows + t.scrollRows + 1
-			if ao, ok := t.activeOverlay.(*approvalOverlay); ok && ev.Row >= panelTop {
-				// Wheel-up shows earlier command lines (opposite of scrollback delta).
-				ao.scrollBy(-delta)
-				t.dirty.markInput()
-				t.mu.Unlock()
-				return
-			}
-			t.mu.Unlock()
-			t.handleScrollDelta(delta)
-			return
-		}
-		if t.blocksBackgroundInput() {
-			if flo, ok := t.activeOverlay.(*filterableListOverlay); ok {
-				vis := flo.filtered()
-				if delta > 0 && flo.idx > 0 {
-					flo.idx--
-				} else if delta < 0 && flo.idx < len(vis)-1 {
-					flo.idx++
+	t.withLock(func() {
+		if delta, ok := mouseWheelDelta(ev.Button); ok {
+			if t.approving.Load() {
+				// The approval panel only occupies the bottom input region — the
+				// conversation stays visible above it (same as PgUp/PgDn, see
+				// approvalRoutesToHandler). A wheel event landing on the panel
+				// itself scrolls the (possibly long) command text; anywhere
+				// above that, in the still-visible conversation, it must scroll
+				// the conversation instead — previously every wheel tick during
+				// an approval was routed to the panel unconditionally, so
+				// scrolling the mouse over the conversation while a prompt was
+				// pending silently did nothing (users had to reach for PgUp/PgDn).
+				panelTop := t.headerRows + t.scrollRows + 1
+				if ao, ok := t.activeOverlay.(*approvalOverlay); ok && ev.Row >= panelTop {
+					// Wheel-up shows earlier command lines (opposite of scrollback delta).
+					ao.scrollBy(-delta)
+					t.dirty.markInput()
+					return
 				}
-				t.dirty.markFull()
-				t.mu.Unlock()
+				scrollDelta, wantScroll = delta, true
 				return
 			}
-			t.mu.Unlock()
-			return
-		}
-		w := t.contentWidth()
-		if t.scroll.focusedToolExpanded(w) {
-			// Wheel-up shows earlier lines (opposite of scrollFocusedTool's own
-			// delta convention, same fix as the approval overlay above).
-			if t.scroll.scrollFocusedTool(w, -delta) {
-				t.markScrollDirty()
+			if t.blocksBackgroundInput() {
+				if flo, ok := t.activeOverlay.(*filterableListOverlay); ok {
+					vis := flo.filtered()
+					if delta > 0 && flo.idx > 0 {
+						flo.idx--
+					} else if delta < 0 && flo.idx < len(vis)-1 {
+						flo.idx++
+					}
+					t.dirty.markFull()
+					return
+				}
+				return
 			}
-			t.mu.Unlock()
+			w := t.contentWidth()
+			if t.scroll.focusedToolExpanded(w) {
+				// Wheel-up shows earlier lines (opposite of scrollFocusedTool's own
+				// delta convention, same fix as the approval overlay above).
+				if t.scroll.scrollFocusedTool(w, -delta) {
+					t.markScrollDirty()
+				}
+				return
+			}
+			scrollDelta, wantScroll = delta, true
 			return
 		}
-		t.mu.Unlock()
-		t.handleScrollDelta(delta)
-		return
-	}
 
-	if ev.Button == 0 && ev.Press && !ev.Motion {
-		t.beginPressLocked(ev.Row, ev.Col)
-		t.mu.Unlock()
-		return
-	}
-	if ev.Button&3 == 0 && ev.Motion {
-		t.extendSelectionLocked(ev.Row, ev.Col)
-		t.mu.Unlock()
-		return
-	}
-	if ev.Button&3 == 0 && !ev.Press && !ev.Motion {
-		t.endSelectionLocked(ev.Row)
-		t.mu.Unlock()
-		return
-	}
+		if ev.Button == 0 && ev.Press && !ev.Motion {
+			t.beginPressLocked(ev.Row, ev.Col)
+			return
+		}
+		if ev.Button&3 == 0 && ev.Motion {
+			t.extendSelectionLocked(ev.Row, ev.Col)
+			return
+		}
+		if ev.Button&3 == 0 && !ev.Press && !ev.Motion {
+			t.endSelectionLocked(ev.Row)
+			return
+		}
+		// consume other buttons / states
+	})
 
-	t.mu.Unlock() // consume other buttons / states
+	if wantScroll {
+		t.handleScrollDelta(scrollDelta)
+	}
 }
 
 // dispatchOverlayClickLocked handles a click landing on overlay chrome (list
