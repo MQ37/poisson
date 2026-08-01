@@ -24,7 +24,7 @@ func runBashTurn(t *testing.T, approvalFn func(ctx context.Context, command, des
 	reg.Register(tools.NewBashTool(".", approvalFn))
 
 	ch := make(chan OutputEvent, 32)
-	events := drainEvents(ch)
+	events, drained := drainEvents(ch)
 	a := NewAgent(s, prov, reg, newTestConfig(), sid, ch, approvalFn)
 	a.SetModel("m")
 
@@ -32,6 +32,7 @@ func runBashTurn(t *testing.T, approvalFn func(ctx context.Context, command, des
 		t.Fatalf("Prompt: %v", err)
 	}
 	close(ch)
+	<-drained // wait for the drain goroutine's last append before reading *events
 
 	for _, ev := range *events {
 		if ev.Type == OutputToolResult && ev.ToolName == "bash" {

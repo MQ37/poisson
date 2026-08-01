@@ -127,14 +127,24 @@ func TestEnsureSessionPersistsLlamaCppDefaultModel(t *testing.T) {
 	}
 }
 
-func drainEvents(ch chan OutputEvent) *[]OutputEvent {
-	events := &[]OutputEvent{}
+// drainEvents drains ch into the returned slice from a background goroutine,
+// so a test can run an agent turn without blocking on ch's buffer filling up.
+// done closes once ch is closed AND fully drained — most callers only need
+// the draining (to avoid that blocking) and ignore both return values, but a
+// caller that wants to read *events afterward (e.g. runBashTurn) MUST wait on
+// done first: reading the slice while the goroutine may still be appending to
+// it is a data race, not just a timing quirk (closing ch alone doesn't mean
+// the range loop below has finished its last append and returned).
+func drainEvents(ch chan OutputEvent) (events *[]OutputEvent, done <-chan struct{}) {
+	events = &[]OutputEvent{}
+	d := make(chan struct{})
 	go func() {
+		defer close(d)
 		for ev := range ch {
 			*events = append(*events, ev)
 		}
 	}()
-	return events
+	return events, d
 }
 
 // --- Tests -----------------------------------------------------------
