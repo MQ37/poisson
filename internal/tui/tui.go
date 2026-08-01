@@ -25,9 +25,10 @@ func (t *TUI) contentWidth() int {
 // inputPromptCols is the visible width of the green "› " on the first input row.
 const inputPromptCols = 2
 
-// inputWrapWidth is how many text runes fit per wrapped input row. The first row
-// also renders the prompt, so text must stay cols-1-prompt wide to avoid
-// spilling past the terminal edge.
+// inputWrapWidth is how many display columns of text fit per wrapped input
+// row (wrapChunks/wrapOne count wide runes as 2 columns, not 1 rune each).
+// The first row also renders the prompt, so text must stay cols-1-prompt
+// wide to avoid spilling past the terminal edge.
 func inputWrapWidth(cols int) int {
 	w := cols - 1 - inputPromptCols
 	if w < 1 {

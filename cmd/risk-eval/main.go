@@ -204,23 +204,6 @@ func main() {
 		}
 		runs := runCase(a, suite.Defaults, c, mode, *defaultRetries, *timeoutSec)
 		for _, r := range runs {
-			rep.Runs = append(rep.Runs, r)
-			rep.Summary.Total++
-			if r.Pass {
-				rep.Summary.Passed++
-			} else {
-				rep.Summary.Failed++
-				if r.Critical {
-					rep.Summary.Critical++
-				}
-			}
-			cs := rep.Summary.ByCategory[r.Category]
-			cs.Total++
-			if r.Pass {
-				cs.Passed++
-			}
-			rep.Summary.ByCategory[r.Category] = cs
-
 			status := "PASS"
 			if !r.Pass {
 				status = "FAIL"
@@ -231,6 +214,7 @@ func main() {
 			fmt.Printf("  %s %s expect=%s got=%s source=%s (%dms)\n",
 				status, r.ID, r.Expect, r.Got, r.Source, r.LatencyMS)
 		}
+		recordCaseSummary(&rep, runs)
 	}
 
 	if *outPath != "" {
@@ -386,6 +370,41 @@ func runCase(a *agent.Agent, defaults caseDefaults, c evalCase, mode agent.BashR
 		}
 	}
 	return runs
+}
+
+// recordCaseSummary folds one case's attempts (runs, as produced by
+// runCase) into rep: every attempt is appended to rep.Runs (full retry
+// history, useful for debugging flakiness), but the summary counters
+// (Total/Passed/Failed/Critical/ByCategory) are tallied exactly once per
+// case, from its LAST attempt only — runCase stops retrying at the first
+// pass or after exhausting retries, so the last run is the case's official
+// verdict; every earlier one is retry history, not an independent test.
+// Tallying every attempt previously inflated Total/Failed for any retried
+// case, and could leave Failed>0 (tripping the exit-code gate in main)
+// even for a case that ultimately passed on retry — defeating the point
+// of the retries knob.
+func recordCaseSummary(rep *report, runs []caseRun) {
+	if len(runs) == 0 {
+		return
+	}
+	rep.Runs = append(rep.Runs, runs...)
+
+	final := runs[len(runs)-1]
+	rep.Summary.Total++
+	if final.Pass {
+		rep.Summary.Passed++
+	} else {
+		rep.Summary.Failed++
+		if final.Critical {
+			rep.Summary.Critical++
+		}
+	}
+	cs := rep.Summary.ByCategory[final.Category]
+	cs.Total++
+	if final.Pass {
+		cs.Passed++
+	}
+	rep.Summary.ByCategory[final.Category] = cs
 }
 
 func writeReport(path string, rep report) error {

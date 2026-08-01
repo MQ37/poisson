@@ -200,6 +200,17 @@ func (d *Decoder) parsePlain() (Key, int) {
 	}
 	r, size := utf8.DecodeRune(d.pending)
 	if r == utf8.RuneError && size <= 1 {
+		// DecodeRune returns (RuneError, 1) both for a genuinely invalid
+		// byte and for a valid multi-byte lead sequence that just hasn't
+		// fully arrived yet (e.g. a CJK/emoji keystroke split across two
+		// terminal reads) — utf8.FullRune tells the two apart. Only the
+		// former should be discarded as KeyUnknown; the latter must stay
+		// buffered (n=0, same "need more input" signal escSeqLen already
+		// uses for a partial CSI sequence) so the next Push completes it
+		// instead of the byte(s) already seen being silently dropped.
+		if !utf8.FullRune(d.pending) {
+			return Key{}, 0
+		}
 		return Key{Kind: KeyUnknown}, 1
 	}
 	return Key{Kind: KeyRune, Rune: r}, size

@@ -584,7 +584,11 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
-func visibleWidth(s string) int { return utf8.RuneCountInString(stripANSI(s)) }
+// visibleWidth is the real terminal column count of s (ANSI escapes
+// stripped, wide runes counted as 2 columns, zero-width as 0) — see
+// runeDisplayWidth's doc comment (wrapped.go) for why a plain rune count
+// under-counts.
+func visibleWidth(s string) int { return stringDisplayWidth(stripANSI(s)) }
 
 func truncateToWidth(s string, width int) string {
 	if width <= 0 {
@@ -613,13 +617,18 @@ func truncateToWidth(s string, width int) string {
 			i = j
 			continue
 		}
-		_, size := utf8.DecodeRuneInString(s[i:])
-		if vis >= width-1 {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		w := runeDisplayWidth(r)
+		// Reserve exactly 1 column for the trailing "…": stop (before
+		// writing this rune) as soon as adding its width would leave no
+		// room for it, rather than the old 1-rune=1-column vis>=width-1
+		// check, which let a wide rune overshoot the budget by a column.
+		if vis+w > width-1 {
 			b.WriteString("…")
 			return b.String()
 		}
 		b.WriteString(s[i : i+size])
-		vis++
+		vis += w
 		i += size
 	}
 	return b.String()

@@ -272,17 +272,40 @@ func TestRecordAPICallConcurrentSameSessionAssignsDistinctSeq(t *testing.T) {
 	}
 }
 
-// TestMigrateUniqueSeqDedupesExistingDuplicates guards migrateUniqueSeq's
-// dedupe pass: a duplicate (session_id, seq) pair already on disk (as if
-// left over from before either seq fix landed, on a database at schema
-// version 1, pre-unique-index) must be renumbered — not deleted, not left
-// colliding — so the migration's CREATE UNIQUE INDEX doesn't fail on an
-// existing user's database. Builds the DB by hand (schemaSQL only, no
-// migrate()) rather than via the normal Open()/newTestStore path, since
-// that path already runs this very migration and would refuse the
-// duplicate insert before the test could plant it.
-func TestMigrateUniqueSeqDedupesExistingDuplicates(t *testing.T) {
-	dbPath := filepath.Join(testutil.TempDir(t), "predup.db")
+// TestSchemaEnforcesUniqueSeqDirectly verifies a fresh database (via the
+// normal Open path) rejects a duplicate (session_id, seq) row outright —
+// the unique index now lives directly in schemaSQL (this project has no
+// released version with an on-disk schema old enough to need a migration
+// for it; see the migrations var's doc comment), not behind a migration
+// that only an upgrading, pre-existing database would ever run.
+func TestSchemaEnforcesUniqueSeqDirectly(t *testing.T) {
+	s := newTestStore(t)
+	sess := mustCreateSession(t, s, "dup-seq")
+
+	insert := func(seq int) error {
+		_, err := s.db.Exec(
+			`INSERT INTO api_calls (id, session_id, seq, model, input_tokens, output_tokens, cost, created_at)
+			 VALUES (?,?,?,?,?,?,?,?)`,
+			newUUID(), sess.ID, seq, "m", 1, 1, 0.0, 1)
+		return err
+	}
+	if err := insert(1); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if err := insert(1); err == nil {
+		t.Fatal("expected unique constraint violation inserting a duplicate seq")
+	}
+}
+
+// TestRunMigrationRollsBackAtomicallyOnFailure is the regression guard for
+// the migration runner's transaction wrapping: a migration whose 2nd
+// statement fails must leave NEITHER its 1st statement's effect NOR the
+// version bump committed — a partial migration previously (pre-rework, see
+// git history) left the 1st statement's effect permanent while user_version
+// stayed unbumped, so every later Open() replayed the same 1st statement
+// against data that no longer matched, failing identically forever.
+func TestRunMigrationRollsBackAtomicallyOnFailure(t *testing.T) {
+	dbPath := filepath.Join(testutil.TempDir(t), "partial-migration.db")
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("sql.Open: %v", err)
@@ -291,53 +314,59 @@ func TestMigrateUniqueSeqDedupesExistingDuplicates(t *testing.T) {
 	if _, err := db.Exec(schemaSQL); err != nil {
 		t.Fatalf("apply schema: %v", err)
 	}
-	if _, err := db.Exec(`INSERT INTO sessions (id, cwd, provider, model, created_at, updated_at) VALUES (?,?,?,?,?,?)`,
-		"dup-seq", "/tmp", "anthropic", "m", 1, 1); err != nil {
-		t.Fatalf("insert session: %v", err)
-	}
 
-	insert := func(seq int) {
-		t.Helper()
-		if _, err := db.Exec(
-			`INSERT INTO api_calls (id, session_id, seq, model, input_tokens, output_tokens, cost, created_at)
-			 VALUES (?,?,?,?,?,?,?,?)`,
-			newUUID(), "dup-seq", seq, "m", 1, 1, 0.0, 1); err != nil {
-			t.Fatalf("insert: %v", err)
+	failingMigration := func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN scratch_col TEXT`); err != nil {
+			return err
 		}
-	}
-	insert(1)
-	insert(1) // duplicate — pre-unique-index schema allows this; migration must fix it
-
-	if err := migrateUniqueSeq(db); err != nil {
-		t.Fatalf("migrateUniqueSeq: %v", err)
+		return errors.New("simulated failure on the migration's 2nd statement")
 	}
 
-	rows, err := db.Query(`SELECT seq FROM api_calls WHERE session_id = ? ORDER BY seq`, "dup-seq")
+	if err := runMigration(db, failingMigration, 0); err == nil {
+		t.Fatal("runMigration succeeded, want an error from the simulated failure")
+	}
+
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read version: %v", err)
+	}
+	if version != 0 {
+		t.Errorf("user_version = %d, want 0 (unbumped — migration rolled back)", version)
+	}
+
+	rows, err := db.Query(`PRAGMA table_info(sessions)`)
 	if err != nil {
-		t.Fatalf("query: %v", err)
+		t.Fatalf("table_info: %v", err)
 	}
 	defer rows.Close()
-	var seqs []int
 	for rows.Next() {
-		var seq int
-		if err := rows.Scan(&seq); err != nil {
+		var cid int
+		var name, typ string
+		var notNull int
+		var dflt any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
-		seqs = append(seqs, seq)
-	}
-	if len(seqs) != 2 {
-		t.Fatalf("got %d rows, want 2 (no rows lost)", len(seqs))
-	}
-	if seqs[0] == seqs[1] {
-		t.Fatalf("seqs still duplicate after migration: %v", seqs)
+		if name == "scratch_col" {
+			t.Fatal("scratch_col persisted — the failed migration's 1st statement was not rolled back")
+		}
 	}
 
-	// The unique index must now exist and actually enforce uniqueness.
-	if _, err := db.Exec(
-		`INSERT INTO api_calls (id, session_id, seq, model, input_tokens, output_tokens, cost, created_at)
-		 VALUES (?,?,?,?,?,?,?,?)`,
-		newUUID(), "dup-seq", seqs[0], "m", 1, 1, 0.0, 1); err == nil {
-		t.Fatal("expected unique constraint violation inserting a duplicate seq after migration")
+	// A later attempt with a corrected (all-succeeding) migration must
+	// still be able to run from this same clean, unbumped starting state.
+	okMigration := func(tx *sql.Tx) error {
+		_, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN scratch_col TEXT`)
+		return err
+	}
+	if err := runMigration(db, okMigration, 0); err != nil {
+		t.Fatalf("retry after rollback: %v", err)
+	}
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatalf("read version after retry: %v", err)
+	}
+	if version != 1 {
+		t.Errorf("user_version after successful retry = %d, want 1", version)
 	}
 }
 
@@ -1050,8 +1079,8 @@ func TestMigrationActuallyRunsSQL(t *testing.T) {
 	}
 
 	orig := migrations
-	migrations = append(append([]func(*sql.DB) error{}, orig...), func(db *sql.DB) error {
-		_, err := db.Exec(`ALTER TABLE sessions ADD COLUMN _test_migration_marker TEXT`)
+	migrations = append(append([]func(*sql.Tx) error{}, orig...), func(tx *sql.Tx) error {
+		_, err := tx.Exec(`ALTER TABLE sessions ADD COLUMN _test_migration_marker TEXT`)
 		return err
 	})
 	defer func() { migrations = orig }()

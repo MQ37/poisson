@@ -33,9 +33,27 @@ func LoadProjectContextFiles(cwd, agentDir string, readDirs []string) []ContextF
 	var result []ContextFile
 	seen := make(map[string]bool)
 	add := func(f *ContextFile) {
-		if f != nil && !seen[f.Path] {
+		if f == nil {
+			return
+		}
+		// Dedup on the resolved real path, not the literal joined path
+		// string: readDirs can reach the same physical AGENTS.md via two
+		// different path strings (a symlinked directory, a bind mount) —
+		// filepath.Clean alone (used above to build dirSet) only
+		// normalizes ".."/"." segments, it never resolves a symlink, so
+		// two distinct-looking dirs that are actually the same directory
+		// both loaded the same file and injected it twice. Falls back to
+		// the literal path if resolution fails (e.g. a permissions
+		// quirk) — matches this package's existing fail-open bias
+		// (loadFromDir already prefers serving best-effort content over
+		// silently skipping a file).
+		key := f.Path
+		if real, err := filepath.EvalSymlinks(f.Path); err == nil {
+			key = real
+		}
+		if !seen[key] {
 			result = append(result, *f)
-			seen[f.Path] = true
+			seen[key] = true
 		}
 	}
 

@@ -34,7 +34,13 @@ func Process(data []byte) (path, mediaType string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("decode image: %w", err)
 	}
-	out := downscale(src)
+	// Downscale first (cheaper to rotate/flip a smaller pixel buffer;
+	// rotation-by-90-multiples and mirroring both commute with a uniform
+	// aspect-preserving scale, so the result is identical either order),
+	// then correct EXIF orientation — image.Decode has no EXIF support at
+	// all, and the re-encoded PNG output has nowhere to carry the tag
+	// forward either, so this is the only point the correction can happen.
+	out := applyOrientation(downscale(src), jpegOrientation(data))
 
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, out); err != nil {

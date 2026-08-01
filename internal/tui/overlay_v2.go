@@ -289,6 +289,23 @@ func (t *TUI) closeOverlayAfter(prev overlay, done, cancel bool) {
 		t.dismissOverlay()
 	} else if done && t.activeOverlay == prev {
 		// onRun/onPick may replace this overlay (e.g. palette → provider picker).
+		//
+		// Bug this guards against: a /btw panel's own normal Esc-close
+		// (feedKey returns done=true, cancel=false once its answer has
+		// already finished streaming — the ordinary "read it, then
+		// dismiss" flow) used to only clear activeOverlay here, leaving
+		// t.currentBTW pointing at the now-invisible, already-closed
+		// overlay and its closedCh forever unsignaled. Every subsequent
+		// non-btw approval (TUI.Approve, agent_io.go) parks on
+		// <-b.closedCh() before it's allowed to show its own prompt —
+		// with that channel never firing, the agent looked permanently
+		// hung with zero UI feedback until the user happened to reopen
+		// /btw (whose own cancelOverlayWork call finally cleared the
+		// stale pointer). cancelOverlayWork is a no-op whenever
+		// currentBTW is already nil (every other keyOverlay type:
+		// search/palette/btwPrompt), so this is safe to call
+		// unconditionally here, not just for btwOverlay closes.
+		t.cancelOverlayWork()
 		t.activeOverlay = nil
 		t.dirty.markFull()
 	}

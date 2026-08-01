@@ -57,6 +57,39 @@ func TestLoadProjectContextFiles(t *testing.T) {
 	}
 }
 
+// TestLoadProjectContextFilesDedupsSymlinkedDirAlias is the regression test
+// for a symlinked directory reaching the same physical AGENTS.md via two
+// distinct path strings — filepath.Clean (used to build dirSet) normalizes
+// "."/".." segments but never resolves a symlink, so the real dir and its
+// alias used to both load and inject the identical content twice.
+func TestLoadProjectContextFilesDedupsSymlinkedDirAlias(t *testing.T) {
+	tmpDir := testutil.TempDir(t)
+	real := filepath.Join(tmpDir, "real")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "AGENTS.md"), []byte("# Real Rules\nOnce only."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmpDir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink not supported on this filesystem: %v", err)
+	}
+	agentDir := filepath.Join(tmpDir, ".poisson")
+	os.MkdirAll(agentDir, 0o700)
+
+	files := LoadProjectContextFiles(real, agentDir, []string{link})
+	count := 0
+	for _, f := range files {
+		if strings.Contains(f.Content, "Once only") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("got %d copies of the AGENTS.md content via the real dir + its symlink alias, want 1", count)
+	}
+}
+
 func TestLoadProjectContextFilesNoFiles(t *testing.T) {
 	tmpDir := testutil.TempDir(t)
 	files := LoadProjectContextFiles(tmpDir, filepath.Join(tmpDir, ".poisson"), nil)

@@ -143,6 +143,75 @@ func TestApprove_MainOriginParksBehindOpenBTWInstead(t *testing.T) {
 	}
 }
 
+// TestBTWNormalEscCloseAfterFinishUnparksLaterApprovals is the regression
+// test for closeOverlayAfter's done-but-not-cancel branch (the ordinary way
+// to dismiss /btw: read the finished answer, then press Esc) previously
+// clearing only activeOverlay and leaving t.currentBTW pointing at the
+// already-closed overlay forever — its closedCh never signaled, so every
+// later non-btw approval parked on <-b.closedCh() and never showed its
+// prompt at all. This is the single most common way to use /btw at all
+// (open it, wait for the answer, close it), so the bug fired on nearly
+// every real session that used the feature.
+func TestBTWNormalEscCloseAfterFinishUnparksLaterApprovals(t *testing.T) {
+	tui := newTestTUIHelper()
+	btw := newBTWOverlay("what's in this file?")
+	btw.finish(nil) // answer already streamed in — the normal pre-close state
+	tui.mu.Lock()
+	tui.activeOverlay = btw
+	tui.currentBTW = btw // openBTW invariant — see TUI.currentBTW
+	tui.mu.Unlock()
+
+	// Normal close: Esc while not processing. feedKey returns
+	// done=true, cancel=false (proc was false) — this is the path that
+	// used to leak.
+	tui.mu.Lock()
+	handled := tui.handleKeyOverlay(Key{Kind: KeyEscape})
+	overlayGone := tui.activeOverlay == nil
+	tui.mu.Unlock()
+	if !handled {
+		t.Fatal("Esc was not handled by the btw overlay")
+	}
+	if !overlayGone {
+		t.Fatal("expected activeOverlay cleared after Esc-close")
+	}
+
+	tui.mu.Lock()
+	stillTracked := tui.currentBTW != nil
+	tui.mu.Unlock()
+	if stillTracked {
+		t.Fatal("currentBTW still points at the closed overlay — later approvals will park forever")
+	}
+
+	// A later, unrelated main-origin approval must show its prompt
+	// immediately — not park behind a phantom /btw session.
+	result := make(chan bool, 1)
+	go func() {
+		allowed, _ := tui.Approve(context.Background(), "rm -rf x", "cleanup", "/tmp", agent.BashRiskHigh, agent.ApprovalOriginMain)
+		result <- allowed
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	isApprovalOverlay := func() bool {
+		tui.mu.Lock()
+		defer tui.mu.Unlock()
+		_, ok := tui.activeOverlay.(*approvalOverlay)
+		return ok
+	}
+	for !isApprovalOverlay() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !isApprovalOverlay() {
+		t.Fatal("approval prompt never surfaced — still stuck parked behind the (already closed) /btw overlay")
+	}
+
+	tui.approvalAnswer <- approvalReply{Allowed: true}
+	select {
+	case <-result:
+	case <-time.After(time.Second):
+		t.Fatal("Approve timed out — answer likely dropped")
+	}
+}
+
 // TestApprove_BTWOwnApprovalNotBlockedByParkedMainApproval is the deadlock
 // regression test: a multi-tool-call /btw side question routinely needs its
 // own approval mid-stream. That must keep working even while a main-turn (or

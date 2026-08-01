@@ -14,7 +14,7 @@ type editor struct {
 	col       int      // 0-indexed cursor column in runes within lines[row]
 	paste     bool     // mid-bracketed-paste
 	pasteBuf  []byte
-	wrapWidth int // current wrap width in runes; 0 means no wrap
+	wrapWidth int // current wrap width in display columns; 0 means no wrap
 }
 
 func newEditor() *editor {

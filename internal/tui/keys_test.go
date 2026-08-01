@@ -40,6 +40,47 @@ func TestDecoderIncompleteCSINeverEmitsBracketRune(t *testing.T) {
 	}
 }
 
+// TestDecoderSplitUTF8RuneAcrossPushes is the regression test for
+// parsePlain silently dropping a multi-byte UTF-8 rune whose bytes arrive
+// split across two Push calls (plausible over ssh/mosh with per-byte
+// delivery, or any IME/CJK keystroke that just happens to straddle a read
+// boundary) — utf8.DecodeRune on an incomplete lead sequence returns
+// (RuneError, 1), indistinguishable from a genuinely invalid byte, so the
+// byte used to get discarded as KeyUnknown instead of buffered.
+func TestDecoderSplitUTF8RuneAcrossPushes(t *testing.T) {
+	full := []byte("世") // U+4E16, 3-byte UTF-8 encoding
+	var d Decoder
+	k1 := d.Push(full[:1])
+	if len(k1) != 0 {
+		t.Fatalf("first (partial) push: keys=%v, want none", k1)
+	}
+	if len(d.pending) != 1 {
+		t.Fatalf("pending=%q, want the 1 lead byte buffered", d.pending)
+	}
+	k2 := d.Push(full[1:])
+	if len(k2) != 1 || k2[0].Kind != KeyRune || k2[0].Rune != '世' {
+		t.Fatalf("second push: keys=%v, want one KeyRune('世')", k2)
+	}
+	if len(d.pending) != 0 {
+		t.Fatalf("pending=%q, want empty after the rune completes", d.pending)
+	}
+}
+
+// TestDecoderInvalidByteStillDiscardedAsUnknown verifies the fix for split
+// UTF-8 runes (utf8.FullRune gating parsePlain's buffer-vs-discard
+// decision) didn't turn a genuinely invalid stray byte into a permanent
+// hang — it must still be consumed and reported as KeyUnknown immediately.
+func TestDecoderInvalidByteStillDiscardedAsUnknown(t *testing.T) {
+	var d Decoder
+	keys := d.Push([]byte{0xFF, 'a'})
+	if len(keys) != 1 || keys[0].Kind != KeyRune || keys[0].Rune != 'a' {
+		t.Fatalf("keys=%v, want the invalid byte discarded and 'a' decoded normally", keys)
+	}
+	if len(d.pending) != 0 {
+		t.Fatalf("pending=%q, want empty (invalid byte must not get stuck buffered)", d.pending)
+	}
+}
+
 // TestDecoderLegacyShiftTab verifies the classic xterm Shift+Tab escape
 // ("\x1b[Z", sent when the kitty keyboard protocol isn't active) decodes to
 // KeyShiftTab, not KeyTab or KeyUnknown.
