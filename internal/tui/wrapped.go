@@ -2,26 +2,7 @@ package tui
 
 import (
 	"unicode/utf8"
-
-	"github.com/mattn/go-runewidth"
 )
-
-// runeDisplayWidth is the terminal column width of r: 0 for zero-width
-// combining marks, 1 for ordinary/narrow runes, 2 for wide runes (CJK
-// Unified Ideographs, most emoji, fullwidth forms). Every wrap/cursor
-// calculation in this file — and visibleWidth/truncateToWidth in
-// scrollback.go — is defined in terms of display columns, not rune counts:
-// a naive 1-rune=1-column assumption under-counts any wide rune by half,
-// letting the real terminal auto-wrap mid-row on content this code still
-// believes fits, corrupting every subsequent absolute-cursor-addressed
-// write on screen for the rest of that frame.
-func runeDisplayWidth(r rune) int {
-	w := runewidth.RuneWidth(r)
-	if w < 0 {
-		return 0
-	}
-	return w
-}
 
 // stringDisplayWidth sums runeDisplayWidth over s.
 func stringDisplayWidth(s string) int {
