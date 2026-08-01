@@ -594,3 +594,67 @@ printf '{"type":"done","success":true,"usage":{"InputTokens":100,"OutputTokens":
 		t.Fatalf("result text = %q, should not mention a cost with no usageFn wired", res.Content)
 	}
 }
+
+// TestBatch_RealSubagentsOverlapInWallClock is the end-to-end proof for the
+// two-part serial-scout fix (agent.go's approvalGatedTools + batch.go's
+// mutatingTools): N subagent calls wrapped in one real batch call, dispatched
+// through the REAL BatchTool -> REAL SubagentTool.Execute -> REAL
+// subagent.Spawn, each spawning an actual OS process (a fake sleeping shell
+// script, not the real px binary — zero LLM calls). Every earlier test in
+// this bug's fix used a synthetic barrier tool standing in for subagent to
+// prove the Go-level dispatch doesn't serialize goroutines; this one instead
+// measures real wall-clock time across real child processes, so a
+// regression anywhere in the production path (not just the two spots this
+// session already found and fixed) would still show up as N times the
+// single-child duration instead of roughly one child's worth.
+func TestBatch_RealSubagentsOverlapInWallClock(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	const n = 5
+	const sleep = 300 * time.Millisecond
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-sleep.sh"
+	script := fmt.Sprintf(`#!/bin/sh
+sleep %g
+printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindow":200000}\n'
+`, sleep.Seconds())
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := NewSubagentTool(".", alwaysApproveSubagent)
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-opus-5" },
+		func() string { return "" },
+	)
+	reg := NewRegistry()
+	reg.Register(tool)
+	bt := NewBatchTool(reg)
+	reg.Register(bt)
+
+	calls := make([]map[string]interface{}, n)
+	for i := range calls {
+		calls[i] = map[string]interface{}{"tool": "subagent", "input": map[string]string{"task": "scout"}}
+	}
+
+	start := time.Now()
+	res, err := bt.Execute(context.Background(), mustJSON(t, map[string]interface{}{"calls": calls}))
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !strings.Contains(res.Content, fmt.Sprintf("%d ok", n)) {
+		t.Fatalf("expected all %d calls to succeed, got: %q", n, res.Content)
+	}
+	// Serial execution would take at least n*sleep (1.5s); concurrent
+	// execution takes roughly one child's worth plus process-spawn overhead.
+	// A generous 2x-sleep ceiling comfortably separates the two without
+	// being timing-flaky on a loaded CI box.
+	if elapsed > 2*sleep {
+		t.Errorf("wall-clock elapsed = %v, want well under %v (n=%d * %v serial) — subagents ran one at a time somewhere in the real dispatch path", elapsed, n*sleep, n, sleep)
+	}
+}
