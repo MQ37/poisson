@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -160,6 +161,60 @@ func TestAppendMessageRequiresSession(t *testing.T) {
 	err := s.AppendMessage(&Message{SessionID: "missing-session", Role: "user", Content: textContent("hi")})
 	if err == nil {
 		t.Fatal("expected foreign key error when session does not exist")
+	}
+}
+
+// TestAppendMessageConcurrentSameSessionAssignsDistinctSeq is the
+// regression guard for the seq TOCTOU race: nextSeq's SELECT MAX(seq) used
+// to run outside AppendMessage's transaction, so two concurrent callers on
+// the same session could both read the same MAX before either INSERTed,
+// assigning the same seq to two different messages and corrupting the
+// ORDER BY seq ordering every reader (GetMessages, GetAllMessages, hydrate,
+// /search) relies on. Moving the read inside the transaction (which the
+// pool's single connection, SetMaxOpenConns(1), then holds exclusively
+// until Commit/Rollback) closes it: every appended message must get a
+// unique seq, with no gaps or duplicates, regardless of how many goroutines
+// race to append.
+func TestAppendMessageConcurrentSameSessionAssignsDistinctSeq(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "concurrent-seq")
+
+	const n = 50
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			errs <- s.AppendMessage(&Message{SessionID: "concurrent-seq", Role: "user", Content: textContent(strconv.Itoa(i))})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("AppendMessage: %v", err)
+		}
+	}
+
+	msgs, err := s.GetAllMessages("concurrent-seq")
+	if err != nil {
+		t.Fatalf("GetAllMessages: %v", err)
+	}
+	if len(msgs) != n {
+		t.Fatalf("got %d messages, want %d", len(msgs), n)
+	}
+	seen := make(map[int]bool, n)
+	for _, m := range msgs {
+		if seen[m.Seq] {
+			t.Fatalf("duplicate seq %d among appended messages — seq race not fixed", m.Seq)
+		}
+		seen[m.Seq] = true
+	}
+	for i := 1; i <= n; i++ {
+		if !seen[i] {
+			t.Errorf("missing seq %d — want a contiguous 1..%d range", i, n)
+		}
 	}
 }
 

@@ -357,6 +357,116 @@ func TestInteg_ToolDispatchCapsConcurrency(t *testing.T) {
 	}
 }
 
+// TestInteg_TopLevelGatedCallSerializesAgainstNestedBatchGatedCall is the
+// regression guard for the reopened-one-level-down half of the approval-
+// ordering bug: a top-level gated call (bash) and a top-level `batch` call
+// that merely WRAPS a gated call (create_sandbox) must still serialize
+// against each other, even though "batch" itself is not in
+// approvalGatedTools. Before isGatedCall taught the dispatch loop to look
+// inside a batch call's nested tools, the batch call went through the
+// concurrent pool while "bash" went through the sequential gated walker —
+// two different paths running at the same time, same race class as two
+// top-level gated calls racing each other.
+func TestInteg_TopLevelGatedCallSerializesAgainstNestedBatchGatedCall(t *testing.T) {
+	batchInput, err := json.Marshal(map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "create_sandbox", "input": map[string]string{}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arg := json.RawMessage(`{}`)
+	turn := []provider.StreamEvent{
+		{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_1", Name: "bash", Input: arg}},
+		{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_1", Name: "bash", Input: arg}},
+		{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_2", Name: "batch", Input: batchInput}},
+		{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_2", Name: "batch", Input: batchInput}},
+		{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+	}
+	e := newIntegEnv(t, [][]provider.StreamEvent{turn, provider.FakeTextResponse("done", nil)})
+
+	var bashDone atomic.Bool
+	sawBashDone := make(chan bool, 1)
+
+	e.reg.Register(barrierTool{name: "bash", run: func(ctx context.Context) (tools.ToolResult, error) {
+		time.Sleep(20 * time.Millisecond) // gives the batch call a real chance to start early if it wrongly could
+		bashDone.Store(true)
+		return tools.ToolResult{Content: "BASH_DONE"}, nil
+	}})
+	e.reg.Register(barrierTool{name: "create_sandbox", run: func(ctx context.Context) (tools.ToolResult, error) {
+		sawBashDone <- bashDone.Load()
+		return tools.ToolResult{Content: "SANDBOX_DONE"}, nil
+	}})
+	e.reg.Register(tools.NewBatchTool(e.reg))
+
+	e.send("run both")
+
+	select {
+	case saw := <-sawBashDone:
+		if !saw {
+			t.Error("nested create_sandbox (inside batch) started before top-level bash finished — batch bypassed the gated walker")
+		}
+	default:
+		t.Fatal("nested create_sandbox never ran")
+	}
+}
+
+// TestInteg_GatedCallSerializesAgainstOddlyCasedNestedBatchCall covers the
+// narrow edge case flagged in isGatedCall's own doc comment: a nested batch
+// call whose tool name doesn't match the standard mcp_<Capitalized> wire
+// convention (e.g. a bare, oddly-cased "Bash" instead of "bash" or
+// "mcp_Bash") must still be recognized as gated via CanonicalToolName's
+// full lowercase fallback, not just ParseBatchCalls' lighter
+// prefix-stripping.
+func TestInteg_GatedCallSerializesAgainstOddlyCasedNestedBatchCall(t *testing.T) {
+	batchInput, err := json.Marshal(map[string]interface{}{
+		"calls": []map[string]interface{}{
+			// Oddly cased, no mcp_ prefix — not what stripWireToolPrefix
+			// alone would normalize; only CanonicalToolName's full
+			// lowercase fallback resolves this to "create_sandbox".
+			{"tool": "Create_Sandbox", "input": map[string]string{}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arg := json.RawMessage(`{}`)
+	turn := []provider.StreamEvent{
+		{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_1", Name: "bash", Input: arg}},
+		{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_1", Name: "bash", Input: arg}},
+		{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_2", Name: "batch", Input: batchInput}},
+		{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_2", Name: "batch", Input: batchInput}},
+		{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+	}
+	e := newIntegEnv(t, [][]provider.StreamEvent{turn, provider.FakeTextResponse("done", nil)})
+
+	var bashDone atomic.Bool
+	sawBashDone := make(chan bool, 1)
+
+	e.reg.Register(barrierTool{name: "bash", run: func(ctx context.Context) (tools.ToolResult, error) {
+		time.Sleep(20 * time.Millisecond) // gives the nested call a real chance to start early if it wrongly could
+		bashDone.Store(true)
+		return tools.ToolResult{Content: "BASH_DONE"}, nil
+	}})
+	e.reg.Register(barrierTool{name: "create_sandbox", run: func(ctx context.Context) (tools.ToolResult, error) {
+		sawBashDone <- bashDone.Load()
+		return tools.ToolResult{Content: "SANDBOX_DONE"}, nil
+	}})
+	e.reg.Register(tools.NewBatchTool(e.reg))
+
+	e.send("run both")
+
+	select {
+	case saw := <-sawBashDone:
+		if !saw {
+			t.Error("nested oddly-cased \"Create_Sandbox\" (inside batch) started before top-level bash finished — CanonicalToolName fallback not applied")
+		}
+	default:
+		t.Fatal("nested Create_Sandbox call never ran")
+	}
+}
+
 // TestInteg_BatchedSubagentGetsOwnStartAndDoneEvents is the regression guard
 // for the fix that gives a subagent nested inside batch its own live TUI
 // widget instead of being invisible until the whole batch call finishes:

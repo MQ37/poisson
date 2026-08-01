@@ -438,6 +438,65 @@ func TestBatch_CancelNotifiesSubagentDoneFnForSkippedCalls(t *testing.T) {
 	}
 }
 
+// barrierStepTool is a fully-controllable test tool for proving execution
+// order — run is called synchronously inside Execute.
+type barrierStepTool struct {
+	name string
+	run  func()
+}
+
+func (t barrierStepTool) Name() string            { return t.name }
+func (t barrierStepTool) Description() string     { return "test barrier" }
+func (t barrierStepTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t barrierStepTool) Execute(ctx context.Context, _ json.RawMessage) (ToolResult, error) {
+	t.run()
+	return ToolResult{Content: "ok"}, nil
+}
+
+// TestBatch_ApprovalGatedToolsForceSerial is the regression guard for
+// closing the approval-ordering race one level down inside batch's own
+// dispatch: a batch made only of bash/create_sandbox/sandbox_cp calls (no
+// edit/write/subagent present) must still run them one at a time, in
+// calls[] order — before mutatingTools included these three, such a batch
+// went through the concurrent path, letting two calls each independently
+// reach TUI.Approve() with no ordering guarantee.
+func TestBatch_ApprovalGatedToolsForceSerial(t *testing.T) {
+	reg := NewRegistry()
+	var firstDone bool
+	var mu sync.Mutex
+	sawFirstDoneWhenSecondRan := false
+
+	reg.Register(barrierStepTool{name: "bash", run: func() {
+		time.Sleep(20 * time.Millisecond) // gives create_sandbox a real chance to start early if it wrongly could
+		mu.Lock()
+		firstDone = true
+		mu.Unlock()
+	}})
+	reg.Register(barrierStepTool{name: "create_sandbox", run: func() {
+		mu.Lock()
+		sawFirstDoneWhenSecondRan = firstDone
+		mu.Unlock()
+	}})
+	bt := NewBatchTool(reg)
+	reg.Register(bt)
+
+	_, err := bt.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "bash", "input": map[string]string{}},
+			{"tool": "create_sandbox", "input": map[string]string{}},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !sawFirstDoneWhenSecondRan {
+		t.Error("create_sandbox started before bash finished — approval-gated batch calls ran concurrently, want strictly sequential")
+	}
+}
+
 // staticToolWithCtx is like staticTool but also observes the context passed
 // to Execute — used to prove BatchTool threads a distinct ToolCallID per
 // nested call.

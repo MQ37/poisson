@@ -74,25 +74,10 @@ func (d *podmanDriver) run(ctx context.Context, args ...string) (stdout, stderr 
 	return out.String(), errBuf.String(), err
 }
 
-// Create starts a new container per opts: pinned image, opts.HostPath
-// bind-mounted as /workspace, any extra opts.Mounts/opts.Env, then runs the
-// one-time bootstrap (see bootstrapScript) before returning. Cleans up the
-// container itself on any failure after it was created — the caller (e.g.
-// CreateSandboxTool) is responsible for cleaning up anything it made on the
-// host side (its scratch workspace directory) when Create returns an error.
-func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, error) {
-	if strings.TrimSpace(opts.Image) == "" {
-		return "", fmt.Errorf("podman create: image is required")
-	}
-
-	// name is both the container's actual --name and the id this Create
-	// returns — a sandbox's name *is* its id, no separate opaque handle (see
-	// CreateOpts.Name / docs/sandbox-plan.md's "Crash recovery" section).
-	name, err := ResolveSandboxName(opts.Name)
-	if err != nil {
-		return "", err
-	}
-
+// createArgs builds the `podman create` argument list for a container named
+// name per opts. Split out from Create so it's unit-testable without a real
+// podman binary.
+func createArgs(name string, opts CreateOpts) []string {
 	// --userns=keep-id: without it, a uid that matches on both sides of the
 	// bind mount is a coincidence, not a guarantee — rootless podman's
 	// default user-namespace mapping means "uid 1000 inside the container"
@@ -106,7 +91,17 @@ func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, err
 	// the mechanism a fresh process uses to rediscover a sandbox after a
 	// crash, or from a different session entirely. poisson.session is
 	// purely informational (list_sandboxes), added only when non-empty.
-	args := []string{"create", "--userns=keep-id", "--name", name, "--label", "poisson.sandbox=1"}
+	//
+	// --init: run podman's built-in catatonit as PID 1 instead of the raw
+	// `sleep infinity` below. Without it, PID 1 never calls wait() on
+	// anything, so any process a bash tool call or subagent backgrounds
+	// (or leaves running when killed mid-command) reparents to PID 1 on
+	// exit and stays a zombie for the container's entire lifetime —
+	// sandboxes are designed to be long-lived and crash-surviving (see
+	// docs/sandbox-plan.md), so that's unbounded, not a one-time leak.
+	// catatonit reaps orphans the normal init way and still execs straight
+	// into `sleep infinity` as its own child, so nothing else here changes.
+	args := []string{"create", "--init", "--userns=keep-id", "--name", name, "--label", "poisson.sandbox=1"}
 	if opts.SessionID != "" {
 		args = append(args, "--label", "poisson.session="+opts.SessionID)
 	}
@@ -134,7 +129,29 @@ func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, err
 	for _, e := range opts.Env {
 		args = append(args, "-e", e)
 	}
-	args = append(args, opts.Image, "sleep", "infinity")
+	return append(args, opts.Image, "sleep", "infinity")
+}
+
+// Create starts a new container per opts: pinned image, opts.HostPath
+// bind-mounted as /workspace, any extra opts.Mounts/opts.Env, then runs the
+// one-time bootstrap (see bootstrapScript) before returning. Cleans up the
+// container itself on any failure after it was created — the caller (e.g.
+// CreateSandboxTool) is responsible for cleaning up anything it made on the
+// host side (its scratch workspace directory) when Create returns an error.
+func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, error) {
+	if strings.TrimSpace(opts.Image) == "" {
+		return "", fmt.Errorf("podman create: image is required")
+	}
+
+	// name is both the container's actual --name and the id this Create
+	// returns — a sandbox's name *is* its id, no separate opaque handle (see
+	// CreateOpts.Name / docs/sandbox-plan.md's "Crash recovery" section).
+	name, err := ResolveSandboxName(opts.Name)
+	if err != nil {
+		return "", err
+	}
+
+	args := createArgs(name, opts)
 
 	if _, stderr, err := d.run(ctx, args...); err != nil {
 		return "", fmt.Errorf("podman create: %w (%s)", err, strings.TrimSpace(stderr))

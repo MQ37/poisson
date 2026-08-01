@@ -95,7 +95,7 @@ func BatchCallID(outerID string, i int) string {
 func (t *BatchTool) Name() string { return "batch" }
 
 func (t *BatchTool) Description() string {
-	return "Run multiple independent tool calls in one step (max 20). Polyfill for models that only emit one tool_use per turn — prefer native parallel tool calls when available. No dataflow between steps: each call needs fully-specified args. Allowed: every registered tool except batch (no recursion) — bash is allowed and still fully gated (LLM risk classifier + human approval, same as calling it directly, no bypass); subagent is allowed but always runs serially (never in parallel with other steps). Read-only steps may run in parallel; any edit/write/subagent makes the whole batch serial. Validation errors (unknown/denied tool, empty calls, over cap) reject the whole batch before any step runs; runtime errors (bad path, edit miss, denied approval, …) are per-step — other steps still run, no rollback."
+	return "Run multiple independent tool calls in one step (max 20). Polyfill for models that only emit one tool_use per turn — prefer native parallel tool calls when available. No dataflow between steps: each call needs fully-specified args. Allowed: every registered tool except batch (no recursion) — bash is allowed and still fully gated (LLM risk classifier + human approval, same as calling it directly, no bypass); subagent is allowed but always runs serially (never in parallel with other steps). Read-only steps may run in parallel; any edit/write/subagent/bash/create_sandbox/sandbox_cp makes the whole batch serial, in the order listed, so approval prompts stay in submission order. Validation errors (unknown/denied tool, empty calls, over cap) reject the whole batch before any step runs; runtime errors (bad path, edit miss, denied approval, …) are per-step — other steps still run, no rollback."
 }
 
 func (t *BatchTool) Schema() json.RawMessage {
@@ -133,10 +133,25 @@ type batchInput struct {
 // subagent is here too: it's a long-lived nested agent loop with its own
 // TUI progress widget, and running several concurrently would tangle that
 // display even though the calls themselves have no shared state.
+//
+// bash, create_sandbox and sandbox_cp are approval-gated the same way edit/
+// write/subagent are (see agent.go's approvalGatedTools) — each independently
+// reaches TUI.Approve(), which is single-flight but has no ordering guarantee
+// across concurrent goroutines. Without these three here, a batch made of
+// e.g. two bash calls (no edit/write/subagent present) would dispatch them
+// through the concurrent path below, each hitting the approval prompt in
+// whatever order the Go scheduler happens to wake them — the exact race
+// agent.go's sequential gated walker exists to prevent at the top level,
+// reopened one level down inside batch's own dispatch. Forcing serial here
+// closes that: every approval-gated tool this package knows about is
+// mutating for batch's purposes, gated or actually-mutating alike.
 var mutatingTools = map[string]bool{
-	"edit":     true,
-	"write":    true,
-	"subagent": true,
+	"edit":           true,
+	"write":          true,
+	"subagent":       true,
+	"bash":           true,
+	"create_sandbox": true,
+	"sandbox_cp":     true,
 }
 
 type batchStepOut struct {

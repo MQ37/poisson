@@ -866,6 +866,37 @@ var approvalGatedTools = map[string]bool{
 	"sandbox_cp":     true,
 }
 
+// isGatedCall reports whether tc must go through the sequential gated
+// walker rather than the concurrent pool: either its own name is directly
+// gated, or (batch only) it wraps at least one nested call whose tool is.
+// batch.go's own mutatingTools set independently forces any such batch to
+// run its nested calls serially once Execute starts — this check is what
+// keeps that same batch call from itself racing another top-level gated
+// call (e.g. a plain `bash` submitted alongside a `batch{create_sandbox}`)
+// through the two different dispatch paths simultaneously. Without it, the
+// top-level partitioning below only ever sees "batch", never what's inside,
+// and the ordering guarantee approvalGatedTools exists for would hold
+// within a batch but not across the batch/non-batch boundary.
+func isGatedCall(tc tools.ToolCall) bool {
+	if approvalGatedTools[tc.Name] {
+		return true
+	}
+	if tc.Name != "batch" {
+		return false
+	}
+	for _, spec := range tools.ParseBatchCalls(tc.Input) {
+		// ParseBatchCalls only strips the wire prefix (mcp_Bash -> Bash),
+		// it doesn't apply the registry's final full-string lowercase
+		// fallback — CanonicalToolName does, matching what Registry.Canonical
+		// would actually resolve a half-stripped name like "Bash" to, so an
+		// oddly-cased nested tool name can't slip past this check unrecognized.
+		if approvalGatedTools[tools.CanonicalToolName(spec.Tool)] {
+			return true
+		}
+	}
+	return false
+}
+
 // emptyResponseBackoff is a var so tests can shorten it.
 var emptyResponseBackoff = 500 * time.Millisecond
 
@@ -1408,7 +1439,7 @@ roundLoop:
 
 		var gatedIdx []int
 		for i, tc := range toolCalls {
-			if approvalGatedTools[tc.Name] {
+			if isGatedCall(tc) {
 				gatedIdx = append(gatedIdx, i)
 				continue
 			}

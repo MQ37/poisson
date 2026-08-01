@@ -65,11 +65,13 @@ func extractTextFromContent(content string) string {
 	return strings.Join(parts, "\n")
 }
 
-// nextSeq returns the next message sequence number for a session
-// (max(seq) + 1, or 1 if there are no rows yet).
-func (s *Store) nextSeq(sessionID string) (int, error) {
+// nextSeqTx returns the next message sequence number for a session
+// (max(seq) + 1, or 1 if there are no rows yet), read through tx so it
+// shares the caller's transaction rather than a separate connection
+// checkout — see AppendMessage's comment on why that matters.
+func nextSeqTx(tx *sql.Tx, sessionID string) (int, error) {
 	var ms int
-	row := s.db.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session_id = ?`, sessionID)
+	row := tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM messages WHERE session_id = ?`, sessionID)
 	if err := row.Scan(&ms); err != nil {
 		return 0, fmt.Errorf("next seq: %w", err)
 	}
@@ -82,13 +84,6 @@ func (s *Store) AppendMessage(msg *Message) error {
 	if msg.ID == "" {
 		msg.ID = newUUID()
 	}
-	if msg.Seq == 0 {
-		seq, err := s.nextSeq(msg.SessionID)
-		if err != nil {
-			return err
-		}
-		msg.Seq = seq
-	}
 	if msg.CreatedAt == 0 {
 		msg.CreatedAt = time.Now().Unix()
 	}
@@ -98,12 +93,31 @@ func (s *Store) AppendMessage(msg *Message) error {
 	}
 
 	// Insert message + FTS index + session touch atomically so a failure
-	// between steps can't leave the message invisible to /search.
+	// between steps can't leave the message invisible to /search. The
+	// seq read below also has to be inside this same tx, not a separate
+	// s.db.QueryRow before Begin: two concurrent callers each doing
+	// "SELECT MAX(seq) outside a tx, then Begin, then INSERT" can both
+	// read the same MAX before either INSERTs, computing an identical
+	// seq and corrupting the ORDER BY seq ordering every reader
+	// (GetMessages, hydrate, /search) relies on — reproduced empirically
+	// under concurrent AppendMessage calls on one session. Reading it
+	// through tx instead means the pool's single connection
+	// (SetMaxOpenConns(1)) holds this whole read-then-insert as one
+	// unit; a second caller's Begin simply blocks until this Commit or
+	// Rollback releases it.
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin append tx: %w", err)
 	}
 	defer tx.Rollback()
+
+	if msg.Seq == 0 {
+		seq, err := nextSeqTx(tx, msg.SessionID)
+		if err != nil {
+			return err
+		}
+		msg.Seq = seq
+	}
 
 	if _, err := tx.Exec(
 		`INSERT INTO messages
