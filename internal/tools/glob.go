@@ -237,39 +237,86 @@ func matchStarStar(parts []string, rel string) bool {
 	return matchStarStarTail(restParts, rel)
 }
 
+// matchStarStarTail matches parts (pattern segments between successive **
+// boundaries) against rel's path segments. It's a memoized DP over
+// (part index, segment index): the naive recursive version below tried
+// every split point for every ** boundary with no memoization, which is
+// exponential in the number of path segments for patterns with two or more
+// ** — a pattern like "a/**/a/**/.../nomatch" against a ~15-segment path
+// took over 30s (should be sub-millisecond). Memoizing on (pi, si) makes
+// each (parts[pi:], segs[si:]) subproblem solved once instead of once per
+// path through the recursion tree, turning it polynomial.
+//
+//	func matchStarStarTail(parts []string, rel string) bool {
+//		if len(parts) == 0 { return true }
+//		...
+//		for i := range segs {  // ** eats segs[:i]
+//			if consumePrefix(part, &rest) {  // part eats more of segs[i:]
+//				if matchStarStarTail(parts[1:], rest) { return true }  // unmemoized recursion
+//			}
+//		}
+//	}
 func matchStarStarTail(parts []string, rel string) bool {
 	if len(parts) == 0 {
 		return true
 	}
-	last := len(parts) == 1
-	part := strings.TrimPrefix(parts[0], "/")
-	part = strings.TrimSuffix(part, "/")
-
-	if part == "" {
-		// Consecutive ** or trailing ** after split.
-		return matchStarStarTail(parts[1:], rel)
-	}
-
-	// Try every split point of rel; ** consumes rel[:i], part matches a prefix of rel[i:].
-	// For the final part, require the remainder to match exactly (suffix).
 	segs := strings.Split(rel, "/")
-	for i := 0; i <= len(segs); i++ {
-		rest := strings.Join(segs[i:], "/")
-		if last {
-			ok, err := filepath.Match(part, rest)
-			if err == nil && ok {
-				return true
-			}
-			continue
+	type key struct{ pi, si int }
+	memo := map[key]bool{}
+	var rec func(pi, si int) bool
+	rec = func(pi, si int) bool {
+		if pi >= len(parts) {
+			// Every part has been consumed (either matched, or skipped as
+			// an empty "**"-adjacent fragment) with no unmatched literal
+			// content left — same as the original's `len(parts) == 0`
+			// base case. Any leftover path segments are absorbed by the
+			// trailing "**" that produced this exhausted parts slice
+			// (that's what trailing ** means: match everything after
+			// this point, including nothing) — si is NOT required to
+			// have reached len(segs).
+			return true
 		}
-		// Non-final: part must match a prefix path of rest, then recurse.
-		if consumePrefix(part, &rest) {
-			if matchStarStarTail(parts[1:], rest) {
-				return true
+		k := key{pi, si}
+		if v, ok := memo[k]; ok {
+			return v
+		}
+		part := strings.TrimPrefix(parts[pi], "/")
+		part = strings.TrimSuffix(part, "/")
+		last := pi == len(parts)-1
+
+		var res bool
+		switch {
+		case part == "":
+			// Consecutive ** or trailing ** after split — no segments
+			// consumed by an empty part, just move to the next one.
+			res = rec(pi+1, si)
+		case last:
+			// Final part: ** eats segs[si:i], part must match the exact
+			// remainder segs[i:].
+			for i := si; i <= len(segs) && !res; i++ {
+				rest := strings.Join(segs[i:], "/")
+				if ok, err := filepath.Match(part, rest); err == nil && ok {
+					res = true
+				}
+			}
+		default:
+			// Non-final part: ** eats segs[si:i], then part itself
+			// consumes some further run of segments segs[i:i+m] (parts
+			// can contain literal slashes spanning multiple segments),
+			// then the rest of parts must match what's left.
+			for i := si; i <= len(segs) && !res; i++ {
+				for m := 1; i+m <= len(segs) && !res; m++ {
+					prefix := strings.Join(segs[i:i+m], "/")
+					if ok, _ := filepath.Match(part, prefix); ok && rec(pi+1, i+m) {
+						res = true
+					}
+				}
 			}
 		}
+		memo[k] = res
+		return res
 	}
-	return false
+	return rec(0, 0)
 }
 
 // consumePrefix requires that some prefix of *rel matches pattern (slash

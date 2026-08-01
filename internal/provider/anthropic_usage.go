@@ -124,7 +124,7 @@ func (p *AnthropicProvider) fetchUsage(ctx context.Context) (*AnthropicUsageLimi
 		refreshed, rerr := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh)
 		if rerr == nil {
 			p.auth["anthropic"] = *refreshed
-			_ = auth.Save(p.auth)
+			_ = auth.UpdateEntry("anthropic", *refreshed)
 		}
 		p.authMu.Unlock()
 		if rerr != nil {

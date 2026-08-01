@@ -6,9 +6,38 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mq37/poisson/internal/testutil"
 )
+
+// TestGlob_DoubleStarNoExponentialBlowup pins the fix for a pattern with
+// several ** boundaries against a deep all-matching-prefix path — the
+// unmemoized matcher took >30s past ~14 segments (classic exponential
+// backtracking); the memoized DP version must resolve this near-instantly
+// regardless of match outcome (this pattern never matches: "nomatch" is
+// the last literal segment against an all-"a" path).
+func TestGlob_DoubleStarNoExponentialBlowup(t *testing.T) {
+	pattern := strings.Repeat("a/**/", 14) + "nomatch"
+	rel := strings.Repeat("a/", 30) + "leaf"
+
+	done := make(chan bool, 1)
+	go func() {
+		ok, err := pathMatch(pattern, rel)
+		if err != nil {
+			t.Errorf("pathMatch error: %v", err)
+		}
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatalf("expected no match")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pathMatch took >2s — exponential blowup regression")
+	}
+}
 
 func TestGlob_BasenamePattern(t *testing.T) {
 	dir := testutil.TempDir(t)

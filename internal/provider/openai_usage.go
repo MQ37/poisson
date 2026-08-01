@@ -93,7 +93,7 @@ func (p *OpenAIProvider) oauthCreds() (accessToken, accountID string, err error)
 	if ok && entry.Type == "oauth" && auth.IsExpired(entry, 5*60*1000) {
 		if refreshed, rerr := auth.RefreshOpenAIToken(entry.Refresh); rerr == nil {
 			p.auth["openai"] = *refreshed
-			_ = auth.Save(p.auth)
+			_ = auth.UpdateEntry("openai", *refreshed)
 			entry = *refreshed
 		}
 	}
@@ -137,7 +137,7 @@ func (p *OpenAIProvider) fetchUsage(ctx context.Context) (*CodexUsage, error) {
 		refreshed, rerr := auth.RefreshOpenAIToken(p.auth["openai"].Refresh)
 		if rerr == nil {
 			p.auth["openai"] = *refreshed
-			_ = auth.Save(p.auth)
+			_ = auth.UpdateEntry("openai", *refreshed)
 		}
 		p.authMu.Unlock()
 		if rerr != nil {

@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,6 +93,57 @@ func TestCompactRetriesEmptyResponse(t *testing.T) {
 	}
 	if fp.CallCount() != 2 {
 		t.Errorf("provider calls = %d, want 2 (one empty response + one retry)", fp.CallCount())
+	}
+}
+
+// TestCompactConcurrentCallsSerialize is the regression guard for the
+// compaction double-run race: two goroutines call compact() at once
+// (simulating manual /compact racing auto-compaction from the turn loop).
+// Without compactMu, both would read the identical original message set and
+// both stream a full, redundant summary, with whichever ApplyCompaction
+// commits last silently overwriting the other's summary. With compactMu,
+// the second caller blocks until the first fully applies its compaction,
+// then sees the now-empty active set and correctly reports
+// ErrNothingToCompact instead of doing (or clobbering) redundant work.
+func TestCompactConcurrentCallsSerialize(t *testing.T) {
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "test-model")
+	seedMessages(t, s, sid, []string{"user", "assistant", "user", "assistant"})
+
+	fp := newFakeProvider()
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse(padSummary("## Big Picture\nFirst compaction"), nil),
+		provider.FakeTextResponse(padSummary("## Big Picture\nSecond compaction"), nil),
+	})
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, make(chan OutputEvent, 8), func(context.Context, string, string, string) (bool, string) { return true, "" })
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = a.Compact()
+		}(i)
+	}
+	wg.Wait()
+
+	successes, nothingToCompact := 0, 0
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrNothingToCompact):
+			nothingToCompact++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if successes != 1 || nothingToCompact != 1 {
+		t.Fatalf("got %d successes, %d ErrNothingToCompact — want exactly one of each (proves serialization, not a race letting both succeed)", successes, nothingToCompact)
+	}
+	if fp.CallCount() != 1 {
+		t.Errorf("provider CallCount = %d, want 1 — the serialized second call must see nothing left to compact without ever streaming a redundant summary", fp.CallCount())
 	}
 }
 

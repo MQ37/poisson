@@ -218,6 +218,129 @@ func TestAppendMessageConcurrentSameSessionAssignsDistinctSeq(t *testing.T) {
 	}
 }
 
+// regression guard for the api_calls.seq TOCTOU race — same bug class as
+// AppendMessage's, fixed the same way: RecordAPICall now computes seq
+// inside its own transaction (nextAPICallSeqTx) instead of the caller
+// reading MAX(seq) outside any tx.
+func TestRecordAPICallConcurrentSameSessionAssignsDistinctSeq(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "concurrent-api-seq")
+
+	const n = 50
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			errs <- s.RecordAPICall(&APICall{SessionID: "concurrent-api-seq", Model: "m", InputTokens: i, OutputTokens: 1, Cost: 0.01})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("RecordAPICall: %v", err)
+		}
+	}
+
+	rows, err := s.db.Query(`SELECT seq FROM api_calls WHERE session_id = ?`, "concurrent-api-seq")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+	seen := make(map[int]bool, n)
+	count := 0
+	for rows.Next() {
+		var seq int
+		if err := rows.Scan(&seq); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if seen[seq] {
+			t.Fatalf("duplicate seq %d among recorded api_calls — seq race not fixed", seq)
+		}
+		seen[seq] = true
+		count++
+	}
+	if count != n {
+		t.Fatalf("got %d api_calls rows, want %d", count, n)
+	}
+	for i := 1; i <= n; i++ {
+		if !seen[i] {
+			t.Errorf("missing seq %d — want a contiguous 1..%d range", i, n)
+		}
+	}
+}
+
+// TestMigrateUniqueSeqDedupesExistingDuplicates guards migrateUniqueSeq's
+// dedupe pass: a duplicate (session_id, seq) pair already on disk (as if
+// left over from before either seq fix landed, on a database at schema
+// version 1, pre-unique-index) must be renumbered — not deleted, not left
+// colliding — so the migration's CREATE UNIQUE INDEX doesn't fail on an
+// existing user's database. Builds the DB by hand (schemaSQL only, no
+// migrate()) rather than via the normal Open()/newTestStore path, since
+// that path already runs this very migration and would refuse the
+// duplicate insert before the test could plant it.
+func TestMigrateUniqueSeqDedupesExistingDuplicates(t *testing.T) {
+	dbPath := filepath.Join(testutil.TempDir(t), "predup.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if _, err := db.Exec(schemaSQL); err != nil {
+		t.Fatalf("apply schema: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO sessions (id, cwd, provider, model, created_at, updated_at) VALUES (?,?,?,?,?,?)`,
+		"dup-seq", "/tmp", "anthropic", "m", 1, 1); err != nil {
+		t.Fatalf("insert session: %v", err)
+	}
+
+	insert := func(seq int) {
+		t.Helper()
+		if _, err := db.Exec(
+			`INSERT INTO api_calls (id, session_id, seq, model, input_tokens, output_tokens, cost, created_at)
+			 VALUES (?,?,?,?,?,?,?,?)`,
+			newUUID(), "dup-seq", seq, "m", 1, 1, 0.0, 1); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	insert(1)
+	insert(1) // duplicate — pre-unique-index schema allows this; migration must fix it
+
+	if err := migrateUniqueSeq(db); err != nil {
+		t.Fatalf("migrateUniqueSeq: %v", err)
+	}
+
+	rows, err := db.Query(`SELECT seq FROM api_calls WHERE session_id = ? ORDER BY seq`, "dup-seq")
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	defer rows.Close()
+	var seqs []int
+	for rows.Next() {
+		var seq int
+		if err := rows.Scan(&seq); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		seqs = append(seqs, seq)
+	}
+	if len(seqs) != 2 {
+		t.Fatalf("got %d rows, want 2 (no rows lost)", len(seqs))
+	}
+	if seqs[0] == seqs[1] {
+		t.Fatalf("seqs still duplicate after migration: %v", seqs)
+	}
+
+	// The unique index must now exist and actually enforce uniqueness.
+	if _, err := db.Exec(
+		`INSERT INTO api_calls (id, session_id, seq, model, input_tokens, output_tokens, cost, created_at)
+		 VALUES (?,?,?,?,?,?,?,?)`,
+		newUUID(), "dup-seq", seqs[0], "m", 1, 1, 0.0, 1); err == nil {
+		t.Fatal("expected unique constraint violation inserting a duplicate seq after migration")
+	}
+}
+
 func TestOpenIdempotent(t *testing.T) {
 	dbPath := filepath.Join(testutil.TempDir(t), "idem.db")
 	s1, err := Open(dbPath)

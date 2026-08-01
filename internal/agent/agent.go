@@ -202,6 +202,17 @@ type Agent struct {
 	// each able to trigger a risk classification or a web-tool helper call)
 	// would otherwise read as the same number.
 	apiCallMu sync.Mutex
+	// compactMu serializes compact(): without it, auto-compaction (triggered
+	// from the turn loop) and a manual /compact could both read the same
+	// active-message set, both stream an independent (expensive) summary,
+	// and race to ApplyCompaction — whichever commits last silently
+	// overwrites the other's summary with one computed from a stale
+	// pre-compaction view. One Agent serves one session at a time, so this
+	// only needs to be in-process; it doesn't cover two separate px
+	// processes compacting the same session simultaneously (an edge case
+	// outside this Agent's own concurrency, same class as other
+	// cross-process races this codebase treats separately, e.g. auth.json).
+	compactMu sync.Mutex
 	// cumUsageMu guards cumUsage and cumCost.
 	cumUsageMu sync.Mutex
 	// cumUsage is the running total of every api_calls row this Agent has
@@ -2027,17 +2038,15 @@ func (a *Agent) recordAPICallFor(usage *provider.Usage, purpose, providerID, mod
 func (a *Agent) recordAPICallCost(usage *provider.Usage, purpose, providerID, model string, cost float64) (string, error) {
 	cacheRead, cacheWrite := usage.CacheReadTokens, usage.CacheWriteTokens
 
-	// Serialized: seq is max(seq)+1 read from the DB, and tools run in
-	// parallel (batch, and web tools inside it), so two concurrent recorders
-	// would otherwise pick the same number.
+	// store.RecordAPICall computes Seq itself (max(seq)+1) inside the same
+	// transaction as the INSERT, so leaving it zero here is safe even with
+	// tools running in parallel (batch, and web tools inside it) or a
+	// subagent child process recording concurrently — see nextAPICallSeqTx.
 	a.apiCallMu.Lock()
 	defer a.apiCallMu.Unlock()
 
-	seq := a.nextAPICallSeq()
-
 	call := &store.APICall{
 		SessionID:          a.sessionID,
-		Seq:                seq,
 		Provider:           providerID,
 		Model:              model,
 		InputTokens:        usage.InputTokens,
@@ -2121,15 +2130,13 @@ func (a *Agent) RecordSubagentUsage(providerID, model string, usage *provider.Us
 			usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, usage.CacheWriteTokens)
 	}
 
-	// Same seq race recordAPICallCost guards against: a batch can finish
-	// several subagents at once, each racing this function's own
-	// nextAPICallSeq() read against every other recorder in the session.
+	// Same reasoning as recordAPICallCost: leave Seq zero and let
+	// store.RecordAPICall assign it inside its own transaction.
 	a.apiCallMu.Lock()
 	defer a.apiCallMu.Unlock()
 
 	call := &store.APICall{
 		SessionID:          a.sessionID,
-		Seq:                a.nextAPICallSeq(),
 		Provider:           providerID,
 		Model:              model,
 		InputTokens:        usage.InputTokens,
@@ -2171,19 +2178,6 @@ func (a *Agent) RecordWebToolCall(c tools.WebCall) {
 	if _, err := a.recordAPICallCost(&usage, c.Purpose, c.Provider, c.Model, cost); err != nil {
 		log.Printf("record %s api call: %v", c.Purpose, err)
 	}
-}
-
-// nextAPICallSeq returns the next sequence number for api_calls in this
-// session (max(seq) + 1, or 1 if no rows yet). Callers hold apiCallMu.
-func (a *Agent) nextAPICallSeq() int {
-	var ms int
-	row := a.store.DB().QueryRow(
-		`SELECT COALESCE(MAX(seq), 0) FROM api_calls WHERE session_id = ?`,
-		a.sessionID)
-	if err := row.Scan(&ms); err != nil {
-		return 1
-	}
-	return ms + 1
 }
 
 // currentModel returns the model from the session, falling back to config

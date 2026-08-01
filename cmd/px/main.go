@@ -552,11 +552,6 @@ func cmdLogin(args []string) {
 		return
 	}
 	prov := strings.ToLower(args[0])
-	authStore, err := auth.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading auth: %v\n", err)
-		os.Exit(1)
-	}
 
 	switch prov {
 	case "anthropic":
@@ -566,8 +561,7 @@ func cmdLogin(args []string) {
 			fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
 			os.Exit(1)
 		}
-		authStore["anthropic"] = *entry
-		if err := auth.Save(authStore); err != nil {
+		if err := auth.UpdateEntry("anthropic", *entry); err != nil {
 			fmt.Fprintf(os.Stderr, "error saving auth: %v\n", err)
 			os.Exit(1)
 		}
@@ -581,8 +575,7 @@ func cmdLogin(args []string) {
 			fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
 			os.Exit(1)
 		}
-		authStore["xai"] = *entry
-		if err := auth.Save(authStore); err != nil {
+		if err := auth.UpdateEntry("xai", *entry); err != nil {
 			fmt.Fprintf(os.Stderr, "error saving auth: %v\n", err)
 			os.Exit(1)
 		}
@@ -595,8 +588,7 @@ func cmdLogin(args []string) {
 			fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
 			os.Exit(1)
 		}
-		authStore["openai"] = *entry
-		if err := auth.Save(authStore); err != nil {
+		if err := auth.UpdateEntry("openai", *entry); err != nil {
 			fmt.Fprintf(os.Stderr, "error saving auth: %v\n", err)
 			os.Exit(1)
 		}
@@ -618,13 +610,7 @@ func cmdLogout(args []string) {
 		return
 	}
 	prov := strings.ToLower(args[0])
-	authStore, err := auth.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading auth: %v\n", err)
-		os.Exit(1)
-	}
-	delete(authStore, prov)
-	if err := auth.Save(authStore); err != nil {
+	if err := auth.DeleteEntry(prov); err != nil {
 		fmt.Fprintf(os.Stderr, "error saving auth: %v\n", err)
 		os.Exit(1)
 	}

@@ -3,8 +3,10 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -50,7 +52,10 @@ func Load() (AuthStore, error) {
 	return store, nil
 }
 
-// Save writes the AuthStore to ~/.poisson/auth.json with 0600 permissions.
+// Save writes the AuthStore to ~/.poisson/auth.json with 0600 permissions,
+// atomically (write to a sibling temp file, then rename over the target).
+// A crash/kill mid-write can therefore never leave auth.json truncated or
+// empty — readers always see either the old complete file or the new one.
 func Save(store AuthStore) error {
 	path, err := AuthPath()
 	if err != nil {
@@ -63,7 +68,68 @@ func Save(store AuthStore) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// withLock runs fn while holding an exclusive OS file lock (flock) on
+// auth.json's sidecar lock file, serializing the load-modify-save cycle
+// across every process that touches auth.json: the parent px, any subagent
+// child process it spawns, or a concurrent `px login`/`px logout`. Without
+// this, two processes each Load() the whole map, mutate a different
+// provider's entry, and Save() the whole map back — whichever saves last
+// silently clobbers the other's fresh token with its own stale copy of it.
+func withLock(fn func() error) error {
+	path, err := AuthPath()
+	if err != nil {
+		return err
+	}
+	lockPath := path + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock auth store: %w", err)
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	return fn()
+}
+
+// UpdateEntry atomically sets a single provider's entry: under withLock, it
+// re-reads the store fresh from disk (not the caller's possibly-stale
+// in-memory copy), sets the entry, and saves. This is the safe way for a
+// token refresh to persist its result — see withLock's doc for why a plain
+// Save(wholeMapSnapshot) races other processes.
+func UpdateEntry(provider string, entry AuthEntry) error {
+	return withLock(func() error {
+		store, err := Load()
+		if err != nil {
+			return err
+		}
+		store[provider] = entry
+		return Save(store)
+	})
+}
+
+// DeleteEntry atomically removes a provider's entry, under the same lock as
+// UpdateEntry (see its docs).
+func DeleteEntry(provider string) error {
+	return withLock(func() error {
+		store, err := Load()
+		if err != nil {
+			return err
+		}
+		delete(store, provider)
+		return Save(store)
+	})
 }
 
 // IsOAuth returns true if the given provider has OAuth credentials.

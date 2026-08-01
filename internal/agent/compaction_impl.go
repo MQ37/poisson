@@ -98,6 +98,14 @@ func (a *Agent) compactionRuntime() (provider.Provider, string, error) {
 // after) it always leaves the current turn active so the next request stays
 // valid and non-empty.
 func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) error {
+	// Serialize against any other compact() call on this Agent (manual
+	// /compact vs. auto-compaction from the turn loop) — see compactMu's
+	// doc on agent.go. Held for the whole function so a second caller
+	// blocks until the first's summary is fully applied, then reads the
+	// post-compaction state instead of racing against it.
+	a.compactMu.Lock()
+	defer a.compactMu.Unlock()
+
 	if err := ctx.Err(); err != nil {
 		return err
 	}

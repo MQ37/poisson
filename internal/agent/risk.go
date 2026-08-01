@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -672,7 +673,9 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 	// not the session model — /classifier-model can point this call at a
 	// cheaper (or pricier) model than the conversation's.
 	out, err := streamAndCollect(ctx, a.provider, req, func(u *provider.Usage) {
-		_, _ = a.recordAPICallFor(u, "risk", a.providerID(), model)
+		if _, rerr := a.recordAPICallFor(u, "risk", a.providerID(), model); rerr != nil {
+			log.Printf("warning: record risk classifier api call: %v", rerr)
+		}
 	})
 	raw := out.Any()
 	if err != nil {

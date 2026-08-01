@@ -92,7 +92,7 @@ func (p *AnthropicProvider) refreshOAuthIfNeeded() bool {
 	if isOAuth && auth.IsExpired(p.auth["anthropic"], 5*60*1000) {
 		if refreshed, err := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh); err == nil {
 			p.auth["anthropic"] = *refreshed
-			if serr := auth.Save(p.auth); serr != nil {
+			if serr := auth.UpdateEntry("anthropic", *refreshed); serr != nil {
 				log.Printf("warning: save anthropic auth after refresh: %v", serr)
 			}
 		}
@@ -110,7 +110,7 @@ func (p *AnthropicProvider) forceRefreshOAuth() error {
 		return err
 	}
 	p.auth["anthropic"] = *refreshed
-	if serr := auth.Save(p.auth); serr != nil {
+	if serr := auth.UpdateEntry("anthropic", *refreshed); serr != nil {
 		log.Printf("warning: save anthropic auth after refresh: %v", serr)
 	}
 	return nil

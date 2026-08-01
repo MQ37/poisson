@@ -78,8 +78,27 @@ func (tb TokenBreakdown) FormatCost(sessionID string, cost float64) string {
 	return b.String()
 }
 
+// nextAPICallSeqTx returns the next api_calls sequence number for a session
+// (max(seq) + 1, or 1 if there are no rows yet), read through tx so it
+// shares the caller's transaction rather than a separate connection
+// checkout — same reasoning as messages' nextSeqTx: reading MAX(seq)
+// outside the INSERT's transaction lets two concurrent callers (in-process
+// or, since this is scoped by the tx/commit rather than an app-level mutex,
+// cross-process too — e.g. a parent px and a subagent child both recording
+// api_calls) both read the same MAX before either INSERTs, producing
+// duplicate seq values.
+func nextAPICallSeqTx(tx *sql.Tx, sessionID string) (int, error) {
+	var ms int
+	row := tx.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM api_calls WHERE session_id = ?`, sessionID)
+	if err := row.Scan(&ms); err != nil {
+		return 0, fmt.Errorf("next api call seq: %w", err)
+	}
+	return ms + 1, nil
+}
+
 // RecordAPICall inserts an api_calls row. ID and CreatedAt are populated
-// if zero.
+// if zero. Seq is computed inside the same transaction as the INSERT when
+// zero — see nextAPICallSeqTx.
 func (s *Store) RecordAPICall(call *APICall) error {
 	if call.ID == "" {
 		call.ID = newUUID()
@@ -102,7 +121,22 @@ func (s *Store) RecordAPICall(call *APICall) error {
 	if call.IsCompaction {
 		isCompaction = 1
 	}
-	_, err := s.db.Exec(
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin record api call tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if call.Seq == 0 {
+		seq, err := nextAPICallSeqTx(tx, call.SessionID)
+		if err != nil {
+			return err
+		}
+		call.Seq = seq
+	}
+
+	if _, err := tx.Exec(
 		`INSERT INTO api_calls
 		 (id, session_id, seq, provider, model, input_tokens, input_tokens_known, output_tokens,
 		  cache_read_tokens, cache_write_tokens, cost, purpose, is_compaction, created_at)
@@ -110,11 +144,10 @@ func (s *Store) RecordAPICall(call *APICall) error {
 		call.ID, call.SessionID, call.Seq, call.Provider, call.Model,
 		call.InputTokens, inputKnown, call.OutputTokens,
 		call.CacheReadTokens, call.CacheWriteTokens,
-		call.Cost, call.Purpose, isCompaction, call.CreatedAt)
-	if err != nil {
+		call.Cost, call.Purpose, isCompaction, call.CreatedAt); err != nil {
 		return fmt.Errorf("record api call: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // GetLastAPICall returns the most recent main-conversation API call for a

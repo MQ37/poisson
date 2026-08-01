@@ -68,7 +68,7 @@ func (p *OpenAIProvider) streamWithRetry(ctx context.Context, req *Request, retr
 	if ok && entry.Type == "oauth" && auth.IsExpired(entry, 5*60*1000) {
 		if refreshed, err := auth.RefreshOpenAIToken(entry.Refresh); err == nil {
 			p.auth["openai"] = *refreshed
-			if serr := auth.Save(p.auth); serr != nil {
+			if serr := auth.UpdateEntry("openai", *refreshed); serr != nil {
 				log.Printf("warning: save openai auth after refresh: %v", serr)
 			}
 			entry = *refreshed
@@ -119,7 +119,7 @@ func (p *OpenAIProvider) streamWithRetry(ctx context.Context, req *Request, retr
 		refreshed, rerr := auth.RefreshOpenAIToken(entry.Refresh)
 		if rerr == nil {
 			p.auth["openai"] = *refreshed
-			if serr := auth.Save(p.auth); serr != nil {
+			if serr := auth.UpdateEntry("openai", *refreshed); serr != nil {
 				log.Printf("warning: save openai auth after refresh: %v", serr)
 			}
 		}

@@ -35,13 +35,18 @@ func (t *TUI) Run() error {
 	// Lifecycle channel. render/input goroutines exit when this is closed.
 	stop := make(chan struct{})
 
-	// SIGTERM/SIGHUP (kill, ssh disconnect) bypass the defer, so restore the
-	// terminal explicitly before exiting — otherwise the shell is left raw.
+	// SIGINT/SIGTERM/SIGHUP (Ctrl+C sent externally, kill, ssh disconnect)
+	// bypass the defer, so restore the terminal explicitly before exiting —
+	// otherwise the shell is left raw. Also cancel any in-flight agent turn
+	// and give it a bounded moment to actually stop, same as the normal quit
+	// path (waitForAgentStop), instead of just os.Exit'ing out from under a
+	// running tool/subprocess/LLM stream and orphaning it.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		select {
 		case <-sigCh:
+			t.waitForAgentStop()
 			t.restoreTerminal()
 			os.Exit(1)
 		case <-stop:
@@ -106,6 +111,11 @@ func (t *TUI) Run() error {
 	usageCtx, cancelUsage := context.WithCancel(context.Background())
 	go func() {
 		defer cancelUsage()
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "poisson: usage-refresh panic: %v\n", r)
+			}
+		}()
 		t.refreshProviderUsageLimitsForce(usageCtx)
 		tick := time.NewTicker(5 * time.Minute)
 		defer tick.Stop()
@@ -140,9 +150,18 @@ func (t *TUI) Run() error {
 		}
 	}()
 
-	// Input loop.
+	// Input loop. This is the largest, most panic-prone surface in the TUI
+	// (key dispatch, overlays, slash commands) — recover so a bug here closes
+	// t.done and lets the run loop's normal exit path restore the terminal,
+	// instead of an unrecovered panic skipping Run()'s defer entirely and
+	// leaving the shell in raw/alt-screen mode.
 	go func() {
 		defer close(t.done)
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "poisson: input loop panic: %v\n", r)
+			}
+		}()
 		for {
 			select {
 			case <-stop:

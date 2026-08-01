@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS compactions (
 // the current shape before migrate runs. v1 is simply "caught up".
 var migrations = []func(*sql.DB) error{
 	func(*sql.DB) error { return nil },
+	migrateUniqueSeq,
 }
 
 // migrate reads db's PRAGMA user_version and applies any migrations not yet
