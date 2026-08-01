@@ -256,6 +256,32 @@ func TestFakeDriver_CreateErr(t *testing.T) {
 	}
 }
 
+// TestFakeDriver_Start confirms Start flips a MarkDead'd container back to
+// alive (idempotent — also succeeds on an already-alive one) and errors for
+// an id that was never created at all.
+func TestFakeDriver_Start(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+	id, err := driver.Create(ctx, CreateOpts{Name: "start-target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(id)
+
+	if err := driver.Start(ctx, id); err != nil {
+		t.Fatalf("Start on a dead container: %v", err)
+	}
+	if alive, _ := driver.Inspect(ctx, id); !alive {
+		t.Error("container should be alive after Start")
+	}
+	if err := driver.Start(ctx, id); err != nil {
+		t.Errorf("Start on an already-alive container should be idempotent, got: %v", err)
+	}
+	if err := driver.Start(ctx, "never-existed"); err == nil {
+		t.Error("expected Start to fail for a container that was never created")
+	}
+}
+
 // TestManager_DiscoveryAttachesForeignLiveSandbox is the crash-recovery
 // case: a second, independent Manager (as if a fresh px process after a
 // crash, or a different session) never created or Authorize'd the sandbox,
@@ -348,6 +374,136 @@ func TestManager_ListProxiesDriver(t *testing.T) {
 	}
 	if len(infos) != 1 || infos[0].ID != "px-sandbox-listed-one" {
 		t.Errorf("List() = %+v, want one entry named px-sandbox-listed-one", infos)
+	}
+}
+
+// TestManager_ResurrectOwnedStopped covers the same-process case: a Manager
+// stops (MarkDead) its own, already-owned sandbox, then resurrects it — no
+// discovery needed at all, since it was already in this Manager's local
+// map.
+func TestManager_ResurrectOwnedStopped(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+	m := NewManager(driver)
+
+	sb, err := m.Create(ctx, CreateOpts{Name: "resurrect-owned", HostPath: "/tmp/x/workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	if alive, _ := m.Alive(ctx, sb.ID); alive {
+		t.Fatal("sandbox should be reported dead after MarkDead")
+	}
+
+	got, err := m.Resurrect(ctx, sb.ID)
+	if err != nil {
+		t.Fatalf("Resurrect: %v", err)
+	}
+	if got.ID != sb.ID || got.HostPath != "/tmp/x/workspace" {
+		t.Errorf("Resurrect() = %+v, want matching ID/HostPath", got)
+	}
+	if alive, err := m.Alive(ctx, sb.ID); err != nil || !alive {
+		t.Errorf("Alive after Resurrect = %v, %v, want true, nil", alive, err)
+	}
+}
+
+// TestManager_ResurrectDiscoveredStopped is the crash-recovery case: a
+// fresh Manager (as if a restarted px process) never created or
+// Authorize'd the sandbox, but with EnableDiscovery it can still find and
+// resurrect a STOPPED one by exact name — attach()'s own running-only
+// filter must not apply here, since resurrecting a stopped one is the
+// whole point.
+func TestManager_ResurrectDiscoveredStopped(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+
+	owner := NewManager(driver)
+	sb, err := owner.Create(ctx, CreateOpts{Name: "resurrect-discovered", HostPath: "/tmp/y/workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	fresh := NewManager(driver) // simulates a brand-new process after restart
+	fresh.EnableDiscovery()
+
+	if fresh.Owns(sb.ID) {
+		t.Fatal("Owns should still be false for a stopped sandbox before Resurrect — attach() must not adopt a non-running match")
+	}
+
+	got, err := fresh.Resurrect(ctx, sb.ID)
+	if err != nil {
+		t.Fatalf("Resurrect: %v", err)
+	}
+	if got.ID != sb.ID || got.HostPath != "/tmp/y/workspace" {
+		t.Errorf("Resurrect() = %+v, want matching ID/HostPath", got)
+	}
+	if !fresh.Owns(sb.ID) {
+		t.Error("fresh Manager should own the sandbox after successfully resurrecting it")
+	}
+	if _, _, _, err := fresh.Exec(ctx, sb.ID, "echo hi", "", time.Second); err != nil {
+		t.Fatalf("Exec after Resurrect: %v", err)
+	}
+}
+
+// TestManager_ResurrectRefusedWithoutDiscovery locks in the same security
+// boundary Resurrect must extend from attach/Owns: a Manager that never
+// created or was Authorize'd for id, and never enabled discovery (e.g. a
+// subagent's), must not be able to resurrect it either.
+func TestManager_ResurrectRefusedWithoutDiscovery(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+
+	owner := NewManager(driver)
+	sb, err := owner.Create(ctx, CreateOpts{Name: "unauthorized-target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	stranger := NewManager(driver) // discovery never enabled
+	if _, err := stranger.Resurrect(ctx, sb.ID); err == nil {
+		t.Fatal("expected Resurrect to refuse a sandbox this Manager wasn't Authorize'd for and has no discovery")
+	}
+}
+
+// TestManager_ResurrectUnknownIDErrors confirms a nonexistent id (never
+// created by anyone) errors clearly rather than somehow starting a
+// container that isn't there.
+func TestManager_ResurrectUnknownIDErrors(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+	m := NewManager(driver)
+	m.EnableDiscovery()
+
+	if _, err := m.Resurrect(ctx, "px-sandbox-never-existed"); err == nil {
+		t.Fatal("expected Resurrect to fail for an id that was never created")
+	}
+}
+
+// TestManager_DiagnoseStoppedRequiresDiscovery confirms DiagnoseStopped
+// never reports anything for a Manager with discovery off — a subagent
+// Manager must not learn a foreign sandbox exists at all, stopped or not.
+func TestManager_DiagnoseStoppedRequiresDiscovery(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+
+	owner := NewManager(driver)
+	sb, err := owner.Create(ctx, CreateOpts{Name: "diagnose-target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	stranger := NewManager(driver)
+	if stranger.DiagnoseStopped(ctx, sb.ID) {
+		t.Error("DiagnoseStopped should be false without discovery enabled")
+	}
+
+	stranger.EnableDiscovery()
+	if !stranger.DiagnoseStopped(ctx, sb.ID) {
+		t.Error("DiagnoseStopped should be true once discovery is enabled and the sandbox is stopped")
 	}
 }
 

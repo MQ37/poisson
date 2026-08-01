@@ -62,7 +62,7 @@ func (t *BashTool) Schema() json.RawMessage {
     "description": { "type": "string", "description": "Short description of what the command does" },
     "workdir": { "type": "string", "description": "Working directory for this call (default: session cwd). Absolute or relative to session cwd. Does not persist to later calls." },
     "timeout": { "type": "integer", "description": "Timeout in seconds (default: 120)" },
-    "sandboxId": { "type": "string", "description": "Run inside this sandbox container instead of on the host — no approval gate. Must be a real, running sandbox name — this session's own create_sandbox result, or one found via list_sandboxes (sandboxes are visible/usable across every session on this host, not scoped to the one that created them). workdir is then a path inside the container (default: its own default directory), not a host path." }
+    "sandboxId": { "type": "string", "description": "Run inside this sandbox container instead of on the host — no approval gate. Must be a real, running sandbox name — this session's own create_sandbox result, or one found via list_sandboxes (sandboxes are visible/usable across every session on this host, not scoped to the one that created them). If list_sandboxes shows it with running=false (e.g. after a restart), call sandbox_resurrect on it first. workdir is then a path inside the container (default: its own default directory), not a host path." }
   },
   "required": ["command", "description"]
 }`)
@@ -231,8 +231,21 @@ func (t *BashTool) executeSandboxed(ctx context.Context, in bashInput) (ToolResu
 	if t.sandboxMgr == nil {
 		return ToolResult{Error: "sandboxId given but no sandbox manager is available in this session"}, nil
 	}
+	// A stopped-but-not-destroyed sandbox (e.g. after a poisson restart)
+	// deserves a specific nudge, not the generic not-found — the model
+	// otherwise has no way to know sandbox_resurrect exists for exactly
+	// this case, and might waste a create_sandbox call rebuilding a
+	// container it already had. Covers a call routed through batch too:
+	// batch dispatches into this same registered "bash" tool, no separate
+	// check needed there.
 	if !t.sandboxMgr.Owns(in.SandboxID) {
+		if t.sandboxMgr.DiagnoseStopped(ctx, in.SandboxID) {
+			return ToolResult{Error: fmt.Sprintf("sandbox %q exists but is stopped (e.g. after a restart or crash) — call sandbox_resurrect with this sandboxId first, then retry", in.SandboxID)}, nil
+		}
 		return ToolResult{Error: fmt.Sprintf("sandbox %q not found — it may belong to a different session, have been destroyed, or never existed", in.SandboxID)}, nil
+	}
+	if alive, err := t.sandboxMgr.Alive(ctx, in.SandboxID); err == nil && !alive {
+		return ToolResult{Error: fmt.Sprintf("sandbox %q is stopped — call sandbox_resurrect with this sandboxId first, then retry", in.SandboxID)}, nil
 	}
 
 	timeoutSec := 120

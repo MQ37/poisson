@@ -157,21 +157,44 @@ func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, err
 		return "", fmt.Errorf("podman create: %w (%s)", err, strings.TrimSpace(stderr))
 	}
 
-	if _, stderr, err := d.run(ctx, "start", name); err != nil {
+	if err := d.startAndBootstrap(ctx, name); err != nil {
 		d.forceRemove(context.Background(), name)
-		return "", fmt.Errorf("podman start: %w (%s)", err, strings.TrimSpace(stderr))
+		return "", err
 	}
-
-	user, err := d.bootstrap(ctx, name)
-	if err != nil {
-		d.forceRemove(context.Background(), name)
-		return "", fmt.Errorf("bootstrap: %w", err)
-	}
-	d.mu.Lock()
-	d.execUser[name] = user
-	d.mu.Unlock()
 
 	return name, nil
+}
+
+// startAndBootstrap starts container id and (re-)resolves its bootstrap
+// exec user, caching it in execUser. Shared by Create (a brand-new
+// container) and Start (resurrecting a stopped one, see sandbox_resurrect)
+// — the sequence is identical; bootstrapScript's own idempotence (reuse the
+// existing uid's user rather than recreating it) is what makes rerunning it
+// on an already-bootstrapped container safe.
+func (d *podmanDriver) startAndBootstrap(ctx context.Context, id string) error {
+	if _, stderr, err := d.run(ctx, "start", id); err != nil {
+		return fmt.Errorf("podman start: %w (%s)", err, strings.TrimSpace(stderr))
+	}
+	user, err := d.bootstrap(ctx, id)
+	if err != nil {
+		return fmt.Errorf("bootstrap: %w", err)
+	}
+	d.mu.Lock()
+	d.execUser[id] = user
+	d.mu.Unlock()
+	return nil
+}
+
+// Start resumes a stopped container id — the mechanism behind
+// sandbox_resurrect. A container survives a poisson crash/restart as a
+// stopped (not removed) podman container (see List's doc comment and
+// docs/sandbox-plan.md's "Crash recovery" section), but a fresh process's
+// execUser map is empty for any container it didn't itself Create — that
+// state lives in this driver instance's memory, not in podman. Re-running
+// bootstrap (via startAndBootstrap) re-resolves it, same as Create does for
+// a brand-new container.
+func (d *podmanDriver) Start(ctx context.Context, id string) error {
+	return d.startAndBootstrap(ctx, id)
 }
 
 // bootstrapScript creates (or reuses an existing user at) the host's own

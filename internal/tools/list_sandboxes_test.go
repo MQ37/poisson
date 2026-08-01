@@ -67,6 +67,40 @@ func TestListSandboxesTool_CrossSessionVisibility(t *testing.T) {
 	}
 }
 
+// TestListSandboxesTool_ShowsStoppedSandboxes confirms a sandbox that's
+// been stopped (e.g. by a restart) but not destroyed still shows up in the
+// listing, with running=false — this is what tells an agent
+// sandbox_resurrect (not create_sandbox) is the right next step.
+func TestListSandboxesTool_ShowsStoppedSandboxes(t *testing.T) {
+	driver := sandbox.NewFakeDriver()
+	mgr := sandbox.NewManager(driver)
+	sb, err := mgr.Create(context.Background(), sandbox.CreateOpts{Name: "stopped-one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	tool := NewListSandboxesTool(mgr)
+	res, _ := tool.Execute(context.Background(), nil)
+	if res.Error != "" {
+		t.Fatalf("unexpected error: %s", res.Error)
+	}
+
+	var entries []struct {
+		SandboxID string `json:"sandboxId"`
+		Running   bool   `json:"running"`
+	}
+	if err := json.Unmarshal([]byte(res.Content), &entries); err != nil {
+		t.Fatalf("unmarshal: %v (content=%q)", err, res.Content)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %+v, want exactly 1 (the stopped sandbox should still be listed)", entries)
+	}
+	if entries[0].SandboxID != sb.ID || entries[0].Running {
+		t.Errorf("entry = %+v, want SandboxID=%q Running=false", entries[0], sb.ID)
+	}
+}
+
 // TestListSandboxesTool_BrowsingGrantsNoAccess confirms list_sandboxes
 // showing an entry doesn't itself let a discovery-disabled Manager act on
 // it — Owns/Get still gate bash/sandbox_cp/sandbox_destroy independently

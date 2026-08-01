@@ -99,6 +99,23 @@ func (f *FakeDriver) Inspect(_ context.Context, id string) (bool, error) {
 	return ok && c.alive, nil
 }
 
+// Start flips a tracked (alive or not) container back to alive — simulating
+// `podman start` on a stopped-but-not-removed container. Errors only when
+// id was never created at all (or was Kill'd, which deletes the record
+// entirely) — matching how the real podmanDriver.Start behaves against a
+// truly nonexistent container name. Idempotent: starting an already-alive
+// container just succeeds, same as the real backend.
+func (f *FakeDriver) Start(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.containers[id]
+	if !ok {
+		return fmt.Errorf("fakeDriver: no such container %q", id)
+	}
+	c.alive = true
+	return nil
+}
+
 func (f *FakeDriver) Kill(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

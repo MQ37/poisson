@@ -99,6 +99,7 @@ func BuildRegistry(opts BuildOptions) *Registry {
 		}
 		reg.Register(NewSandboxCpTool(opts.Cwd, opts.SandboxManager, fileApproval))
 		reg.Register(NewSandboxDestroyTool(opts.SandboxManager))
+		reg.Register(NewSandboxResurrectTool(opts.SandboxManager))
 		reg.Register(NewListSandboxesTool(opts.SandboxManager))
 	}
 	// web_search and fetch are re-registered with their provider-gated

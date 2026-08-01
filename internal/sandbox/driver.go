@@ -147,6 +147,10 @@ type Driver interface {
 	Exec(ctx context.Context, id, cmd, workdir string, timeout time.Duration) (stdout, stderr string, exitCode int, err error)
 	// Inspect reports whether container id is still alive.
 	Inspect(ctx context.Context, id string) (alive bool, err error)
+	// Start resumes a stopped (not removed) container id — the mechanism
+	// behind sandbox_resurrect. Safe to call on an already-running
+	// container (idempotent, same as `podman start`/`docker start`).
+	Start(ctx context.Context, id string) error
 	// Kill stops and removes container id.
 	Kill(ctx context.Context, id string) error
 	// List reports every live sandbox container this driver's backend knows

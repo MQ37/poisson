@@ -130,6 +130,124 @@ func TestBashTool_SandboxedExecFailurePropagates(t *testing.T) {
 	}
 }
 
+// TestBashTool_SandboxedOwnedStoppedGivesResurrectHint covers the
+// same-process case: this Manager still owns the sandbox locally (it
+// created it earlier), but the container has since stopped (MarkDead) —
+// the error must nudge toward sandbox_resurrect, not a generic Exec
+// failure.
+func TestBashTool_SandboxedOwnedStoppedGivesResurrectHint(t *testing.T) {
+	dir := testutil.TempDir(t)
+	driver := sandbox.NewFakeDriver()
+	mgr := sandbox.NewManager(driver)
+	sb, err := mgr.Create(context.Background(), sandbox.CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	b := NewBashTool(dir, alwaysApprove)
+	b.SetSandboxManager(mgr)
+
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "echo hi",
+		"description": "echo",
+		"sandboxId":   sb.ID,
+	}))
+	if res.Error == "" || !strings.Contains(res.Error, "sandbox_resurrect") {
+		t.Fatalf("error = %q, want it to nudge toward sandbox_resurrect", res.Error)
+	}
+}
+
+// TestBashTool_SandboxedDiscoveredStoppedGivesResurrectHint is the reported
+// scenario itself: a fresh session (as if px restarted) never created this
+// sandbox, but discovery can see it — stopped — by exact name. The error
+// must distinguish this from a plain "not found" and nudge toward
+// sandbox_resurrect.
+func TestBashTool_SandboxedDiscoveredStoppedGivesResurrectHint(t *testing.T) {
+	dir := testutil.TempDir(t)
+	driver := sandbox.NewFakeDriver()
+	owner := sandbox.NewManager(driver)
+	sb, err := owner.Create(context.Background(), sandbox.CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	fresh := sandbox.NewManager(driver) // simulates a restarted process
+	fresh.EnableDiscovery()
+	b := NewBashTool(dir, alwaysApprove)
+	b.SetSandboxManager(fresh)
+
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "echo hi",
+		"description": "echo",
+		"sandboxId":   sb.ID,
+	}))
+	if res.Error == "" || !strings.Contains(res.Error, "sandbox_resurrect") {
+		t.Fatalf("error = %q, want it to nudge toward sandbox_resurrect", res.Error)
+	}
+}
+
+// TestBashTool_SandboxedStoppedWithoutDiscoveryStaysGeneric confirms a
+// Manager with discovery off (e.g. a subagent's) never learns a foreign
+// sandbox exists at all, stopped or otherwise — the generic not-found
+// message, no more detail, is the correct/secure behavior there.
+func TestBashTool_SandboxedStoppedWithoutDiscoveryStaysGeneric(t *testing.T) {
+	dir := testutil.TempDir(t)
+	driver := sandbox.NewFakeDriver()
+	owner := sandbox.NewManager(driver)
+	sb, err := owner.Create(context.Background(), sandbox.CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	stranger := sandbox.NewManager(driver) // discovery never enabled
+	b := NewBashTool(dir, alwaysApprove)
+	b.SetSandboxManager(stranger)
+
+	res, _ := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command":     "echo hi",
+		"description": "echo",
+		"sandboxId":   sb.ID,
+	}))
+	if res.Error == "" || strings.Contains(res.Error, "sandbox_resurrect") {
+		t.Fatalf("error = %q, want the generic not-found message with no resurrect hint", res.Error)
+	}
+	if !strings.Contains(res.Error, "not found") {
+		t.Errorf("error = %q, want it to say the sandbox was not found", res.Error)
+	}
+}
+
+// TestBatch_SandboxedBashOnStoppedContainerGivesResurrectHint proves the
+// nudge also fires for a bash call routed through batch — batch dispatches
+// into the same registered "bash" tool, so no separate check is needed
+// there, but this confirms it end-to-end rather than assuming it.
+func TestBatch_SandboxedBashOnStoppedContainerGivesResurrectHint(t *testing.T) {
+	dir := testutil.TempDir(t)
+	driver := sandbox.NewFakeDriver()
+	mgr := sandbox.NewManager(driver)
+	sb, err := mgr.Create(context.Background(), sandbox.CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	reg := BuildRegistry(BuildOptions{Cwd: dir, ApprovalFn: alwaysApprove, FileApprovalFn: alwaysApprove, SandboxManager: mgr})
+
+	res, _ := reg.Execute(context.Background(), "batch", mustJSON(t, map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "bash", "input": map[string]interface{}{"command": "echo hi", "description": "echo", "sandboxId": sb.ID}},
+		},
+	}))
+	if res.Error != "" {
+		t.Fatalf("batch error: %s", res.Error)
+	}
+	if !strings.Contains(res.Content, "sandbox_resurrect") {
+		t.Errorf("batch step output = %q, want it to nudge toward sandbox_resurrect", res.Content)
+	}
+}
+
 // TestBatch_MixedHostAndSandboxedBash exercises the real path an agent
 // hits: setting up in a sandbox while also reading/running something on the
 // host in the same batch round.

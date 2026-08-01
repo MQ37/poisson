@@ -8,13 +8,14 @@ import (
 	"github.com/mq37/poisson/internal/sandbox"
 )
 
-// ListSandboxesTool browses every live poisson sandbox container on this
-// host, not just ones the current session created — the discovery half of
-// crash recovery (see docs/sandbox-plan.md's "Crash recovery" section):
-// find a sandbox by the name it was given, whether this session created it,
-// a different one did, or the process that created it has since crashed.
-// Read-only: listing never grants access on its own, Manager.Get/Owns still
-// gate bash/sandbox_cp/sandbox_destroy the same way regardless.
+// ListSandboxesTool browses every poisson sandbox container on this host
+// (running or stopped), not just ones the current session created — the
+// discovery half of crash recovery (see docs/sandbox-plan.md's "Crash
+// recovery" section): find a sandbox by the name it was given, whether this
+// session created it, a different one did, or the process that created it
+// has since crashed or was restarted. Read-only: listing never grants
+// access on its own, Manager.Get/Owns still gate bash/sandbox_cp/
+// sandbox_destroy/sandbox_resurrect the same way regardless.
 type ListSandboxesTool struct {
 	mgr *sandbox.Manager
 }
@@ -26,7 +27,7 @@ func NewListSandboxesTool(mgr *sandbox.Manager) *ListSandboxesTool {
 func (t *ListSandboxesTool) Name() string { return "list_sandboxes" }
 
 func (t *ListSandboxesTool) Description() string {
-	return "List every live podman sandbox container on this host, across every session and process — including ones from a crashed or otherwise-finished session. Use it to find an existing sandbox by name (its sandboxId) before creating a new one, especially after a crash or to check what another concurrent session is already using. Each entry shows sandboxId, hostPath, which session created it, when, and whether it's still running. This only browses — pass sandboxId to bash/sandbox_cp/sandbox_destroy to actually use one, and prefer sandboxes you recognize as your own over ones that look like someone else's active work."
+	return "List every podman sandbox container on this host, running or stopped, across every session and process — including ones from a crashed, restarted, or otherwise-finished session. Use it to find an existing sandbox by name (its sandboxId) before creating a new one, especially after a crash or to check what another concurrent session is already using. Each entry shows sandboxId, hostPath, which session created it, when, and whether it's still running. A stopped one (running=false) still exists with all its state intact — pass its sandboxId to sandbox_resurrect to resume it instead of creating a fresh one. This only browses — pass sandboxId to bash/sandbox_cp/sandbox_destroy/sandbox_resurrect to actually use one, and prefer sandboxes you recognize as your own over ones that look like someone else's active work."
 }
 
 func (t *ListSandboxesTool) Schema() json.RawMessage {
