@@ -842,26 +842,41 @@ const maxTurnContinuations = 8
 // response run at once — see the dispatch loop in runTurn.
 const maxConcurrentToolCalls = 8
 
-// approvalGatedTools are tool names whose Execute may ask a human for
-// approval: bash's risk gate, edit/write/sandbox_cp's sensitive-path gate,
-// create_sandbox's mount/env gate, and subagent's relayed child approvals.
-// Every one of these funnels through the same single-flight TUI.Approve
-// call (see its doc comment), which has no ordering guarantee across
-// concurrent goroutines — a plain sync.Mutex hands out its lock in
-// whatever order the Go scheduler happens to wake blocked goroutines, not
-// necessarily the model's submission order. Two gated calls dispatched
-// concurrently can therefore show their approval prompts (and run) out of
-// order — e.g. a `create_sandbox` call submitted after a `bash` call
-// prompting/finishing first, even though the sandbox may depend on the
-// bash command. The dispatch loop below pulls these out of the concurrent
-// pool and runs them one at a time, in submission order, so two of them can
-// never be in flight together — the race is structurally impossible rather
-// than merely unlikely. Every other tool call keeps full concurrency.
+// approvalGatedTools are tool names whose Execute asks for approval as
+// (essentially) the first thing it does: bash's risk gate, edit/write/
+// sandbox_cp's sensitive-path gate, create_sandbox's mount/env gate. Every
+// one of these funnels through the same single-flight TUI.Approve call (see
+// its doc comment), which has no ordering guarantee across concurrent
+// goroutines — a plain sync.Mutex hands out its lock in whatever order the
+// Go scheduler happens to wake blocked goroutines, not necessarily the
+// model's submission order. Two gated calls dispatched concurrently can
+// therefore show their approval prompts (and run) out of order — e.g. a
+// `create_sandbox` call submitted after a `bash` call prompting/finishing
+// first, even though the sandbox may depend on the bash command. The
+// dispatch loop below pulls these out of the concurrent pool and runs them
+// one at a time, in submission order, so two of them can never be in flight
+// together — the race is structurally impossible rather than merely
+// unlikely. Every other tool call keeps full concurrency.
+//
+// subagent deliberately is NOT here, despite also being able to trigger a
+// human approval prompt (relayed from a gated call the child itself runs,
+// e.g. its own bash): unlike bash/edit/write/create_sandbox, a subagent's
+// approval_request can arrive at any arbitrary point during its run — a
+// child agent loop that may take minutes — not near the start of Execute.
+// There was never a real "submission order" relationship between a
+// subagent's eventual approval prompt and another top-level call's, so
+// putting it in this set bought no real ordering guarantee; it only forced
+// every subagent call in a round to run one at a time, for its ENTIRE
+// lifetime, defeating the whole point of spawning several concurrently
+// (see TestInteg_ParallelSubagentsRunConcurrently). TUI.Approve's own
+// single-flight mutex already keeps at most one prompt on screen no matter
+// which tools reach it concurrently — that's the real safety property; this
+// set only sharpens it into a submission-order guarantee for the tools
+// whose approval timing is otherwise racy at the top level.
 var approvalGatedTools = map[string]bool{
 	"bash":           true,
 	"edit":           true,
 	"write":          true,
-	"subagent":       true,
 	"create_sandbox": true,
 	"sandbox_cp":     true,
 }

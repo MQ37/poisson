@@ -132,6 +132,65 @@ func TestInteg_ParallelToolsRunConcurrently(t *testing.T) {
 	}
 }
 
+// TestInteg_ParallelSubagentsRunConcurrently is the regression guard for the
+// "only the first scout's turn count moves, the rest just sit at their
+// elapsed timer" bug: several `subagent` tool_use calls in the same round
+// (the native-parallel-tool-call path, not batch) must all actually run at
+// once, not one at a time. subagent used to sit in approvalGatedTools, which
+// forces every call in that set through a sequential walker that doesn't
+// start call i+1's Execute until call i's has fully returned — fine for
+// bash/edit/write (approval is the first thing they do, and they're short),
+// wrong for subagent (a long-lived nested agent loop whose own approval, if
+// any, can land at any arbitrary point deep into a run that may take
+// minutes). Each fake subagent call signals it has started and then waits
+// for every sibling's start signal, so all N must be in flight
+// simultaneously to proceed — serial dispatch would deadlock (caught by the
+// context timeout + the maxInFlight assertion below).
+func TestInteg_ParallelSubagentsRunConcurrently(t *testing.T) {
+	const n = 5
+	arg := json.RawMessage(`{}`)
+	var turn []provider.StreamEvent
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("call_%d", i)
+		turn = append(turn,
+			provider.StreamEvent{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: id, Name: "subagent", Input: arg}},
+			provider.StreamEvent{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: id, Name: "subagent", Input: arg}},
+		)
+	}
+	turn = append(turn, provider.StreamEvent{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}})
+
+	e := newIntegEnv(t, [][]provider.StreamEvent{turn, provider.FakeTextResponse("done", nil)})
+
+	var startedCount atomic.Int32
+	allStarted := make(chan struct{})
+	var inFlight, maxInFlight int32
+	e.reg.Register(barrierTool{name: "subagent", run: func(ctx context.Context) (tools.ToolResult, error) {
+		n2 := atomic.AddInt32(&inFlight, 1)
+		defer atomic.AddInt32(&inFlight, -1)
+		for {
+			m := atomic.LoadInt32(&maxInFlight)
+			if n2 <= m || atomic.CompareAndSwapInt32(&maxInFlight, m, n2) {
+				break
+			}
+		}
+		if startedCount.Add(1) == n {
+			close(allStarted)
+		}
+		select {
+		case <-allStarted: // serial execution would deadlock here
+		case <-ctx.Done():
+			return tools.ToolResult{}, ctx.Err()
+		}
+		return tools.ToolResult{Content: "scout done"}, nil
+	}})
+
+	e.send("run scouts")
+
+	if got := atomic.LoadInt32(&maxInFlight); got != n {
+		t.Errorf("max concurrent subagent executions = %d, want %d (ran serially?)", got, n)
+	}
+}
+
 // TestInteg_GatedToolsRunSequentially is the regression guard for the
 // approval-ordering bug: two tool calls whose names are in
 // approvalGatedTools (here "bash" and "create_sandbox", standing in for the
