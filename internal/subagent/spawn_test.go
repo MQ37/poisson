@@ -2,6 +2,8 @@ package subagent
 
 import (
 	"bufio"
+	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -10,11 +12,28 @@ import (
 	"time"
 )
 
-// processAlive reports whether a PID is still a live (non-reaped) process.
+// processAlive reports whether a PID is still running (not exited AND not a
+// zombie). Signal-0 liveness (kill(pid, 0) == nil) alone isn't enough in a
+// container with no real init/reaper (this sandbox's PID 1 is literally
+// `sleep infinity`, confirmed by prior scouting): a SIGKILLed process still
+// occupies its PID-table slot as a <defunct> zombie until *something* calls
+// wait() on it, which never happens here — kill(pid, 0) keeps succeeding
+// forever even though the process is stopped and consumes no resources.
+// Reading /proc/[pid]/stat's state field distinguishes "actually still
+// running" from "killed, just unreaped" so Kill()/Reap() tests measure what
+// they're actually supposed to guarantee (the target stops running) rather
+// than something this environment's broken PID 1 makes untestable.
 func processAlive(pid int) bool {
-	// Signal 0 performs error checking without sending a signal.
-	err := syscall.Kill(pid, 0)
-	return err == nil
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err == nil {
+		if idx := strings.LastIndexByte(string(data), ')'); idx >= 0 && idx+2 < len(data) {
+			if fields := strings.Fields(string(data)[idx+2:]); len(fields) > 0 {
+				return fields[0] != "Z"
+			}
+		}
+	}
+	// /proc unavailable (non-Linux) or unparsable: fall back to signal-0.
+	return syscall.Kill(pid, 0) == nil
 }
 
 // waitDead polls until the PID is gone or the timeout elapses.
@@ -82,4 +101,104 @@ func TestReapKillsProcessGroup(t *testing.T) {
 func TestReapNilProcessSafe(t *testing.T) {
 	c := &ChildProcess{cmd: exec.Command("true")}
 	c.Reap() // must not panic
+}
+
+// TestKillReachesGrandchildInSeparateProcessGroup reproduces the real
+// subagent scenario: internal/tools/bash.go runs every command it execs in
+// its OWN new process group (Setpgid:true), distinct from the subagent
+// process's own group. Before killDescendantTree, ChildProcess.Kill()'s
+// pgid-targeted SIGKILL never reached that separate group, orphaning
+// whatever the subagent was running via bash.go at the moment it got
+// killed from the outside (Ctrl+C, subagent timeout, parent cancellation).
+func TestKillReachesGrandchildInSeparateProcessGroup(t *testing.T) {
+	if _, err := os.Stat("/proc"); err != nil {
+		t.Skip("/proc not available on this OS")
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid not available")
+	}
+
+	// The outer shell (the "subagent") backgrounds `setsid sleep 300` — a
+	// real, portable way (no manual syscall.Setpgid from an unrelated
+	// process, which POSIX only permits from the direct parent, before the
+	// target has exec'd) to get a grandchild in its OWN new session/process
+	// group, exactly like bash.go's Setpgid:true does for every command a
+	// subagent runs.
+	cmd := exec.Command("sh", "-c", "setsid sleep 300 & echo $!; wait")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	c := &ChildProcess{cmd: cmd, stdout: bufio.NewReader(stdout)}
+
+	line, err := c.stdout.ReadString('\n')
+	if err != nil {
+		c.Reap()
+		t.Fatalf("read grandchild pid: %v", err)
+	}
+	grandPID, err := strconv.Atoi(strings.TrimSpace(line))
+	if err != nil {
+		c.Reap()
+		t.Fatalf("parse grandchild pid %q: %v", line, err)
+	}
+
+	// $! is the PID of the forked-but-not-yet-exec'd shell job; `setsid`
+	// (and, after it, `sleep`) only becomes its own process-group/session
+	// leader once that fork actually execs into setsid — a race with
+	// however long that takes. Poll until pgid == grandPID itself (setsid's
+	// whole point) before proceeding, so the kill below is guaranteed to
+	// race against an already-separated group, not an in-flight fork.
+	if !waitOwnProcessGroup(grandPID, 2*time.Second) {
+		t.Fatalf("grandchild %d never became its own process group leader (setsid didn't run in time)", grandPID)
+	}
+
+	c.Reap()
+
+	if !waitDead(grandPID, 2*time.Second) {
+		t.Errorf("grandchild %d in a separate process group survived Kill — orphaned subprocess (the bug killDescendantTree fixes)", grandPID)
+	}
+}
+
+// waitOwnProcessGroup polls /proc/[pid]/stat until pid is its own process
+// group leader (field 5, pgrp, equals pid) or the timeout elapses.
+func waitOwnProcessGroup(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if pgid, ok := statPgid(pid); ok && pgid == pid {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pgid, ok := statPgid(pid)
+	return ok && pgid == pid
+}
+
+// statPgid reads the pgrp field (5th field, right after "pid (comm) state")
+// from /proc/[pid]/stat.
+func statPgid(pid int) (int, bool) {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return 0, false
+	}
+	idx := strings.LastIndexByte(string(data), ')')
+	if idx < 0 || idx+2 >= len(data) {
+		return 0, false
+	}
+	fields := strings.Fields(string(data)[idx+2:])
+	// fields[0]=state, fields[1]=ppid, fields[2]=pgrp.
+	if len(fields) < 3 {
+		return 0, false
+	}
+	pgid, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return 0, false
+	}
+	return pgid, true
 }

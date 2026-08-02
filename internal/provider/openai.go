@@ -29,7 +29,6 @@ const jwtAccountClaim = "https://api.openai.com/auth"
 // auth with auto-refresh, mirroring the xAI/Anthropic subscription flows.
 type OpenAIProvider struct {
 	auth     auth.AuthStore
-	authMu   sync.Mutex
 	config   *config.Config
 	client   *http.Client
 	endpoint string // Codex Responses URL; overridable in tests
@@ -63,18 +62,22 @@ func (p *OpenAIProvider) Stream(ctx context.Context, req *Request) (<-chan Strea
 }
 
 func (p *OpenAIProvider) streamWithRetry(ctx context.Context, req *Request, retry int) (<-chan StreamEvent, error) {
-	p.authMu.Lock()
+	// auth.StoreMu, not a private-to-this-struct mutex: the same underlying
+	// AuthStore map is also written by XAIProvider/WebAskTool's grok backend
+	// (see auth.StoreMu's doc comment for why a per-provider-instance mutex
+	// isn't enough to prevent a concurrent map write). The refresh itself
+	// goes through auth.RefreshIfExpired, cross-process safe too — see its
+	// doc comment.
+	auth.StoreMu.Lock()
 	entry, ok := p.auth["openai"]
-	if ok && entry.Type == "oauth" && auth.IsExpired(entry, 5*60*1000) {
-		if refreshed, err := auth.RefreshOpenAIToken(entry.Refresh); err == nil {
-			p.auth["openai"] = *refreshed
-			if serr := auth.UpdateEntry("openai", *refreshed); serr != nil {
-				log.Printf("warning: save openai auth after refresh: %v", serr)
-			}
-			entry = *refreshed
+	if ok && entry.Type == "oauth" {
+		if refreshed, err := auth.RefreshIfExpired(p.auth, "openai", 5*60*1000, auth.RefreshOpenAIToken); err == nil {
+			entry = refreshed
+		} else {
+			log.Printf("warning: refresh openai auth: %v", err)
 		}
 	}
-	p.authMu.Unlock()
+	auth.StoreMu.Unlock()
 	if !ok || entry.Type != "oauth" {
 		return nil, fmt.Errorf("no OpenAI credentials — run: px login openai")
 	}
@@ -115,15 +118,9 @@ func (p *OpenAIProvider) streamWithRetry(ctx context.Context, req *Request, retr
 
 	if resp.StatusCode == 401 && retry == 0 {
 		resp.Body.Close()
-		p.authMu.Lock()
-		refreshed, rerr := auth.RefreshOpenAIToken(entry.Refresh)
-		if rerr == nil {
-			p.auth["openai"] = *refreshed
-			if serr := auth.UpdateEntry("openai", *refreshed); serr != nil {
-				log.Printf("warning: save openai auth after refresh: %v", serr)
-			}
-		}
-		p.authMu.Unlock()
+		auth.StoreMu.Lock()
+		_, rerr := auth.ForceRefresh(p.auth, "openai", 0, auth.RefreshOpenAIToken)
+		auth.StoreMu.Unlock()
 		if rerr == nil {
 			return p.streamWithRetry(ctx, req, 1)
 		}

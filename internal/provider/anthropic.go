@@ -24,7 +24,6 @@ import (
 type AnthropicProvider struct {
 	baseURL string
 	auth    auth.AuthStore
-	authMu  sync.Mutex
 	config  *config.Config
 	client  *http.Client
 
@@ -82,19 +81,21 @@ func (p *AnthropicProvider) Stream(ctx context.Context, req *Request) (<-chan St
 }
 
 // refreshOAuthIfNeeded reports whether auth is OAuth, refreshing a token
-// that expires within 5 minutes first. All auth-map access is guarded:
-// concurrent callers (parallel bash-risk assessments, a web-tool helper call
-// during a turn) would otherwise race on the shared map and crash the process.
+// that expires within 5 minutes first. All auth-map access is guarded by
+// auth.StoreMu — a single process-wide lock, not a private-to-this-struct
+// mutex — because the same underlying AuthStore map is also written by
+// XAIProvider/WebAskTool's grok backend (see auth.StoreMu's doc comment for
+// why a per-provider-instance mutex isn't enough). The refresh itself goes
+// through auth.RefreshIfExpired, which is also cross-process safe (a
+// subagent child racing this same refresh against its parent, or two
+// independent px instances) — see its doc comment.
 func (p *AnthropicProvider) refreshOAuthIfNeeded() bool {
-	p.authMu.Lock()
-	defer p.authMu.Unlock()
+	auth.StoreMu.Lock()
+	defer auth.StoreMu.Unlock()
 	isOAuth := auth.IsOAuth(p.auth, "anthropic")
-	if isOAuth && auth.IsExpired(p.auth["anthropic"], 5*60*1000) {
-		if refreshed, err := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh); err == nil {
-			p.auth["anthropic"] = *refreshed
-			if serr := auth.UpdateEntry("anthropic", *refreshed); serr != nil {
-				log.Printf("warning: save anthropic auth after refresh: %v", serr)
-			}
+	if isOAuth {
+		if _, err := auth.RefreshIfExpired(p.auth, "anthropic", 5*60*1000, auth.RefreshAnthropicToken); err != nil {
+			log.Printf("warning: refresh anthropic auth: %v", err)
 		}
 	}
 	return isOAuth
@@ -102,18 +103,15 @@ func (p *AnthropicProvider) refreshOAuthIfNeeded() bool {
 
 // forceRefreshOAuth refreshes the OAuth token unconditionally — used after a
 // 401, where the stored token is known bad regardless of its expiry field.
+// Goes through auth.ForceRefresh (cross-process safe, see its doc): if
+// another process already refreshed this same entry in the meantime, this
+// adopts that result instead of racing its own (possibly already-rotated
+// and therefore failing) refresh_token.
 func (p *AnthropicProvider) forceRefreshOAuth() error {
-	p.authMu.Lock()
-	defer p.authMu.Unlock()
-	refreshed, err := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh)
-	if err != nil {
-		return err
-	}
-	p.auth["anthropic"] = *refreshed
-	if serr := auth.UpdateEntry("anthropic", *refreshed); serr != nil {
-		log.Printf("warning: save anthropic auth after refresh: %v", serr)
-	}
-	return nil
+	auth.StoreMu.Lock()
+	defer auth.StoreMu.Unlock()
+	_, err := auth.ForceRefresh(p.auth, "anthropic", 0, auth.RefreshAnthropicToken)
+	return err
 }
 
 func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, retry int) (<-chan StreamEvent, error) {
@@ -561,10 +559,10 @@ func (p *AnthropicProvider) setHeaders(req *http.Request, isOAuth bool, adaptive
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("anthropic-version", "2023-06-01")
 
-	p.authMu.Lock()
+	auth.StoreMu.Lock()
 	access := p.auth["anthropic"].Access
 	apiKey := auth.GetAPIKey(p.auth, "anthropic")
-	p.authMu.Unlock()
+	auth.StoreMu.Unlock()
 
 	if isOAuth {
 		req.Header.Set("Authorization", "Bearer "+access)

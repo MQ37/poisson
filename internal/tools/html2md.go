@@ -345,6 +345,16 @@ func htmlToMarkdown(src string) string {
 	cur := func() *strings.Builder { return stack[len(stack)-1] }
 	push := func() { stack = append(stack, &strings.Builder{}) }
 	pop := func() string {
+		if len(stack) <= 1 {
+			// An orphan closing tag (e.g. a stray "</a>" with no matching
+			// open — common in sloppy real-world HTML) reaches here with
+			// nothing of its own ever pushed. Popping the last remaining
+			// builder would empty the stack entirely and panic the next
+			// cur() call (index out of range). Degrade to "no content"
+			// instead, per this function's own doc comment: malformed
+			// HTML should never fail the fetch.
+			return ""
+		}
 		s := stack[len(stack)-1].String()
 		stack = stack[:len(stack)-1]
 		return s

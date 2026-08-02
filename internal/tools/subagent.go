@@ -16,6 +16,22 @@ import (
 	"github.com/mq37/poisson/internal/subagent"
 )
 
+// maxConcurrentSubagents caps concurrently-RUNNING subagent child processes,
+// process-wide — not just within one batch call. agent.maxConcurrentToolCalls
+// and batch.go's own batchMaxConcurrent (same value, 8) each already cap
+// their OWN fan-out, but neither knows about the other: nothing stops
+// several of an agent round's 8 top-level tool_use slots from each
+// independently being their own `batch` call, each spawning its own 8-wide
+// subagent fan-out — up to 8×8=64 concurrent child processes system-wide
+// (found scouting), well past the documented "8 max concurrent" ceiling.
+const maxConcurrentSubagents = 8
+
+// subagentSlots is acquired before every subagent.Spawn and released only
+// once that child has been fully reaped (see Execute), so the combined
+// in-flight total across every batch/round — no matter how deeply nested —
+// really can't exceed maxConcurrentSubagents.
+var subagentSlots = make(chan struct{}, maxConcurrentSubagents)
+
 // removeDBFiles deletes a SQLite database and its WAL/SHM sidecars.
 func removeDBFiles(path string) {
 	for _, suffix := range []string{"", "-wal", "-shm"} {
@@ -243,6 +259,18 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	// persisted to the parent's DB (same policy as /btw).
 	dbPath := filepath.Join(os.TempDir(), "poisson-"+childSessionID+".db")
 	defer removeDBFiles(dbPath)
+
+	// Block for a global concurrency slot before spawning a real OS process
+	// — see maxConcurrentSubagents' doc comment. Released only after the
+	// child is fully reaped below (defer registered before child.Reap's, so
+	// it runs after — LIFO), not merely after Spawn returns, so the slot
+	// reflects an actually-running process the whole time it's alive.
+	select {
+	case subagentSlots <- struct{}{}:
+	case <-ctx.Done():
+		return ToolResult{Error: "subagent cancelled while waiting for a concurrency slot"}, nil
+	}
+	defer func() { <-subagentSlots }()
 
 	child, err := subagent.Spawn(subagent.SpawnInput{
 		Task:                params.Task,

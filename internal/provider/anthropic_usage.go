@@ -49,9 +49,9 @@ type AnthropicUsageLimits struct {
 // a background poll shouldn't blank a number already on screen over one
 // dropped request.
 func (p *AnthropicProvider) UsageLimits(ctx context.Context) (*AnthropicUsageLimits, error) {
-	p.authMu.Lock()
+	auth.StoreMu.Lock()
 	isOAuth := auth.IsOAuth(p.auth, "anthropic")
-	p.authMu.Unlock()
+	auth.StoreMu.Unlock()
 	if !isOAuth {
 		return nil, fmt.Errorf("usage limits require Anthropic OAuth login")
 	}
@@ -100,9 +100,9 @@ func (p *AnthropicProvider) fetchUsage(ctx context.Context) (*AnthropicUsageLimi
 	defer cancel()
 
 	do := func() (*http.Response, error) {
-		p.authMu.Lock()
+		auth.StoreMu.Lock()
 		access := p.auth["anthropic"].Access
-		p.authMu.Unlock()
+		auth.StoreMu.Unlock()
 		req, err := http.NewRequestWithContext(fetchCtx, "GET", p.baseURL+"/api/oauth/usage", nil)
 		if err != nil {
 			return nil, err
@@ -120,13 +120,13 @@ func (p *AnthropicProvider) fetchUsage(ctx context.Context) (*AnthropicUsageLimi
 	}
 	if resp.StatusCode == 401 {
 		resp.Body.Close()
-		p.authMu.Lock()
+		auth.StoreMu.Lock()
 		refreshed, rerr := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh)
 		if rerr == nil {
 			p.auth["anthropic"] = *refreshed
 			_ = auth.UpdateEntry("anthropic", *refreshed)
 		}
-		p.authMu.Unlock()
+		auth.StoreMu.Unlock()
 		if rerr != nil {
 			return nil, fmt.Errorf("token expired, refresh failed: %w", rerr)
 		}

@@ -534,3 +534,56 @@ func TestModelKeyUnknownProvider(t *testing.T) {
 		t.Fatal("expected error for unknown provider in model key")
 	}
 }
+
+// TestModelKeyAppendedAfterLastSectionErrsInsteadOfSilentlyLandingInTUI
+// reproduces the exact real-world scenario scouting found: the single most
+// natural edit a user would make — appending `model = "..."` to the very
+// end of their real ~/.poisson/config.toml — silently binds it to
+// whichever section is last in the shipped template ([tui], which has no
+// "model" field of its own) because TOML root-level keys only attach to
+// the root table up to the first [section] header. Before the fix this
+// parsed with NO error at all and the override simply never took effect,
+// with zero diagnostic. Now it must fail loudly instead.
+func TestModelKeyAppendedAfterLastSectionErrsInsteadOfSilentlyLandingInTUI(t *testing.T) {
+	data := defaultConfigToml() + "\nmodel = \"ollama/llama3-test\"\n"
+	m, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	// Confirm the misplacement actually happened the way the bug describes,
+	// so this test is exercising the real defect and not a strawman.
+	tui, ok := lookup(m, "tui")
+	if !ok {
+		t.Fatalf("expected a [tui] table to exist in the parsed map")
+	}
+	tuiMap, ok := tui.(map[string]interface{})
+	if !ok || tuiMap["model"] != "ollama/llama3-test" {
+		t.Fatalf("expected the appended model line to land in tui.model (proving the bug scenario); got tui=%#v", tui)
+	}
+
+	if _, err := mapToConfig(m); err == nil {
+		t.Fatal("mapToConfig: expected a loud error for model landing in [tui], got none — override silently swallowed")
+	} else if !strings.Contains(err.Error(), "tui.model") {
+		t.Errorf("mapToConfig error = %q, want it to mention tui.model", err.Error())
+	}
+}
+
+// TestModelKeyBeforeFirstSectionStillWorksInRealTemplate is the positive
+// counterpart: placing the override correctly — right where the shipped
+// template's own new top-of-file example now shows — still parses and
+// applies cleanly, proving the fix above didn't just ban "model" from
+// ever appearing loose in the file.
+func TestModelKeyBeforeFirstSectionStillWorksInRealTemplate(t *testing.T) {
+	data := "model = \"ollama/llama3-test\"\n\n" + defaultConfigToml()
+	m, err := Parse(data)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	cfg, err := mapToConfig(m)
+	if err != nil {
+		t.Fatalf("mapToConfig: %v", err)
+	}
+	if cfg.Provider.Default != "ollama" || cfg.Ollama.Model != "llama3-test" {
+		t.Errorf("got %s/%s, want ollama/llama3-test", cfg.Provider.Default, cfg.Ollama.Model)
+	}
+}

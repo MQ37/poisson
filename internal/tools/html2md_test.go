@@ -21,6 +21,39 @@ func TestHTMLToMarkdown_BoldItalicCode(t *testing.T) {
 	}
 }
 
+// TestHTMLToMarkdown_OrphanClosingTagDoesNotPanic reproduces a real crash:
+// a stray closing tag with no matching open (single unmatched "</a>", "hi"
+// forum/chat-dump HTML, etc.) used to underflow the internal builder
+// stack's pop() and panic on the very next cur() call — inside
+// FetchTool.fetchDirect, that turned "malformed HTML degrades gracefully"
+// (this function's own doc comment) into an actual crash of the fetch
+// call. Covers every close-case that calls pop() (a/strong/b/em/i/code/
+// blockquote/tr/td/th), not just <a>.
+func TestHTMLToMarkdown_OrphanClosingTagDoesNotPanic(t *testing.T) {
+	cases := []string{
+		"<html><body>hi</a>bye</body></html>",
+		"<p>hi</strong>bye</p>",
+		"<p>hi</b>bye</p>",
+		"<p>hi</em>bye</p>",
+		"<p>hi</i>bye</p>",
+		"<p>hi</code>bye</p>",
+		"<blockquote></blockquote></blockquote>",
+		"<table><tr>a</tr></tr></table>",
+		"<table><tr><td>a</td></td></tr></table>",
+		"<table><tr><th>a</th></th></tr></table>",
+	}
+	for _, in := range cases {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("htmlToMarkdown(%q) panicked: %v", in, r)
+				}
+			}()
+			htmlToMarkdown(in)
+		}()
+	}
+}
+
 func TestHTMLToMarkdown_NestedInline(t *testing.T) {
 	got := htmlToMarkdown("<p><a href=\"https://example.com\"><strong>Click here</strong></a></p>")
 	want := "[**Click here**](https://example.com)\n"

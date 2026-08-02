@@ -254,6 +254,15 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 # checks). Higher = more thinking, more cost/latency.
 # effort = "medium"              # low | medium | high | xhigh | max
 
+# One-liner default provider + model override — sets BOTH at once. A bare
+# value (no slash) applies to whatever provider.default already is.
+# MUST appear here, before any [section] header below — TOML root-level
+# keys only attach to the root table up to the first one. Appending this
+# line at the end of the file instead (after every section is already
+# open) silently attaches it to the LAST section instead, with no model
+# ever actually being set — always add it up here, never at the bottom.
+# model = "anthropic/claude-opus-5"  # or "ollama/glm-5.2:cloud", etc.
+
 # Default provider + model
 [provider]
 # default = "ollama"             # {{PROVIDERS}}
@@ -419,9 +428,41 @@ func Load() (*Config, error) {
 	return mapToConfig(parsed)
 }
 
+// noModelTables lists top-level tables that have no "model" field of their
+// own. If a "model" key ends up inside one anyway, it's not a real setting
+// for that table — it's almost certainly the documented top-level
+// `model = "provider/model"` one-liner override (see the comment on that
+// block below), misplaced there because TOML root-level keys must appear
+// BEFORE the first [section] header in the file. The shipped config.toml
+// template already opens every section, so appending the override at the
+// end — the single most natural edit a user would make — silently binds it
+// to whichever table happens to be last ([tui], via the shipped template)
+// instead of erroring or doing what was obviously meant. Providers
+// (anthropic/xai/openai/ollama/llamacpp) and classifier/compaction all have
+// a legitimate "model" field of their own, so they're deliberately excluded
+// here — only tables where "model" can never mean anything real are checked.
+var noModelTables = []string{"tui", "stealth", "provider"}
+
 // mapToConfig applies parsed TOML values on top of the built-in defaults.
 func mapToConfig(m map[string]interface{}) (*Config, error) {
 	cfg := defaultConfig()
+
+	for _, table := range noModelTables {
+		tbl, ok := lookup(m, table)
+		if !ok {
+			continue
+		}
+		tblMap, ok := tbl.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if _, has := tblMap["model"]; has {
+			return nil, fmt.Errorf(
+				"%s.model is not a real setting — did you mean the top-level `model = \"provider/model\"` override? "+
+					"it must appear BEFORE any [section] header in the file, not appended after one (see config.toml's own top-of-file example)",
+				table)
+		}
+	}
 
 	if v, ok := lookup(m, "provider", "default"); ok {
 		s, err := asString(v)

@@ -369,6 +369,50 @@ func TestStripEmbeddedQuotes_SeesThroughQuoteSplicing(t *testing.T) {
 	}
 }
 
+// TestClassify_QuoteSplicedDangerousFlag proves the per-command flag/
+// subcommand detectors (findHasDangerousFlag, sedHasDangerousFlag,
+// gitSubIsMutating, treeHasDangerousFlag, yqHasDangerousFlag) see through
+// the same embedded-quote splicing normalizeToken already sees through for
+// destructive command *names* (TestClassify_QuoteSplicedDestructiveCommand).
+// Every payload below is byte-identical, real bash to its unspliced form —
+// confirmed against a live `bash -c` during scouting — and the base command
+// (find/sed/git/tree/yq) is SAFE-listed, so before the fix these classified
+// safe=true with zero human/LLM review.
+func TestClassify_QuoteSplicedDangerousFlag(t *testing.T) {
+	cases := []string{
+		`find . -exe""c rm -rf {} \;`,
+		`sed -""i.bak 's/a/b/' file.txt`,
+		`git branch -""f evilname main`,
+		`git tag -""d v1`,
+		`git remote r""m origin`,
+		`git remote a""dd upstream http://evil.example/repo.git`,
+		`git remote se""t-url origin http://evil.example/repo.git`,
+		`tree -""o /tmp/pwn .`,
+		`yq -""i '.x=1' file.yml`,
+	}
+	for _, cmd := range cases {
+		if safe, reason := Classify(cmd); safe {
+			t.Errorf("Classify(%q) = safe, want unsafe (quote-spliced dangerous flag/subcommand); reason=%q", cmd, reason)
+		}
+	}
+}
+
+// TestIsGitDangerous_QuoteSplicedForceFlag proves the separate hard
+// "always ask a human" git gate (gitSubcommandIsDangerous, used by
+// IsGitDangerous/GitInvocationIsDangerous — not routed through
+// checkPerCommandDetectors at all) sees through the same splicing.
+func TestIsGitDangerous_QuoteSplicedForceFlag(t *testing.T) {
+	cases := []string{
+		`git branch -""f evilname main`,
+		`git tag -""f v1 HEAD`,
+	}
+	for _, cmd := range cases {
+		if !IsGitDangerous(cmd) {
+			t.Errorf("IsGitDangerous(%q) = false, want true (quote-spliced force flag)", cmd)
+		}
+	}
+}
+
 // TestClassify_QuoteSplicedDestructiveCommand is the end-to-end version:
 // guard.Classify must deterministically reject a quote-spliced "rm", not
 // just fail to recognize it as safe by accident.

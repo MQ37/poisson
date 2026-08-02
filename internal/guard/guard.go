@@ -277,6 +277,7 @@ func GitInvocationIsDangerous(tokens []string) bool {
 }
 
 func gitSubcommandIsDangerous(sub string, tokens []string) bool {
+	tokens = stripEmbeddedQuotesTokens(tokens)
 	switch sub {
 	case "commit", "rm":
 		return true
@@ -478,6 +479,16 @@ func checkPerCommandDetectors(tokens []string) (string, bool) {
 	if len(tokens) == 0 {
 		return "", false
 	}
+	// Every flag/subcommand detector below compares tokens against literal
+	// spellings ("-exec", "-i", "add", ...) with no quote-awareness of its
+	// own — unlike isSegmentSafe's SAFE-list check, which goes through
+	// normalizeToken (and so already strips embedded quotes). Without this,
+	// a quote-spliced flag/arg ("-exe\"\"c", "-\"\"i", "a\"\"dd") — a
+	// byte-identical no-op in real bash, per stripEmbeddedQuotes' own doc
+	// comment — sails past every detector below while the base command
+	// still matches the SAFE list, auto-approving e.g. find -exec, sed -i,
+	// git branch -f, git remote add/set-url with zero review.
+	tokens = stripEmbeddedQuotesTokens(tokens)
 	cmd := normalizeToken(tokens[0])
 	switch cmd {
 	case "find":

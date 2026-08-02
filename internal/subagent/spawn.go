@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -329,16 +330,107 @@ func (c *ChildProcess) Wait() error {
 // Kill terminates the child process and its entire process group, so any
 // grandchildren (e.g. bash commands the subagent launched) are killed too
 // rather than being orphaned and left running in the background.
+//
+// Process-group kill alone is not enough: internal/tools/bash.go runs every
+// command it execs in its OWN new process group (Setpgid:true), distinct
+// from the subagent's, so that its own internal timeout/cancel can target
+// just that command without also killing the whole subagent process. When
+// the child is instead killed from the OUTSIDE — this Kill(), e.g. the
+// subagent tool's context being cancelled or timing out, or a top-level
+// Ctrl+C reaping every active subagent — the child process (and its own
+// group) dies before any of its own Go runtime code (including bash.go's
+// cmd.Cancel) ever gets a chance to run: SIGKILL cannot be caught or
+// deferred. Any bash command the child happened to be running at that
+// moment sits in a different process group that never receives the
+// group-targeted signal at all, and is orphaned (reparented to init) still
+// running. killDescendantTree closes this by finding and killing every
+// live descendant of the child PID individually, via /proc parent-child
+// links rather than process-group membership, so it reaches a subprocess
+// regardless of which group it put itself in.
 func (c *ChildProcess) Kill() error {
 	if c.cmd.Process == nil {
 		return nil
 	}
+	pid := c.cmd.Process.Pid
+	killDescendantTree(pid)
 	// Negative PID targets the whole process group (set via Setpgid at spawn).
-	if err := syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL); err == nil {
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err == nil {
 		return nil
 	}
 	// Fall back to killing just the process if the group signal failed.
 	return c.cmd.Process.Kill()
+}
+
+// killDescendantTree SIGKILLs every process transitively descended from
+// root, individually, regardless of which process group each one sits in.
+// Linux-only (reads /proc) and best-effort: on any other OS, or if /proc
+// can't be read, it's a silent no-op — the pgid-based kill in Kill() above
+// remains the primary mechanism and is sufficient for the common case (a
+// grandchild that stayed in the same group). See Kill's doc comment for why
+// this exists.
+func killDescendantTree(root int) {
+	children, err := procChildren()
+	if err != nil {
+		return
+	}
+	descendants := map[int]bool{}
+	var walk func(pid int)
+	walk = func(pid int) {
+		for _, child := range children[pid] {
+			if descendants[child] {
+				continue
+			}
+			descendants[child] = true
+			walk(child)
+		}
+	}
+	walk(root)
+	for pid := range descendants {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	}
+}
+
+// procChildren reads /proc/[pid]/stat for every currently-visible process
+// and returns a ppid -> []pid adjacency map, for killDescendantTree's tree
+// walk. Best-effort: a process that exits mid-scan, or a /proc/[pid]/stat
+// this process lacks permission to read, is silently skipped rather than
+// failing the whole scan — those processes are stale or none of the caller's
+// business (killDescendantTree only cares about pid's own descendants).
+func procChildren() (map[int][]int, error) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[int][]int)
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err != nil {
+			continue
+		}
+		// Format: "pid (comm) state ppid ...". comm can itself contain
+		// spaces or parens, so locate the LAST ')' rather than splitting
+		// naively on whitespace, then read state/ppid as the two fields
+		// right after it.
+		s := string(data)
+		closeParen := strings.LastIndexByte(s, ')')
+		if closeParen < 0 || closeParen+2 >= len(s) {
+			continue
+		}
+		fields := strings.Fields(s[closeParen+2:])
+		if len(fields) < 2 {
+			continue
+		}
+		ppid, err := strconv.Atoi(fields[1]) // fields[0]=state, fields[1]=ppid
+		if err != nil {
+			continue
+		}
+		out[ppid] = append(out[ppid], pid)
+	}
+	return out, nil
 }
 
 // Reap kills the child if still running and always waits to avoid zombies.

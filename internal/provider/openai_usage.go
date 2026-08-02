@@ -88,7 +88,7 @@ func (p *OpenAIProvider) ForceUsageRefresh(ctx context.Context) (*CodexUsage, er
 // streamWithRetry resolves for the main Codex chat endpoint, duplicated here
 // since usage/reset is a separate concern even though it hits the same host.
 func (p *OpenAIProvider) oauthCreds() (accessToken, accountID string, err error) {
-	p.authMu.Lock()
+	auth.StoreMu.Lock()
 	entry, ok := p.auth["openai"]
 	if ok && entry.Type == "oauth" && auth.IsExpired(entry, 5*60*1000) {
 		if refreshed, rerr := auth.RefreshOpenAIToken(entry.Refresh); rerr == nil {
@@ -97,7 +97,7 @@ func (p *OpenAIProvider) oauthCreds() (accessToken, accountID string, err error)
 			entry = *refreshed
 		}
 	}
-	p.authMu.Unlock()
+	auth.StoreMu.Unlock()
 	if !ok || entry.Type != "oauth" {
 		return "", "", fmt.Errorf("no OpenAI credentials — run: px login openai")
 	}
@@ -133,13 +133,13 @@ func (p *OpenAIProvider) fetchUsage(ctx context.Context) (*CodexUsage, error) {
 	}
 	if resp.StatusCode == 401 {
 		resp.Body.Close()
-		p.authMu.Lock()
+		auth.StoreMu.Lock()
 		refreshed, rerr := auth.RefreshOpenAIToken(p.auth["openai"].Refresh)
 		if rerr == nil {
 			p.auth["openai"] = *refreshed
 			_ = auth.UpdateEntry("openai", *refreshed)
 		}
-		p.authMu.Unlock()
+		auth.StoreMu.Unlock()
 		if rerr != nil {
 			return nil, fmt.Errorf("token expired, refresh failed: %w", rerr)
 		}

@@ -827,3 +827,18 @@ func stripEmbeddedQuotes(token string) string {
 	}
 	return b.String()
 }
+
+// stripEmbeddedQuotesTokens applies stripEmbeddedQuotes to every token,
+// returning a new slice — used by detectors that compare tokens against
+// literal flag/subcommand spellings (findHasDangerousFlag, sedHasDangerousFlag,
+// gitSubIsMutating, gitSubcommandIsDangerous, ...), so a quote-spliced flag
+// or subcommand ("-\"\"i", "a\"\"dd") is recognized the same way
+// isSegmentSafe's SAFE-list check already recognizes a quote-spliced
+// command name (via normalizeToken, which also calls stripEmbeddedQuotes).
+func stripEmbeddedQuotesTokens(tokens []string) []string {
+	out := make([]string, len(tokens))
+	for i, t := range tokens {
+		out[i] = stripEmbeddedQuotes(t)
+	}
+	return out
+}
