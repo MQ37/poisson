@@ -110,7 +110,7 @@ func (p *AnthropicProvider) refreshOAuthIfNeeded() bool {
 func (p *AnthropicProvider) forceRefreshOAuth() error {
 	auth.StoreMu.Lock()
 	defer auth.StoreMu.Unlock()
-	_, err := auth.ForceRefresh(p.auth, "anthropic", 0, auth.RefreshAnthropicToken)
+	_, err := auth.ForceRefresh(p.auth, "anthropic", auth.RefreshAnthropicToken)
 	return err
 }
 

@@ -113,6 +113,50 @@ func TestRefreshIfExpired_CrossProcessLoserAdoptsWinnersToken(t *testing.T) {
 	}
 }
 
+// TestForceRefresh_AlwaysRefreshesEvenWhenNotYetExpiredByClock reproduces a
+// real regression this fix caught in itself: ForceRefresh's whole purpose
+// is "the server just returned a live 401, refresh regardless of what the
+// stored entry's own Expires field claims" (server-side early revocation,
+// clock skew, or the access token's real TTL simply being shorter than
+// expires_in reported). An earlier version of refreshCrossProcessLocked
+// decided "someone else already refreshed it" by re-checking the disk
+// copy's OWN expiry instead of comparing it by value against the entry
+// the caller already knows is dead — so when no other process had
+// actually refreshed anything (disk still held the exact same,
+// not-yet-"expired"-by-the-clock entry), it wrongly concluded "still
+// fresh" and handed back the same broken token with no error and no real
+// refresh call at all. The caller retried once with it, got 401 again,
+// and gave up — surfacing as an occasional forced full re-login instead
+// of the automatic recovery ForceRefresh exists to provide.
+func TestForceRefresh_AlwaysRefreshesEvenWhenNotYetExpiredByClock(t *testing.T) {
+	testutil.TempHome(t)
+
+	// The stored entry is NOT expired by its own Expires field (far future)
+	// — exactly what happens when the server revokes early or the real TTL
+	// is shorter than what expires_in claimed, yet the caller still got a
+	// live 401 on it right now.
+	notYetExpired := AuthEntry{Type: "oauth", Access: "dead-but-not-expired", Refresh: "refresh-dead", Expires: farFutureMs}
+	if err := Save(AuthStore{"anthropic": notYetExpired}); err != nil {
+		t.Fatalf("seed Save: %v", err)
+	}
+	store := AuthStore{"anthropic": notYetExpired}
+
+	refresher := &rotatingRefresher{}
+	got, err := ForceRefresh(store, "anthropic", refresher.refresh)
+	if err != nil {
+		t.Fatalf("ForceRefresh: %v", err)
+	}
+	if got.Access == "dead-but-not-expired" {
+		t.Fatal("ForceRefresh returned the same known-bad token unchanged — it must always actually attempt a refresh, not skip based on the entry's own (unreliable, since we just got a live 401 on it) expiry field")
+	}
+	if refresher.nextID != 1 {
+		t.Errorf("refresher.nextID = %d, want exactly 1 (ForceRefresh must call doRefresh here — disk holds the identical, not-actually-refreshed-by-anyone entry)", refresher.nextID)
+	}
+	if got.Access != "access-1" {
+		t.Errorf("access = %q, want access-1 (the real refresh result)", got.Access)
+	}
+}
+
 // TestForceRefresh_CrossProcessAdoptsAlreadyFreshEntry proves ForceRefresh
 // (the post-401 reactive path) has the same protection: if another process
 // already refreshed the entry (so it's no longer actually expired) by the
@@ -130,7 +174,7 @@ func TestForceRefresh_CrossProcessAdoptsAlreadyFreshEntry(t *testing.T) {
 	staleLocal := AuthStore{"anthropic": {Type: "oauth", Access: "stale-local", Refresh: "refresh-shared-stale", Expires: 1}}
 
 	refresher := &rotatingRefresher{}
-	got, err := ForceRefresh(staleLocal, "anthropic", 0, refresher.refresh)
+	got, err := ForceRefresh(staleLocal, "anthropic", refresher.refresh)
 	if err != nil {
 		t.Fatalf("ForceRefresh: %v", err)
 	}

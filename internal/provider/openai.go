@@ -119,7 +119,7 @@ func (p *OpenAIProvider) streamWithRetry(ctx context.Context, req *Request, retr
 	if resp.StatusCode == 401 && retry == 0 {
 		resp.Body.Close()
 		auth.StoreMu.Lock()
-		_, rerr := auth.ForceRefresh(p.auth, "openai", 0, auth.RefreshOpenAIToken)
+		_, rerr := auth.ForceRefresh(p.auth, "openai", auth.RefreshOpenAIToken)
 		auth.StoreMu.Unlock()
 		if rerr == nil {
 			return p.streamWithRetry(ctx, req, 1)

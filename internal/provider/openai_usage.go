@@ -90,11 +90,9 @@ func (p *OpenAIProvider) ForceUsageRefresh(ctx context.Context) (*CodexUsage, er
 func (p *OpenAIProvider) oauthCreds() (accessToken, accountID string, err error) {
 	auth.StoreMu.Lock()
 	entry, ok := p.auth["openai"]
-	if ok && entry.Type == "oauth" && auth.IsExpired(entry, 5*60*1000) {
-		if refreshed, rerr := auth.RefreshOpenAIToken(entry.Refresh); rerr == nil {
-			p.auth["openai"] = *refreshed
-			_ = auth.UpdateEntry("openai", *refreshed)
-			entry = *refreshed
+	if ok && entry.Type == "oauth" {
+		if refreshed, rerr := auth.RefreshIfExpired(p.auth, "openai", 5*60*1000, auth.RefreshOpenAIToken); rerr == nil {
+			entry = refreshed
 		}
 	}
 	auth.StoreMu.Unlock()
@@ -134,11 +132,7 @@ func (p *OpenAIProvider) fetchUsage(ctx context.Context) (*CodexUsage, error) {
 	if resp.StatusCode == 401 {
 		resp.Body.Close()
 		auth.StoreMu.Lock()
-		refreshed, rerr := auth.RefreshOpenAIToken(p.auth["openai"].Refresh)
-		if rerr == nil {
-			p.auth["openai"] = *refreshed
-			_ = auth.UpdateEntry("openai", *refreshed)
-		}
+		_, rerr := auth.ForceRefresh(p.auth, "openai", auth.RefreshOpenAIToken)
 		auth.StoreMu.Unlock()
 		if rerr != nil {
 			return nil, fmt.Errorf("token expired, refresh failed: %w", rerr)

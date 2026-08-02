@@ -162,7 +162,7 @@ func EnsureXAIFresh(store AuthStore, skewMs int64) (AuthEntry, error) {
 func ForceRefreshXAI(store AuthStore) (AuthEntry, error) {
 	StoreMu.Lock()
 	defer StoreMu.Unlock()
-	return ForceRefresh(store, "xai", 0, RefreshXAIToken)
+	return ForceRefresh(store, "xai", RefreshXAIToken)
 }
 
 // RefreshXAIToken refreshes an expired xAI access token.

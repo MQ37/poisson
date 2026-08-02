@@ -121,11 +121,7 @@ func (p *AnthropicProvider) fetchUsage(ctx context.Context) (*AnthropicUsageLimi
 	if resp.StatusCode == 401 {
 		resp.Body.Close()
 		auth.StoreMu.Lock()
-		refreshed, rerr := auth.RefreshAnthropicToken(p.auth["anthropic"].Refresh)
-		if rerr == nil {
-			p.auth["anthropic"] = *refreshed
-			_ = auth.UpdateEntry("anthropic", *refreshed)
-		}
+		_, rerr := auth.ForceRefresh(p.auth, "anthropic", auth.RefreshAnthropicToken)
 		auth.StoreMu.Unlock()
 		if rerr != nil {
 			return nil, fmt.Errorf("token expired, refresh failed: %w", rerr)

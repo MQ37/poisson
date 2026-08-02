@@ -18,12 +18,34 @@ import "fmt"
 // refresh_token and keeps failing identically forever.
 //
 // currentEntry.Refresh is only actually used if the freshly-loaded disk
-// copy turns out to need refreshing too (i.e. no other process beat us to
-// it). store[provider] is updated to match the result before returning,
-// whether or not a refresh actually happened. Caller must already hold
-// StoreMu (this only adds cross-process coordination on top of the
-// in-process one).
-func refreshCrossProcessLocked(store AuthStore, provider string, skewMs int64, currentEntry AuthEntry, doRefresh func(refreshToken string) (*AuthEntry, error)) (AuthEntry, error) {
+// copy turns out to be the SAME entry we already hold (i.e. no other
+// process beat us to refreshing it). store[provider] is updated to match
+// the result before returning, whether or not a refresh actually happened.
+// Caller must already hold StoreMu (this only adds cross-process
+// coordination on top of the in-process one).
+//
+// "Someone else already refreshed it" is decided by VALUE — the disk copy
+// differs from currentEntry — not by re-checking the disk copy's own
+// expiry field. That distinction matters: ForceRefresh calls this
+// specifically because the server just said, via a live 401, that
+// currentEntry is dead RIGHT NOW — but currentEntry's own client-computed
+// Expires timestamp can still be in the future at that moment (early
+// server-side revocation, clock skew, or the access token's real TTL
+// simply being shorter than the expires_in the token endpoint reported).
+// An earlier version of this function used an expiry check here instead:
+// it re-Loaded the disk copy — which, with no other process having
+// refreshed anything, was byte-identical to the already-dead
+// currentEntry — saw that its Expires field hadn't technically passed
+// yet, and concluded "still fresh, no refresh needed", handing the
+// caller back the exact same broken token with no error at all. The
+// caller retried once with it, 401'd again, and gave up — surfacing as
+// an occasional, seemingly random forced full re-login (`px login
+// anthropic`) instead of the automatic recovery ForceRefresh exists to
+// provide. Comparing by value instead is correct for both callers:
+// RefreshIfExpired only ever reaches here after its OWN expiry check on
+// currentEntry already said "needs refreshing", so an identical disk copy
+// still needs refreshing too, regardless of its self-reported expiry.
+func refreshCrossProcessLocked(store AuthStore, provider string, currentEntry AuthEntry, doRefresh func(refreshToken string) (*AuthEntry, error)) (AuthEntry, error) {
 	var result AuthEntry
 	var refreshErr error
 	lockErr := withLock(func() error {
@@ -31,9 +53,9 @@ func refreshCrossProcessLocked(store AuthStore, provider string, skewMs int64, c
 		if err != nil {
 			return err
 		}
-		if fe, ok := fresh[provider]; ok && !IsExpired(fe, skewMs) {
-			// Another process already refreshed (and saved) this entry
-			// while we were waiting for the lock.
+		if fe, ok := fresh[provider]; ok && fe != currentEntry {
+			// Another process already refreshed (and saved) a genuinely
+			// different entry while we were waiting for the lock.
 			result = fe
 			return nil
 		}
@@ -68,21 +90,21 @@ func RefreshIfExpired(store AuthStore, provider string, skewMs int64, doRefresh 
 	if !IsExpired(entry, skewMs) {
 		return entry, nil
 	}
-	return refreshCrossProcessLocked(store, provider, skewMs, entry, doRefresh)
+	return refreshCrossProcessLocked(store, provider, entry, doRefresh)
 }
 
 // ForceRefresh is RefreshIfExpired without the "is my in-memory copy
 // expired" gate — used reactively after a request comes back 401, where
 // the stored token is known bad regardless of what its expiry field
-// claims. Still checks the freshly-reloaded disk copy first (via the same
-// cross-process path) in case another process already refreshed in the
-// meantime, so this doesn't force a redundant — and, if the token has
-// rotated, actively failing — refresh when a perfectly good one is already
-// sitting in auth.json. Caller must hold StoreMu.
-func ForceRefresh(store AuthStore, provider string, skewMs int64, doRefresh func(refreshToken string) (*AuthEntry, error)) (AuthEntry, error) {
+// claims. Always actually attempts a refresh unless the freshly-reloaded
+// disk copy has genuinely changed since currentEntry (see
+// refreshCrossProcessLocked's doc for why that check is by value, not by
+// re-checking expiry — using expiry here specifically would defeat the
+// whole point of a FORCED refresh). Caller must hold StoreMu.
+func ForceRefresh(store AuthStore, provider string, doRefresh func(refreshToken string) (*AuthEntry, error)) (AuthEntry, error) {
 	entry, ok := store[provider]
 	if !ok {
 		return AuthEntry{}, fmt.Errorf("no %s credentials", provider)
 	}
-	return refreshCrossProcessLocked(store, provider, skewMs, entry, doRefresh)
+	return refreshCrossProcessLocked(store, provider, entry, doRefresh)
 }
