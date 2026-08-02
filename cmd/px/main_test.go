@@ -1,16 +1,38 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mq37/poisson/internal/auth"
 	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/store"
 	"github.com/mq37/poisson/internal/testutil"
 )
+
+// captureStdout redirects os.Stdout for the duration of fn, returning
+// everything written to it. Mirrors TestLoadConfigOrDefaultWarnsOnParseFailure's
+// os.Pipe pattern above, applied to stdout instead of stderr.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	fn()
+	w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+	return string(out)
+}
 
 // TestLoadConfigOrDefaultWarnsOnParseFailure is the regression guard for
 // runPrint (-p / headless mode) and runChildMode (subagents) silently
@@ -122,5 +144,245 @@ func TestResolvePrintRuntimeBareProviderUsesDefault(t *testing.T) {
 func TestResolvePrintRuntimeRejectsIncompletePair(t *testing.T) {
 	if _, _, err := resolvePrintRuntime("ollama/", nil, config.DefaultConfig()); err == nil {
 		t.Fatal("expected incomplete provider/model error")
+	}
+}
+
+// --- cmdLogout ---
+
+// TestCmdLogoutRemovesEntryCaseInsensitive pins that the provider name is
+// matched case-insensitively (px logout Anthropic == px logout anthropic)
+// and that only the named provider's entry is removed.
+func TestCmdLogoutRemovesEntryCaseInsensitive(t *testing.T) {
+	testutil.TempHome(t)
+	if err := auth.Save(auth.AuthStore{
+		"anthropic": {Type: "oauth", Access: "a"},
+		"openai":    {Type: "oauth", Access: "o"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	out := captureStdout(t, func() { cmdLogout([]string{"Anthropic"}) })
+	if !strings.Contains(out, "Logged out of anthropic.") {
+		t.Errorf("output = %q, want lowercase confirmation message", out)
+	}
+
+	authStore, err := auth.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := authStore["anthropic"]; ok {
+		t.Error("anthropic entry should be gone")
+	}
+	if authStore["openai"].Access != "o" {
+		t.Error("openai entry should survive untouched")
+	}
+}
+
+func TestCmdLogoutNoArgsPrintsUsage(t *testing.T) {
+	out := captureStdout(t, func() { cmdLogout(nil) })
+	if !strings.Contains(out, "usage: Poisson logout <provider>") {
+		t.Errorf("output = %q, want usage message", out)
+	}
+}
+
+// TestRunLogoutPropagatesDeleteEntryError forces a real auth.DeleteEntry
+// error (auth.json exists as a directory, so os.ReadFile inside Load fails
+// with something other than IsNotExist) and checks it comes back out of
+// runLogout instead of being swallowed.
+func TestRunLogoutPropagatesDeleteEntryError(t *testing.T) {
+	tmpHome := testutil.TempHome(t)
+	authPath := filepath.Join(tmpHome, ".poisson", "auth.json")
+	if err := os.MkdirAll(authPath, 0o700); err != nil {
+		t.Fatalf("mkdir auth.json as a directory: %v", err)
+	}
+
+	if _, err := runLogout("anthropic"); err == nil {
+		t.Fatal("expected an error when auth.json is unreadable, got nil")
+	}
+}
+
+// --- cmdLogin ---
+
+func TestCmdLoginNoArgsPrintsUsage(t *testing.T) {
+	out := captureStdout(t, func() { cmdLogin(nil) })
+	if !strings.Contains(out, "usage: Poisson login <provider>") {
+		t.Errorf("output = %q, want usage message", out)
+	}
+}
+
+// TestCmdLoginOllamaIsPurePrintNoAuthCall pins the ollama branch as a
+// no-op/no-auth-call print — unlike anthropic/xai/openai it must never
+// touch auth.LoginXxx (which would need a live browser/network).
+func TestCmdLoginOllamaIsPurePrintNoAuthCall(t *testing.T) {
+	out := captureStdout(t, func() { cmdLogin([]string{"ollama"}) })
+	if !strings.Contains(out, "Ollama runs locally") {
+		t.Errorf("output = %q, want the ollama no-login message", out)
+	}
+}
+
+// TestCmdLoginUnknownProviderExitsNonzero runs the built px binary as a
+// subprocess (same pattern as TestResumeCommand_MissingArg above) since the
+// unknown-provider branch calls os.Exit directly and isn't decomposed.
+func TestCmdLoginUnknownProviderExitsNonzero(t *testing.T) {
+	bin := buildPX(t)
+	cmd := exec.Command(bin, "login", "frobnicate")
+	cmd.Env = isolatedEnv(isolatedHome(t))
+	out, err := cmd.CombinedOutput()
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("expected exit error, got %v (output: %s)", err, out)
+	}
+	if exitErr.ExitCode() != 1 {
+		t.Errorf("exit code = %d, want 1 (output: %s)", exitErr.ExitCode(), out)
+	}
+	if !strings.Contains(string(out), "unknown provider: frobnicate") {
+		t.Errorf("output = %q, want unknown-provider message", out)
+	}
+}
+
+// --- cmdSessions / formatSessionsListing ---
+
+func TestFormatSessionsListingEmpty(t *testing.T) {
+	out := formatSessionsListing(nil, func(string) int { return 0 })
+	if out != "no sessions\n" {
+		t.Errorf("out = %q, want %q", out, "no sessions\n")
+	}
+}
+
+// TestFormatSessionsListingPopulated proves the format wiring (display id,
+// date, per-session message count from the injected msgCount, provider/model)
+// against two distinct sessions rather than a tautological single-field check.
+func TestFormatSessionsListingPopulated(t *testing.T) {
+	ts1 := time.Date(2024, 1, 2, 12, 0, 0, 0, time.UTC).Unix()
+	ts2 := time.Date(2024, 3, 4, 12, 0, 0, 0, time.UTC).Unix()
+	sessions := []store.Session{
+		{ID: "s-aaaa1111", CreatedAt: ts1, Provider: "anthropic", Model: "claude-sonnet-5"},
+		{ID: "s-bbbb2222", CreatedAt: ts2, Provider: "xai", Model: "grok-build"},
+	}
+	counts := map[string]int{"s-aaaa1111": 3, "s-bbbb2222": 0}
+
+	out := formatSessionsListing(sessions, func(id string) int { return counts[id] })
+
+	want := fmt.Sprintf("  %s  %s  3 msgs  anthropic/claude-sonnet-5\n  %s  %s  0 msgs  xai/grok-build\n",
+		store.DisplaySessionID("s-aaaa1111"), time.Unix(ts1, 0).Format("2006-01-02"),
+		store.DisplaySessionID("s-bbbb2222"), time.Unix(ts2, 0).Format("2006-01-02"))
+	if out != want {
+		t.Errorf("out = %q, want %q", out, want)
+	}
+}
+
+// TestCmdSessionsEmptyStorePrintsNoSessions exercises cmdSessions end-to-end
+// (ConfigDir → store.Open → formatSessionsListing) against an empty,
+// testutil-isolated store.
+func TestCmdSessionsEmptyStorePrintsNoSessions(t *testing.T) {
+	testutil.TempHome(t)
+	out := captureStdout(t, cmdSessions)
+	if out != "no sessions\n" {
+		t.Errorf("out = %q, want %q", out, "no sessions\n")
+	}
+}
+
+// TestCmdSessionsListsSeededSessions seeds a session directly into the same
+// DB path cmdSessions itself opens, then checks the listing reflects it.
+func TestCmdSessionsListsSeededSessions(t *testing.T) {
+	testutil.TempHome(t)
+	dbPath := filepath.Join(config.ConfigDir(), "poisson.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	if err := st.CreateSession(&store.Session{ID: "s-seed0001", Provider: "anthropic", Model: "claude-sonnet-5"}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	st.Close()
+
+	out := captureStdout(t, cmdSessions)
+	if !strings.Contains(out, "anthropic/claude-sonnet-5") {
+		t.Errorf("out = %q, want the seeded session listed", out)
+	}
+	if !strings.Contains(out, "0 msgs") {
+		t.Errorf("out = %q, want 0 msgs (no messages appended)", out)
+	}
+}
+
+// --- cmdCost / runCost ---
+
+func TestRunCostTotalAcrossSessions(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(filepath.Join(dir, "cost.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	if err := st.CreateSession(&store.Session{ID: "s-cost0001", Provider: "anthropic", Model: "claude-sonnet-5"}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := st.RecordAPICall(&store.APICall{
+		SessionID: "s-cost0001", Provider: "anthropic", Model: "claude-sonnet-5",
+		InputTokens: 100, OutputTokens: 50, Cost: 1.2345,
+	}); err != nil {
+		t.Fatalf("RecordAPICall: %v", err)
+	}
+
+	stdout, stderr, code := runCost(st, nil)
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q, want success", code, stderr)
+	}
+	if stdout != "Total cost across all sessions: $1.2345\n" {
+		t.Errorf("stdout = %q", stdout)
+	}
+}
+
+func TestRunCostPerSessionBreakdown(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(filepath.Join(dir, "cost.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	if err := st.CreateSession(&store.Session{ID: "s-cost0002", Provider: "anthropic", Model: "claude-sonnet-5"}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := st.RecordAPICall(&store.APICall{
+		SessionID: "s-cost0002", Provider: "anthropic", Model: "claude-sonnet-5",
+		InputTokens: 10, OutputTokens: 20, Cost: 0.5,
+	}); err != nil {
+		t.Fatalf("RecordAPICall: %v", err)
+	}
+
+	stdout, stderr, code := runCost(st, []string{"s-cost0002"})
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q, want success", code, stderr)
+	}
+	if !strings.Contains(stdout, "Session s-cost0002:") || !strings.Contains(stdout, "Cost:   $0.5000") {
+		t.Errorf("stdout = %q, want a per-session cost breakdown", stdout)
+	}
+}
+
+// TestRunCostSessionNotFoundReturnsNonzero is the actual gate CI-style
+// callers rely on: an unknown session id must come back as a nonzero code
+// and a clear stderr message, not a silent empty report.
+func TestRunCostSessionNotFoundReturnsNonzero(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(filepath.Join(dir, "cost.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	stdout, stderr, code := runCost(st, []string{"nonexistent"})
+	if code == 0 {
+		t.Fatal("code = 0, want nonzero for a missing session")
+	}
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty on error", stdout)
+	}
+	if !strings.Contains(stderr, "session not found: nonexistent") {
+		t.Errorf("stderr = %q, want session-not-found message", stderr)
 	}
 }

@@ -22,7 +22,6 @@ import (
 const (
 	openaiClientID     = "app_EMoamEEZ73f0CkXaXp7hrann"
 	openaiAuthorizeURL = "https://auth.openai.com/oauth/authorize"
-	openaiTokenURL     = "https://auth.openai.com/oauth/token"
 	openaiScopes       = "openid profile email offline_access"
 	openaiRedirectPort = 1455
 	openaiRedirectURI  = "http://localhost:1455/auth/callback"
@@ -30,6 +29,11 @@ const (
 	// backend accepts arbitrary originators (pi.dev uses "pi").
 	openaiOriginator = "poisson"
 )
+
+// openaiTokenURL is a var (not a const) so tests can point it at a local
+// httptest server instead of the real OpenAI endpoint — same idiom as
+// internal/tools/web_ask_grok.go's grokResponsesURL.
+var openaiTokenURL = "https://auth.openai.com/oauth/token"
 
 // createState returns a random hex state token for CSRF protection.
 func createState() (string, error) {

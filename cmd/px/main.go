@@ -515,15 +515,27 @@ func cmdSessions() {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	fmt.Print(formatSessionsListing(sessions, func(id string) int {
+		msgs, _ := st.GetMessages(id)
+		return len(msgs)
+	}))
+}
+
+// formatSessionsListing renders `px sessions`' output: "no sessions\n" when
+// empty, else one line per session with display id/date/message-count/
+// provider-model. Pulled out of cmdSessions so the format itself is testable
+// without a live store; msgCount is injected (rather than a *store.Store) so
+// a test can seed exact counts without depending on GetMessages' schema.
+func formatSessionsListing(sessions []store.Session, msgCount func(id string) int) string {
 	if len(sessions) == 0 {
-		fmt.Println("no sessions")
-		return
+		return "no sessions\n"
 	}
+	var b strings.Builder
 	for _, s := range sessions {
 		date := time.Unix(s.CreatedAt, 0).Format("2006-01-02")
-		msgs, _ := st.GetMessages(s.ID)
-		fmt.Printf("  %s  %s  %d msgs  %s/%s\n", store.DisplaySessionID(s.ID), date, len(msgs), s.Provider, s.Model)
+		fmt.Fprintf(&b, "  %s  %s  %d msgs  %s/%s\n", store.DisplaySessionID(s.ID), date, msgCount(s.ID), s.Provider, s.Model)
 	}
+	return b.String()
 }
 
 // cmdCost shows cost from the CLI.
@@ -536,32 +548,46 @@ func cmdCost(args []string) {
 	}
 	defer st.Close()
 
+	stdout, stderr, code := runCost(st, args)
+	if stdout != "" {
+		fmt.Print(stdout)
+	}
+	if stderr != "" {
+		fmt.Fprint(os.Stderr, stderr)
+	}
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+// runCost implements `px cost [session-id]` against an already-open store,
+// separated from cmdCost's os.Exit calls so the total-cost path, the
+// per-session breakdown path, and the session-not-found path are all
+// unit-testable against a testutil-seeded store without exercising
+// os.Exit. Returns exactly the stdout/stderr text and exit code cmdCost
+// would otherwise have printed/used directly.
+func runCost(st *store.Store, args []string) (stdout, stderr string, code int) {
 	if len(args) > 0 {
 		sid := args[0]
 		if _, err := st.GetSession(sid); err != nil {
-			fmt.Fprintf(os.Stderr, "error: session not found: %s\n", sid)
-			os.Exit(1)
+			return "", fmt.Sprintf("error: session not found: %s\n", sid), 1
 		}
 		cost, err := st.GetSessionCost(sid)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error reading cost: %v\n", err)
-			os.Exit(1)
+			return "", fmt.Sprintf("error reading cost: %v\n", err), 1
 		}
 		breakdown, err := st.GetSessionTokenBreakdown(sid)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error reading token breakdown: %v\n", err)
-			os.Exit(1)
+			return "", fmt.Sprintf("error reading token breakdown: %v\n", err), 1
 		}
-		fmt.Print(breakdown.FormatCost(sid, cost))
-		return
+		return breakdown.FormatCost(sid, cost), "", 0
 	}
 
 	cost, err := st.GetTotalCost()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error reading total cost: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Sprintf("error reading total cost: %v\n", err), 1
 	}
-	fmt.Printf("Total cost across all sessions: $%.4f\n", cost)
+	return fmt.Sprintf("Total cost across all sessions: $%.4f\n", cost), "", 0
 }
 
 func cmdLogin(args []string) {
@@ -629,11 +655,23 @@ func cmdLogout(args []string) {
 		return
 	}
 	prov := strings.ToLower(args[0])
-	if err := auth.DeleteEntry(prov); err != nil {
+	msg, err := runLogout(prov)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error saving auth: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Logged out of %s.\n", prov)
+	fmt.Print(msg)
+}
+
+// runLogout deletes prov's stored auth entry and returns the success
+// message cmdLogout prints, separated out from cmdLogout's os.Exit call so
+// both the happy path and auth.DeleteEntry's error path are unit-testable
+// (e.g. against a testutil-seeded HOME) without exercising os.Exit.
+func runLogout(prov string) (string, error) {
+	if err := auth.DeleteEntry(prov); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Logged out of %s.\n", prov), nil
 }
 
 // runChildMode runs Poisson as a subagent child process in JSON output mode.

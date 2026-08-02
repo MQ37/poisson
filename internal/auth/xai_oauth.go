@@ -13,10 +13,14 @@ import (
 // xAI OAuth constants (from SPEC §4.3).
 const (
 	xaiClientID      = "b1a00492-073a-47ea-816f-4c329264a828"
-	xaiTokenURL      = "https://auth.x.ai/oauth2/token"
 	xaiDeviceCodeURL = "https://auth.x.ai/oauth2/device/code"
 	xaiScopes        = "openid profile email offline_access grok-cli:access api:access"
 )
+
+// xaiTokenURL is a var (not a const) so tests can point it at a local
+// httptest server instead of the real xAI endpoint — same idiom as
+// internal/tools/web_ask_grok.go's grokResponsesURL.
+var xaiTokenURL = "https://auth.x.ai/oauth2/token"
 
 // xaiHTTPClient bounds every token request (connection + body read) so a stalled
 // device-code poll or a hung refresh can't block the provider auth flow forever.

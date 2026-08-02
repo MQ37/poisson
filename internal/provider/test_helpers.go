@@ -37,6 +37,17 @@ func pumpXAISSETest(ctx context.Context, body io.ReadCloser, ch chan<- StreamEve
 	})
 }
 
+// SetBaseURLForTests points the provider at a local test server instead of
+// the real Anthropic API. Exported (unlike the in-package p.baseURL field
+// itself) so cross-package tests — internal/agent's Force*UsageLimits
+// wiring tests — can prove the agent-layer entry point reaches this
+// provider without a live network call. Production code never calls this.
+func (p *AnthropicProvider) SetBaseURLForTests(url string) { p.baseURL = url }
+
+// SetWebBaseURLForTests is SetBaseURLForTests's OpenAI/Codex counterpart —
+// points the usage/reset "web" backend (chatgpt.com) at a local test server.
+func (p *OpenAIProvider) SetWebBaseURLForTests(url string) { p.webBaseURL = url }
+
 func pumpOllamaSSETest(ctx context.Context, body io.ReadCloser, ch chan<- StreamEvent, inputEstimate int) {
 	pumpOpenAIChatCompletionsSSE(ctx, body, ch, openaiSSEConfig{
 		InputEstimate:          inputEstimate,

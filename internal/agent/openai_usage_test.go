@@ -2,6 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mq37/poisson/internal/auth"
@@ -9,6 +14,19 @@ import (
 	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/testutil"
 )
+
+// fakeOpenAIJWT builds a minimal unsigned JWT carrying the
+// chatgpt_account_id claim OpenAIProvider's usage path requires
+// (extractAccountID in internal/provider/openai.go) — reproduced here since
+// that package's own equivalent test helper (fakeJWT) is unexported and
+// this is a different package.
+func fakeOpenAIJWT(accountID string) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
+	claims := map[string]any{"https://api.openai.com/auth": map[string]string{"chatgpt_account_id": accountID}}
+	payloadJSON, _ := json.Marshal(claims)
+	payload := base64.RawURLEncoding.EncodeToString(payloadJSON)
+	return header + "." + payload + ".sig"
+}
 
 // TestOpenAIUsageLimits_NonOpenAIProviderIsNoop mirrors
 // TestAnthropicUsageLimits_NonAnthropicProviderIsNoop.
@@ -54,5 +72,37 @@ func TestOpenAIUsageLimits_NoCredsNeverHitsNetwork(t *testing.T) {
 	}
 	if _, err := a.ResetOpenAIUsage(context.Background()); err == nil {
 		t.Fatal("expected an error resetting usage with no credentials")
+	}
+}
+
+// TestRefreshOpenAIUsageLimitsForce_ReachesProviderForceEachCall is the
+// OpenAI/Codex counterpart of
+// TestRefreshAnthropicUsageLimitsForce_ReachesProviderForceEachCall — two
+// Force calls in quick succession must produce two real server hits,
+// proving the agent-layer entry point reaches
+// provider.OpenAIProvider.ForceUsageRefresh on every call rather than the
+// TTL-cached UsageLimits.
+func TestRefreshOpenAIUsageLimitsForce_ReachesProviderForceEachCall(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Write([]byte(`{"rate_limit":{"primary_window":{"used_percent":1,"reset_after_seconds":1,"reset_at":1}},"rate_limit_reset_credits":{"available_count":0}}`))
+	}))
+	defer srv.Close()
+
+	op := provider.NewOpenAIProvider(auth.AuthStore{"openai": {Type: "oauth", Access: fakeOpenAIJWT("acc_1"), Expires: 1 << 62}}, &config.Config{})
+	op.SetWebBaseURLForTests(srv.URL)
+
+	s := newTestStore(t)
+	cfg := newTestConfig()
+	sessionID := newTestSession(t, s, "test-model")
+	reg := newTestRegistry(testutil.TempDir(t))
+	a := NewAgent(s, op, reg, cfg, sessionID, nil, nil)
+
+	a.RefreshOpenAIUsageLimitsForce(context.Background())
+	a.RefreshOpenAIUsageLimitsForce(context.Background())
+
+	if got := hits.Load(); got != 2 {
+		t.Fatalf("server hits = %d, want 2 (each Force call must bypass the TTL and re-fetch)", got)
 	}
 }

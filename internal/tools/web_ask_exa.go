@@ -13,12 +13,18 @@ import (
 )
 
 const (
-	exaTokenURL  = "https://exa.ai/api/token/issue"
-	exaSearchURL = "https://exa.ai/api/search"
 	exaUserAgent = "Mozilla/5.0 (X11; Linux x86_64; rv:151.0) Gecko/20100101 Firefox/151.0"
 
 	exaMaxBytes    = 1 << 20 // 1 MiB: cap search response (OOM guard)
 	exaErrMaxBytes = 4 << 10 // 4 KiB: cap error bodies
+)
+
+// exaTokenURL/exaSearchURL are vars (not consts) so tests can point them at
+// a local httptest server instead of the real exa.ai endpoints — same idiom
+// as grokResponsesURL in web_ask_grok.go.
+var (
+	exaTokenURL  = "https://exa.ai/api/token/issue"
+	exaSearchURL = "https://exa.ai/api/search"
 )
 
 // execExaSearch runs the exa.ai backend for WebAskTool: token issue (cached)

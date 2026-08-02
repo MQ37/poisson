@@ -103,6 +103,70 @@ func TestReapNilProcessSafe(t *testing.T) {
 	c.Reap() // must not panic
 }
 
+// TestSendExpediteWritesExactExpediteShape is the end-to-end guard for
+// SendExpedite, the one leg of the expedite fan-out chain
+// (ChildProcess.SendExpedite -> tools.SubagentTool.ExpediteAll ->
+// agent.Agent.ExpediteSubagents) that had zero test at any layer. Mirrors
+// TestSpawnEndToEndWithFakeChildProcess's real pipe-based fake-child-process
+// pattern (spawn_args_test.go): a real spawned "child" via
+// SetLookupExecutableForTest, real stdin/stdout pipes, zero real LLM calls.
+// Instead of grepping the received line for a substring (as the existing
+// approval round-trip test does), this captures the raw bytes that actually
+// crossed the pipe to a file and compares them byte-for-byte — proving the
+// wire shape is exactly `{"type":"expedite"}`, not accidentally
+// SendApproval's shape (which additionally carries "approved"/"reason").
+func TestSendExpediteWritesExactExpediteShape(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-expedite.sh"
+	capturePath := dir + "/captured-stdin-line.json"
+	// Reads exactly one line off stdin and dumps it verbatim (no reformatting,
+	// no substring test) to CAPTURE_FILE, so the Go side can assert on the
+	// exact bytes SendExpedite put on the wire.
+	script := `#!/bin/sh
+read -r line
+printf '%s' "$line" > "$CAPTURE_FILE"
+printf '{"type":"done","success":true}\n'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	child, err := Spawn(SpawnInput{
+		Task:      "do something",
+		Cwd:       ".",
+		SessionID: "sess-expedite",
+		ExtraEnv:  []string{"CAPTURE_FILE=" + capturePath},
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	defer child.Reap()
+
+	if err := child.SendExpedite(); err != nil {
+		t.Fatalf("SendExpedite: %v", err)
+	}
+
+	ev, err := child.ReadEvent()
+	if err != nil || ev == nil || ev.Type != "done" {
+		t.Fatalf("ReadEvent (done) = %+v, err=%v", ev, err)
+	}
+
+	data, err := os.ReadFile(capturePath)
+	if err != nil {
+		t.Fatalf("read captured stdin line: %v", err)
+	}
+	got := string(data)
+	const want = `{"type":"expedite"}`
+	if got != want {
+		t.Errorf("child's stdin received %q via SendExpedite, want exactly %q (not the SendApproval shape, which additionally carries approved/reason fields)", got, want)
+	}
+}
+
 // TestKillReachesGrandchildInSeparateProcessGroup reproduces the real
 // subagent scenario: internal/tools/bash.go runs every command it execs in
 // its OWN new process group (Setpgid:true), distinct from the subagent

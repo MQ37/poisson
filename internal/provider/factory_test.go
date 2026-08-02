@@ -6,6 +6,7 @@ import (
 
 	"github.com/mq37/poisson/internal/auth"
 	"github.com/mq37/poisson/internal/config"
+	"github.com/mq37/poisson/internal/testutil"
 )
 
 func TestResolveDefaultProvider_AnthropicFallback(t *testing.T) {
@@ -122,6 +123,64 @@ func TestIsConfiguredAuthProvidersNeedCreds(t *testing.T) {
 func TestDefaultModelUnknownProvider(t *testing.T) {
 	if got := DefaultModel("bogus", config.DefaultConfig()); got != "" {
 		t.Fatalf("DefaultModel(bogus) = %q, want empty", got)
+	}
+}
+
+// TestIsConfiguredFromDisk_TogglesWithSavedAuth confirms IsConfiguredFromDisk
+// actually reads through to auth.json: an auth-requiring provider reports
+// unconfigured before any credentials are saved, and configured immediately
+// after auth.Save persists a usable entry.
+func TestIsConfiguredFromDisk_TogglesWithSavedAuth(t *testing.T) {
+	testutil.TempHome(t)
+	cfg := config.DefaultConfig()
+
+	if IsConfiguredFromDisk("anthropic", cfg) {
+		t.Fatal("expected anthropic unconfigured before any auth.Save")
+	}
+	if err := auth.Save(auth.AuthStore{"anthropic": {Type: "api_key", Key: "sk-ant-test"}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if !IsConfiguredFromDisk("anthropic", cfg) {
+		t.Fatal("expected anthropic configured after auth.Save with an api_key entry")
+	}
+}
+
+// TestIsConfiguredFromDisk_OllamaNeedsNoAuth confirms a NeedsAuth=false
+// provider is always configured, with or without anything in auth.json.
+func TestIsConfiguredFromDisk_OllamaNeedsNoAuth(t *testing.T) {
+	testutil.TempHome(t)
+	cfg := config.DefaultConfig()
+
+	if !IsConfiguredFromDisk("ollama", cfg) {
+		t.Fatal("expected ollama always configured (NeedsAuth=false) before any auth.Save")
+	}
+	if err := auth.Save(auth.AuthStore{"anthropic": {Type: "api_key", Key: "unrelated"}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if !IsConfiguredFromDisk("ollama", cfg) {
+		t.Fatal("expected ollama still configured after an unrelated Save")
+	}
+}
+
+// TestNewProviderFromDisk_ConstructsForKnownProviders confirms
+// NewProviderFromDisk actually loads auth from disk and constructs a
+// correctly-ID'd provider, for both an auth-requiring provider and a local
+// one — through the disk-loading entry point rather than NewProvider's own
+// already-tested in-memory path.
+func TestNewProviderFromDisk_ConstructsForKnownProviders(t *testing.T) {
+	testutil.TempHome(t)
+	cfg := config.DefaultConfig()
+	if err := auth.Save(auth.AuthStore{"anthropic": {Type: "api_key", Key: "sk-ant-test"}}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	for _, id := range []string{"anthropic", "ollama"} {
+		p := NewProviderFromDisk(id, cfg)
+		if p == nil {
+			t.Fatalf("NewProviderFromDisk(%q) = nil", id)
+		}
+		if p.ID() != id {
+			t.Errorf("NewProviderFromDisk(%q).ID() = %q", id, p.ID())
+		}
 	}
 }
 

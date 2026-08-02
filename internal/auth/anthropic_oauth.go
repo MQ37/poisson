@@ -22,11 +22,15 @@ import (
 const (
 	anthropicClientID     = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 	anthropicAuthorizeURL = "https://claude.ai/oauth/authorize"
-	anthropicTokenURL     = "https://platform.claude.com/v1/oauth/token"
 	anthropicScopes       = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
 	anthropicRedirectPort = 53692
 	anthropicRedirectURI  = "http://localhost:53692/callback"
 )
+
+// anthropicTokenURL is a var (not a const) so tests can point it at a local
+// httptest server instead of the real Anthropic endpoint — same idiom as
+// internal/tools/web_ask_grok.go's grokResponsesURL.
+var anthropicTokenURL = "https://platform.claude.com/v1/oauth/token"
 
 // generatePKCE creates a PKCE verifier and S256 challenge.
 func generatePKCE() (verifier, challenge string, err error) {
