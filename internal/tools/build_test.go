@@ -78,7 +78,7 @@ func TestBuildRegistry_ParentWithStore(t *testing.T) {
 			return false, ""
 		},
 	})
-	for _, w := range []string{"recall", "subagent"} {
+	for _, w := range []string{"recall", "list_sessions", "read_messages", "subagent"} {
 		if _, ok := reg.Get(w); !ok {
 			t.Errorf("parent+store registry missing %q", w)
 		}
@@ -100,7 +100,7 @@ func TestBuildRegistry_Child(t *testing.T) {
 		Child:       true,
 		SubApproval: func(string, string, string, string, string) (bool, string) { return true, "" },
 	})
-	for _, w := range []string{"read", "write", "edit", "bash", "batch", "grep", "glob", "web_ask", "web_search", "recall"} {
+	for _, w := range []string{"read", "write", "edit", "bash", "batch", "grep", "glob", "web_ask", "web_search", "recall", "list_sessions", "read_messages"} {
 		if _, ok := reg.Get(w); !ok {
 			t.Errorf("child registry missing %q; have %v", w, toolNames(reg))
 		}

@@ -109,6 +109,8 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	reg.Register(NewWebAskTool(opts.Auth))
 	if opts.Store != nil {
 		reg.Register(NewRecallTool(opts.Store))
+		reg.Register(NewListSessionsTool(opts.Store))
+		reg.Register(NewReadMessagesTool(opts.Store))
 	}
 	// Parent-only: a subagent must never receive the subagent tool, or it could
 	// spawn subagents without bound.
