@@ -124,6 +124,33 @@ func TestApproveFreezesBlockTimers(t *testing.T) {
 	}
 }
 
+// TestBlockElapsedExactWhileFrozenNearZero is the flicker bug: a command
+// flagged dangerous by the guard fast path (or an already-warm classifier)
+// reaches the approval prompt with essentially zero real elapsed time —
+// StartedAt and the pause's start are the same instant. Repeated reads while
+// the prompt sits open must return the exact same value every time, not
+// wobble by a millisecond — a wobble here used to flip formatToolCollapsed's
+// "(0.0s)" suffix in and out of the rendered line on every ~33ms render
+// tick, a visible layout flicker, because it came from computing the two
+// halves of the subtraction against two independently-sampled time.Now()
+// calls instead of one shared instant.
+func TestBlockElapsedExactWhileFrozenNearZero(t *testing.T) {
+	resetApprovalClock(t)
+
+	var m BlockMeta
+	markStarted(&m) // StartedAt == now, PauseBase == 0
+	approvalClock.begin()
+	defer approvalClock.end()
+
+	first := blockElapsedMs(m)
+	for i := 0; i < 20; i++ {
+		time.Sleep(2 * time.Millisecond)
+		if got := blockElapsedMs(m); got != first {
+			t.Fatalf("tick %d: elapsed = %dms, want the frozen constant %dms (exact, not just close) — this is the render flicker bug", i, got, first)
+		}
+	}
+}
+
 // TestNestedPauseSharesOneWindow covers a /btw approval opening on top of a
 // main-turn approval: the inner end must not restart the clock while the outer
 // prompt is still waiting.

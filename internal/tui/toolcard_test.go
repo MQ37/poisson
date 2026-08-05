@@ -72,6 +72,32 @@ func TestToolCardLayoutStreamingBash(t *testing.T) {
 	}
 }
 
+// TestToolCardCollapsedShowsDurationEvenAtZero guards the display half of
+// the approval-wait flicker fix (see pause_clock.go's blockElapsedMs doc
+// comment for the root cause): a still-running collapsed card must show its
+// "(Ns)" suffix even when the live elapsed value is exactly 0ms, not hide it
+// — hiding it exactly at 0 is what turned an inherent ms-level rounding
+// wobble into the whole suffix appearing/disappearing every render tick.
+func TestToolCardCollapsedShowsDurationEvenAtZero(t *testing.T) {
+	b := Block{
+		id:   1,
+		kind: blockToolCall,
+		meta: BlockMeta{
+			ToolName: "bash",
+			ToolInput: toolInputJSON("bash", map[string]string{
+				"command":     "rm -rf x",
+				"description": "danger",
+			}),
+			Streaming: true,
+			StartedAt: time.Now(), // elapsed ~0ms right now
+		},
+	}
+	plain := stripANSI(formatToolCollapsed(&b, 60))
+	if !strings.Contains(plain, "0.0s") {
+		t.Fatalf("running card at ~0ms elapsed should still show a duration suffix (never hidden at exactly 0): %q", plain)
+	}
+}
+
 func TestToolCardComplete(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendToolCall(1, "", "read", toolInputJSON("read", map[string]string{"path": "main.go"}))

@@ -196,10 +196,24 @@ func formatToolCollapsed(b *Block, width int) string {
 
 	metaParts := []string{}
 	durMs := b.meta.DurationMs
+	// Once running, the "(Ns)" suffix is always shown — never gated on
+	// durMs > 0 the way the completed case below is. blockElapsedMs's own
+	// doc comment covers the main fix (the frozen value while an approval
+	// prompt is open used to genuinely alternate between 0ms and 1ms from
+	// one render tick to the next); gating this suffix's visibility on
+	// ">0" is what turned that ms-level wobble into a bigger, more visible
+	// flicker — the whole "(0.0s)" text appearing and disappearing,
+	// reflowing the reason text's truncation width with it — instead of
+	// just a digit that wouldn't have visibly changed anyway. Kept as a
+	// second layer of defense: showing it unconditionally means even a
+	// theoretical future rounding wobble can only flip a digit, never the
+	// suffix's presence.
+	showDur := b.meta.ToolDone && durMs > 0
 	if !b.meta.ToolDone {
 		durMs = blockElapsedMs(b.meta)
+		showDur = true
 	}
-	if durMs > 0 {
+	if showDur {
 		metaParts = append(metaParts, fmt.Sprintf("%.1fs", float64(durMs)/1000))
 	}
 	if b.meta.TokensPerSec > 0 {

@@ -59,10 +59,16 @@ type BlockMeta struct {
 	Streaming        bool // true while assistant/thinking/tool stream is in flight
 	StartedAt        time.Time
 	DurationMs       int64
-	// PauseBaseMs is approvalClock.totalMs() as of this block's start, so
-	// blockElapsedMs subtracts only the approval waiting that happened during
-	// this block's own lifetime — not pauses from earlier in the session.
-	PauseBaseMs int64
+	// PauseBase is approvalClock's total paused time as of this block's
+	// start, so blockElapsedMs subtracts only the approval waiting that
+	// happened during this block's own lifetime — not pauses from earlier in
+	// the session. Kept at full time.Duration (nanosecond) precision, not
+	// pre-rounded to milliseconds: blockElapsedMs only ever truncates to ms
+	// once, at the very end of its own subtraction — see its doc comment for
+	// why an earlier version that rounded here (and again inside
+	// approvalClock.totalMs()) before subtracting made a frozen elapsed
+	// reading flicker between two adjacent millisecond values.
+	PauseBase time.Duration
 	// TokensPerSec is the average output tokens/sec of the streaming round
 	// that produced this block (thinking, assistant text, or tool call) — see
 	// agent.OutputInferenceSpeed and scrollback.applyInferenceSpeed. Zero
