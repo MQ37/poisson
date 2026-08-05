@@ -117,6 +117,8 @@ func main() {
 		cmdSessions()
 	case "cost":
 		cmdCost(cmdArgs[1:])
+	case "search":
+		cmdSearch(cmdArgs[1:])
 	case "resume":
 		if len(cmdArgs) < 2 || strings.TrimSpace(cmdArgs[1]) == "" {
 			fmt.Fprintln(os.Stderr, "usage: Poisson resume <session-id>")
@@ -132,6 +134,7 @@ func main() {
 		fmt.Println("  Poisson sessions            list sessions")
 		fmt.Println("  Poisson resume <session-id> resume a session in the TUI")
 		fmt.Println("  Poisson cost [session-id]   show cost")
+		fmt.Println("  Poisson search <query>      list sessions whose messages match query")
 		fmt.Println("  Poisson -v                  print version")
 	}
 }
@@ -588,6 +591,91 @@ func runCost(st *store.Store, args []string) (stdout, stderr string, code int) {
 		return "", fmt.Sprintf("error reading total cost: %v\n", err), 1
 	}
 	return fmt.Sprintf("Total cost across all sessions: $%.4f\n", cost), "", 0
+}
+
+// cmdSearch runs `px search <query>` from the CLI: the same FTS5 index the
+// "recall" tool gives the agent, but summarized per session instead of per
+// message, since the CLI use case is finding which past session to resume,
+// not reading isolated hits.
+func cmdSearch(args []string) {
+	dbPath := filepath.Join(config.ConfigDir(), "poisson.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	defer st.Close()
+
+	stdout, stderr, code := runSearch(st, args)
+	if stdout != "" {
+		fmt.Print(stdout)
+	}
+	if stderr != "" {
+		fmt.Fprint(os.Stderr, stderr)
+	}
+	if code != 0 {
+		os.Exit(code)
+	}
+}
+
+// searchResultLimit bounds how many raw FTS5 hits runSearch fetches before
+// grouping by session. It's a hit budget, not a session budget: a query
+// that recurs constantly across a handful of sessions should still surface
+// every one of them, so this needs enough headroom over a plausible
+// per-session hit count instead of being tied to how many sessions to show.
+const searchResultLimit = 200
+
+// runSearch implements `px search <query>` against an already-open store,
+// separated from cmdSearch's os.Exit calls the same way runCost is —
+// unit-testable without exercising process exit. Groups store.Search's
+// per-message hits by session (Store.Search already orders by FTS5 rank,
+// so the first hit seen per session is that session's best match) and
+// prints one line per matching session: id, creation date, hit count,
+// provider/model, and the best-matching snippet — enough to decide which
+// one to `px resume`.
+func runSearch(st *store.Store, args []string) (stdout, stderr string, code int) {
+	query := strings.TrimSpace(strings.Join(args, " "))
+	if query == "" {
+		return "", "usage: Poisson search <query>\n", 2
+	}
+
+	results, err := st.Search(query, searchResultLimit)
+	if err != nil {
+		return "", fmt.Sprintf("error searching: %v\n", err), 1
+	}
+	if len(results) == 0 {
+		return fmt.Sprintf("no sessions match: %s\n", query), "", 0
+	}
+
+	type sessionHits struct {
+		count   int
+		snippet string
+	}
+	var order []string
+	bySession := map[string]*sessionHits{}
+	for _, r := range results {
+		h, ok := bySession[r.SessionID]
+		if !ok {
+			h = &sessionHits{snippet: r.Snippet}
+			bySession[r.SessionID] = h
+			order = append(order, r.SessionID)
+		}
+		h.count++
+	}
+
+	var b strings.Builder
+	for _, sid := range order {
+		h := bySession[sid]
+		sess, err := st.GetSession(sid)
+		if err != nil {
+			fmt.Fprintf(&b, "  %s  %d match(es)  %s\n", store.DisplaySessionID(sid), h.count, h.snippet)
+			continue
+		}
+		date := time.Unix(sess.CreatedAt, 0).Format("2006-01-02")
+		fmt.Fprintf(&b, "  %s  %s  %d match(es)  %s/%s  %s\n",
+			store.DisplaySessionID(sid), date, h.count, sess.Provider, sess.Model, h.snippet)
+	}
+	return b.String(), "", 0
 }
 
 func cmdLogin(args []string) {

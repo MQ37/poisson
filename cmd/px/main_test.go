@@ -386,3 +386,85 @@ func TestRunCostSessionNotFoundReturnsNonzero(t *testing.T) {
 		t.Errorf("stderr = %q, want session-not-found message", stderr)
 	}
 }
+
+// --- cmdSearch / runSearch ---
+
+func TestRunSearchNoQueryReturnsUsage(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(filepath.Join(dir, "search.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	stdout, stderr, code := runSearch(st, nil)
+	if code != 2 || stdout != "" {
+		t.Fatalf("code=%d stdout=%q, want usage error", code, stdout)
+	}
+	if !strings.Contains(stderr, "usage:") {
+		t.Errorf("stderr = %q, want usage message", stderr)
+	}
+}
+
+func TestRunSearchNoMatches(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(filepath.Join(dir, "search.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	stdout, stderr, code := runSearch(st, []string{"zzz-nonexistent-term"})
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q, want success", code, stderr)
+	}
+	if !strings.Contains(stdout, "no sessions match") {
+		t.Errorf("stdout = %q, want a no-match message", stdout)
+	}
+}
+
+// TestRunSearchGroupsHitsBySession seeds two matching messages in one
+// session and one in another, then checks the listing shows one line per
+// session (not per message) with the right hit counts, provider/model, and
+// a snippet — the shape a human uses to pick a session to `px resume`.
+func TestRunSearchGroupsHitsBySession(t *testing.T) {
+	dir := testutil.TempDir(t)
+	st, err := store.Open(filepath.Join(dir, "search.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	if err := st.CreateSession(&store.Session{ID: "s-search001", Provider: "anthropic", Model: "claude-sonnet-5"}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := st.CreateSession(&store.Session{ID: "s-search002", Provider: "xai", Model: "grok-build"}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	msg := func(sid, role, text string) *store.Message {
+		return &store.Message{SessionID: sid, Role: role, Content: fmt.Sprintf(`[{"type":"text","text":%q}]`, text)}
+	}
+	if err := st.AppendMessage(msg("s-search001", "user", "let's talk about zebrafish genomics")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if err := st.AppendMessage(msg("s-search001", "assistant", "zebrafish are a great model organism")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if err := st.AppendMessage(msg("s-search002", "user", "unrelated zebrafish question")); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+
+	stdout, stderr, code := runSearch(st, []string{"zebrafish"})
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q, want success", code, stderr)
+	}
+	if !strings.Contains(stdout, store.DisplaySessionID("s-search001")) || !strings.Contains(stdout, "2 match(es)") {
+		t.Errorf("stdout = %q, want s-search001 with 2 matches", stdout)
+	}
+	if !strings.Contains(stdout, store.DisplaySessionID("s-search002")) || !strings.Contains(stdout, "1 match(es)") {
+		t.Errorf("stdout = %q, want s-search002 with 1 match", stdout)
+	}
+	if !strings.Contains(stdout, "anthropic/claude-sonnet-5") || !strings.Contains(stdout, "xai/grok-build") {
+		t.Errorf("stdout = %q, want both sessions' provider/model", stdout)
+	}
+}

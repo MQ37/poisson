@@ -28,6 +28,7 @@ type Store struct {
 // edit to this constant.
 const schemaSQL = `
 PRAGMA journal_mode = WAL;
+PRAGMA synchronous = NORMAL;
 PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
 
@@ -160,8 +161,18 @@ func runMigration(db *sql.DB, step func(*sql.Tx) error, version int) error {
 }
 
 // Open opens (or creates) the SQLite database at path, sets the WAL
-// journal mode and busy_timeout pragmas, and runs idempotent schema
-// creation. The returned Store is ready for use.
+// journal mode, synchronous=NORMAL, and busy_timeout pragmas, and runs
+// idempotent schema creation. The returned Store is ready for use.
+//
+// synchronous=NORMAL (schemaSQL's default without it is FULL) means SQLite
+// only fsyncs at WAL checkpoint boundaries instead of on every single
+// commit — AppendMessage/RecordAPICall run once per finalized message, so
+// FULL would cost one fsync per turn for the life of every session. WAL +
+// NORMAL is SQLite's own documented safe pairing: a transaction already
+// committed here still survives this process crashing or being killed;
+// only an OS crash or power loss between commit and the next checkpoint
+// can lose the last few seconds of writes, never corrupt the file. That
+// tradeoff is fine for a local single-user CLI history store.
 func Open(path string) (*Store, error) {
 	// "_pragma=busy_timeout(5000)" is applied via exec below; we also set
 	// pragmas through schemaSQL execution.
