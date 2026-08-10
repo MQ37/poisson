@@ -112,6 +112,45 @@ func TestApprovalMouseWheelScrollDirection(t *testing.T) {
 	}
 }
 
+// TestBTWMouseWheelScrollDirection is the /btw-answer-panel counterpart to
+// TestApprovalMouseWheelScrollDirection. Regression: handleOneMouseEvent had
+// no case for *btwOverlay, so a wheel tick over the panel fell into the
+// generic "blocksBackgroundInput, no matching overlay" branch and silently
+// did nothing — arrow keys (feedKey) still worked, only the wheel was dead.
+func TestBTWMouseWheelScrollDirection(t *testing.T) {
+	tui := newTUI(nil, "s1", nil)
+	bo := newBTWOverlay("q")
+	bo.appendText(strings.Repeat("answer line\n", 40))
+	bo.finish(nil)
+	tui.activeOverlay = bo
+
+	// Wheel up (btn 64) → earlier content → lower scroll index.
+	bo.scroll = 10
+	if !tui.handleMouseInput([]byte("\x1b[<64;10;20M")) {
+		t.Fatal("wheel should be consumed while /btw is active")
+	}
+	if _, _, _, _, scroll, _ := bo.snapshot(); scroll != 7 {
+		t.Fatalf("wheel up: scroll = %d, want 7", scroll)
+	}
+
+	// Wheel down (btn 65) → later content → higher scroll index.
+	if !tui.handleMouseInput([]byte("\x1b[<65;10;20M")) {
+		t.Fatal("wheel down should be consumed")
+	}
+	if _, _, _, _, scroll, _ := bo.snapshot(); scroll != 10 {
+		t.Fatalf("wheel down: scroll = %d, want 10", scroll)
+	}
+
+	// Wheel up floors at 0, doesn't go negative.
+	bo.scroll = 0
+	if !tui.handleMouseInput([]byte("\x1b[<64;10;20M")) {
+		t.Fatal("wheel up at scroll=0 should still be consumed")
+	}
+	if _, _, _, _, scroll, _ := bo.snapshot(); scroll != 0 {
+		t.Fatalf("wheel up at scroll=0 should stay 0, got %d", scroll)
+	}
+}
+
 // TestApprovalMouseWheelScrollsConversationAboveThePanel reproduces a
 // reported bug: every wheel tick during a pending approval was routed to the
 // approval panel's own (usually single-line) command scroll, even when the

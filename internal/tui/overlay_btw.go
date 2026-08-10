@@ -208,6 +208,20 @@ func (o *btwOverlay) renderWithFrame(scrollRows, cols, frame int) (int, []string
 	return 1, out
 }
 
+// scrollBy adjusts the answer scroll position by delta (positive = later
+// content, matching isNavDown's o.scroll++ convention) — the mouse-wheel
+// counterpart to feedKey's arrow-key handling. render's own clamp on the
+// next paint keeps it in [0, maxScroll]; the floor here just keeps a large
+// negative wheel burst from needing that clamp to be re-derived here too.
+func (o *btwOverlay) scrollBy(delta int) {
+	o.mu.Lock()
+	o.scroll += delta
+	if o.scroll < 0 {
+		o.scroll = 0
+	}
+	o.mu.Unlock()
+}
+
 func (o *btwOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {
 	switch {
 	case k.isNavUp():

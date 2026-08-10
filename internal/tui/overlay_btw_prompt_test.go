@@ -24,6 +24,33 @@ func TestBTWPromptOverlayRenderShowsPlaceholderThenQuery(t *testing.T) {
 	}
 }
 
+// TestBTWPromptOverlayWrapsLongQuery is a regression test: render() used to
+// return exactly one line, truncateToWidth-ing anything past cols — a long
+// question just vanished off the right edge instead of wrapping, unlike the
+// main input box. It must now wrap across multiple lines, keep every word of
+// the query somewhere in the output, and still carry the trailing hint.
+func TestBTWPromptOverlayWrapsLongQuery(t *testing.T) {
+	o := newBTWPromptOverlay(nil)
+	o.query = strings.Repeat("word ", 40) + "end"
+	_, lines := o.render(1, 60)
+
+	if len(lines) < 2 {
+		t.Fatalf("expected the long query to wrap across multiple lines, got %d: %v", len(lines), lines)
+	}
+	joined := stripANSI(strings.Join(lines, " "))
+	if !strings.Contains(joined, "end") {
+		t.Fatalf("expected the full query (incl. trailing word) preserved across wrapped lines, got %q", joined)
+	}
+	if !strings.Contains(stripANSI(lines[len(lines)-1]), "Enter ask") {
+		t.Fatalf("expected the hint on the last wrapped line, got %q", stripANSI(lines[len(lines)-1]))
+	}
+	for i, ln := range lines {
+		if w := visibleWidth(ln); w > 60 {
+			t.Errorf("line %d width = %d, want <= 60", i, w)
+		}
+	}
+}
+
 func TestBTWPromptOverlayTypingAndBackspace(t *testing.T) {
 	o := newBTWPromptOverlay(nil)
 	for _, r := range "hi" {

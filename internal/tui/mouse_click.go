@@ -99,6 +99,16 @@ func (t *TUI) handleOneMouseEvent(ev MouseEvent) {
 					t.dirty.markFull()
 					return
 				}
+				// /btw's answer panel: same "wheel up shows earlier content"
+				// convention as the approval panel above — without this, a
+				// wheel tick over the panel fell through to the bare `return`
+				// below and did nothing at all (arrow keys still worked via
+				// feedKey; only the mouse wheel was dead).
+				if bo, ok := t.activeOverlay.(*btwOverlay); ok {
+					bo.scrollBy(-delta)
+					t.dirty.markOverlay()
+					return
+				}
 				return
 			}
 			w := t.contentWidth()

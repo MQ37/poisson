@@ -2,11 +2,12 @@ package tui
 
 import "strings"
 
-// btwPromptOverlay is a floating single-line input opened by Ctrl+B. It
-// collects a /btw side question without touching whatever the user already
-// has drafted in the main input box — an alternative way to reach the exact
-// same side-question flow as typing "/btw <question>" directly, for when
-// clearing the draft to type "/btw" isn't an option.
+// btwPromptOverlay is a floating input opened by Ctrl+B — one line normally,
+// word-wrapping across more when the question outgrows the terminal width.
+// It collects a /btw side question without touching whatever the user
+// already has drafted in the main input box — an alternative way to reach
+// the exact same side-question flow as typing "/btw <question>" directly,
+// for when clearing the draft to type "/btw" isn't an option.
 type btwPromptOverlay struct {
 	query    string
 	onSubmit func(question string)
@@ -17,15 +18,41 @@ func newBTWPromptOverlay(onSubmit func(question string)) *btwPromptOverlay {
 }
 
 func (o *btwPromptOverlay) render(scrollRows, cols int) (int, []string) {
-	q := o.query
-	if q == "" {
-		q = dim + "ask a side question — your draft stays put" + reset
-	} else {
-		q = fgCyan + q + reset
+	if cols < 12 {
+		cols = 12
 	}
-	label := fgCyan + bold + " btw: " + reset + q
+	label := fgCyan + bold + " btw: " + reset
 	hint := dim + " · Enter ask · Esc cancel" + reset
-	return 1, []string{truncateToWidth(label+hint, cols)}
+
+	if o.query == "" {
+		q := dim + "ask a side question — your draft stays put" + reset
+		return 1, []string{truncateToWidth(label+q+hint, cols)}
+	}
+
+	// A long question must wrap like the main input instead of getting cut
+	// off past the terminal edge — truncateToWidth on a single line silently
+	// dropped everything past cols. Continuation lines indent under the
+	// label so the wrapped question still reads as one block.
+	prefixWidth := visibleWidth(label)
+	wrapW := cols - prefixWidth
+	if wrapW < 8 {
+		wrapW = 8
+	}
+	wrapped := wrapWords(o.query, wrapW)
+	lines := make([]string, len(wrapped))
+	indent := strings.Repeat(" ", prefixWidth)
+	for i, ln := range wrapped {
+		prefix := label
+		if i > 0 {
+			prefix = indent
+		}
+		content := prefix + fgCyan + ln + reset
+		if i == len(wrapped)-1 {
+			content += hint
+		}
+		lines[i] = truncateToWidth(content, cols)
+	}
+	return 1, lines
 }
 
 func (o *btwPromptOverlay) feedKey(k Key) (handled bool, done bool, cancel bool) {

@@ -165,3 +165,24 @@ func TestBTWOverlayScroll(t *testing.T) {
 		t.Fatalf("scroll = %d after up, want 0", scroll)
 	}
 }
+
+// TestBTWOverlayScrollBy is scrollBy's own unit coverage — the mouse-wheel
+// counterpart to TestBTWOverlayScroll's arrow-key coverage. Regression for
+// the bug where a wheel tick over the /btw answer panel did nothing at all
+// (handleOneMouseEvent had no case for *btwOverlay, so it fell into the
+// generic "blocksBackgroundInput, no recognized overlay" no-op branch).
+func TestBTWOverlayScrollBy(t *testing.T) {
+	o := newBTWOverlay("q")
+	o.scrollBy(5)
+	if _, _, _, _, scroll, _ := o.snapshot(); scroll != 5 {
+		t.Fatalf("scroll = %d after scrollBy(5), want 5", scroll)
+	}
+	o.scrollBy(-2)
+	if _, _, _, _, scroll, _ := o.snapshot(); scroll != 3 {
+		t.Fatalf("scroll = %d after scrollBy(-2), want 3", scroll)
+	}
+	o.scrollBy(-100)
+	if _, _, _, _, scroll, _ := o.snapshot(); scroll != 0 {
+		t.Fatalf("scroll = %d after large negative scrollBy, want floored at 0", scroll)
+	}
+}
