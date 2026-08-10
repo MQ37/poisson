@@ -268,11 +268,32 @@ func (m *Manager) Resurrect(ctx context.Context, id string) (Sandbox, error) {
 }
 
 // Kill stops sandbox id via the Driver and drops it from this Manager's
-// ownership set.
+// ownership set. Deliberately does not gate on Owns/Get: those go through
+// attach(), which refuses a stopped container (correct for actually *using*
+// a sandbox — Exec needs it alive — but wrong here). Killing a stopped
+// container is a normal, supported operation (`podman rm -f` works
+// regardless of state), so Kill resolves ownership the same way Resurrect
+// does: already-owned works outright; a foreign id only resolves with
+// discovery enabled, found by exact name via the Driver's own List, running
+// or not.
 func (m *Manager) Kill(ctx context.Context, id string) error {
-	if !m.Owns(id) {
-		return fmt.Errorf("sandbox %q not found", id)
+	m.mu.Lock()
+	_, owned := m.sandboxes[id]
+	m.mu.Unlock()
+
+	if !owned {
+		if !m.discovery {
+			return fmt.Errorf("sandbox %q not found", id)
+		}
+		_, ok, err := m.findByID(ctx, id)
+		if err != nil {
+			return fmt.Errorf("kill sandbox: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("sandbox %q not found", id)
+		}
 	}
+
 	if err := m.driver.Kill(ctx, id); err != nil {
 		return err
 	}

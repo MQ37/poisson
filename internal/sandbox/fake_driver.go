@@ -116,15 +116,14 @@ func (f *FakeDriver) Start(_ context.Context, id string) error {
 	return nil
 }
 
+// Kill removes container id regardless of alive/stopped state, matching the
+// real podmanDriver's `podman rm -f -t 0` (which doesn't care whether the
+// container is running). Only a truly nonexistent id errors.
 func (f *FakeDriver) Kill(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	c, ok := f.containers[id]
-	switch {
-	case !ok:
+	if _, ok := f.containers[id]; !ok {
 		return fmt.Errorf("fakeDriver: no such container %q", id)
-	case !c.alive:
-		return fmt.Errorf("fakeDriver: container %q already dead", id)
 	}
 	delete(f.containers, id)
 	return nil

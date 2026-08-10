@@ -54,11 +54,11 @@ func (t *SandboxDestroyTool) Execute(ctx context.Context, input json.RawMessage)
 		return ToolResult{Error: "sandboxId is required"}, nil
 	}
 
-	_, ok := t.mgr.Get(in.SandboxID)
-	if !ok {
-		return ToolResult{Error: fmt.Sprintf("sandbox %q not found — it may belong to a different session or already be destroyed", in.SandboxID)}, nil
-	}
-
+	// No separate Get pre-check: Get/Owns go through attach()'s running-only
+	// discovery filter, which would wrongly reject a stopped-but-real
+	// foreign sandbox here. Kill resolves ownership itself (owned, or
+	// discoverable by name regardless of running state) and returns its own
+	// clear not-found error otherwise.
 	if err := t.mgr.Kill(ctx, in.SandboxID); err != nil {
 		return ToolResult{Error: "destroy sandbox: " + err.Error()}, nil
 	}

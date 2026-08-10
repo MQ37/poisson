@@ -586,9 +586,18 @@ never host data, so there's no risk to gate. Kills the container via
 whatever the agent supplied (see "Amendment" below), so `sandbox_destroy`
 must not delete it; there's no `sandboxes` store row to delete yet either,
 since that table doesn't exist until the lifecycle/persistence follow-up
-lands. Double-destroy or destroying a
-foreign/unowned id goes through `Manager.Owns` (via `Manager.Get`) the same
-way `bash` does — a clean error, not a crash; tested.
+lands. Double-destroy or destroying a truly foreign/unowned id — a clean
+error, not a crash; tested. Unlike `bash`/`sandbox_cp`, `Kill` does **not**
+gate through `Manager.Owns`/`Get`: those go through `attach()`'s running-only
+discovery filter (correct for *using* a sandbox, wrong for destroying one).
+`Kill` resolves ownership itself, the same way `Resurrect` does — already-
+owned works outright; a foreign id resolves with discovery enabled, found by
+exact name via the Driver's own `List`, running or not — so a stopped
+sandbox discovered only via `list_sandboxes` (e.g. after a crash/restart) is
+directly destroyable without first calling `sandbox_resurrect`. Fixed after
+an initial version wrongly required the container to be running (bug: found
+during a TODO review, tests added in `TestManager_KillDiscoveredStopped`,
+`TestSandboxDestroyTool_StoppedForeignSandbox`).
 
 `read/write/edit/grep/glob` schemas are **unchanged**.
 

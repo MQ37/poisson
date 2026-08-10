@@ -408,6 +408,66 @@ func TestManager_ResurrectOwnedStopped(t *testing.T) {
 	}
 }
 
+// TestManager_KillDiscoveredStopped is the sandbox_destroy counterpart to
+// TestManager_ResurrectDiscoveredStopped: a fresh Manager (crash/restart)
+// that never created or Authorize'd the sandbox must still be able to Kill
+// (not just Resurrect) a STOPPED foreign one found by exact name —
+// attach()'s running-only filter is right for Get/Exec but wrong for Kill,
+// which doesn't care whether the container is running.
+func TestManager_KillDiscoveredStopped(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+
+	owner := NewManager(driver)
+	sb, err := owner.Create(ctx, CreateOpts{Name: "kill-discovered-stopped"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	fresh := NewManager(driver) // simulates a brand-new process after restart
+	fresh.EnableDiscovery()
+
+	if _, ok := fresh.Get(sb.ID); ok {
+		t.Fatal("sanity: Get should still refuse a stopped foreign sandbox (attach()'s own filter)")
+	}
+
+	if err := fresh.Kill(ctx, sb.ID); err != nil {
+		t.Fatalf("Kill(stopped foreign sandbox) = %v, want nil", err)
+	}
+
+	infos, err := fresh.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, info := range infos {
+		if info.ID == sb.ID {
+			t.Errorf("sandbox %q still present after Kill", sb.ID)
+		}
+	}
+}
+
+// TestManager_KillDiscoveredStoppedNoDiscovery confirms Kill still refuses a
+// foreign stopped sandbox when discovery is off (e.g. a subagent's own
+// Manager) — Kill's relaxed running check must not become a blanket bypass
+// of ownership.
+func TestManager_KillDiscoveredStoppedNoDiscovery(t *testing.T) {
+	driver := NewFakeDriver()
+	ctx := context.Background()
+
+	owner := NewManager(driver)
+	sb, err := owner.Create(ctx, CreateOpts{Name: "kill-no-discovery"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	child := NewManager(driver) // no EnableDiscovery
+	if err := child.Kill(ctx, sb.ID); err == nil {
+		t.Fatal("expected Kill to refuse a foreign sandbox without discovery enabled")
+	}
+}
+
 // TestManager_ResurrectDiscoveredStopped is the crash-recovery case: a
 // fresh Manager (as if a restarted px process) never created or
 // Authorize'd the sandbox, but with EnableDiscovery it can still find and

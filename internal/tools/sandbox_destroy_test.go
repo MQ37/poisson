@@ -54,6 +54,42 @@ func TestSandboxDestroyTool_Basic(t *testing.T) {
 	}
 }
 
+// TestSandboxDestroyTool_StoppedForeignSandbox covers the crash-recovery
+// case: a sandbox discovered only via list_sandboxes (a different session's,
+// now stopped) must still be destroyable directly, without first calling
+// sandbox_resurrect — Get/attach()'s running-only filter must not leak into
+// destroy, which doesn't care whether the container is running.
+func TestSandboxDestroyTool_StoppedForeignSandbox(t *testing.T) {
+	driver := sandbox.NewFakeDriver()
+	owner := sandbox.NewManager(driver)
+	sb, err := owner.Create(context.Background(), sandbox.CreateOpts{Name: "stopped-foreign"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver.MarkDead(sb.ID)
+
+	fresh := sandbox.NewManager(driver) // simulates a restarted px process
+	fresh.EnableDiscovery()
+	destroy := NewSandboxDestroyTool(fresh)
+
+	res, _ := destroy.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"sandboxId": sb.ID,
+	}))
+	if res.Error != "" {
+		t.Fatalf("sandbox_destroy(stopped foreign sandbox) error: %s", res.Error)
+	}
+
+	infos, err := fresh.List(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, info := range infos {
+		if info.ID == sb.ID {
+			t.Errorf("sandbox %q still listed after destroy", sb.ID)
+		}
+	}
+}
+
 func TestSandboxDestroyTool_ForeignID(t *testing.T) {
 	mgr := sandbox.NewManager(sandbox.NewFakeDriver())
 	tool := NewSandboxDestroyTool(mgr)
