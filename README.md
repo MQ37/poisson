@@ -44,7 +44,7 @@ px                                                   # launch the TUI
   work, `batch` for independent calls in one step, plus `web_search`,
   `web_ask`, `fetch` (selectable backends, [details](docs/web-tools.md)),
   `recall` (cross-session full-text search), subagents,
-  and 10 built-in skills ([below](#-built-in-skills)), user-extendable via
+  and 13 built-in skills ([below](#-built-in-skills)), user-extendable via
   `~/.poisson/skills/`. `bash` is stateless — pass `workdir` explicitly on
   any call that needs a directory other than session cwd.
 - **Bash safety guard, two speeds** — Fast mode (default): a deterministic
@@ -72,7 +72,7 @@ px                                                   # launch the TUI
 
 ## 🧰 Built-in skills
 
-Ten skills ship baked into the `px` binary — no setup, no config directory
+Thirteen skills ship baked into the `px` binary — no setup, no config directory
 needed. The `skill` tool loads one by name and works the same for subagents
 as it does in the main session.
 
@@ -80,18 +80,21 @@ as it does in the main session.
 |---|---|
 | `code-quality` | Suckless-style simplicity/clarity principles — bloat, over-abstraction, needless defensiveness. Use before writing or reviewing code. |
 | `code-review` | Full multi-lens review of a diff (correctness, security, API design, tests) with subagent-verified findings and apply/escalate/skip fixes. |
+| `tdd` | Red-green-refactor discipline — failing test before production code, minimum code to pass, refactor under green. |
 | `feature-impact` | Blast-radius inventory for a change that adds a path beside an existing one — enumerates every mode, flag, and consumer on the shared seam and classifies each as handled, rejected, or unknown. |
 | `review-pr` | Gathers a PR/branch diff (local, GitHub, or fresh checkout) for review; hands off to `code-review` + `stacked-diff-review`. |
 | `stacked-diff-review` | Risk-tiered (🔴/🟡/🟢) write-up format for presenting a review. |
 | `check-work` | Spawns a fresh-context subagent to independently verify finished work actually satisfies the original request — PASS/FAIL verdict. |
 | `council` | Convenes parallel subagent personas (Torvalds, Hotz, Davis, ...) to critique code/architecture and synthesizes a ranked verdict. |
+| `grilling` | Relentless one-question-at-a-time interview mapping a plan as a design tree, to stress-test it before acting. |
 | `create-issue` | Drafts a tight, single-focus issue or bug report. |
 | `create-pr` | Picks a conventional-commit title, writes a What/Why/Testing description, self-reviews the diff before pushing. |
 | `sandbox` | Sets up an isolated podman sandbox for a work session — right directory mounted from the start, build/test through the container, commit only from host. |
+| `create-skill` | Authors a new SKILL.md, builtin (Go, embedded) or user-scoped (`~/.poisson/skills/`). |
 
 Add your own under `~/.poisson/skills/<name>/SKILL.md` — a user skill with the
 same name as a built-in one overrides it, so you can customize any of the
-ten without touching the binary. `/reload` rediscovers user skills without
+thirteen without touching the binary. `/reload` rediscovers user skills without
 restarting.
 
 ---

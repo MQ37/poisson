@@ -231,6 +231,28 @@ func TestBuildSystemPromptNoContext(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptDefaultsToSandbox guards the guideline that build/test/
+// feature work should default to bash(sandboxId=...), not plain host bash.
+func TestBuildSystemPromptDefaultsToSandbox(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "Default to a sandbox for actual work") {
+		t.Error("missing sandbox-first-for-work guideline")
+	}
+}
+
+// TestBuildSystemPromptStoicMantra guards the persona-level compression
+// mantra (10-words-beats-two-paragraphs), stated as identity, not just a
+// stylistic tip.
+func TestBuildSystemPromptStoicMantra(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "if it fits in 10 words, that beats two paragraphs of slop") {
+		t.Error("missing stoic compression mantra")
+	}
+	if !strings.Contains(prompt, "task briefs handed to a subagent") {
+		t.Error("mantra must extend to subagent/other-agent communication, not just user-facing chat")
+	}
+}
+
 func TestBuildSystemPromptAlwaysIncludesCavemanStyle(t *testing.T) {
 	// No config option gates this — it's always on, checked with the minimal
 	// options a caller could pass (no tools, no context, no skills).
@@ -238,8 +260,8 @@ func TestBuildSystemPromptAlwaysIncludesCavemanStyle(t *testing.T) {
 	if !strings.Contains(prompt, "respond terse, like smart caveman") {
 		t.Error("missing always-on caveman communication style")
 	}
-	if !strings.Contains(prompt, "Write normal (no compression) for: security warnings") {
-		t.Error("missing safety/boundary exception (security warnings must not be compressed)")
+	if !strings.Contains(prompt, "Write full sentences, not fragments, for: security warnings") {
+		t.Error("missing safety/boundary exception (security warnings need full grammar, not fragments)")
 	}
 }
 
