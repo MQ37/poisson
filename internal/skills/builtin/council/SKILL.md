@@ -43,15 +43,12 @@ Three **core** voices (straight from the manifesto) plus an **extended** bench s
 | **Rob Pike** | "Data dominates. Simplicity. Clarity." | Unix/Go composition; small sharp interfaces; clear concurrency; "a little copying beats a little dependency"; readability over cleverness. | API design, concurrency, architecture |
 | **John Carmack** | "Focus is a matter of deciding what not to do." | Pragmatic performance under real constraints; debugging discipline; ship it; "premature abstraction is worse than premature optimization"; measure. | Perf, hot paths, practical review |
 | **Joe Armstrong** | "Let it crash." | Fault tolerance; isolate failure; supervision/recovery; concurrency correctness; build for the failure case, not the happy path. | Resilience, error handling, distributed |
-| **Edsger Dijkstra** | "Simplicity is prerequisite for reliability." | Correctness by reasoning, not just testing; elegance; complexity as a moral failing; invariants; "testing shows the presence, not the absence, of bugs." | Correctness, algorithm soundness |
 | **Tony Hoare** | "Two ways to design: so simple there are obviously no deficiencies, or so complex there are no obvious ones." | Null / illegal states (his "billion-dollar mistake"); make bad states unrepresentable; type safety; concurrency hazards. | Type/state modeling, safety |
 | **Barbara Liskov** | "Abstraction is the key to managing complexity." | Module boundaries; substitutability (LSP); data abstraction; what a caller may assume; hidden coupling. | Architecture, OOP, modularity |
-| **Alan Kay** | "Simple things should be simple, complex things should be possible." | Big-picture systems vision; are these the *right* abstractions; will it still be right in five years; expressive power vs accidental complexity. | Brainstorming, architecture vision |
 | **Fred Brooks** | "Conceptual integrity is the most important consideration in system design." | One coherent idea over many clever ones; build-the-right-thing before build-it-right; "plan to throw one away"; second-system bloat. | Architecture, scoping, brainstorming |
-| **Leslie Lamport** | "A distributed system is one where a computer you didn't know existed can break yours." | Distributed correctness; precise specs and invariants; ordering, failure, and partial-failure modes; what the model actually guarantees. | Distributed systems, protocols |
 | **Donald Knuth** | "Premature optimization is the root of all evil." | Algorithmic rigor; analyze before you optimize; correctness and edge-case exhaustiveness; measure, then tune the 3% that matters. | Algorithms, perf decisions |
 
-> Pairings that spark the most useful conflict: **Carmack (perf) vs Davis (simplicity)**, **Kay/Brooks (build the right grand thing) vs Hotz/Torvalds (ship the small concrete thing)**, **Dijkstra/Hoare (prove it correct) vs geohot (just run it and see)**. Seat opposed lenses on purpose.
+> Pairings that spark the most useful conflict: **Carmack (perf) vs Davis (simplicity)**, **Brooks (build the right grand thing) vs Hotz/Torvalds (ship the small concrete thing)**, **Hoare (prove it correct) vs geohot (just run it and see)**. Seat opposed lenses on purpose.
 
 ---
 
@@ -70,7 +67,7 @@ RID=$(python3 -c 'import uuid; print(uuid.uuid4().hex[:8])')   # or: RID=$(uuidg
 
 ### 2. Pick the panel (3–5)
 
-Seat the 3 core voices for most code reviews; swap in extended voices for the task (resilience work → Armstrong; distributed → Lamport; perf → Carmack/Knuth; API/architecture → Pike/Liskov/Kay; greenfield idea → Kay/Brooks). Deliberately include at least one voice likely to *disagree* with the obvious direction.
+Seat the 3 core voices for most code reviews; swap in extended voices for the task (resilience work → Armstrong; perf → Carmack/Knuth; API/architecture → Pike/Liskov; greenfield idea → Brooks). Deliberately include at least one voice likely to *disagree* with the obvious direction.
 
 ### 3. Spawn them in parallel
 
