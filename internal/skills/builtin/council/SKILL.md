@@ -5,10 +5,6 @@ description: Convene a council of legendary engineers — spawned as parallel su
 
 # The Council
 
-> *"An idiot admires complexity, a genius admires simplicity."* — Terry Davis
-> *"Bad programmers worry about the code. Good programmers worry about data structures."* — Linus Torvalds
-> *"Complexity is the enemy."* — George Hotz
-
 One reviewer has one set of blind spots. A **council** of strong, *opposed* philosophies finds what any single lens misses: the minimalist catches bloat the performance hawk would ship; the correctness zealot catches the race the pragmatist would merge; the systems visionary catches the architecture the bug-hunter would optimize into a corner. This skill spawns several legends as parallel subagents, each reviewing the same artifact through their own durable philosophy, then **synthesizes** their verdicts — consensus is high signal, disagreement is where the real decision lives.
 
 This is the operational companion to the [`code-quality`](../code-quality/SKILL.md) manifesto: that skill is the *rules*; this one is a *room full of people who each weigh those rules differently*.
@@ -130,10 +126,8 @@ The council *reasons*; it doesn't *run*. Before reporting a Critical, confirm it
 
 ## Guardrails
 
-- **Read-only for code review.** Subagents critique; the orchestrator (you) applies fixes after the user decides.
 - **Self-contained tasks.** Subagents can't ask questions — every prompt must carry full context, file paths, and the output format.
 - **In character, not in costume.** The persona shapes *priorities and tone*, never the technical accuracy. No theatrics that obscure the finding; keep language professional.
-- **Cap the panel.** 3 default, 5 max. More voices = more tokens and less signal.
 - **The council advises; the user commands.** Present synthesized options; don't auto-apply architectural changes.
 
 ---

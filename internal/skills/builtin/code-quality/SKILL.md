@@ -229,22 +229,9 @@ Walk these before you call it done.
 
 ---
 
-## 🏷️ Commits & PR Descriptions
+## See also
 
-**Commit format:** `type(scope): description` — lowercase, imperative, no trailing period. Append `!` for breaking changes.
-Types: `feat | fix | chore | docs | refactor | perf | test | ci | build | style | revert`
-
-**PR description:** 20–40 lines for non-trivial work, never 150+. Describe *why*, not *what* — the diff already shows what. Drop behavior tables, perf tables, and marketing prose. A useful template:
-
-```markdown
-## Context
-[1–3 sentences: why this is needed]
-
-## Solution
-[1–3 sentences: the approach; link related work]
-
-## Worth your attention
-- **<non-obvious decision>** — [why]
-```
+- [`create-pr`](../create-pr/SKILL.md) — commit format, PR title/description template.
+- [`create-issue`](../create-issue/SKILL.md) — issue-writing conventions.
 
 > Talk is cheap. Show the code. Then show *less* code.
