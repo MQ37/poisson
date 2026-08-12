@@ -27,7 +27,7 @@ func ResolveDefaultProvider(a auth.AuthStore, cfg *config.Config) (name string, 
 // rest need an OAuth session, an auth.json API key, or (anthropic only) a
 // config.toml api_key.
 func IsConfigured(name string, a auth.AuthStore, cfg *config.Config) bool {
-	meta, ok := config.ProviderMetaByID(name)
+	meta, ok := config.ResolveProviderMeta(name, cfg)
 	if !ok {
 		return false
 	}
@@ -77,13 +77,35 @@ var providerConstructors = map[string]func(auth.AuthStore, *config.Config) Provi
 	},
 }
 
-// NewProvider constructs a provider by name. Returns nil for unknown names.
+// NewProvider constructs a provider by name: a built-in first (the static
+// providerConstructors map), then a cfg.CustomProviders instance. Returns
+// nil for a name neither registry knows about.
 func NewProvider(name string, a auth.AuthStore, cfg *config.Config) Provider {
-	ctor, ok := providerConstructors[name]
+	if ctor, ok := providerConstructors[name]; ok {
+		return ctor(a, cfg)
+	}
+	return newCustomProvider(name, cfg)
+}
+
+// newCustomProvider constructs a provider from cfg.CustomProviders, dispatching
+// on its Type. Only "ollama" exists today — config.parseCustomProviders
+// already rejects any other type at load time, so the default case here is
+// unreachable through normal config parsing; it's still an explicit nil
+// rather than a panic for a *config.Config built by hand (e.g. tests).
+func newCustomProvider(name string, cfg *config.Config) Provider {
+	if cfg == nil {
+		return nil
+	}
+	cp, ok := cfg.CustomProviders[name]
 	if !ok {
 		return nil
 	}
-	return ctor(a, cfg)
+	switch cp.Type {
+	case "ollama":
+		return NewCustomOllamaProvider(name, cp.BaseURL, cp.Model)
+	default:
+		return nil
+	}
 }
 
 // NewProviderFromDisk loads auth from disk and constructs a provider by name.
@@ -93,12 +115,14 @@ func NewProviderFromDisk(name string, cfg *config.Config) Provider {
 }
 
 // DefaultModel returns the configured model for a provider, with built-in
-// fallbacks (config.Providers) when the config field is empty.
+// fallbacks (config.Providers) when the config field is empty. A custom
+// provider has no built-in fallback string, so this returns "" until the
+// user sets [custom_providers.<name>].model or switches via /model.
 func DefaultModel(provName string, cfg *config.Config) string {
 	if cfg == nil {
 		return ""
 	}
-	meta, ok := config.ProviderMetaByID(provName)
+	meta, ok := config.ResolveProviderMeta(provName, cfg)
 	if !ok {
 		return ""
 	}

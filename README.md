@@ -161,6 +161,14 @@ context size, MTP speculative decoding), use
 [**alpaca**](https://github.com/MQ37/alpaca) — a small standalone session
 launcher built for this.
 
+**Custom provider instances**: `[custom_providers.<name>]` defines a second
+(third, ...) Ollama-compatible endpoint under a name you pick — e.g. a
+daemon on a remote host, alongside your local one. Works everywhere a
+built-in provider does: `/providers`, `/model`, `px -p <name>/<model>`,
+subagent provider pinning. No login needed (same as `ollama`/`llamacpp`).
+See the `[custom_providers.*]` block in the shipped `config.toml` template
+for the full example.
+
 Switch anytime: `/model`, `/effort`, `/providers` (or the Ctrl+P palette).
 Reasoning effort levels: `low · medium · high · xhigh · max` (default `medium`;
 each model advertises which it supports).
@@ -213,6 +221,11 @@ via `/providers` without naming a model):
 [llamacpp]
 # base_url = "http://localhost:11212"     # local llama-server instance
 # model = "unsloth/Laguna-S-2.1-GGUF"
+
+# [custom_providers.bastion]              # a second Ollama instance, any name
+# type = "ollama"                         # only "ollama" supported
+# base_url = "http://bastion-host:11434"
+# model = "laguna-s-2.1:q4_K_M"
 
 [classifier]
 # model = ""                         # fallback bash-risk classifier (bare = all providers, "provider/model" = one)

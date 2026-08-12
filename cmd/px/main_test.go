@@ -220,6 +220,75 @@ func TestCmdLoginOllamaIsPurePrintNoAuthCall(t *testing.T) {
 	}
 }
 
+// --- resolveChildProvider ---
+
+// TestResolveChildProviderCustom checks a subagent explicitly pinned to a
+// custom provider (POISSON_SUBAGENT_PROVIDER) keeps it, instead of being
+// silently downgraded to ollama because config.ResolveProviderMeta wasn't
+// consulted.
+func TestResolveChildProviderCustom(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CustomProviders["bastion"] = &config.CustomProviderConfig{
+		Type: "ollama", BaseURL: "http://bastion-host:11434", Model: "laguna-s-2.1:q4_K_M",
+	}
+	if got := resolveChildProvider("bastion", cfg); got != "bastion" {
+		t.Errorf("resolveChildProvider = %q, want bastion", got)
+	}
+}
+
+// TestResolveChildProviderUnknownFallsBackToOllama checks a genuinely
+// unknown name (neither built-in nor custom) still falls back, unchanged
+// behavior from before the custom-provider generalization.
+func TestResolveChildProviderUnknownFallsBackToOllama(t *testing.T) {
+	cfg := config.DefaultConfig()
+	if got := resolveChildProvider("frobnicate", cfg); got != "ollama" {
+		t.Errorf("resolveChildProvider = %q, want ollama", got)
+	}
+}
+
+// TestResolveChildProviderEmptyUsesConfigDefault checks an empty env value
+// falls back to cfg.Provider.Default.
+func TestResolveChildProviderEmptyUsesConfigDefault(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.CustomProviders["bastion"] = &config.CustomProviderConfig{Type: "ollama", BaseURL: "http://bastion-host:11434"}
+	cfg.Provider.Default = "bastion"
+	if got := resolveChildProvider("", cfg); got != "bastion" {
+		t.Errorf("resolveChildProvider = %q, want bastion", got)
+	}
+}
+
+// TestCmdLoginLlamaCppIsGenericNoAuth checks llamacpp — a second built-in
+// NeedsAuth=false provider that had no explicit switch case — gets the same
+// generic "no login needed" treatment as ollama, instead of falling into
+// "unknown provider". Regression guard for the gap the custom-provider
+// generalization fixed incidentally.
+func TestCmdLoginLlamaCppIsGenericNoAuth(t *testing.T) {
+	testutil.TempHome(t)
+	out := captureStdout(t, func() { cmdLogin([]string{"llamacpp"}) })
+	if !strings.Contains(out, "no login needed") {
+		t.Errorf("output = %q, want a generic no-login-needed message", out)
+	}
+}
+
+// TestCmdLoginCustomProviderIsGenericNoAuth checks a [custom_providers.*]
+// instance (always NeedsAuth=false, v1 supports type="ollama" only) also
+// gets the generic no-login message instead of "unknown provider".
+func TestCmdLoginCustomProviderIsGenericNoAuth(t *testing.T) {
+	tmpHome := testutil.TempHome(t)
+	dir := filepath.Join(tmpHome, ".poisson")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	toml := "[custom_providers.bastion]\ntype = \"ollama\"\nbase_url = \"http://bastion-host:11434\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(toml), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	out := captureStdout(t, func() { cmdLogin([]string{"bastion"}) })
+	if !strings.Contains(out, "no login needed") {
+		t.Errorf("output = %q, want a generic no-login-needed message", out)
+	}
+}
+
 // TestCmdLoginUnknownProviderExitsNonzero runs the built px binary as a
 // subprocess (same pattern as TestResumeCommand_MissingArg above) since the
 // unknown-provider branch calls os.Exit directly and isn't decomposed.

@@ -48,6 +48,25 @@ func newSandboxManager(sessionID string) *sandbox.Manager {
 	return mgr
 }
 
+// resolveChildProvider resolves a subagent child's provider ID: envValue
+// (POISSON_SUBAGENT_PROVIDER) if set, else cfg's configured default; falls
+// back to "ollama" if that name isn't a real provider — built-in
+// (config.Providers) or user-defined (cfg.CustomProviders) — via
+// config.ResolveProviderMeta, so a subagent explicitly pinned to a custom
+// provider keeps it instead of being silently downgraded. Pulled out of
+// runChildMode as its own function for the same testability reason
+// resolveChildSandboxManager (below) was.
+func resolveChildProvider(envValue string, cfg *config.Config) string {
+	childProv := envValue
+	if childProv == "" {
+		childProv = cfg.Provider.Default
+	}
+	if _, ok := config.ResolveProviderMeta(childProv, cfg); !ok {
+		childProv = "ollama"
+	}
+	return childProv
+}
+
 // resolveChildSandboxManager parses envValue (POISSON_SUBAGENT_SANDBOXES, as
 // built by subagent.buildSpawnEnv) and returns a Manager with each
 // authorized sandbox recorded via Authorize, or nil when there's nothing to
@@ -274,7 +293,8 @@ func runPrint(opts printOpts) {
 	}
 	prov := provider.NewProvider(provName, authStore, cfg)
 	if prov == nil {
-		fmt.Fprintf(os.Stderr, "px -p: unknown provider %q (use anthropic/<model>, openai/<model>, xai/<model>, ollama/<model>)\n", provName)
+		fmt.Fprintf(os.Stderr, "px -p: unknown provider %q (want %s, or a [custom_providers.*] name)\n",
+			provName, strings.Join(config.ProviderIDs(), "/"))
 		os.Exit(2)
 	}
 
@@ -403,7 +423,8 @@ func runREPL(noSkills bool, resumeSessionID string) {
 		fmt.Fprintln(os.Stderr, warn)
 	}
 	if prov == nil {
-		fmt.Fprintf(os.Stderr, "error: unknown provider %q in config; use anthropic, ollama, or xai\n", provName)
+		fmt.Fprintf(os.Stderr, "error: unknown provider %q in config (want %s, or a [custom_providers.*] name)\n",
+			provName, strings.Join(config.ProviderIDs(), "/"))
 		os.Exit(1)
 	}
 
@@ -732,8 +753,17 @@ func cmdLogin(args []string) {
 		fmt.Println("Just start the Ollama server (default: http://localhost:11434).")
 
 	default:
-		fmt.Printf("unknown provider: %s\n", prov)
-		os.Exit(1)
+		// Any other NeedsAuth=false provider — llamacpp, or a user-defined
+		// [custom_providers.<name>] instance (v1 supports type="ollama"
+		// only, which is unauthenticated) — needs no login either. A name
+		// neither registry knows about is still a real error.
+		cfg := loadConfigOrDefault()
+		meta, ok := config.ResolveProviderMeta(prov, cfg)
+		if !ok || meta.NeedsAuth {
+			fmt.Printf("unknown provider: %s\n", prov)
+			os.Exit(1)
+		}
+		fmt.Printf("%s runs locally — no login needed.\n", prov)
 	}
 }
 
@@ -840,14 +870,8 @@ func runChildMode() {
 		sessionID = store.NewSubagentID()
 	}
 	cwd, _ := os.Getwd()
-	childProv := os.Getenv("POISSON_SUBAGENT_PROVIDER")
+	childProv := resolveChildProvider(os.Getenv("POISSON_SUBAGENT_PROVIDER"), cfg)
 	childModel := os.Getenv("POISSON_SUBAGENT_MODEL")
-	if childProv == "" {
-		childProv = cfg.Provider.Default
-	}
-	if _, ok := config.ProviderMetaByID(childProv); !ok {
-		childProv = "ollama"
-	}
 	if childModel == "" {
 		childModel = provider.DefaultModel(childProv, cfg)
 	}

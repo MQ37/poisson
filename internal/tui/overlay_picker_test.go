@@ -78,6 +78,38 @@ func TestPickerModelItemsUsesCuratedList(t *testing.T) {
 	}
 }
 
+// TestPickerModelItemsCustomProviderUsesModelOverrides checks the /model
+// picker for a custom provider draws from the existing generic
+// [models.<name>.<model>] table — no new config surface needed for model
+// curation, it's the same mechanism built-in providers already use.
+func TestPickerModelItemsCustomProviderUsesModelOverrides(t *testing.T) {
+	_, a, sessionID := newTestStoreAndAgent(t)
+	a.Config().CustomProviders["bastion"] = &config.CustomProviderConfig{
+		Type: "ollama", BaseURL: "http://bastion-host:11434", Model: "laguna-s-2.1:q4_K_M",
+	}
+	a.Config().ModelOverrides["bastion"] = map[string]config.ModelOverride{
+		"laguna-s-2.1:q4_K_M":  {ContextWindow: 262144},
+		"laguna-xs-2.1:q4_K_M": {ContextWindow: 262144},
+	}
+	a.SetProvider(provider.NewCustomOllamaProvider("bastion", "http://bastion-host:11434", "laguna-s-2.1:q4_K_M"))
+	a.SetModel("laguna-s-2.1:q4_K_M")
+
+	items, err := pickerModelItems(cmdHost(newTUIWithAgent(a, sessionID)))
+	if err != nil {
+		t.Fatalf("pickerModelItems: %v", err)
+	}
+	got := map[string]int{}
+	for _, it := range items {
+		got[it.id]++
+		if it.id == "laguna-s-2.1:q4_K_M" && it.hint != "ctx=262144" {
+			t.Errorf("hint = %q, want ctx=262144", it.hint)
+		}
+	}
+	if got["laguna-s-2.1:q4_K_M"] != 1 || got["laguna-xs-2.1:q4_K_M"] != 1 {
+		t.Fatalf("model picker items = %v, want both bastion models exactly once", got)
+	}
+}
+
 func TestPickerProviderItemsOllamaNoAuth(t *testing.T) {
 	testutil.TempHome(t) // isolate auth store to an empty temp HOME
 	_, a, sessionID := newTestStoreAndAgent(t)
@@ -148,6 +180,34 @@ func TestPickerProviderItemsLlamaCppNoAuth(t *testing.T) {
 		return
 	}
 	t.Fatal("llamacpp not in provider picker")
+}
+
+// TestPickerProviderItemsIncludesCustom checks a [custom_providers.<name>]
+// instance shows up in the /providers picker, after the built-ins, never
+// "not configured" (custom providers are always NeedsAuth=false).
+func TestPickerProviderItemsIncludesCustom(t *testing.T) {
+	testutil.TempHome(t)
+	_, a, sessionID := newTestStoreAndAgent(t)
+	a.Config().CustomProviders["bastion"] = &config.CustomProviderConfig{
+		Type: "ollama", BaseURL: "http://bastion-host:11434", Model: "laguna-s-2.1:q4_K_M",
+	}
+	items := pickerProviderItems(cmdHost(newTUIWithAgent(a, sessionID)))
+	if len(items) != len(config.Providers)+1 {
+		t.Fatalf("got %d picker items, want %d (built-ins + 1 custom)", len(items), len(config.Providers)+1)
+	}
+	last := items[len(items)-1]
+	if last.id != "bastion" {
+		t.Fatalf("last item id = %q, want bastion", last.id)
+	}
+	if strings.Contains(last.hint, "not configured") {
+		t.Errorf("bastion should not be 'not configured': %q", last.hint)
+	}
+	if !strings.Contains(last.hint, "no auth needed") {
+		t.Errorf("bastion hint = %q, want 'no auth needed'", last.hint)
+	}
+	if !strings.Contains(last.hint, "http://bastion-host:11434") {
+		t.Errorf("bastion hint = %q, want it to mention base_url", last.hint)
+	}
 }
 
 func TestPaletteOverlayFilter(t *testing.T) {

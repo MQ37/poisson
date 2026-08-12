@@ -59,6 +59,25 @@ type LlamaCppConfig struct {
 	Model   string
 }
 
+// CustomProviderConfig is one user-defined [custom_providers.<name>]
+// instance — e.g. a second Ollama daemon on a remote host, under a name the
+// user picks. Type currently must be "ollama" (same OpenAI-compatible wire
+// format as the built-in Ollama/LlamaCpp providers); the field exists so a
+// future second wire format doesn't need a schema change. Model metadata
+// (context window, effort levels, vision) and pricing for these instances
+// reuse the existing generic [models.<name>.<model>] / [pricing.<name>.<model>]
+// tables verbatim — those are already keyed by an arbitrary string, not a
+// fixed provider enum, so a custom name works there with no code change.
+//
+// A pointer (not a value) in Config.CustomProviders so ProviderMeta.Model's
+// accessor can return a genuinely mutable pointer into it, the same
+// contract the built-in providers' own Model field satisfies.
+type CustomProviderConfig struct {
+	Type    string // must be "ollama" in v1
+	BaseURL string
+	Model   string // default model for this instance; "" = user picks via /model
+}
+
 // ClassifierConfig controls the bash-command risk classifier (the small LLM
 // call behind the approval gate).
 //
@@ -147,6 +166,9 @@ type Config struct {
 	Pricing map[string]map[string]Pricing
 	// ModelOverrides is keyed [provider][model] → ModelOverride.
 	ModelOverrides map[string]map[string]ModelOverride
+	// CustomProviders is keyed by user-chosen instance name, from
+	// [custom_providers.<name>] — see CustomProviderConfig.
+	CustomProviders map[string]*CustomProviderConfig
 }
 
 // defaultConfig returns a Config populated with all built-in defaults.
@@ -187,9 +209,10 @@ func defaultConfig() *Config {
 			ShowTokens: true,
 			ShowCost:   true,
 		},
-		Effort:         DefaultEffort,
-		Pricing:        defaultPricing(),
-		ModelOverrides: map[string]map[string]ModelOverride{},
+		Effort:          DefaultEffort,
+		Pricing:         defaultPricing(),
+		ModelOverrides:  map[string]map[string]ModelOverride{},
+		CustomProviders: map[string]*CustomProviderConfig{},
 	}
 	// Each provider's default model comes from the single Providers registry
 	// (providers.go) instead of being repeated here per provider.
@@ -289,6 +312,24 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 # Local llama-server (see workdir/alpaca), OpenAI-compatible wire format.
 # base_url = "http://localhost:11212"
 # model = "unsloth/Laguna-S-2.1-GGUF"
+
+# User-defined provider instance — e.g. a second Ollama daemon on a remote
+# host, under a name you pick. Works everywhere a built-in provider does:
+# /providers, /model, px -p <name>/<model>, subagent provider pinning.
+# type must be "ollama" (only wire format supported today). base_url is
+# required; model is optional (pick one later via /model). Repeat the table
+# under a different name for another instance (e.g. one local, one remote).
+# [custom_providers.bastion]
+# type = "ollama"
+# base_url = "http://bastion-host:11434"
+# model = "laguna-s-2.1:q4_K_M"
+#
+# Curated model list and context windows reuse the SAME [models.<name>.*]
+# table as any built-in provider (see the [models.*] examples further
+# down) — no separate schema. Omit entirely to fall back to live discovery
+# via that instance's own /api/tags.
+# [models.bastion."laguna-s-2.1:q4_K_M"]
+# context_window = 262144
 
 [classifier]
 # Model that rates bash-command risk for the approval gate. The classifier
@@ -544,6 +585,13 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 		cfg.LlamaCpp.Model = s
 	}
 
+	// Custom providers must be parsed before the top-level `model =` knob
+	// below, which may target one by name (setProviderModel resolves
+	// through cfg.CustomProviders too).
+	if err := parseCustomProviders(cfg, m); err != nil {
+		return nil, err
+	}
+
 	// Top-level `model = "<provider>/<model>"` is the one-liner default: it sets
 	// both the default provider and that provider's model. A bare value (no
 	// slash) applies to the current default provider. Parsed last so it wins over
@@ -797,6 +845,70 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 	return cfg, nil
 }
 
+// customProviderTypes lists the wire formats a [custom_providers.<name>]
+// instance may declare. Only "ollama" exists today (same OpenAI-compatible
+// format the built-in Ollama/LlamaCpp providers already speak); listed as a
+// set instead of a single string comparison so a second format later is a
+// one-line addition here.
+var customProviderTypes = map[string]bool{"ollama": true}
+
+// parseCustomProviders parses [custom_providers.<name>] tables into
+// cfg.CustomProviders. Each name becomes a new provider ID recognized
+// throughout Poisson (config.ResolveProviderMeta, the /providers and /model
+// pickers, px -p, subagent spawning) — see internal/provider/factory.go and
+// internal/config/providers.go for where that ID is actually resolved and
+// constructed. Model metadata and pricing for these instances are NOT
+// parsed here: they reuse the existing generic [models.<name>.<model>] and
+// [pricing.<name>.<model>] tables above verbatim, which are already keyed
+// by an arbitrary string.
+func parseCustomProviders(cfg *Config, m map[string]interface{}) error {
+	cp, ok := m["custom_providers"]
+	if !ok {
+		return nil
+	}
+	cpMap, ok := cp.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("custom_providers: expected table")
+	}
+	for name, val := range cpMap {
+		if strings.Contains(name, "/") {
+			return fmt.Errorf("custom_providers.%s: name must not contain '/' (ambiguous with provider/model parsing)", name)
+		}
+		if _, builtin := ProviderMetaByID(name); builtin {
+			return fmt.Errorf("custom_providers.%s: name collides with a built-in provider — pick a different name", name)
+		}
+		tbl, ok := val.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("custom_providers.%s: expected table", name)
+		}
+		typ, err := asString(tbl["type"])
+		if err != nil || strings.TrimSpace(typ) == "" {
+			return fmt.Errorf("custom_providers.%s.type: required (want %q)", name, "ollama")
+		}
+		typ = strings.TrimSpace(typ)
+		if !customProviderTypes[typ] {
+			return fmt.Errorf("custom_providers.%s.type: unsupported type %q (want %q)", name, typ, "ollama")
+		}
+		baseURL, err := asString(tbl["base_url"])
+		if err != nil || strings.TrimSpace(baseURL) == "" {
+			return fmt.Errorf("custom_providers.%s.base_url: required", name)
+		}
+		model := ""
+		if v, has := tbl["model"]; has {
+			model, err = asString(v)
+			if err != nil {
+				return fmt.Errorf("custom_providers.%s.model: %w", name, err)
+			}
+		}
+		cfg.CustomProviders[name] = &CustomProviderConfig{
+			Type:    typ,
+			BaseURL: strings.TrimSpace(baseURL),
+			Model:   model,
+		}
+	}
+	return nil
+}
+
 // lookup fetches m[a][b] as a value, ok=false if any step is missing or
 // not a table.
 func lookup(m map[string]interface{}, path ...string) (interface{}, bool) {
@@ -818,11 +930,14 @@ func lookup(m map[string]interface{}, path ...string) (interface{}, bool) {
 }
 
 // setProviderModel points a provider's Model field at model. Used by the
-// top-level `model = "<provider>/<model>"` config knob.
+// top-level `model = "<provider>/<model>"` config knob — resolves through
+// cfg.CustomProviders too (parseCustomProviders runs before this is ever
+// called), so the one-liner works for a custom provider by name just like
+// a built-in one.
 func setProviderModel(cfg *Config, prov, model string) error {
-	meta, ok := ProviderMetaByID(prov)
+	meta, ok := ResolveProviderMeta(prov, cfg)
 	if !ok {
-		return fmt.Errorf("unknown provider %q (want %s)", prov, strings.Join(ProviderIDs(), "|"))
+		return fmt.Errorf("unknown provider %q (want %s, or a [custom_providers.*] name)", prov, strings.Join(ProviderIDs(), "|"))
 	}
 	*meta.Model(cfg) = model
 	return nil

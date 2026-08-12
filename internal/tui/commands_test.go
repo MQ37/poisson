@@ -327,6 +327,32 @@ func TestCmdModelWithProvider(t *testing.T) {
 	}
 }
 
+// TestCmdModelWithCustomProvider checks /model can switch to a
+// [custom_providers.<name>] instance exactly like a built-in one: no login
+// needed (NeedsAuth=false), provider+model persist on the session.
+func TestCmdModelWithCustomProvider(t *testing.T) {
+	s, a, sessionID := newTestStoreAndAgent(t)
+	a.Config().CustomProviders["bastion"] = &config.CustomProviderConfig{
+		Type: "ollama", BaseURL: "http://bastion-host:11434", Model: "laguna-s-2.1:q4_K_M",
+	}
+	tui := newTUIWithAgent(a, sessionID)
+
+	cmdModel(cmdHost(tui), []string{"bastion/laguna-s-2.1:q4_K_M"})
+	if a.Provider().ID() != "bastion" {
+		t.Errorf("expected provider bastion, got %q", a.Provider().ID())
+	}
+	if a.Model() != "laguna-s-2.1:q4_K_M" {
+		t.Errorf("expected model laguna-s-2.1:q4_K_M, got %q", a.Model())
+	}
+	sess, err := s.GetSession(sessionID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if sess.Provider != "bastion" || sess.Model != "laguna-s-2.1:q4_K_M" {
+		t.Fatalf("session metadata = %s/%s, want bastion/laguna-s-2.1:q4_K_M", sess.Provider, sess.Model)
+	}
+}
+
 // An unconfigured provider must not switch (it would report success then fail
 // at request time). The switch is refused with a helpful message.
 func TestCmdModelRefusesUnconfiguredProvider(t *testing.T) {

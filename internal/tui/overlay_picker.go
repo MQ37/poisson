@@ -49,8 +49,9 @@ func newPickerOverlay(title string, items []pickerItem, current string, onPick f
 func pickerProviderItems(h commandHost) []pickerItem {
 	store, _ := auth.Load()
 	cfg := h.Agent().Config()
-	items := make([]pickerItem, 0, len(config.Providers))
-	for _, p := range config.Providers {
+	all := config.AllProviderMeta(cfg)
+	items := make([]pickerItem, 0, len(all))
+	for _, p := range all {
 		status := "✓ no auth needed"
 		if p.NeedsAuth {
 			if provider.IsConfigured(p.ID, store, cfg) {
