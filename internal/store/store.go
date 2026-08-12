@@ -29,7 +29,7 @@ type Store struct {
 const schemaSQL = `
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
-PRAGMA busy_timeout = 5000;
+PRAGMA busy_timeout = 30000;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -174,7 +174,7 @@ func runMigration(db *sql.DB, step func(*sql.Tx) error, version int) error {
 // can lose the last few seconds of writes, never corrupt the file. That
 // tradeoff is fine for a local single-user CLI history store.
 func Open(path string) (*Store, error) {
-	// "_pragma=busy_timeout(5000)" is applied via exec below; we also set
+	// "_pragma=busy_timeout(30000)" is applied via exec below; we also set
 	// pragmas through schemaSQL execution.
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
