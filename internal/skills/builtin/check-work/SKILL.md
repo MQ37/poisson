@@ -7,6 +7,8 @@ description: Self-verification — spawn a fresh-context subagent to independent
 
 Poisson's `subagent` tool spawns a **blank-context child** — its conversation is ephemeral and never inherits this one (see `subagent.go`: "the child's conversation is ephemeral... its internal steps never enter the parent's conversation"). So the verifier cannot see what the user asked for, what you did, or why, unless you write it down for it. Skipping the briefing step below produces a verifier that's guessing, not verifying.
 
+The verifier is going to run builds/tests/greps against real code — that's real bash, real approval-gate exposure. Per [`sandbox`](../sandbox/SKILL.md) §8: before spawning, create a sandbox mounting the workdir/worktree(s) it needs to inspect, then pass its id via `sandboxIds` and tell it to use `bash(sandboxId=...)`. Skipping this puts every build/test/lint command the verifier runs on the human approval queue.
+
 ## 1. Write a self-contained briefing
 
 Before spawning, write out — don't paraphrase this away as "verify my work":
@@ -19,7 +21,7 @@ This briefing is the *only* thing the verifier will ever know about this session
 
 ## 2. Spawn the verifier
 
-Call the `subagent` tool with `task` set to the VERIFIER PROMPT below, with the three placeholders filled from step 1. Give it a clear name (e.g. "verify: fix auth token expiry").
+If the work touched code, create a sandbox first (mount the workdir/worktree that was actually changed), per [`sandbox`](../sandbox/SKILL.md) §8. Call the `subagent` tool with `sandboxIds` set to it, and `task` set to the VERIFIER PROMPT below, with all four placeholders filled from step 1 (SANDBOX gets the same id passed to `sandboxIds`). Give it a clear name (e.g. "verify: fix auth token expiry").
 
 ### VERIFIER PROMPT (fill in and pass verbatim as the subagent's task)
 
@@ -36,6 +38,9 @@ confirm it against the actual code and environment yourself.
 
 === FOCUS AREA ===
 <a specific area to concentrate on, or "none — verify everything above">
+
+=== SANDBOX ===
+<the sandboxId passed to this call, if any — "none, use plain bash" otherwise>
 
 === YOUR JOB ===
 
@@ -55,8 +60,9 @@ Phase B — Code review (when the task involved code):
    excess (unnecessary refactors or scope creep beyond what was asked), edge
    cases (missing ones vs. over-engineered ones).
 7. Build and test: read the repo's AGENTS.md/README for the actual commands,
-   run them. A broken build or failing test is an automatic FAIL regardless
-   of anything else.
+   run them — via bash(sandboxId="<SANDBOX_ID>", ...) if one was given below,
+   plain bash otherwise. A broken build or failing test is an automatic FAIL
+   regardless of anything else.
 8. Look for bugs, security issues, missing validation at trust boundaries,
    regressions, and low-quality tests (circular, over-mocked, happy-path-only).
 
@@ -91,3 +97,4 @@ VERDICT: FAIL
 
 - [`code-review`](../code-review/SKILL.md) — reviews a diff on its own terms; this skill verifies a diff *against a specific request* someone claims it satisfies.
 - [`code-quality`](../code-quality/SKILL.md) — the standard the code review phase applies.
+- [`sandbox`](../sandbox/SKILL.md) — §8 covers staging a sandbox for the verifier before spawning it.

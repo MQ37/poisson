@@ -113,6 +113,34 @@ and tested.
   ```
   Ask first if it's not obvious the user's done with it.
 
+## 8. Sandboxing subagents, not just yourself
+
+Spawning several subagents that will each run bash (parallel PR reviews,
+per-branch audits, `council`/`check-work` workloads) needs the same setup
+done *before* the spawn — a subagent cannot call `create_sandbox` itself, it
+can only use a sandbox this session already created and explicitly shares
+via `sandboxIds`. Skipping this means every gated bash command each child
+runs queues its own approval prompt, multiplied by however many are running
+in parallel — the exact failure mode this skill exists to prevent, just one
+level removed.
+
+- **Create one sandbox per subagent** (or per worktree, if several subagents
+  share a repo but work on different branches) — same `hostPath`-first
+  discipline as step 3, done N times up front, not improvised mid-fan-out.
+- **Stage everything the child will need before spawning it**: worktree
+  already checked out, diff already computed and written to a file (`git
+  diff ... > /tmp/<name>.diff`), dependencies already installed if the task
+  is going to build/test — a subagent has no way to ask you for anything, so
+  incomplete staging just becomes wasted turns re-deriving what the parent
+  already knew.
+- **Pass `sandboxIds: ["<id>", ...]`** in the `subagent` call, and tell the
+  child explicitly in its task text to use `bash(sandboxId="<id>", ...)` for
+  every command — it defaults to plain host bash otherwise, which puts every
+  gated command it runs right back on the human approval queue.
+- Issue the `create_sandbox` calls and the `subagent` calls that use them in
+  the same batch/round where possible; there's no dependency between sibling
+  sandboxes, only between a sandbox and the one subagent call that names it.
+
 ---
 
 ## ✅ Checklist
@@ -125,3 +153,4 @@ and tested.
 - [ ] Any one-off secret used `podman exec -e` via plain host `bash`, never baked into `create_sandbox`'s `env`.
 - [ ] Every commit ran via plain host `bash`, never with `sandboxId` set.
 - [ ] `sandbox_destroy` (if used) only killed the container — mounted directory and any worktree left untouched unless separately, explicitly removed.
+- [ ] If spawning multiple subagents that run bash: one sandbox per subagent created and staged *before* the spawn, `sandboxIds` passed to each, task text tells the child to use `bash(sandboxId=...)`.

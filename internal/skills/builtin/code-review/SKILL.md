@@ -35,6 +35,8 @@ Assign an **initial** severity per finding: `critical` / `high` / `medium` / `lo
 
 Use subagents to check each finding against the actual code — read the lines, trace the call path, don't take the first read at face value. **Discard** anything that can't be verified. Three solid findings beat ten speculative ones.
 
+Reviewing several PRs/branches in parallel (one subagent per PR): per [`sandbox`](../sandbox/SKILL.md) §8, create one sandbox per subagent first, mount/worktree what each needs, then pass `sandboxIds` — otherwise every git/build/lint command each parallel child runs queues its own approval prompt.
+
 ## 3. Re-evaluate severity (important)
 
 Initial severities are guesses made under uncertainty. After verification, reconsider each:
@@ -89,3 +91,4 @@ Run the relevant tests/lint/build for every file you touched. Report what was ap
 - [`code-quality`](../code-quality/SKILL.md) — the content rules every lens above points back to.
 - [`feature-impact`](../feature-impact/SKILL.md) — the blast-radius inventory the lens above requires.
 - [`council`](../council/SKILL.md) — multi-persona alternative when one lens isn't enough.
+- [`sandbox`](../sandbox/SKILL.md) — §8 covers staging sandboxes for parallel review subagents.
