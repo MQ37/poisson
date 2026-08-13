@@ -295,6 +295,58 @@ func TestStreamQuickAnswerRunsReadOnlyTool(t *testing.T) {
 	}
 }
 
+// TestStreamQuickAnswerAppendsApprovalNudge confirms a /btw tool call that
+// actually asked a human (see tools.RecordApproval) gets the same
+// humanApprovalNudge appended to its tool_result as the main turn loop does
+// — /btw's own callCtx didn't attach an ApprovalRecord at all before this,
+// so RecordApproval was silently a no-op and the nudge could never land.
+func TestStreamQuickAnswerAppendsApprovalNudge(t *testing.T) {
+	reg := tools.NewRegistry()
+	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
+		tools.RecordApproval(ctx, true)
+		return true, ""
+	}
+	reg.Register(tools.NewBashTool(".", approvalFn))
+
+	fp := provider.NewFakeProvider("fake", nil)
+	first, second := provider.FakeToolCallResponse("bash", map[string]string{"command": "ls", "description": "look around"}, "done")
+	fp.SetResponses([][]provider.StreamEvent{first, second})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, reg, newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	textCh, errCh, err := a.StreamQuickAnswer(context.Background(), "list files?", nil)
+	if err != nil {
+		t.Fatalf("StreamQuickAnswer: %v", err)
+	}
+	for range textCh {
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("stream error: %v", err)
+	}
+
+	reqs := fp.Requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 requests (tool round + final), got %d", len(reqs))
+	}
+	var got string
+	for _, m := range reqs[1].Messages {
+		if m.Role != "tool" {
+			continue
+		}
+		for _, b := range m.Content {
+			if b.Type == "tool_result" {
+				got = b.ToolResult
+			}
+		}
+	}
+	if !strings.Contains(got, humanApprovalNudge) {
+		t.Fatalf("tool result = %q, want it to contain the nudge", got)
+	}
+}
+
 // TestStreamQuickAnswerDeniesDisallowedTool confirms a tool outside the
 // allowlist (write here — it mutates the filesystem from an unaudited,
 // never-persisted side channel, unlike bash which is now allowed and gated

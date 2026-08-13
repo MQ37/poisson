@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"sync"
+
+	"github.com/mq37/poisson/internal/tools"
 )
 
 // childApprovalBroker serializes stdin reads for bash approval in child mode.
@@ -118,4 +121,14 @@ func (b *childApprovalBroker) register() chan approvalReply {
 // path directly, without going through a real request write.
 func (b *childApprovalBroker) wait() approvalReply {
 	return <-b.register()
+}
+
+// approveViaChildBroker asks the parent for approval and records the
+// outcome on ctx's ApprovalRecord, mirroring tui.TUI.Approve — without this
+// the child's own dispatch loop never saw Asked=true, so its own
+// tool_results never got the human-approval nudge (agent.humanApprovalNudgeFor).
+func approveViaChildBroker(ctx context.Context, broker *childApprovalBroker, event map[string]interface{}) (bool, string) {
+	allowed, reason := broker.emitAndWait(event)
+	tools.RecordApproval(ctx, allowed)
+	return allowed, reason
 }

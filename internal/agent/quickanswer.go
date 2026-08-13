@@ -159,15 +159,16 @@ func (a *Agent) runQuickAnswerLoop(ctx context.Context, req *provider.Request, t
 				// knows it came from /btw, not the main turn — see
 				// ApprovalOriginBTW and tui.TUI.Approve.
 				callCtx := WithApprovalOrigin(tools.WithToolCallID(ctx, tc.ID), ApprovalOriginBTW)
+				callCtx, approvalRec := tools.WithApprovalRecord(callCtx)
 				res, execErr := a.tools.Execute(callCtx, tc.Name, tc.Input)
 				if execErr != nil {
 					res = tools.TrimToolResult(tools.ToolResult{Error: execErr.Error()})
 				}
 				if res.Error != "" {
 					block.ToolIsError = true
-					block.ToolResult = res.Error
+					block.ToolResult = res.Error + humanApprovalNudgeFor(approvalRec)
 				} else {
-					block.ToolResult = res.Content
+					block.ToolResult = res.Content + humanApprovalNudgeFor(approvalRec)
 					// A tool that loaded an image (currently only `read` on
 					// an image file — see ToolResult's doc comment) carries
 					// it as a sibling content block, same as the main turn

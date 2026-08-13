@@ -921,7 +921,7 @@ func runChildMode() {
 			event["usage"] = usage
 			event["cost"] = childAgentRef.CumulativeCost()
 		}
-		return approvalBroker.emitAndWait(event)
+		return approveViaChildBroker(ctx, &approvalBroker, event)
 	}
 	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
 		if childAgentRef != nil {

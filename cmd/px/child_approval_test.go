@@ -2,10 +2,13 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/mq37/poisson/internal/tools"
 )
 
 // TestChildApprovalBrokerSerializesConcurrent verifies two concurrent approval
@@ -72,6 +75,84 @@ func TestChildApprovalBrokerSerializesConcurrent(t *testing.T) {
 
 	if first == second {
 		t.Fatalf("both goroutines emitted %q", first)
+	}
+}
+
+// TestApproveViaChildBrokerRecordsApproval verifies approveViaChildBroker
+// marks the caller's ApprovalRecord — the fix that lets the child's own
+// dispatch loop see Asked=true (and so append the human-approval nudge) for
+// a bash/file approval relayed to the parent, which broker.emitAndWait alone
+// never did.
+func TestApproveViaChildBrokerRecordsApproval(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = oldStdin })
+
+	var broker childApprovalBroker
+	ctx, rec := tools.WithApprovalRecord(context.Background())
+	done := make(chan bool, 1)
+	go func() {
+		allowed, _ := approveViaChildBroker(ctx, &broker, map[string]interface{}{"type": "approval_request"})
+		done <- allowed
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	data, _ := json.Marshal(map[string]interface{}{"type": "approval_response", "approved": true})
+	if _, err := w.Write(append(data, '\n')); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case allowed := <-done:
+		if !allowed {
+			t.Fatal("expected allowed=true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout")
+	}
+	if !rec.Asked || !rec.Allowed {
+		t.Fatalf("rec = %+v, want {Asked:true Allowed:true}", rec)
+	}
+}
+
+// TestApproveViaChildBrokerRecordsDenial is the denied counterpart.
+func TestApproveViaChildBrokerRecordsDenial(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldStdin := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = oldStdin })
+
+	var broker childApprovalBroker
+	ctx, rec := tools.WithApprovalRecord(context.Background())
+	done := make(chan bool, 1)
+	go func() {
+		allowed, _ := approveViaChildBroker(ctx, &broker, map[string]interface{}{"type": "approval_request"})
+		done <- allowed
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	data, _ := json.Marshal(map[string]interface{}{"type": "approval_response", "approved": false})
+	if _, err := w.Write(append(data, '\n')); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case allowed := <-done:
+		if allowed {
+			t.Fatal("expected allowed=false")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout")
+	}
+	if !rec.Asked || rec.Allowed {
+		t.Fatalf("rec = %+v, want {Asked:true Allowed:false}", rec)
 	}
 }
 

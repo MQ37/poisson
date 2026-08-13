@@ -1374,6 +1374,9 @@ roundLoop:
 		// as before.
 		dispatchCwd := a.cwd()
 		results := make([]tools.ToolResult, len(toolCalls))
+		// approvalRecs[idx] mirrors results[idx]: filled in by runTool, read
+		// after wg.Wait() by the persistence loop's humanApprovalNudgeFor.
+		approvalRecs := make([]*tools.ApprovalRecord, len(toolCalls))
 		var wg sync.WaitGroup
 		// Bounds how many of this round's tool calls run at once — a model
 		// response with an unusually large number of parallel tool_use
@@ -1456,6 +1459,7 @@ roundLoop:
 			}
 			callCtx := tools.WithToolCallID(ctx, call.ID)
 			callCtx, approvalRec = tools.WithApprovalRecord(callCtx)
+			approvalRecs[idx] = approvalRec
 			res, err := a.tools.Execute(callCtx, call.Name, call.Input)
 			if err != nil {
 				res = tools.TrimToolResult(tools.ToolResult{Error: err.Error()})
@@ -1541,6 +1545,9 @@ roundLoop:
 				toolBlock.ToolResult += a.contextInjectionForFile(
 					turnCwd, toolCalls[i].Name, toolCalls[i].Input, sysCtxPaths)
 			}
+			// Tell the model a human had to approve this specific call —
+			// see humanApprovalNudgeFor.
+			toolBlock.ToolResult += humanApprovalNudgeFor(approvalRecs[i])
 			// If the user asked us to wrap up (Ctrl+G — subagents only), append the
 			// nudge to the last tool result and force the next completion to be
 			// tool-less, so the model can't just acknowledge the nudge and keep
