@@ -51,6 +51,8 @@ Phase A — Trace review (always):
 3. Verify current state yourself: read the modified files, don't trust the
    "what was done" summary. If actions had external effects (jobs submitted,
    configs changed, resources created), confirm those effects actually exist.
+   If anything was renamed, moved, or deleted, grep the whole tree yourself for
+   its old name — don't trust the implementer's summary or one linter's coverage.
 
 Phase B — Code review (when the task involved code):
 4. Collect the diff: `git diff`, `git diff --cached`, `git log --oneline -5`.
@@ -62,7 +64,11 @@ Phase B — Code review (when the task involved code):
 7. Build and test: read the repo's AGENTS.md/README for the actual commands,
    run them — via bash(sandboxId="<SANDBOX_ID>", ...) if one was given below,
    plain bash otherwise. A broken build or failing test is an automatic FAIL
-   regardless of anything else.
+   regardless of anything else. If the diff adds or flips a flag that gates
+   specific behavior (a live-only path, a feature flag, a new mode), run with
+   it enabled — a passing default-path suite verifies nothing about a path
+   it never touched. If the diff changes what gets exported/published, verify
+   the built artifact directly, not just the source tree.
 8. Look for bugs, security issues, missing validation at trust boundaries,
    regressions, and low-quality tests (circular, over-mocked, happy-path-only).
 

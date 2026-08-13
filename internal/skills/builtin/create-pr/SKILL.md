@@ -62,6 +62,8 @@ Types: `feat | fix | chore | docs | refactor | perf | test | ci | build | style 
 
 The only three sections. If a sentence describes *what the code does* line by line, delete it — the diff shows that. Keep the *why* when it is non-obvious. Always say *how you verified it*.
 
+If the diff adds or flips something that gates which code actually runs — a live/deployment-only path, a feature flag, a new opt-in mode — the Testing section states that the gated path itself was exercised, not just that the general suite passed. "Compiles" and "type-checks" are not "ran"; a reviewer who runs the gated path themselves and watches it fail is a worse outcome than an honest "didn't run the gated path, here's why."
+
 ```markdown
 ## What
 [1–3 sentences: the change, at the level a reviewer skims before reading code.]
@@ -97,6 +99,7 @@ A PR description rots the same way code does: padding hides signal. Cut anything
 | Marketing prose ("improves developer experience") | Show the change, don't sell it |
 | AI hedge phrases ("this allows us to", "it should be noted") | Reads as slop |
 | Restating the title in paragraph form | Say it once |
+| Testing claim that covers the suite generally, silent on the new gated path | The new path is exactly the one a reviewer can't verify from the diff alone |
 
 ---
 
@@ -111,7 +114,9 @@ For non-trivial work, split *before* opening PR #1, in dependency order:
 3. **Wiring / integration** — connect it up.
 4. **Launch** — flip the flag.
 
-If a single PR is doing **two of {types, core, wiring, UI, infra, tests-only}**, it's probably too big — split it. If the work will become a multi-PR stack, sketch the stack in PR #1's description so reviewers see where it's going.
+If a single PR is doing **two of {types, core, wiring, UI, infra, tests-only}**, it's probably too big — split it. If the work will become a multi-PR stack, sketch the stack in PR #1's description so reviewers see where it's going. A chain spanning multiple repos doesn't get a size exemption — each PR in it still has to individually hold in a reviewer's head; cross-repo scope is a reason to split further, not an excuse to widen one PR.
+
+If the change creates new coupling between systems — shared code, a shared schema, a shared release cadence — that's a design decision, not an implementation detail. Get a nod on the approach (a short proposal, a sync) before writing the full diff. A diff built on an unconfirmed premise is what the reviewer now has to unwind instead of just reading the code.
 
 ---
 
@@ -121,6 +126,8 @@ If a single PR is doing **two of {types, core, wiring, UI, infra, tests-only}**,
 - [ ] Description is only **What / Why / Testing**, ≤30 lines (≤10 for a trivial fix).
 - [ ] No behavior tables, perf tables, or sections that just narrate the diff.
 - [ ] Every claim matches the diff; ticket / related PRs linked under Why.
+- [ ] Any claim that a gated/new path was tested names that path specifically, not just "the suite passed."
+- [ ] Renamed/moved/deleted anything referenced by name elsewhere (docs, config, comments)? Grepped the whole tree for the old name, not just what one linter covers.
 - [ ] Walked the [`code-quality`](../code-quality/SKILL.md) pre-flight checklist.
 - [ ] Breaking change marked with `!` in the title.
 - [ ] The diff is as small as the change allows.

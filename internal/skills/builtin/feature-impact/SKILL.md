@@ -14,6 +14,8 @@ Works in both directions: run it **before** implementing to size the real job, a
 - A second implementation of an existing capability (new transport, protocol revision, API version, storage backend, auth scheme).
 - Any change to a shared entry point: route handler, dispatcher, factory, middleware chain, store, client wrapper.
 - A new mode, flag, tier, or tenant class that rides the same code as the existing ones.
+- Extending a shared config/options/context type that already flows into multiple implementations of one interface.
+- Splitting a shared setup/registration routine that several entry points assembled from into pieces each entry point now reassembles on its own.
 - Reviewing any of the above.
 
 If a change only touches leaf code with one caller, skip this — it has no blast radius to scout.
@@ -37,6 +39,7 @@ Grep the seam and what it calls. Build the inventory from what you find, not fro
 - Observability: counters, spans, log fields that consumers filter on.
 - Persistence and cross-node/shared state.
 - Downstream consumers reading the output shape: other services, UIs, SDK clients, dashboards, alerts.
+- Every field on a shared options/context object passed across multiple implementations — does each one read it, or does one silently fall back to an ambient default instead?
 
 Every branch you find is an inventory entry. A branch you can't explain is an inventory entry too.
 

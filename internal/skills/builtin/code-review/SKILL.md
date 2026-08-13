@@ -60,6 +60,9 @@ Treat these as blocking regardless of how the rest of the diff looks — a passi
 - An unnecessary wrapper, cast, or optional field that makes a contract more indirect than it needs to be.
 - Logic duplicated where an existing canonical helper already does the job.
 - An `unknown` entry in the [`feature-impact`](../feature-impact/SKILL.md) inventory, or an existing test gated to the old path without naming the mechanism that makes the case impossible on the new one.
+- A new flag or mode that gates which code runs, with "tests pass" as the only evidence and no sign the gated path itself was exercised.
+- A change to what a module exports, publishes, or packages, verified only through a dev-linked/workspace path rather than the artifact a real consumer installs.
+- A boolean/skip/exclude predicate whose name reads the opposite of what it does when you read the call site out loud.
 
 ## 4. Report
 

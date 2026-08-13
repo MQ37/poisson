@@ -27,6 +27,7 @@ You are not paid by the line. Every abstraction, branch, parameter, dependency, 
 - **Solve the problem in front of you**, not the six hypothetical ones you imagine. Speculative generality is the most expensive code there is.
 - **A feature you don't build has no bugs, no tests, no docs, and no maintenance cost.** Push back on scope.
 - **Scope-cutting has a floor.** Input validation at trust boundaries, error handling that prevents data loss, security, and accessibility are never the corner you cut to shrink a diff — regardless of how minimal the rest of the change is.
+- **New coupling is a one-way door.** Sharing code, a schema, or a release cycle across repos, services, or teams binds their future changes together long after this diff merges. Flag it and get a nod on the approach before you build the full implementation — a big diff resting on an unconfirmed premise is a sunk cost the reviewer now has to unwind, not review.
 - **If you can't hold the whole thing in your head, it's too complex.** Terry Davis wrote an operating system he understood end to end. You should at least understand the function you just wrote, top to bottom, with no magic.
 - **Make it work, make it right, make it small** — in that order, but never skip the last step before you ship.
 
@@ -57,6 +58,7 @@ The single highest-leverage move in programming is choosing the right data struc
 - **Eliminate the special case, don't handle it.** Before writing `if (firstElement)` / `if (lastElement)` / `if (empty)`, ask whether a different representation (sentinel node, pointer-to-pointer, empty-but-valid object) makes the branch disappear.
 - **The shape of the data dictates the shape of the code.** If the code is ugly, the data model is usually wrong. Fix the model, not the symptom.
 - **Store a fact once.** Derive everything else. Duplicated state is a bug waiting for the two copies to disagree.
+- **Enforce a cross-site invariant once, structurally.** Ordering, mutual exclusion, cleanup-must-run — if it has to hold at several call sites, put it behind one function, assertion, or type that all of them go through. A rule repeated as a comment at each site isn't enforced anywhere; it drifts the moment one site changes and the others don't.
 - **Make illegal states unrepresentable.** A structure that cannot hold a bad value needs no validation for that value.
 
 > Rule of thumb: when you find yourself adding the third `if` to a function, stop and ask what data structure would have made all three unnecessary.
@@ -79,6 +81,7 @@ The single highest-leverage move in programming is choosing the right data struc
 ## 3. Names, Constants, and Magic
 
 - **A name describes what the thing IS**, using the same word the rest of the system already uses. If the surrounding contract calls it `count`, do not call it `total` here.
+- **Name a boolean or predicate for its effect, not the condition it inspects.** This bites hardest on skip/exclude/negate flags — a name framed as an allow-list that's actually read as "skip when true" reads backwards from what it does. Read the call site out loud; if the sentence says the opposite of what runs, rename it.
 - **No fancy verbs that hide the concept** — `enrich`, `process`, `handle`, `transform`, `prepare`, `manage`. Say what actually happens: `appendTimestamp`, `parseHeader`, `retryOnce`.
 - **No vague nouns** — `data`, `info`, `obj`, `thing`, `config`, `manager`, `util`. Name the content.
 - **No `tmp` / `new` / `old` prefixes** unless the thing is genuinely temporary. They age into lies the moment a `newer` one appears.
@@ -106,6 +109,7 @@ The single highest-leverage move in programming is choosing the right data struc
 - **A comment that restates the type signature or the function name adds nothing — delete it.**
 - **Every `TODO` needs an owner or a ticket link.** A bare `// TODO: handle errors` is conversational filler with no intent behind it; it is a merge blocker, not documentation.
 - **Mark a deliberate shortcut with its ceiling, not a bare TODO.** A known corner cut on purpose — a global lock, an O(n²) scan, a naive heuristic — needs the limit and the trigger to revisit named right in the comment: `// shortcut: global lock, move to per-key locks if throughput matters`. Naming the ceiling is what stops "later" from quietly becoming "never".
+- **A comment justifying a value must still match that value.** A stale justification next to a flag or config setting that was flipped since is worse than no comment — it actively lies to the next reader. Check the two agree before shipping.
 - If the code needs a paragraph to explain *what* it does, the code is wrong — rewrite the code, don't annotate it.
 
 ---
@@ -133,6 +137,7 @@ This is the C programmer's discipline, and it applies everywhere, garbage collec
 - **Every acquire has a matching release on every path** — success *and* error. Every open file gets closed, every lock unlocked, every timer/interval cleared, every listener removed, every connection/stream closed.
 - **Pair them visibly.** Allocation and cleanup should be obvious to a reader scanning the function. If the release is far away or conditional, it will eventually be skipped.
 - **Bound everything that can grow** — buffers, caches, queues, retry loops, recursion depth. Unbounded growth is a memory leak or a denial-of-service with a delay.
+- **Exclusive ownership, not just bounded growth.** Two processes racing to write the same target — build watchers, cron jobs, migrations — corrupt it silently even when each one is individually correct. Before starting a new concurrent/background process, check nothing else already owns its output.
 - **Respect the machine.** Cycles, memory, file descriptors, and bandwidth are finite. Frugality is not premature optimization; it is basic respect for the hardware you don't own.
 
 ---
@@ -147,6 +152,8 @@ This is the C programmer's discipline, and it applies everywhere, garbage collec
 - **Re-declaring a shared constant in two places invites drift.** Import it from its one canonical home.
 - **Pin and vet what you pull in.** Don't run code you've never looked at on a whim, and don't trust a brand-new release blindly — fresh packages carry both bugs and supply-chain risk.
 - **Verify every import resolves and every API you call actually exists.** Hallucinated package names, methods removed two versions ago, typosquatted lookalikes — build/lint/type-check *before* you reason about logic. Code that doesn't compile isn't a starting point for review.
+- **Scope a suppression to the exact offender.** A lint-disable, type-ignore, or rule override belongs on the line or block that needs it, not a whole file or directory — widen it only when you've shown the false positive recurs throughout that scope.
+- **Verify a boundary the way its real consumer will cross it.** If the change alters what gets exported, published, or packaged, run the actual built artifact the way a consumer installs it, not the source tree through a dev symlink or workspace link. A linked dev environment resolves paths a shipped package can't — that gap is exactly where packaging bugs hide until a real consumer hits them.
 
 ---
 
@@ -179,6 +186,8 @@ The codebase you're editing already made its choices. Consistency beats your per
 - **Test behavior, not implementation.** Assert the observable contract, not the internal call sequence; the latter breaks on every harmless refactor and protects nothing.
 - **One reason to fail per test.** When it goes red, the name alone should tell you what broke.
 - **Cover the edges you actually have** — empty, one, many, boundary, malformed-from-a-trust-boundary — not a pile of near-identical happy-path cases.
+- **No fixed sleeps to dodge a race or a rate limit.** Wait on the actual signal — an event, a polled condition, a documented retry-on-error contract — with a timeout, not a guessed delay. A guessed delay is either too short (flaky) or always fully paid (slow), and only covers the case it was tuned against.
+- **A protective or cleanup wait belongs in `finally`.** One that only runs after a successful assertion isn't protecting anything — the one time it's needed most, a failure upstream skips it.
 
 ---
 
@@ -190,6 +199,7 @@ Minimalism is the goal; mutilation is not.
 - **Don't merge unrelated concerns** to save lines. Validation, transformation, and I/O crammed into one block is harder to reason about, not easier.
 - **Explicit beats compressed.** A 20-line function that reads straight down beats a 10-line one dense with chained ternaries.
 - **Simplification is structural only.** If you changed behavior while "cleaning up", you went too far. Re-run the tests; the output must be identical.
+- **A mechanical conversion is a draft, not the diff.** Reshaping code's container (statement list to array, class to functions) while preserving old scaffolding — wrapper closures kept only for block-scoping, adapter shims, redundant IIFEs — leaves dead weight that made sense in the old shape and not the new one. Follow the mechanical pass with a cleanup pass.
 
 ---
 
@@ -226,6 +236,8 @@ Walk these before you call it done.
 - [ ] I matched the local idiom; any new file mirrors an existing analog.
 - [ ] The diff is as small as it can be. Could I delete more and still pass?
 - [ ] I can explain every line I added with no "magic" hand-waving.
+- [ ] Renamed, moved, or deleted something referenced by name elsewhere? Grepped the whole tree — code, docs, config, comments — not just what one linter happens to cover.
+- [ ] Any claim about how a tool, dependency, or published artifact behaves is checked with a real command against the real thing — not recalled from memory.
 
 ---
 
