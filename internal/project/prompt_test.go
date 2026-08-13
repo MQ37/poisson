@@ -232,11 +232,17 @@ func TestBuildSystemPromptNoContext(t *testing.T) {
 }
 
 // TestBuildSystemPromptDefaultsToSandbox guards the guideline that build/test/
-// feature work should default to bash(sandboxId=...), not plain host bash.
+// feature work should default to bash(sandboxId=...), not plain host bash —
+// and that the exception for "quick" work is closed, not left open to
+// rationalize a multi-step install/build/test chain onto the host (the
+// exact miss observed in two real sessions).
 func TestBuildSystemPromptDefaultsToSandbox(t *testing.T) {
 	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
 	if !strings.Contains(prompt, "Default to a sandbox for actual work") {
 		t.Error("missing sandbox-first-for-work guideline")
+	}
+	if !strings.Contains(prompt, "no exception for") {
+		t.Error("missing closed-loophole wording for builds/installs/tests")
 	}
 }
 
@@ -250,6 +256,16 @@ func TestBuildSystemPromptStoicMantra(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "task briefs handed to a subagent") {
 		t.Error("mantra must extend to subagent/other-agent communication, not just user-facing chat")
+	}
+}
+
+// TestBuildSystemPromptCommentBrevity guards the explicit word-budget for
+// comments (added after agent-authored comments in this repo drifted into
+// multi-paragraph history lessons despite the general compression mantra).
+func TestBuildSystemPromptCommentBrevity(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "Comments: one sentence stating why") {
+		t.Error("missing explicit comment-brevity budget")
 	}
 }
 
