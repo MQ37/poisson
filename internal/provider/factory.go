@@ -75,6 +75,9 @@ var providerConstructors = map[string]func(auth.AuthStore, *config.Config) Provi
 	"openai": func(a auth.AuthStore, cfg *config.Config) Provider {
 		return NewOpenAIProvider(a, cfg)
 	},
+	"openrouter": func(a auth.AuthStore, cfg *config.Config) Provider {
+		return NewOpenRouterProvider(a, cfg)
+	},
 }
 
 // NewProvider constructs a provider by name: a built-in first (the static

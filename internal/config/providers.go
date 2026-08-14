@@ -67,6 +67,14 @@ var Providers = []ProviderMeta{
 		DefaultModel: "gpt-5.6-terra",
 		Model:        func(c *Config) *string { return &c.OpenAI.Model },
 	},
+	{
+		ID:           "openrouter",
+		Desc:         "OpenRouter (400+ models, API key)",
+		NeedsAuth:    true,
+		DefaultModel: "deepseek/deepseek-v4-flash-0731",
+		Model:        func(c *Config) *string { return &c.OpenRouter.Model },
+		APIKey:       func(c *Config) string { return c.OpenRouter.APIKey },
+	},
 }
 
 // ProviderMetaByID looks up one provider's metadata by ID.

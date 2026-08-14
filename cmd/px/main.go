@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -702,7 +703,7 @@ func runSearch(st *store.Store, args []string) (stdout, stderr string, code int)
 func cmdLogin(args []string) {
 	if len(args) == 0 {
 		fmt.Println("usage: Poisson login <provider>")
-		fmt.Println("providers: anthropic, xai, openai")
+		fmt.Println("providers: anthropic, xai, openai, openrouter")
 		return
 	}
 	prov := strings.ToLower(args[0])
@@ -747,6 +748,27 @@ func cmdLogin(args []string) {
 			os.Exit(1)
 		}
 		fmt.Println("Logged in to OpenAI (ChatGPT subscription). Model: gpt-5.5")
+
+	case "openrouter":
+		// Plain API key, not OAuth — no device flow or browser, just read
+		// and store it (auth.json, type api_key), same as Anthropic's
+		// non-OAuth path.
+		fmt.Print("Enter your OpenRouter API key (from https://openrouter.ai/keys): ")
+		key, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
+			os.Exit(1)
+		}
+		key = strings.TrimSpace(key)
+		if key == "" {
+			fmt.Fprintln(os.Stderr, "login failed: empty API key")
+			os.Exit(1)
+		}
+		if err := auth.UpdateEntry("openrouter", auth.AuthEntry{Type: "api_key", Key: key}); err != nil {
+			fmt.Fprintf(os.Stderr, "error saving auth: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Logged in to OpenRouter.")
 
 	case "ollama":
 		fmt.Println("Ollama runs locally and needs no login.")

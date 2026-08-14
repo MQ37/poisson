@@ -45,6 +45,17 @@ type OpenAIConfig struct {
 	Model string
 }
 
+// OpenRouterConfig holds OpenRouter provider settings. OpenRouter is a
+// single OpenAI-compatible endpoint proxying 400+ models from many labs
+// (https://openrouter.ai/docs). Auth is a plain API key, not OAuth —
+// `px login openrouter` prompts for it and stores it in auth.json (type
+// api_key), same storage Anthropic's non-OAuth fallback path uses.
+type OpenRouterConfig struct {
+	Model   string
+	APIKey  string // optional; if empty, use auth.json
+	BaseURL string // defaults to https://openrouter.ai/api/v1
+}
+
 // OllamaConfig holds Ollama provider settings.
 type OllamaConfig struct {
 	BaseURL string
@@ -155,6 +166,7 @@ type Config struct {
 	Anthropic  AnthropicConfig
 	XAI        XAIConfig
 	OpenAI     OpenAIConfig
+	OpenRouter OpenRouterConfig
 	Ollama     OllamaConfig
 	LlamaCpp   LlamaCppConfig
 	Classifier ClassifierConfig
@@ -191,6 +203,9 @@ func defaultConfig() *Config {
 	cfg := &Config{
 		Provider: ProviderConfig{
 			Default: "ollama",
+		},
+		OpenRouter: OpenRouterConfig{
+			BaseURL: "https://openrouter.ai/api/v1",
 		},
 		Ollama: OllamaConfig{
 			BaseURL: "http://localhost:11434",
@@ -255,6 +270,10 @@ func defaultPricing() map[string]map[string]Pricing {
 			"gpt-5.6-terra": {InputPerMTok: 2.5, OutputPerMTok: 15.0, CacheReadPerMTok: 0.25},
 			"gpt-5.6-luna":  {InputPerMTok: 1.0, OutputPerMTok: 6.0, CacheReadPerMTok: 0.1},
 		},
+		"openrouter": {
+			// Confirmed live via GET https://openrouter.ai/api/v1/models.
+			"deepseek/deepseek-v4-flash-0731": {InputPerMTok: 0.14, OutputPerMTok: 0.28, CacheReadPerMTok: 0.028},
+		},
 		"ollama": {
 			"*": {},
 		},
@@ -303,6 +322,14 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 [openai]
 # GPT via the ChatGPT Codex subscription (run: px login openai).
 # model = "gpt-5.6-terra"          # or gpt-5.6-sol / gpt-5.6-luna, or legacy gpt-5.5
+
+[openrouter]
+# OpenRouter (https://openrouter.ai) — one OpenAI-compatible endpoint for
+# 400+ models across many labs. Auth is a plain API key: run
+# px login openrouter (prompts and stores it in auth.json), or set it here.
+# model = "deepseek/deepseek-v4-flash-0731"
+# api_key = "sk-or-..."
+# base_url = "https://openrouter.ai/api/v1"
 
 [ollama]
 # base_url = "http://localhost:11434"
@@ -553,6 +580,28 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 			return nil, fmt.Errorf("openai.model: %w", err)
 		}
 		cfg.OpenAI.Model = s
+	}
+
+	if v, ok := lookup(m, "openrouter", "model"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("openrouter.model: %w", err)
+		}
+		cfg.OpenRouter.Model = s
+	}
+	if v, ok := lookup(m, "openrouter", "api_key"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("openrouter.api_key: %w", err)
+		}
+		cfg.OpenRouter.APIKey = s
+	}
+	if v, ok := lookup(m, "openrouter", "base_url"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("openrouter.base_url: %w", err)
+		}
+		cfg.OpenRouter.BaseURL = s
 	}
 
 	if v, ok := lookup(m, "ollama", "base_url"); ok {

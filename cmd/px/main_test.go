@@ -309,6 +309,34 @@ func TestCmdLoginUnknownProviderExitsNonzero(t *testing.T) {
 	}
 }
 
+// TestCmdLoginOpenRouterPromptsAndSavesKey runs the built px binary as a
+// subprocess (bufio.NewReader(os.Stdin) needs a real stdin pipe, unlike the
+// other cmdLogin cases above which are exercised in-process) piping a fake
+// API key and checking it lands in auth.json as an api_key entry — the
+// plain-key path OpenRouter uses instead of the OAuth device flows.
+func TestCmdLoginOpenRouterPromptsAndSavesKey(t *testing.T) {
+	bin := buildPX(t)
+	home := isolatedHome(t)
+	cmd := exec.Command(bin, "login", "openrouter")
+	cmd.Env = isolatedEnv(home)
+	cmd.Stdin = strings.NewReader("sk-or-test123\n")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("login failed: %v (output: %s)", err, out)
+	}
+	if !strings.Contains(string(out), "Logged in to OpenRouter") {
+		t.Errorf("output = %q, want success message", out)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".poisson", "auth.json"))
+	if err != nil {
+		t.Fatalf("read auth.json: %v", err)
+	}
+	if !strings.Contains(string(data), "sk-or-test123") || !strings.Contains(string(data), `"type": "api_key"`) {
+		t.Errorf("auth.json = %s, want api_key entry with the piped key", data)
+	}
+}
+
 // --- cmdSessions / formatSessionsListing ---
 
 func TestFormatSessionsListingEmpty(t *testing.T) {

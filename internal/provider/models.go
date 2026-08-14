@@ -82,6 +82,16 @@ var KnownModels = map[string]ModelSettings{
 		EffortLevels:   []string{"low", "medium", "high"},
 		Vision:         true,
 	},
+	// OpenRouter — deepseek-v4-flash-0731 (13B active/284B total MoE),
+	// confirmed live via GET https://openrouter.ai/api/v1/models: 1,048,576
+	// context, 393,216 max completion tokens, reasoning_effort low|high|max
+	// (no "medium" — deepseek's own API doesn't expose one), text-only (no
+	// vision).
+	"openrouter/deepseek/deepseek-v4-flash-0731": {
+		ContextWindow:  1048576,
+		SupportsEffort: true,
+		EffortLevels:   []string{"low", "high", "max"},
+	},
 	// Ollama — glm-5.2:cloud, minimax-m3:cloud, kimi-k2.7-code:cloud.
 	"ollama/glm-5.2:cloud": {
 		ContextWindow:  976000,
