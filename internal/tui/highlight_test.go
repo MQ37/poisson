@@ -73,7 +73,7 @@ func TestHighlightUnknownLangPlain(t *testing.T) {
 }
 
 func TestRenderCodeBlockBorder(t *testing.T) {
-	lines := renderCodeBlock("go", "x := 1", 30, "")
+	lines := renderCodeBlock("go", "go", "x := 1", 30, "")
 	if len(lines) < 3 {
 		t.Fatalf("lines = %d", len(lines))
 	}

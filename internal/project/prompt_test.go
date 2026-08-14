@@ -281,6 +281,24 @@ func TestBuildSystemPromptAlwaysIncludesCavemanStyle(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptRenderTagGuideline guards the <render> citation
+// widget guideline: the model must know the syntax exists (or it never
+// uses it, per the feature's own design — see internal/tui/render_tag.go),
+// and must know the tag has to be alone on its own line, never mid-sentence
+// — a full-width widget splits the sentence around it otherwise.
+func TestBuildSystemPromptRenderTagGuideline(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "<render file=") {
+		t.Error("missing <render> tag syntax example")
+	}
+	if !strings.Contains(prompt, "ref=") {
+		t.Error("missing the git ref attribute for citing a commit/branch")
+	}
+	if !strings.Contains(prompt, "own line") {
+		t.Error("missing the never-mid-sentence rule")
+	}
+}
+
 func TestBuildSystemPromptWithSkills(t *testing.T) {
 	opts := BuildSystemPromptOptions{
 		Cwd:        "/test",

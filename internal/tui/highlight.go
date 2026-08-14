@@ -6,11 +6,18 @@ import (
 	"unicode/utf8"
 )
 
-// mdSegment is one prose or fenced-code chunk from assistant markdown.
+// mdSegment is one prose, fenced-code, or <render> citation chunk from
+// assistant markdown. renderFile is empty for a plain prose/code segment;
+// when set, the other render* fields are that segment's whole content —
+// text/code/lang are unused.
 type mdSegment struct {
-	code bool
-	lang string
-	text string
+	code       bool
+	lang       string
+	text       string
+	renderFile string
+	renderRef  string
+	renderFrom int
+	renderTo   int
 }
 
 // splitFenceSegments splits markdown on triple-backtick fences. A fence
@@ -46,6 +53,11 @@ func splitFenceSegments(src string) []mdSegment {
 	}
 	for i := 0; i < len(lines); i++ {
 		trimmed := strings.TrimSpace(lines[i])
+		if file, ref, from, to, ok := parseRenderTag(trimmed); ok {
+			flush(true)
+			out = append(out, mdSegment{renderFile: file, renderRef: ref, renderFrom: from, renderTo: to})
+			continue
+		}
 		if !strings.HasPrefix(trimmed, "```") {
 			prose = append(prose, lines[i])
 			continue
@@ -87,12 +99,21 @@ func layoutRichMarkdown(raw string, width int, prefix string) []string {
 	var out []string
 	first := true
 	for _, seg := range segments {
+		if seg.renderFile != "" {
+			p := ""
+			if first {
+				p = prefix
+				first = false
+			}
+			out = append(out, renderFileWidget(seg.renderFile, seg.renderRef, seg.renderFrom, seg.renderTo, width, p)...)
+			continue
+		}
 		if seg.code {
 			p := ""
 			if first {
 				p = prefix
 			}
-			out = append(out, renderCodeBlock(seg.lang, seg.text, width, p)...)
+			out = append(out, renderCodeBlock(seg.lang, seg.lang, seg.text, width, p)...)
 			first = false
 			continue
 		}
@@ -113,7 +134,11 @@ func layoutRichMarkdown(raw string, width int, prefix string) []string {
 }
 
 // renderCodeBlock draws a bordered, optionally highlighted code block.
-func renderCodeBlock(lang, code string, width int, prefix string) []string {
+// title labels the box (a fenced code block's language, or a <render>
+// citation's path/ref/line-range); lang picks the syntax highlighter and
+// can differ from title — a render citation's title is a path, not a
+// language name, so its highlighter is derived separately (langFromExt).
+func renderCodeBlock(title, lang, code string, width int, prefix string) []string {
 	if width < 8 {
 		width = 8
 	}
@@ -121,13 +146,13 @@ func renderCodeBlock(lang, code string, width int, prefix string) []string {
 	if inner < 1 {
 		inner = 1
 	}
-	label := strings.TrimSpace(lang)
+	label := strings.TrimSpace(title)
 	if label == "" {
 		label = "code"
 	}
 	top := boxTop(label, width)
 	bottom := boxBottom(width)
-	highlighted := highlightCode(label, code)
+	highlighted := highlightCode(lang, code)
 	srcLines := strings.Split(highlighted, "\n")
 	if len(srcLines) == 1 && srcLines[0] == "" {
 		srcLines = nil
