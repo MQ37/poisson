@@ -65,6 +65,10 @@ px                                                   # launch the TUI
 - **Exact cost & tokens**, live in the status bar and `/cost`, plus live
   usage-limit tracking for Anthropic/OpenAI subscription accounts.
 - **Image input** — paste (Ctrl+V) or `@screenshot.png`. ([details](docs/images.md))
+- **`<render>` file citations** — the agent cites `<render file="path"
+  from="10" to="50"/>` instead of retyping a snippet, expanded into a
+  full-width widget at zero output-token cost; `ref="<commit-or-branch>"`
+  cites the file as of a git ref instead of the working tree.
 - **Message queueing** — type while the agent works; sent at the next turn
   boundary instead of waiting for the whole turn to finish.
 
