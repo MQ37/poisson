@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -214,6 +215,58 @@ func TestAppendMessageConcurrentSameSessionAssignsDistinctSeq(t *testing.T) {
 	for i := 1; i <= n; i++ {
 		if !seen[i] {
 			t.Errorf("missing seq %d — want a contiguous 1..%d range", i, n)
+		}
+	}
+}
+
+// TestOpenConcurrentInstancesNoLockError is the regression guard for
+// "database is locked" when multiple poisson processes share one db file:
+// each Open below is its own *sql.DB with its own connection, exactly like
+// two separately-launched poisson instances, not goroutines sharing one
+// Store — the bug this guards against was cross-connection lock
+// contention, invisible to a same-connection concurrency test. Reproduced
+// empirically pre-fix: this hit "database is locked (5) (SQLITE_BUSY)" and
+// "database is locked (517) (SQLITE_BUSY_SNAPSHOT)" within milliseconds
+// under BEGIN DEFERRED; fixed via BEGIN IMMEDIATE (_txlock=immediate, see
+// openOnce) plus Open's own busy-retry loop for the schema-creation race.
+func TestOpenConcurrentInstancesNoLockError(t *testing.T) {
+	dir := testutil.TempDir(t)
+	dbPath := filepath.Join(dir, "shared.db")
+
+	const instances = 8
+	const messagesPerInstance = 150
+	var wg sync.WaitGroup
+	errs := make(chan error, instances)
+	wg.Add(instances)
+	for i := 0; i < instances; i++ {
+		go func(i int) {
+			defer wg.Done()
+			s, err := Open(dbPath)
+			if err != nil {
+				errs <- fmt.Errorf("instance %d: Open: %w", i, err)
+				return
+			}
+			defer s.Close()
+
+			sessID := fmt.Sprintf("instance-%d", i)
+			if err := s.CreateSession(&Session{ID: sessID, Cwd: "/tmp", Provider: "p", Model: "m"}); err != nil {
+				errs <- fmt.Errorf("instance %d: CreateSession: %w", i, err)
+				return
+			}
+			for j := 0; j < messagesPerInstance; j++ {
+				if err := s.AppendMessage(&Message{SessionID: sessID, Role: "user", Content: textContent(strconv.Itoa(j))}); err != nil {
+					errs <- fmt.Errorf("instance %d msg %d: AppendMessage: %w", i, j, err)
+					return
+				}
+			}
+			errs <- nil
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
 }

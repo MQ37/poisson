@@ -8,10 +8,13 @@ package store
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
 
-	// Register the modernc.org/sqlite driver (pure-Go, cgo-free).
-	_ "modernc.org/sqlite"
+	// Registers the modernc.org/sqlite driver (pure-Go, cgo-free) and
+	// supplies its *sqlite.Error type, used by isSQLiteBusy below.
+	"modernc.org/sqlite"
 )
 
 // Store wraps a *sql.DB connection to the Poisson SQLite database.
@@ -173,10 +176,71 @@ func runMigration(db *sql.DB, step func(*sql.Tx) error, version int) error {
 // only an OS crash or power loss between commit and the next checkpoint
 // can lose the last few seconds of writes, never corrupt the file. That
 // tradeoff is fine for a local single-user CLI history store.
+//
+// Open itself retries on SQLITE_BUSY (see openRetryAttempts): the very
+// first CREATE TABLE / PRAGMA journal_mode=WAL on a database file that
+// doesn't exist yet needs an exclusive lock, and two poisson instances
+// launched at the same instant for the first time can race for it — that
+// race is over in microseconds, so a handful of short local retries clears
+// it, well under busy_timeout's 30s (which covers steady-state write
+// contention once the schema already exists, handled below).
 func Open(path string) (*Store, error) {
-	// "_pragma=busy_timeout(30000)" is applied via exec below; we also set
-	// pragmas through schemaSQL execution.
-	db, err := sql.Open("sqlite", path)
+	var st *Store
+	var err error
+	for attempt := 0; ; attempt++ {
+		st, err = openOnce(path)
+		if err == nil || !isSQLiteBusy(err) || attempt >= openRetryAttempts-1 {
+			return st, err
+		}
+		time.Sleep(openRetryBaseDelay << attempt)
+	}
+}
+
+// openRetryAttempts and openRetryBaseDelay bound Open's retry loop (doc
+// comment above) to 8 attempts, 7 backoff sleeps of 20/40/.../1280ms
+// between them: ~2.5s worst case.
+const (
+	openRetryAttempts  = 8
+	openRetryBaseDelay = 20 * time.Millisecond
+)
+
+// isSQLiteBusy reports whether err is SQLite's SQLITE_BUSY result code,
+// masking off the extended-result-code byte (e.g. 517 is
+// SQLITE_BUSY_SNAPSHOT) since callers only care about the primary code.
+func isSQLiteBusy(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqliteBusyCode
+}
+
+// sqliteBusyCode is SQLITE_BUSY's numeric result code (5), hardcoded
+// because modernc.org/sqlite/lib (the package that defines the named
+// constant) isn't part of the driver's public API.
+const sqliteBusyCode = 5
+
+// openOnce is Open's single attempt, without the outer busy-retry loop —
+// see Open's doc comment for why that loop exists.
+func openOnce(path string) (*Store, error) {
+	// "_txlock=immediate" makes every Begin() issue BEGIN IMMEDIATE instead
+	// of the driver's default BEGIN DEFERRED: a deferred transaction that
+	// reads (e.g. nextSeqTx's SELECT MAX(seq)) before it writes only takes
+	// its write lock on the later write statement, so a concurrent writer
+	// that commits in between leaves it holding a stale read snapshot —
+	// SQLite then rejects the write with SQLITE_BUSY_SNAPSHOT instead of
+	// retrying (retrying would just read the same stale snapshot again).
+	// BEGIN IMMEDIATE takes the write lock at Begin() time, before any
+	// read, so contention shows up as an ordinary SQLITE_BUSY wait that
+	// busy_timeout actually retries. Reproduced empirically: concurrent
+	// AppendMessage calls across separate processes on a shared db file
+	// hit "database is locked" within milliseconds under BEGIN DEFERRED,
+	// and zero times across the same load under BEGIN IMMEDIATE.
+	//
+	// "_pragma=busy_timeout(30000)" applies the busy handler at
+	// connection-open time, before schemaSQL's own PRAGMA busy_timeout
+	// statement would otherwise be the first thing to run on the
+	// connection — a concurrent instance's schema/WAL setup on a
+	// brand-new database file needs the handler in place before that
+	// first statement, not after it.
+	db, err := sql.Open("sqlite", path+"?_txlock=immediate&_pragma=busy_timeout(30000)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
