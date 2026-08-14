@@ -224,6 +224,42 @@ func TestReadGitLineRangeRefStartingWithDashIsNotAFlag(t *testing.T) {
 	}
 }
 
+// TestReadGitLineRangeWorksOutsideAnyRepo is a regression test for a live
+// bug: px's own session cwd is routinely a multi-project index directory one
+// level above several independent git repos (this repo's own dev workflow —
+// see AGENTS.md), never a git repo itself. readGitLineRange (the production
+// entrypoint, unlike readGitLineRangeIn used directly by the tests above)
+// used to run `git show` with no explicit directory, i.e. implicitly in
+// whatever the process's actual cwd happened to be — failing with "not a
+// git repository" for every single citation in that (extremely common)
+// setup, regardless of how correct the file path was.
+func TestReadGitLineRangeWorksOutsideAnyRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	repoDir := initGitRepo(t)
+	// A sibling directory that is itself not a repo and not inside one —
+	// mirrors a multi-project index dir like /home/mq/workdir.
+	outsideDir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(outsideDir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldwd)
+
+	abs := filepath.Join(repoDir, "sample.txt")
+	body, _, _, err := readGitLineRange("HEAD~1", abs, 0, 0)
+	if err != nil {
+		t.Fatalf("expected the citation to resolve via the file's own repo, got error: %v", err)
+	}
+	if body != "1: old1\n2: old2\n" {
+		t.Fatalf("body = %q, want the first commit's content", body)
+	}
+}
+
 func TestReadGitLineRangeBlocksSensitivePath(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")

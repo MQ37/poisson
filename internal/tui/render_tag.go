@@ -23,6 +23,13 @@ const maxRenderTagLines = 500
 // the whole TUI. A timeout renders as an error box instead of hanging.
 const gitShowTimeout = 2 * time.Second
 
+// gitRevParseTimeout bounds the repo-root lookup (gitRepoRelativePath) that
+// precedes a git show call — kept shorter than gitShowTimeout since it's
+// pure local metadata (no object data to read), so the worst case for a
+// full <render ref="..."> citation stays a bounded few seconds, not double
+// gitShowTimeout.
+const gitRevParseTimeout = 1 * time.Second
+
 // renderTagOuterRe matches a <render .../> tag that occupies its entire
 // (already trimmed) line, same discipline as a ``` fence delimiter — a tag
 // sharing a line with other text is left as literal text instead of
@@ -99,11 +106,47 @@ func readFileLineRange(path string, from, to int) (body string, effFrom, effTo i
 	return sliceLines(string(data), from, to)
 }
 
-// readGitLineRange reads path's content at git ref via `git show ref:path`,
-// run in the process's own working directory (same implicit-cwd convention
-// as @path/readAtFile — px's cwd is the session's directory).
+// readGitLineRange reads path's content at git ref via `git show ref:path`.
+// path resolves the same implicit-cwd way as a disk read (relative to the
+// process's own working directory) — but the git command itself always runs
+// inside path's own repository, with a path relative to that repository's
+// root, regardless of what the process's cwd happens to be. Needed because
+// px's session cwd is routinely a multi-project index directory sitting one
+// level above several independent repos (this repo's own dev workflow — see
+// AGENTS.md), not a git repo itself; running `git show` there fails "not a
+// git repository" for every single citation no matter how correct path is.
 func readGitLineRange(ref, path string, from, to int) (body string, effFrom, effTo int, err error) {
-	return readGitLineRangeIn("", ref, path, from, to)
+	repoRoot, relPath, err := gitRepoRelativePath(path)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	return readGitLineRangeIn(repoRoot, ref, relPath, from, to)
+}
+
+// gitRepoRelativePath resolves path (implicit process-cwd, same convention
+// as a disk read) to an absolute path, then finds the git repository
+// containing it via `git rev-parse --show-toplevel` and returns that
+// repository's root plus path's location relative to it.
+func gitRepoRelativePath(path string) (repoRoot, relPath string, err error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitRevParseTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", filepath.Dir(abs), "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return "", "", fmt.Errorf("git rev-parse timed out after %s", gitRevParseTimeout)
+		}
+		return "", "", fmt.Errorf("%s is not inside a git repository", path)
+	}
+	repoRoot = strings.TrimSpace(string(out))
+	rel, err := filepath.Rel(repoRoot, abs)
+	if err != nil {
+		return "", "", err
+	}
+	return repoRoot, filepath.ToSlash(rel), nil
 }
 
 // readGitLineRangeIn is readGitLineRange with an explicit repo directory
