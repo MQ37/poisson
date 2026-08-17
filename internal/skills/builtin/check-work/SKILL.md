@@ -69,8 +69,22 @@ Phase B — Code review (when the task involved code):
    it enabled — a passing default-path suite verifies nothing about a path
    it never touched. If the diff changes what gets exported/published, verify
    the built artifact directly, not just the source tree.
-8. Look for bugs, security issues, missing validation at trust boundaries,
-   regressions, and low-quality tests (circular, over-mocked, happy-path-only).
+8. Diff every changed test's expected value, not just its name or setup. An
+   assertion whose expected output moved (`toEqual(['query'])` becoming
+   `toEqual([])`) is a behavior change wearing test-cleanup clothes — confirm
+   it against the issue/spec being closed, not just against the code that now
+   produces it. A test passing because its expectation was edited to match
+   new output proves internal consistency, not correctness.
+9. When the diff removes or loosens a defensive/redundant check tied to a
+   past bug (regression guard, workaround comment, `// see #NNN`), find every
+   producer of the value that check guards against — not just the one this
+   diff fixed at the source. A stricter check often exists to survive
+   producers the diff doesn't touch (hand-built inputs, other call sites, a
+   sibling implementation in a related repo). If a related codebase or spec
+   already encodes the same restriction, that's a signal to match it, not
+   override it.
+10. Look for bugs, security issues, missing validation at trust boundaries,
+    regressions, and low-quality tests (circular, over-mocked, happy-path-only).
 
 === OUTPUT ===
 

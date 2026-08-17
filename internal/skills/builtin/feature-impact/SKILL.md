@@ -16,6 +16,7 @@ Works in both directions: run it **before** implementing to size the real job, a
 - A new mode, flag, tier, or tenant class that rides the same code as the existing ones.
 - Extending a shared config/options/context type that already flows into multiple implementations of one interface.
 - Splitting a shared setup/registration routine that several entry points assembled from into pieces each entry point now reassembles on its own.
+- Removing or loosening a defensive/redundant check because the one known trigger was fixed at its source — the check is a seam if more than one producer can still reach it.
 - Reviewing any of the above.
 
 If a change only touches leaf code with one caller, skip this — it has no blast radius to scout.
@@ -88,6 +89,7 @@ Then the verdict: every `unknown`, and every gate without a stated mechanism, is
 | Gating existing tests until the suite is green | Trades information for the appearance of progress |
 | Classifying an entry from the happy path alone | Modes combine; the break is usually in a pair, not a single |
 | Treating an `unknown` as a follow-up ticket | A follow-up ticket is a decision made by whoever gets paged |
+| Fixing root cause and assuming a downstream guard is now dead weight | The guard protects against every producer that reaches it, not just the one fixed |
 
 ## See also
 
