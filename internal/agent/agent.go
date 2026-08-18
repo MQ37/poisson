@@ -1648,19 +1648,12 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 	// files the agent works on are injected into the conversation on demand (see
 	// contextInjectionForFile), not the system prompt.
 	contextFiles := project.LoadProjectContextFiles(sess.Cwd, config.ConfigDir(), nil)
-	toolNames := make([]string, 0)
-	if a.tools != nil {
-		for _, td := range a.tools.Definitions() {
-			toolNames = append(toolNames, td.Name)
-		}
-	}
 	var skillsText string
 	if a.skillsEnabled && len(a.skills) > 0 {
 		skillsText = skills.FormatSkillsForPrompt(a.skills)
 	}
 	sysPrompt := project.BuildSystemPrompt(project.BuildSystemPromptOptions{
 		Cwd:          sess.Cwd,
-		ToolNames:    toolNames,
 		ContextFiles: contextFiles,
 		SkillsText:   skillsText,
 	})

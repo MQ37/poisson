@@ -170,8 +170,7 @@ func TestContextDirsForFile(t *testing.T) {
 
 func TestBuildSystemPrompt(t *testing.T) {
 	opts := BuildSystemPromptOptions{
-		Cwd:       "/home/user/project",
-		ToolNames: []string{"bash", "read", "write"},
+		Cwd: "/home/user/project",
 		ContextFiles: []ContextFile{
 			{Path: "/home/user/project/AGENTS.md", Content: "Always use tabs."},
 		},
@@ -179,9 +178,6 @@ func TestBuildSystemPrompt(t *testing.T) {
 	prompt := BuildSystemPrompt(opts)
 	if !strings.Contains(prompt, "You are Poisson") {
 		t.Error("missing base prompt")
-	}
-	if !strings.Contains(prompt, "bash") {
-		t.Error("missing tool name")
 	}
 	if !strings.Contains(prompt, "Always use tabs.") {
 		t.Error("missing context file content")
@@ -218,16 +214,24 @@ func TestBuildSystemPromptPrefersDedicatedTools(t *testing.T) {
 }
 
 func TestBuildSystemPromptNoContext(t *testing.T) {
-	opts := BuildSystemPromptOptions{
-		Cwd:       "/test",
-		ToolNames: []string{"bash"},
-	}
+	opts := BuildSystemPromptOptions{Cwd: "/test"}
 	prompt := BuildSystemPrompt(opts)
 	if strings.Contains(prompt, "project_context") {
 		t.Error("should not have project_context with no files")
 	}
 	if !strings.Contains(prompt, "bash") {
-		t.Error("missing tool name")
+		t.Error("missing bash guideline text")
+	}
+}
+
+// TestBuildSystemPromptNoToolNameList guards the removed "Available tools:"
+// bare-name list: every provider already sends the model the full tool
+// name+description+schema via its native tool-calling field, so listing bare
+// names again in the prompt text is a pure duplicate, not new information.
+func TestBuildSystemPromptNoToolNameList(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if strings.Contains(prompt, "Available tools:") {
+		t.Error("bare tool-name list should be removed, it duplicates the native tool schema")
 	}
 }
 
@@ -302,7 +306,6 @@ func TestBuildSystemPromptRenderTagGuideline(t *testing.T) {
 func TestBuildSystemPromptWithSkills(t *testing.T) {
 	opts := BuildSystemPromptOptions{
 		Cwd:        "/test",
-		ToolNames:  []string{"bash"},
 		SkillsText: "\n\nAvailable skills:\n- review: Review code\n",
 	}
 	prompt := BuildSystemPrompt(opts)

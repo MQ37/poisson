@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -117,10 +118,25 @@ func (r *Registry) Definitions() []ToolDef {
 		defs = append(defs, ToolDef{
 			Name:        t.Name(),
 			Description: t.Description(),
-			Schema:      t.Schema(),
+			Schema:      compactSchema(t.Schema()),
 		})
 	}
 	return defs
+}
+
+// compactSchema strips insignificant whitespace from a tool's JSON schema.
+// Schema() literals are hand-indented for source readability, but that
+// indentation is sent byte-for-byte over the wire every request (ToolDef.Schema
+// is json.RawMessage, copied verbatim by every provider's request marshaling)
+// — pure formatting with no semantic value to the model. Falls back to the
+// original bytes on malformed JSON so a bug in one tool's schema can't drop it
+// from the request entirely.
+func compactSchema(schema []byte) []byte {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, schema); err != nil {
+		return schema
+	}
+	return buf.Bytes()
 }
 
 // Execute dispatches a single tool call by name. A panic inside the tool's

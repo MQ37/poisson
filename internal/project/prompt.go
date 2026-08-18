@@ -188,16 +188,10 @@ func BuildSystemPrompt(opts BuildSystemPromptOptions) string {
 	b.WriteString("You are Poisson, a coding assistant operating in a terminal. ")
 	b.WriteString("You help users by reading files, executing commands, editing code, and writing new files.\n\n")
 
-	// Tools.
-	if len(opts.ToolNames) > 0 {
-		b.WriteString("Available tools:\n")
-		for _, name := range opts.ToolNames {
-			b.WriteString("- ")
-			b.WriteString(name)
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
-	}
+	// Tool names are deliberately not listed here: every provider already
+	// sends the model the full name+description+schema for each tool via its
+	// native tool-calling field (see Registry.Definitions/ToolDef) — a bare
+	// name list here would be a pure duplicate, not new information.
 
 	// Guidelines.
 	b.WriteString("Guidelines:\n")
@@ -244,7 +238,6 @@ func BuildSystemPrompt(opts BuildSystemPromptOptions) string {
 // BuildSystemPromptOptions holds the parameters for building the system prompt.
 type BuildSystemPromptOptions struct {
 	Cwd          string
-	ToolNames    []string
 	ContextFiles []ContextFile
 	SkillsText   string
 }

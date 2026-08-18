@@ -63,6 +63,74 @@ type errIndexOutOfRange struct{}
 
 func (errIndexOutOfRange) Error() string { return "synthetic index out of range" }
 
+// prettySchemaTool has a hand-indented, multi-line Schema() — same style
+// every real tool uses for source readability — to verify Definitions()
+// strips that formatting before it goes out over the wire.
+type prettySchemaTool struct{}
+
+func (prettySchemaTool) Name() string        { return "pretty" }
+func (prettySchemaTool) Description() string { return "d" }
+func (prettySchemaTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+  "type": "object",
+  "properties": {
+    "x": { "type": "string" }
+  }
+}`)
+}
+func (prettySchemaTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
+	return ToolResult{}, nil
+}
+
+// TestDefinitionsCompactsSchema guards the wire-size fix: Schema() literals
+// are pretty-printed in source, but json.RawMessage copies bytes verbatim
+// into every provider's request — indentation whitespace used to ride along
+// on every single API call for zero semantic value.
+func TestDefinitionsCompactsSchema(t *testing.T) {
+	r := NewRegistry()
+	r.Register(prettySchemaTool{})
+
+	defs := r.Definitions()
+	if len(defs) != 1 {
+		t.Fatalf("want 1 definition, got %d", len(defs))
+	}
+	got := string(defs[0].Schema)
+	if strings.Contains(got, "\n") || strings.Contains(got, "  ") {
+		t.Errorf("schema not compacted: %q", got)
+	}
+	want := `{"type":"object","properties":{"x":{"type":"string"}}}`
+	if got != want {
+		t.Errorf("schema = %q, want %q", got, want)
+	}
+}
+
+// malformedSchemaTool has invalid JSON in Schema(), simulating a typo in a
+// hand-written schema literal.
+type malformedSchemaTool struct{}
+
+func (malformedSchemaTool) Name() string            { return "broken" }
+func (malformedSchemaTool) Description() string     { return "d" }
+func (malformedSchemaTool) Schema() json.RawMessage { return json.RawMessage(`{not valid json`) }
+func (malformedSchemaTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
+	return ToolResult{}, nil
+}
+
+// TestDefinitionsKeepsMalformedSchemaAsIs guards the fail-open fallback: a
+// bug in one tool's hand-written schema literal must not drop that tool from
+// the request entirely.
+func TestDefinitionsKeepsMalformedSchemaAsIs(t *testing.T) {
+	r := NewRegistry()
+	r.Register(malformedSchemaTool{})
+
+	defs := r.Definitions()
+	if len(defs) != 1 {
+		t.Fatalf("want 1 definition, got %d", len(defs))
+	}
+	if string(defs[0].Schema) != `{not valid json` {
+		t.Errorf("malformed schema should pass through unchanged, got %q", defs[0].Schema)
+	}
+}
+
 // TestExecuteStillWorksForNormalTools is a sanity check that adding the
 // recover() didn't change ordinary success/error behavior.
 func TestExecuteStillWorksForNormalTools(t *testing.T) {
