@@ -15,7 +15,7 @@ Check the invocation for an explicit go-ahead — the word "apply" in the `skill
 
 Lenses to scan in parallel:
 
-- **Correctness, performance, edge cases, test coverage, security, API design** — the standard surface.
+- **Correctness, performance, edge cases, test coverage, security, API design** — the standard surface. An invariant assumed about data from an external dependency (uniqueness, format, ordering) is not verified by reading its name — check the dependency's actual source or a real run.
 - **Feature impact (blast radius)** — when the diff adds a path beside an existing one or touches a shared entry point, run [`feature-impact`](../feature-impact/SKILL.md) and demand its inventory. This is the lens that catches what the diff *doesn't* show.
 - **Boundary and type cleanliness** — unnecessary `any`/`unknown`/casts where a clearer type boundary could exist; a silent fallback papering over an invariant that should instead be made explicit. Question every optionality that isn't a real absence.
 - **Orchestration and atomicity** — independent work serialized for no reason (should it run in parallel?); related updates that can leave state half-applied (should the change be more atomic?). Don't over-index on micro-optimization, but flag avoidable orchestration complexity that makes the implementation more brittle.

@@ -60,6 +60,7 @@ The single highest-leverage move in programming is choosing the right data struc
 - **Store a fact once.** Derive everything else. Duplicated state is a bug waiting for the two copies to disagree.
 - **Enforce a cross-site invariant once, structurally.** Ordering, mutual exclusion, cleanup-must-run — if it has to hold at several call sites, put it behind one function, assertion, or type that all of them go through. A rule repeated as a comment at each site isn't enforced anywhere; it drifts the moment one site changes and the others don't.
 - **Make illegal states unrepresentable.** A structure that cannot hold a bad value needs no validation for that value.
+- **An assumed invariant about input data is a claim, not a fact.** Uniqueness, a reserved separator/sentinel never appearing in real values, ordering, disjoint ranges — verify it against the actual producer's real output, not its name or apparent shape. An unproven invariant baked into a data structure or algorithm is a latent bug waiting for the one input that breaks it.
 
 > Rule of thumb: when you find yourself adding the third `if` to a function, stop and ask what data structure would have made all three unnecessary.
 
@@ -122,6 +123,7 @@ A crash at the point of a bug is a gift: it has a stack trace and a clear cause.
 - **Don't catch what signals a real bug.** If data was validated where it was written, don't re-validate it on read "just in case". If an invariant is broken, you *want* the loud failure.
 - **No catch-and-continue that hides corruption.** Skipping a "maybe malformed" record that should never be malformed only delays and disguises the problem.
 - **Never swallow.** A bare `catch {}` is forbidden. Always bind the error and log it with context. If you truly can recover, say *why* in one line.
+- **Silent degradation is a swallowed error with extra steps.** Code that meets input violating an assumption and computes a plausible-looking wrong result (`NaN`, empty, a quiet default) instead of surfacing the violation crashes nothing and logs nothing — the feature just quietly stops working. Make the violation visible — throw, return `null`, assert — anything but continuing on a value you know is wrong.
 - **Never leak raw internals to the outside.** Stack traces, queries, internal addresses, tokens — log the full error on your side, return a sanitized, generic message to the caller.
 - **Don't copy a guard from one path into another** without re-deriving the reason it exists. If you can't state in one plain sentence what *this* path is being protected from, the guard doesn't belong here.
 - **Don't over-defend.** A wall of `if (!x) return` checks for conditions that cannot occur is noise that hides the checks that matter.
@@ -237,7 +239,7 @@ Walk these before you call it done.
 - [ ] The diff is as small as it can be. Could I delete more and still pass?
 - [ ] I can explain every line I added with no "magic" hand-waving.
 - [ ] Renamed, moved, or deleted something referenced by name elsewhere? Grepped the whole tree — code, docs, config, comments — not just what one linter happens to cover.
-- [ ] Any claim about how a tool, dependency, or published artifact behaves is checked with a real command against the real thing — not recalled from memory.
+- [ ] Any claim about how a tool, dependency, or published artifact behaves — including the *shape* of data it produces (ID formats, naming schemes, encodings) — is checked against the real thing, not assumed from a name or recalled from memory.
 
 ---
 
