@@ -62,7 +62,7 @@ Types: `feat | fix | chore | docs | refactor | perf | test | ci | build | style 
 
 The only three sections. If a sentence describes *what the code does* line by line, delete it — the diff shows that. Keep the *why* when it is non-obvious. Always say *how you verified it*.
 
-If the diff adds or flips something that gates which code actually runs — a live/deployment-only path, a feature flag, a new opt-in mode — the Testing section states that the gated path itself was exercised, not just that the general suite passed. "Compiles" and "type-checks" are not "ran"; a reviewer who runs the gated path themselves and watches it fail is a worse outcome than an honest "didn't run the gated path, here's why."
+If the diff gates behavior behind a flag, live-only path, or new opt-in mode, the Testing section names that the gated path itself was exercised (per [`code-quality`](../code-quality/SKILL.md) §10) — not just that the general suite passed. A reviewer who runs the gated path themselves and watches it fail is a worse outcome than an honest "didn't run it, here's why."
 
 ```markdown
 ## What

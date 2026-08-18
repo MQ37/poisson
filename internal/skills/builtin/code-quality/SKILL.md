@@ -191,6 +191,7 @@ The codebase you're editing already made its choices. Consistency beats your per
 - **No fixed sleeps to dodge a race or a rate limit.** Wait on the actual signal — an event, a polled condition, a documented retry-on-error contract — with a timeout, not a guessed delay. A guessed delay is either too short (flaky) or always fully paid (slow), and only covers the case it was tuned against.
 - **A protective or cleanup wait belongs in `finally`.** One that only runs after a successful assertion isn't protecting anything — the one time it's needed most, a failure upstream skips it.
 - **Load-bearing behavior verified only by hand or locally, never in CI, is one merge from silently regressing.** A security boundary, a cross-service integration, a concurrency invariant — if nothing automated re-checks it, the next change to touch that area has no signal until it breaks in production. Run it in CI, even a scaled-down version, or name in the PR exactly what stays unverified and why.
+- **A path gated behind a flag, mode, or new opt-in has to be exercised itself, not inferred from the general suite.** A passing default-path suite proves nothing about behavior it never touched. "Compiles" and "type-checks" are not "ran." Run the gated path directly, or say plainly that it wasn't and why.
 
 ---
 

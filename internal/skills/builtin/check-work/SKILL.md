@@ -7,7 +7,7 @@ description: Self-verification — spawn a fresh-context subagent to independent
 
 Poisson's `subagent` tool spawns a **blank-context child** — its conversation is ephemeral and never inherits this one (see `subagent.go`: "the child's conversation is ephemeral... its internal steps never enter the parent's conversation"). So the verifier cannot see what the user asked for, what you did, or why, unless you write it down for it. Skipping the briefing step below produces a verifier that's guessing, not verifying.
 
-The verifier is going to run builds/tests/greps against real code — that's real bash, real approval-gate exposure. Per [`sandbox`](../sandbox/SKILL.md) §8: before spawning, create a sandbox mounting the workdir/worktree(s) it needs to inspect, then pass its id via `sandboxIds` and tell it to use `bash(sandboxId=...)`. Skipping this puts every build/test/lint command the verifier runs on the human approval queue.
+The verifier runs builds/tests/greps against real code — that's real bash. Per [`sandbox`](../sandbox/SKILL.md) §8, stage a sandbox mounting what it needs to inspect before spawning it, and pass its id via `sandboxIds`.
 
 ## 1. Write a self-contained briefing
 
@@ -64,10 +64,9 @@ Phase B — Code review (when the task involved code):
 7. Build and test: read the repo's AGENTS.md/README for the actual commands,
    run them — via bash(sandboxId="<SANDBOX_ID>", ...) if one was given below,
    plain bash otherwise. A broken build or failing test is an automatic FAIL
-   regardless of anything else. If the diff adds or flips a flag that gates
-   specific behavior (a live-only path, a feature flag, a new mode), run with
-   it enabled — a passing default-path suite verifies nothing about a path
-   it never touched. If the diff changes what gets exported/published, verify
+   regardless of anything else. A gated path (flag/mode/new opt-in) must be
+   exercised directly, per code-quality §10 — a passing default-path suite is
+   not evidence. If the diff changes what gets exported/published, verify
    the built artifact directly, not just the source tree.
 8. Diff every changed test's expected value, not just its name or setup. An
    assertion whose expected output moved (`toEqual(['query'])` becoming

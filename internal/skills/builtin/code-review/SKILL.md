@@ -35,7 +35,7 @@ Assign an **initial** severity per finding: `critical` / `high` / `medium` / `lo
 
 Use subagents to check each finding against the actual code — read the lines, trace the call path, don't take the first read at face value. **Discard** anything that can't be verified. Three solid findings beat ten speculative ones.
 
-Reviewing several PRs/branches in parallel (one subagent per PR): per [`sandbox`](../sandbox/SKILL.md) §8, create one sandbox per subagent first, mount/worktree what each needs, then pass `sandboxIds` — otherwise every git/build/lint command each parallel child runs queues its own approval prompt.
+Reviewing several PRs/branches in parallel (one subagent per PR): per [`sandbox`](../sandbox/SKILL.md) §8, create one sandbox per subagent first, mount/worktree what each needs, then pass `sandboxIds`.
 
 ## 3. Re-evaluate severity (important)
 
@@ -62,7 +62,7 @@ Treat these as blocking regardless of how the rest of the diff looks — a passi
 - An `unknown` entry in the [`feature-impact`](../feature-impact/SKILL.md) inventory, or an existing test gated to the old path without naming the mechanism that makes the case impossible on the new one.
 - An existing test's expected value edited to match new output, with no argument given for why the new output is the *right* one — "the test now matches the code" is not that argument.
 - A defensive/redundant check removed or loosened on the grounds that its one known trigger was fixed at the source, without checking whether other producers can still reach it.
-- A new flag or mode that gates which code runs, with "tests pass" as the only evidence and no sign the gated path itself was exercised.
+- A gated path (flag/mode/opt-in) with "tests pass" as the only evidence — [`code-quality`](../code-quality/SKILL.md) §10 requires the gated path itself be exercised.
 - A change to what a module exports, publishes, or packages, verified only through a dev-linked/workspace path rather than the artifact a real consumer installs.
 - A boolean/skip/exclude predicate whose name reads the opposite of what it does when you read the call site out loud.
 

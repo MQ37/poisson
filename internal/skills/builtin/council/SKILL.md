@@ -73,7 +73,7 @@ Seat the 3 core voices for most code reviews; swap in extended voices for the ta
 
 Issue all `subagent` calls **in one block** (they're independent). Each task is self-contained: persona + manifesto reference + the artifact + a critical "trace the real behavior, don't just read it" instruction + a fixed output format. **Code review subagents are read-only — instruct them not to modify files.**
 
-If "trace the real behavior" means any legend will run a build/test/repro rather than just reading — per [`sandbox`](../sandbox/SKILL.md) §8, create the sandbox(es) first (one shared read-only sandbox is usually enough since every legend reviews the same artifact) and pass its `sandboxIds` to each `subagent` call, with an instruction to use `bash(sandboxId=...)`. Skip this only when every legend is doing pure read/grep against the diff file and source — then there's nothing to gate.
+If "trace the real behavior" means any legend will run a build/test/repro rather than just reading — per [`sandbox`](../sandbox/SKILL.md) §8, create the sandbox(es) first (one shared read-only sandbox is usually enough since every legend reviews the same artifact) and pass its `sandboxIds` to each `subagent` call. Skip this only when every legend is doing pure read/grep against the diff file and source — then there's nothing to gate.
 
 ### 4. Persona prompt scaffold
 
