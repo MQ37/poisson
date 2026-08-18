@@ -1,6 +1,6 @@
 ---
 name: feature-impact
-description: Scout the blast radius of a change before or after writing it — name the shared seam it touches, enumerate from the code every mode, flag, header, and consumer already flowing through that seam, then classify each as works-unchanged / wired / deliberately-rejected-loudly / unknown, with evidence and test parity. Catches the classic miss where a second path is added beside an existing one and pre-existing behavior is silently left unhandled or gated out of the tests. Use when adding a parallel implementation, forking a shared entry point, introducing a new protocol/API version, transport, mode, or tier, or when reviewing any of those.
+description: Scout the blast radius of a change before or after writing it — name the shared seam it touches, enumerate from the code every mode, flag, header, and consumer already flowing through that seam, then classify each as works-unchanged / wired / deliberately-rejected-loudly / unknown, with evidence and test parity. Catches the classic miss where a second path is added beside an existing one and pre-existing behavior is silently left unhandled or gated out of the tests. Use when adding a parallel implementation, forking a shared entry point, introducing a new protocol/API version, transport, mode, or tier, fixing a bug or adding a guard in a function with multiple existing call sites, or when reviewing any of those.
 ---
 
 # Feature Impact
@@ -17,6 +17,7 @@ Works in both directions: run it **before** implementing to size the real job, a
 - Extending a shared config/options/context type that already flows into multiple implementations of one interface.
 - Splitting a shared setup/registration routine that several entry points assembled from into pieces each entry point now reassembles on its own.
 - Removing or loosening a defensive/redundant check because the one known trigger was fixed at its source — the check is a seam if more than one producer can still reach it.
+- Fixing a bug or adding a guard/check in a function with multiple existing call sites — the sibling call sites are the seam.
 - Reviewing any of the above.
 
 If a change only touches leaf code with one caller, skip this — it has no blast radius to scout.
@@ -90,6 +91,7 @@ Then the verdict: every `unknown`, and every gate without a stated mechanism, is
 | Classifying an entry from the happy path alone | Modes combine; the break is usually in a pair, not a single |
 | Treating an `unknown` as a follow-up ticket | A follow-up ticket is a decision made by whoever gets paged |
 | Fixing root cause and assuming a downstream guard is now dead weight | The guard protects against every producer that reaches it, not just the one fixed |
+| Fixing one call site of a shared function and moving on | Sibling call sites of the same function carry the same bug until each is checked |
 
 ## See also
 
