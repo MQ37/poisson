@@ -303,6 +303,16 @@ func TestBuildSystemPromptRenderTagGuideline(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPromptTitleGuideline(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "set_title") {
+		t.Error("missing set_title guideline")
+	}
+	if !strings.Contains(prompt, "kept as history") {
+		t.Error("missing the title-history reassurance")
+	}
+}
+
 func TestBuildSystemPromptWithSkills(t *testing.T) {
 	opts := BuildSystemPromptOptions{
 		Cwd:        "/test",
