@@ -87,6 +87,49 @@ func TestListSessionsTool_ListsWithMessageCounts(t *testing.T) {
 	}
 }
 
+func TestListSessionsTool_TitleHistory(t *testing.T) {
+	st := openTestStore(t)
+	if err := st.CreateSession(&store.Session{ID: "s-renamed", Cwd: "/tmp", Provider: "p", Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateSession(&store.Session{ID: "s-never-renamed", Cwd: "/tmp", Provider: "p", Model: "m"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSessionTitle("s-renamed", "pr 1 draft"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSessionTitle("s-renamed", "pr 1 tools refactor"); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := NewListSessionsTool(st)
+	res, _ := tool.Execute(context.Background(), nil)
+	if res.Error != "" {
+		t.Fatalf("unexpected error: %s", res.Error)
+	}
+	var entries []sessionListEntry
+	if err := json.Unmarshal([]byte(res.Content), &entries); err != nil {
+		t.Fatalf("unmarshal: %v (content=%q)", err, res.Content)
+	}
+	byID := map[string]sessionListEntry{}
+	for _, e := range entries {
+		byID[e.SessionID] = e
+	}
+
+	renamed := byID["s-renamed"]
+	if len(renamed.TitleHistory) != 2 || renamed.TitleHistory[0].Title != "pr 1 draft" || renamed.TitleHistory[1].Title != "pr 1 tools refactor" {
+		t.Fatalf("titleHistory = %+v, want both titles oldest-first ending at current", renamed.TitleHistory)
+	}
+	if renamed.TitleHistory[0].CreatedAt == "" {
+		t.Error("titleHistory entry missing createdAt")
+	}
+
+	neverRenamed := byID["s-never-renamed"]
+	if neverRenamed.TitleHistory != nil {
+		t.Errorf("titleHistory = %+v, want omitted for a session never renamed", neverRenamed.TitleHistory)
+	}
+}
+
 func TestListSessionsTool_NamedFilter(t *testing.T) {
 	st := openTestStore(t)
 	title := "named one"

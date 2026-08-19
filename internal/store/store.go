@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS compactions (
     cost          REAL DEFAULT 0.0,
     created_at    INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS session_title_history (
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL REFERENCES sessions(id),
+    title       TEXT NOT NULL,
+    created_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_title_history_session ON session_title_history(session_id, created_at);
 `
 
 // migrations are schema changes applied in order, gated by SQLite's PRAGMA

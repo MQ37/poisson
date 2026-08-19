@@ -24,7 +24,7 @@ func NewListSessionsTool(st *store.Store) *ListSessionsTool {
 func (t *ListSessionsTool) Name() string { return "list_sessions" }
 
 func (t *ListSessionsTool) Description() string {
-	return "List px sessions recorded in the local SQLite store, newest-updated first. Each entry has sessionId, title (if set), createdAt/updatedAt timestamps, provider, model, cwd, isSubagent, and messageCount. named=true restricts the list to sessions that have an explicit title, skipping ad-hoc/untitled ones. Use with read_messages to inspect a session's actual conversation."
+	return "List px sessions recorded in the local SQLite store, newest-updated first. Each entry has sessionId, title (if set), titleHistory (previous titles, oldest-first, omitted if never renamed), createdAt/updatedAt timestamps, provider, model, cwd, isSubagent, and messageCount. named=true restricts the list to sessions that have an explicit title, skipping ad-hoc/untitled ones. Use with read_messages to inspect a session's actual conversation."
 }
 
 func (t *ListSessionsTool) Schema() json.RawMessage {
@@ -38,15 +38,23 @@ func (t *ListSessionsTool) Schema() json.RawMessage {
 }
 
 type sessionListEntry struct {
-	SessionID    string `json:"sessionId"`
-	Title        string `json:"title,omitempty"`
-	CreatedAt    string `json:"createdAt"`
-	UpdatedAt    string `json:"updatedAt"`
-	Cwd          string `json:"cwd"`
-	Provider     string `json:"provider"`
-	Model        string `json:"model"`
-	IsSubagent   bool   `json:"isSubagent"`
-	MessageCount int    `json:"messageCount"`
+	SessionID    string              `json:"sessionId"`
+	Title        string              `json:"title,omitempty"`
+	TitleHistory []titleHistoryEntry `json:"titleHistory,omitempty"`
+	CreatedAt    string              `json:"createdAt"`
+	UpdatedAt    string              `json:"updatedAt"`
+	Cwd          string              `json:"cwd"`
+	Provider     string              `json:"provider"`
+	Model        string              `json:"model"`
+	IsSubagent   bool                `json:"isSubagent"`
+	MessageCount int                 `json:"messageCount"`
+}
+
+// titleHistoryEntry is a past title the session held, oldest-first, so the
+// list reads as a timeline ending at the entry's current Title.
+type titleHistoryEntry struct {
+	Title     string `json:"title"`
+	CreatedAt string `json:"createdAt"`
 }
 
 func (t *ListSessionsTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
@@ -84,6 +92,14 @@ func (t *ListSessionsTool) Execute(ctx context.Context, input json.RawMessage) (
 	if err != nil {
 		return ToolResult{Error: "count messages: " + err.Error()}, nil
 	}
+	ids := make([]string, len(sessions))
+	for i, s := range sessions {
+		ids[i] = s.ID
+	}
+	titleHist, err := t.store.TitleHistoryForSessions(ids)
+	if err != nil {
+		return ToolResult{Error: "title history: " + err.Error()}, nil
+	}
 
 	entries := make([]sessionListEntry, 0, len(sessions))
 	for _, s := range sessions {
@@ -102,6 +118,12 @@ func (t *ListSessionsTool) Execute(ctx context.Context, input json.RawMessage) (
 		}
 		if s.Title != nil {
 			e.Title = *s.Title
+		}
+		for _, h := range titleHist[s.ID] {
+			e.TitleHistory = append(e.TitleHistory, titleHistoryEntry{
+				Title:     h.Title,
+				CreatedAt: time.Unix(h.CreatedAt, 0).Format(time.RFC3339),
+			})
 		}
 		entries = append(entries, e)
 		if params.Named && limit > 0 && len(entries) >= limit {

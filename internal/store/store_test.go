@@ -109,12 +109,22 @@ func TestDeleteSession(t *testing.T) {
 	if err := s.AppendMessage(&Message{SessionID: "keep-2", Role: "user", Content: textContent("keep this one")}); err != nil {
 		t.Fatal(err)
 	}
+	// A session with title history is the FK regression case: deleting it
+	// must also purge session_title_history, or the FK constraint on that
+	// table (session_id REFERENCES sessions(id), no cascade) rejects the
+	// DELETE FROM sessions below outright.
+	if err := s.SetSessionTitle("del-1", "doomed session"); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := s.DeleteSession("del-1"); err != nil {
 		t.Fatalf("DeleteSession: %v", err)
 	}
 	if _, err := s.GetSession("del-1"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("GetSession(del-1) err = %v, want ErrNotFound", err)
+	}
+	if hist, _ := s.TitleHistoryForSessions([]string{"del-1"}); len(hist["del-1"]) != 0 {
+		t.Errorf("deleted session still has %d title history entries", len(hist["del-1"]))
 	}
 	if msgs, _ := s.GetMessages("del-1"); len(msgs) != 0 {
 		t.Errorf("deleted session still has %d messages", len(msgs))
@@ -829,6 +839,49 @@ func TestSetSessionTitle(t *testing.T) {
 	got, _ = s.GetSession("title-sess")
 	if got.Title != nil {
 		t.Fatalf("cleared title = %v, want nil", got.Title)
+	}
+}
+
+func TestSetSessionTitleHistory(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "hist-sess")
+
+	// Setting the same title twice back-to-back must not duplicate.
+	if err := s.SetSessionTitle("hist-sess", "pr 1 draft"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSessionTitle("hist-sess", "pr 1 draft"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetSessionTitle("hist-sess", "pr 1 tools refactor"); err != nil {
+		t.Fatal(err)
+	}
+	// Clearing must not add a history entry.
+	if err := s.SetSessionTitle("hist-sess", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	hist, err := s.TitleHistoryForSessions([]string{"hist-sess"})
+	if err != nil {
+		t.Fatalf("TitleHistoryForSessions: %v", err)
+	}
+	entries := hist["hist-sess"]
+	if len(entries) != 2 {
+		t.Fatalf("history entries = %d, want 2 (got %+v)", len(entries), entries)
+	}
+	if entries[0].Title != "pr 1 draft" || entries[1].Title != "pr 1 tools refactor" {
+		t.Fatalf("history = %+v, want [pr 1 draft, pr 1 tools refactor] oldest-first", entries)
+	}
+}
+
+func TestTitleHistoryForSessionsEmpty(t *testing.T) {
+	s := newTestStore(t)
+	hist, err := s.TitleHistoryForSessions(nil)
+	if err != nil {
+		t.Fatalf("TitleHistoryForSessions(nil): %v", err)
+	}
+	if len(hist) != 0 {
+		t.Fatalf("history = %+v, want empty", hist)
 	}
 }
 

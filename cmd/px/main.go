@@ -352,6 +352,7 @@ func runPrint(opts printOpts) {
 	outputChan := make(chan agent.OutputEvent, 256)
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
 	agentRef = a
+	tools.BindSessionTitle(reg, a.SessionID, a.EnsureSession)
 	if err := a.SetModel(model); err != nil {
 		fmt.Fprintf(os.Stderr, "error updating session model: %v\n", err)
 		os.Exit(1)
@@ -490,6 +491,7 @@ func runREPL(noSkills bool, resumeSessionID string) {
 	// Set up agent.
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
 	agentRef = a
+	tools.BindSessionTitle(reg, a.SessionID, a.EnsureSession)
 	tools.BindSubagentRuntime(reg, func() string { return a.Provider().ID() }, func() string { return a.Model() }, func() string { return a.Effort() })
 	tools.BindSubagentProgress(reg, a.SendSubagentProgress)
 	tools.BindSubagentSkills(reg, a.SkillsEnabled)
@@ -978,6 +980,7 @@ func runChildMode() {
 	outputChan := make(chan agent.OutputEvent, 256)
 	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
 	childAgentRef = a
+	tools.BindSessionTitle(reg, a.SessionID, a.EnsureSession)
 	a.SetModel(childModel)
 	if e := os.Getenv("POISSON_SUBAGENT_EFFORT"); e != "" {
 		a.SetEffort(e)

@@ -132,6 +132,7 @@ func (s *Store) DeleteSession(id string) error {
 		`DELETE FROM messages WHERE session_id = ?`,
 		`DELETE FROM api_calls WHERE session_id = ?`,
 		`DELETE FROM compactions WHERE session_id = ?`,
+		`DELETE FROM session_title_history WHERE session_id = ?`,
 		`DELETE FROM sessions WHERE id = ?`,
 	} {
 		if _, err := tx.Exec(q, id); err != nil {
@@ -279,20 +280,49 @@ func (s *Store) ApplyCompaction(sessionID string, upToSeq int, summary string) e
 }
 
 // MessageIDAtSeq returns the message id at the given seq in a session.
-// SetSessionTitle sets the display title for a session.
+// SetSessionTitle sets the display title for a session and appends it to
+// that session's title history — the sole place a title ever changes (see
+// UpdateSession's doc comment), so every caller (the /name command, the
+// set_title tool) gets history for free. Clearing (title == "") logs
+// nothing: an unset title isn't a title worth remembering. Setting the same
+// title again (no actual change) is deduped against the most recent history
+// entry so back-to-back no-op calls don't spam the log.
 func (s *Store) SetSessionTitle(id, title string) error {
 	title = strings.TrimSpace(title)
 	var titleVal interface{}
 	if title != "" {
 		titleVal = title
 	}
-	_, err := s.db.Exec(
-		`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`,
-		titleVal, time.Now().Unix(), id)
+	now := time.Now().Unix()
+
+	tx, err := s.db.Begin()
 	if err != nil {
+		return fmt.Errorf("begin set title tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		`UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`,
+		titleVal, now, id); err != nil {
 		return fmt.Errorf("set session title: %w", err)
 	}
-	return nil
+	if title != "" {
+		var last sql.NullString
+		err := tx.QueryRow(
+			`SELECT title FROM session_title_history WHERE session_id = ?
+			 ORDER BY created_at DESC, rowid DESC LIMIT 1`, id).Scan(&last)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("check last title: %w", err)
+		}
+		if !last.Valid || last.String != title {
+			if _, err := tx.Exec(
+				`INSERT INTO session_title_history (id, session_id, title, created_at) VALUES (?, ?, ?, ?)`,
+				newUUID(), id, title, now); err != nil {
+				return fmt.Errorf("record title history: %w", err)
+			}
+		}
+	}
+	return tx.Commit()
 }
 
 // scanner abstracts *sql.Row and *sql.Rows for shared scan logic.

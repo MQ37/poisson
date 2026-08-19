@@ -111,6 +111,7 @@ func BuildRegistry(opts BuildOptions) *Registry {
 		reg.Register(NewRecallTool(opts.Store))
 		reg.Register(NewListSessionsTool(opts.Store))
 		reg.Register(NewReadMessagesTool(opts.Store))
+		reg.Register(NewSetTitleTool(opts.Store))
 	}
 	// Parent-only: a subagent must never receive the subagent tool, or it could
 	// spawn subagents without bound.
@@ -149,6 +150,18 @@ func withSubagentTool(reg *Registry, fn func(*SubagentTool)) {
 // BindSubagentRuntime wires live provider/model/effort resolvers on the subagent tool.
 func BindSubagentRuntime(reg *Registry, providerFn, modelFn, effortFn func() string) {
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetRuntime(providerFn, modelFn, effortFn) })
+}
+
+// BindSessionTitle wires the live current-session-id getter and
+// ensure-session-row callback onto set_title, once the owning Agent exists —
+// BuildRegistry runs before that, so set_title has neither at construction.
+// A no-op when set_title wasn't registered (opts.Store was nil).
+func BindSessionTitle(reg *Registry, sessionIDFn func() string, ensureFn func() error) {
+	if t, ok := reg.Get("set_title"); ok {
+		if st, ok := t.(*SetTitleTool); ok {
+			st.SetSessionFns(sessionIDFn, ensureFn)
+		}
+	}
 }
 
 // BindSubagentProgress wires a live turn-count + context-usage progress

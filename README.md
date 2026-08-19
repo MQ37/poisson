@@ -43,7 +43,8 @@ px                                                   # launch the TUI
 - **Real tools, not just bash** — `read`/`write`/`edit`/`grep`/`glob` for file
   work, `batch` for independent calls in one step, plus `web_search`,
   `web_ask`, `fetch` (selectable backends, [details](docs/web-tools.md)),
-  `recall` (cross-session full-text search), subagents,
+  `recall` (cross-session full-text search), `set_title` (rename the current
+  session, kept as history), subagents,
   and 13 built-in skills ([below](#-built-in-skills)), user-extendable via
   `~/.poisson/skills/`. `bash` is stateless — pass `workdir` explicitly on
   any call that needs a directory other than session cwd.
