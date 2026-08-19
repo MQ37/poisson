@@ -853,6 +853,15 @@ const maxTurnContinuations = 8
 // response run at once — see the dispatch loop in runTurn.
 const maxConcurrentToolCalls = 8
 
+// maxLeakedInvokeRetries bounds how many times runTurn asks a model to
+// reissue a response that leaked poisson's own tool-call XML template as
+// plain text (tools.CountLeakedInvokes) instead of a real tool call. Some
+// local/weak models repeat the same mistake every attempt (the same failure
+// mode validateToolInput's doc comment describes recurring ~100 times in one
+// session) — bounded so such a model still finishes the turn with whatever
+// text it produced, rather than looping forever.
+const maxLeakedInvokeRetries = 2
+
 // approvalGatedTools are tool names whose Execute asks for approval as
 // (essentially) the first thing it does: bash's risk gate, edit/write/
 // sandbox_cp's sensitive-path gate, create_sandbox's mount/env gate. Every
@@ -1040,6 +1049,31 @@ func (a *Agent) appendContinueMessage() error {
 	})
 }
 
+// appendLeakedInvokeCorrection adds a synthetic user turn telling the model
+// its last response leaked poisson's own tool-call XML template as plain
+// text instead of issuing a real tool call — so none of it ran — and asking
+// it to reissue the action as an actual tool call. Same shape as
+// appendContinueMessage: a user turn keeps roles alternating.
+func (a *Agent) appendLeakedInvokeCorrection(count int) error {
+	plural := ""
+	if count != 1 {
+		plural = "s"
+	}
+	text := fmt.Sprintf(
+		"Your last response contained %d literal tool-call tag%s (an invoke tag with parameter tags inside) as plain text instead of an actual tool call — nothing in it ran. "+
+			"Reissue the intended action as a real tool call through the normal tool-calling mechanism, not as XML text in your reply.",
+		count, plural)
+	content, err := contentBlocksToJSON([]provider.ContentBlock{{Type: "text", Text: text}})
+	if err != nil {
+		return err
+	}
+	return a.store.AppendMessage(&store.Message{
+		SessionID: a.sessionID,
+		Role:      "user",
+		Content:   content,
+	})
+}
+
 // runTurn executes the turn loop: build → stream → collect tools → dispatch →
 // append results → check compaction → repeat until no tool calls.
 // streamWithRetryNotice calls a.provider.Stream with a provider.RetryTrace
@@ -1075,6 +1109,7 @@ func (a *Agent) runTurn(ctx context.Context) error {
 	emptyAttempts := 0
 	continuations := 0
 	midStreamRetries := 0
+	leakedInvokeRetries := 0
 roundLoop:
 	for {
 		if err := ctx.Err(); err != nil {
@@ -1306,6 +1341,22 @@ roundLoop:
 			// answer text) already exists in the TUI, so it's safe to report
 			// this round's speed now, before whichever exit path below runs.
 			a.sendInferenceSpeedEvent(usage, roundStart)
+			// A model whose chat template doesn't reliably route to real
+			// tool-calling sometimes reproduces poisson's own tool-call XML
+			// template as plain text instead (see tools.CountLeakedInvokes) —
+			// none of it ran. Checked before the max_tokens branch below: a
+			// response cut off mid-tag needs the same correction, not more
+			// of the same broken text via "continue".
+			if leaked := tools.CountLeakedInvokes(textBuilder.String()); leaked > 0 && leakedInvokeRetries < maxLeakedInvokeRetries {
+				leakedInvokeRetries++
+				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf(
+					"model leaked %d raw tool-call tag(s) as text instead of invoking a tool — asking it to retry (%d/%d)",
+					leaked, leakedInvokeRetries, maxLeakedInvokeRetries)})
+				if err := a.appendLeakedInvokeCorrection(leaked); err != nil {
+					return a.failTurn(fmt.Sprintf("Store error: %v", err), fmt.Errorf("append leaked-invoke correction: %w", err))
+				}
+				continue
+			}
 			if stopReason == "max_tokens" && continuations < maxTurnContinuations {
 				continuations++
 				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf(
