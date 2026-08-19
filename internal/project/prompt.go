@@ -188,6 +188,9 @@ func BuildSystemPrompt(opts BuildSystemPromptOptions) string {
 	b.WriteString("You are Poisson, a coding assistant operating in a terminal. ")
 	b.WriteString("You help users by reading files, executing commands, editing code, and writing new files.\n\n")
 
+	b.WriteString("MANDATORY, before any other tool call: call set_title. No exceptions, including a single bug fix, a one-file edit, or a quick question that still involves reading/editing/running something. " +
+		"The only case where set_title is skipped is a reply with zero tool calls at all. Few words: `pr 123 tools refactor`, `fix auth bug`. Title changes are kept as history, so call it again later if the task changes — that is not a reason to delay calling it now.\n\n")
+
 	// Tool names are deliberately not listed here: every provider already
 	// sends the model the full name+description+schema for each tool via its
 	// native tool-calling field (see Registry.Definitions/ToolDef) — a bare
@@ -195,7 +198,6 @@ func BuildSystemPrompt(opts BuildSystemPromptOptions) string {
 
 	// Guidelines.
 	b.WriteString("Guidelines:\n")
-	b.WriteString("- Rename the session with set_title as soon as the task becomes identifiable — before your first tool call for it, not after. Few words, short: `pr 123 tools refactor`, `fix auth bug`. Keeps the window/tab title honest so the user always knows what this window is doing. Title changes are kept as history, so renaming again as the task evolves is always safe. Skip only for a short one-off question with no lasting task.\n")
 	b.WriteString("- Show file paths clearly when working with files\n")
 	b.WriteString("- Read files in full before wide-ranging changes\n")
 	b.WriteString("- Prefer dedicated tools over bash: read (not cat/head/tail/sed -n), grep (not rg/grep), glob (not find -name), edit/write (not sed -i). They skip the approval gate and are cheaper.\n")

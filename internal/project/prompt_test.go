@@ -303,13 +303,26 @@ func TestBuildSystemPromptRenderTagGuideline(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptTitleGuideline guards the set_title nudge's strength
+// and placement — a softer, buried-in-Guidelines version of this text was
+// tried first and empirically failed to get the model to call set_title
+// (confirmed live: identical prompt, only this text changed, before/after).
+// It must read as unconditional ("MANDATORY", "No exceptions") and sit
+// before the Guidelines list, not inside it, for the same reason
+// TestBuildSystemPromptPrefersDedicatedTools's dedicated-tools nudge does.
 func TestBuildSystemPromptTitleGuideline(t *testing.T) {
 	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
-	if !strings.Contains(prompt, "set_title") {
-		t.Error("missing set_title guideline")
+	if !strings.Contains(prompt, "MANDATORY, before any other tool call: call set_title") {
+		t.Error("missing the unconditional set_title directive")
+	}
+	if !strings.Contains(prompt, "No exceptions") {
+		t.Error("set_title directive must be unconditional, not a soft suggestion")
 	}
 	if !strings.Contains(prompt, "kept as history") {
 		t.Error("missing the title-history reassurance")
+	}
+	if idx, guidelinesIdx := strings.Index(prompt, "MANDATORY"), strings.Index(prompt, "Guidelines:"); idx == -1 || guidelinesIdx == -1 || idx > guidelinesIdx {
+		t.Error("set_title directive must appear before the Guidelines list, not buried inside it")
 	}
 }
 
