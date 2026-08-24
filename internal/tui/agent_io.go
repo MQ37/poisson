@@ -92,6 +92,11 @@ func (t *TUI) startTurn(segments []agent.TextSegment, images ...agent.ImageAttac
 	t.dirty.markStatus()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	// Lets agent.WrapRiskGatedApproval (which can't import this package —
+	// see tools.ApprovalPause's doc comment) freeze elapsed-time displays
+	// during a bash call's risk classification too, not just the human
+	// decision wait Approve already brackets.
+	ctx = tools.WithApprovalPause(ctx, tools.ApprovalPause{Begin: approvalClock.begin, End: approvalClock.end})
 	t.cancelMu.Lock()
 	t.cancelCtx = ctx
 	t.cancelRun = cancel

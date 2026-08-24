@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/mq37/poisson/internal/provider"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 func TestWrapRiskGatedApprovalAutoLow(t *testing.T) {
@@ -245,6 +246,70 @@ func TestWrapRiskGatedApprovalParanoidModeAsksAlways(t *testing.T) {
 	}
 	if fp.CallCount() != 0 {
 		t.Fatalf("LLM was called %d times, want 0 (paranoid mode must not classify)", fp.CallCount())
+	}
+}
+
+// TestWrapRiskGatedApprovalPausesTimerDuringClassification verifies the risk
+// classification LLM call is bracketed by ctx's tools.ApprovalPause hook —
+// so a sibling bash call still queued behind this one (they run one at a
+// time; see agent.go's gated walker) doesn't have this call's classification
+// latency silently added to its own displayed elapsed time. Regression test
+// for that exact bug: previously only the human decision wait (TUI.Approve)
+// was covered, leaving this earlier window unpaused.
+func TestWrapRiskGatedApprovalPausesTimerDuringClassification(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("medium", nil),
+		provider.FakeTextResponse("medium", nil),
+	})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	var begins, ends int
+	ctx := tools.WithApprovalPause(context.Background(), tools.ApprovalPause{
+		Begin: func() { begins++ },
+		End:   func() { ends++ },
+	})
+
+	approve := WrapRiskGatedApproval(a, func(_ context.Context, _, _, _ string, _ BashRisk, _ ApprovalOrigin) (bool, string) {
+		// Classification's own pause window (begin/end around
+		// AssessBashRisk) is already closed by the time ask() runs — the
+		// separate human-decision-wait window is TUI.Approve's to open,
+		// not this call's.
+		if begins != 1 || ends != 1 {
+			t.Fatalf("entering human ask: begins=%d ends=%d, want 1,1", begins, ends)
+		}
+		return true, ""
+	})
+
+	if _, _ = approve(ctx, "npm install x", "add pkg", "/tmp"); begins != 1 || ends != 1 {
+		t.Fatalf("begins=%d ends=%d, want 1,1", begins, ends)
+	}
+}
+
+// TestWrapRiskGatedApprovalNoPauseHookIsNoop verifies a ctx with no
+// tools.ApprovalPause attached (headless callers, every existing test above)
+// works exactly as before — the pause lookup must never panic or require
+// one.
+func TestWrapRiskGatedApprovalNoPauseHookIsNoop(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("low", nil),
+		provider.FakeTextResponse("low", nil),
+	})
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	approve := WrapRiskGatedApproval(a, func(_ context.Context, _, _, _ string, _ BashRisk, _ ApprovalOrigin) (bool, string) {
+		return false, ""
+	})
+	if allowed, _ := approve(context.Background(), "gh run list", "list", "/tmp"); !allowed {
+		t.Fatal("expected auto-allow for low risk")
 	}
 }
 

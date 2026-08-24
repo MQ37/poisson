@@ -52,3 +52,32 @@ func RecordApproval(ctx context.Context, allowed bool) {
 		rec.Allowed = allowed
 	}
 }
+
+type approvalPauseKey struct{}
+
+// ApprovalPause is a begin/end pair around wall-clock time that isn't real
+// tool work — e.g. a bash call's pre-approval risk classification — so a
+// timer implementation (the TUI's) can freeze elapsed-time displays for it,
+// same as it already does for the human decision wait itself. Both fields
+// are nil-safe to call directly.
+type ApprovalPause struct {
+	Begin func()
+	End   func()
+}
+
+// WithApprovalPause attaches p to ctx so agent.WrapRiskGatedApproval (which
+// cannot import the TUI package that implements timer freezing, to avoid an
+// import cycle) can bracket its risk-classification call without knowing
+// what's on the other end. Absent from ctx (headless/eval callers, tests) is
+// the normal case and means "no timer to freeze" — every reader must treat
+// that as a no-op, not an error.
+func WithApprovalPause(ctx context.Context, p ApprovalPause) context.Context {
+	return context.WithValue(ctx, approvalPauseKey{}, p)
+}
+
+// ApprovalPauseFromContext returns the ApprovalPause attached by
+// WithApprovalPause, if any.
+func ApprovalPauseFromContext(ctx context.Context) (ApprovalPause, bool) {
+	p, ok := ctx.Value(approvalPauseKey{}).(ApprovalPause)
+	return p, ok
+}

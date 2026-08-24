@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mq37/poisson/internal/guard"
+	"github.com/mq37/poisson/internal/tools"
 )
 
 const approvalRiskTimeout = 45 * time.Second
@@ -51,9 +52,24 @@ func WrapRiskGatedApproval(a *Agent, ask HumanApprovalFunc) func(ctx context.Con
 		}
 		var risk BashRisk = BashRiskUnknown
 		if a != nil {
+			// This LLM call is real wall time but no more "the tool's own
+			// work" than the human decision wait below is — for a sibling
+			// bash call still queued behind this one (bash calls are
+			// dispatched one at a time, in submission order, so siblings
+			// spend this exact window idle, not executing), leaving it
+			// unpaused inflates their displayed elapsed time by however
+			// long classification took. Pause is a no-op when ctx carries
+			// none (headless/eval callers).
+			pause, hasPause := tools.ApprovalPauseFromContext(ctx)
+			if hasPause && pause.Begin != nil {
+				pause.Begin()
+			}
 			rctx, cancel := context.WithTimeout(ctx, approvalRiskTimeout)
 			risk = a.AssessBashRisk(rctx, command, description, workdir)
 			cancel()
+			if hasPause && pause.End != nil {
+				pause.End()
+			}
 			if risk == BashRiskLow {
 				return true, ""
 			}
