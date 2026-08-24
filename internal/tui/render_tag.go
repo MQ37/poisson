@@ -95,12 +95,22 @@ func renderFileWidget(file, ref string, from, to, width int, prefix string) []st
 }
 
 // readFileLineRange reads path fresh off disk and slices it to [from, to].
+// path resolves relative to the process's cwd, same convention as read/write
+// (see readGitLineRange's doc comment) — a relative path silently pointing
+// at the wrong file (e.g. left over from a bash workdir override) is a
+// non-obvious bug to spot, so a missing-file error names the absolute path
+// that was actually tried instead of leaving the reader to guess.
 func readFileLineRange(path string, from, to int) (body string, effFrom, effTo int, err error) {
 	if reason := guard.SensitivePathReason(path); reason != "" {
 		return "", 0, 0, fmt.Errorf("blocked: %s", reason)
 	}
 	data, err := readAtFile(path)
 	if err != nil {
+		if !filepath.IsAbs(path) {
+			if abs, absErr := filepath.Abs(path); absErr == nil {
+				return "", 0, 0, fmt.Errorf("%w (resolved to %s)", err, abs)
+			}
+		}
 		return "", 0, 0, err
 	}
 	return sliceLines(string(data), from, to)

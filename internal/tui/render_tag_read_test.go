@@ -117,6 +117,26 @@ func TestReadFileLineRangeMissingFileErrors(t *testing.T) {
 	}
 }
 
+// TestReadFileLineRangeMissingRelativeFileNamesResolvedPath is a regression
+// test for a real support case: a model cited a relative path left over
+// from a bash workdir override, resolving against the wrong directory. The
+// bare os.Open error only echoes the relative path back, giving no hint
+// that it resolved somewhere other than intended — the absolute path must
+// be in the message so the mismatch is obvious without re-deriving it.
+func TestReadFileLineRangeMissingRelativeFileNamesResolvedPath(t *testing.T) {
+	_, _, _, err := readFileLineRange("no/such/relative/path.txt", 0, 0)
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+	abs, absErr := filepath.Abs("no/such/relative/path.txt")
+	if absErr != nil {
+		t.Fatal(absErr)
+	}
+	if !strings.Contains(err.Error(), abs) {
+		t.Fatalf("error %q does not name resolved absolute path %q", err.Error(), abs)
+	}
+}
+
 func TestReadFileLineRangeBlocksSensitivePath(t *testing.T) {
 	dir := testutil.TempDir(t)
 	path := filepath.Join(dir, "id_rsa")
