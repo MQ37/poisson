@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -138,6 +139,10 @@ func readGitLineRange(ref, path string, from, to int) (body string, effFrom, eff
 // containing it via `git rev-parse --show-toplevel` and returns that
 // repository's root plus path's location relative to it.
 func gitRepoRelativePath(path string) (repoRoot, relPath string, err error) {
+	path, err = resolveUnderWorkspaceRepo(path)
+	if err != nil {
+		return "", "", err
+	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", "", err
@@ -174,6 +179,41 @@ func gitRepoRelativePath(path string) (repoRoot, relPath string, err error) {
 		return "", "", err
 	}
 	return repoRoot, filepath.ToSlash(rel), nil
+}
+
+// resolveUnderWorkspaceRepo adjusts a relative <render ref="..."> path when
+// it doesn't exist directly under the process cwd but is found, unambiguously,
+// one or two directories below it — the shape of a multi-repo workspace (see
+// AGENTS.md: px's own dev cwd sits one level above many independent repos).
+// This recovers the routine case where ref/path were copied from a citation
+// made inside one of those repos (bash workdir override, subagent cwd) and
+// reused verbatim against the outer session's cwd — exactly the mismatch
+// gitRepoRelativePath's error names but previously left the reader to fix
+// by hand. A direct hit or zero candidates return path unchanged, so the
+// existing "not inside a git repository" error (with its resolved-path
+// hint) still fires for a genuinely wrong or nonexistent path. Multiple
+// candidates return an error instead of guessing — showing the wrong
+// repo's file silently would be worse than the original error.
+func resolveUnderWorkspaceRepo(path string) (string, error) {
+	if filepath.IsAbs(path) {
+		return path, nil
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	var matches []string
+	for _, depth := range []string{"*", filepath.Join("*", "*")} {
+		found, _ := filepath.Glob(filepath.Join(depth, path))
+		matches = append(matches, found...)
+	}
+	switch len(matches) {
+	case 0:
+		return path, nil
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("%s is ambiguous, found under: %s", path, strings.Join(matches, ", "))
+	}
 }
 
 // readGitLineRangeIn is readGitLineRange with an explicit repo directory

@@ -311,6 +311,93 @@ func TestReadGitLineRangeNotInAnyRepoNamesResolvedPath(t *testing.T) {
 	}
 }
 
+// initGitRepoAt is initGitRepo but for a caller-chosen directory, so a test
+// can lay out several repos at specific nesting depths under one workspace
+// root instead of each getting its own throwaway temp dir.
+func initGitRepoAt(t *testing.T, dir, relFile, content string) {
+	t.Helper()
+	path := filepath.Join(dir, relFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("add", relFile)
+	run("commit", "-q", "-m", "initial")
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(oldwd) })
+}
+
+// TestReadGitLineRangeResolvesUnambiguousNestedRepo is the fix for the
+// reported case: a citation path copied from inside a nested repo (e.g. a
+// subagent's own workdir) two levels below the session's actual cwd — a
+// namespaced multi-repo workspace layout like workdir/apify/<repo>/... —
+// resolves automatically instead of erroring, as long as exactly one repo
+// under cwd contains that relative path.
+func TestReadGitLineRangeResolvesUnambiguousNestedRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	workspace := t.TempDir()
+	rel := "src/tools/actors/call_actor.ts"
+	initGitRepoAt(t, filepath.Join(workspace, "apify", "apify-mcp-server"), rel, "export {};\n")
+	chdir(t, workspace)
+
+	body, _, _, err := readGitLineRange("HEAD", rel, 0, 0)
+	if err != nil {
+		t.Fatalf("expected the citation to auto-resolve to the one matching repo, got error: %v", err)
+	}
+	if body != "1: export {};\n" {
+		t.Fatalf("body = %q", body)
+	}
+}
+
+// TestReadGitLineRangeAmbiguousNestedRepoErrors: two sibling repos both
+// contain the cited relative path — guessing which one would silently show
+// the wrong file, so this must error instead, naming both candidates.
+func TestReadGitLineRangeAmbiguousNestedRepoErrors(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	workspace := t.TempDir()
+	initGitRepoAt(t, filepath.Join(workspace, "repoA"), "sample.txt", "a\n")
+	initGitRepoAt(t, filepath.Join(workspace, "repoB"), "sample.txt", "b\n")
+	chdir(t, workspace)
+
+	_, _, _, err := readGitLineRange("HEAD", "sample.txt", 0, 0)
+	if err == nil {
+		t.Fatal("expected ambiguous error, got none")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") ||
+		!strings.Contains(err.Error(), filepath.Join("repoA", "sample.txt")) ||
+		!strings.Contains(err.Error(), filepath.Join("repoB", "sample.txt")) {
+		t.Fatalf("error %q does not name both ambiguous candidates", err.Error())
+	}
+}
+
 func TestReadGitLineRangeBlocksSensitivePath(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
