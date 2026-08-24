@@ -149,7 +149,24 @@ func gitRepoRelativePath(path string) (repoRoot, relPath string, err error) {
 		if ctx.Err() == context.DeadlineExceeded {
 			return "", "", fmt.Errorf("git rev-parse timed out after %s", gitRevParseTimeout)
 		}
-		return "", "", fmt.Errorf("%s is not inside a git repository", path)
+		// Real cause first: rev-parse fails "not a git repository" for a
+		// wrong directory, but also for e.g. dubious-ownership — reporting
+		// git's own message instead of a fixed guess avoids lying about
+		// which one it is. Same "(resolved to %s)" naming as the disk-read
+		// miss below: a relative path is routinely left over from a citation
+		// made inside a different repo (bash workdir override, subagent
+		// cwd), and the resolved absolute path makes that mismatch obvious
+		// on sight instead of requiring the reader to re-derive it.
+		reason := "is not inside a git repository"
+		if ee, ok := err.(*exec.ExitError); ok {
+			if msg := firstLine(string(ee.Stderr)); msg != "" {
+				reason = msg
+			}
+		}
+		if !filepath.IsAbs(path) {
+			return "", "", fmt.Errorf("%s: %s (resolved to %s)", path, reason, abs)
+		}
+		return "", "", fmt.Errorf("%s: %s", path, reason)
 	}
 	repoRoot = strings.TrimSpace(string(out))
 	rel, err := filepath.Rel(repoRoot, abs)

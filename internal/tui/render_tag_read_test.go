@@ -280,6 +280,37 @@ func TestReadGitLineRangeWorksOutsideAnyRepo(t *testing.T) {
 	}
 }
 
+// TestReadGitLineRangeNotInAnyRepoNamesResolvedPath is a regression test for
+// the git-citation counterpart of
+// TestReadFileLineRangeMissingRelativeFileNamesResolvedPath: a relative path
+// left over from a citation made inside a different repo (bash workdir
+// override, subagent cwd) resolves against the wrong directory here too, and
+// the bare "not inside a git repository" error gave no hint where it looked.
+func TestReadGitLineRangeNotInAnyRepoNamesResolvedPath(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	outsideDir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(outsideDir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldwd)
+
+	rel := "src/tools/actors/call_actor.ts"
+	_, _, _, err = readGitLineRange("HEAD", rel, 0, 0)
+	if err == nil {
+		t.Fatal("expected error: rel path is not inside any git repository")
+	}
+	abs := filepath.Join(outsideDir, rel)
+	if !strings.Contains(err.Error(), abs) {
+		t.Fatalf("error %q does not name resolved absolute path %q", err.Error(), abs)
+	}
+}
+
 func TestReadGitLineRangeBlocksSensitivePath(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
