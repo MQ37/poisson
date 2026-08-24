@@ -366,7 +366,7 @@ func toolExpandedInputLines(toolName string, input []byte, width int) []string {
 			return lines
 		}
 	}
-	preview := toolInputPreview(toolName, input)
+	preview := toolInputPreviewFull(toolName, input)
 	if preview == "" || preview == "..." {
 		return nil
 	}

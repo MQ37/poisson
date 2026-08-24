@@ -80,7 +80,28 @@ func sandboxTagFromInput(input json.RawMessage) string {
 	return "[" + previewText(in.SandboxID, 30) + "]"
 }
 
+// toolInputPreview is the short, single-line-safe summary shown on a tool
+// card's collapsed line and header — every field is capped (via previewText)
+// to a byte budget picked for a typical terminal width.
 func toolInputPreview(toolName string, input []byte) string {
+	return toolInputPreviewCapped(toolName, input, previewText)
+}
+
+// toolInputPreviewFull is toolInputPreview with every per-field length cap
+// removed — used for a tool card's expanded input body (toolExpandedInputLines),
+// where wrapLine already spans the text across as many screen lines as it
+// needs, so nothing has to be eaten early just to fit one line's width. Only
+// the byte budget differs; control-character sanitizing still applies.
+func toolInputPreviewFull(toolName string, input []byte) string {
+	return toolInputPreviewCapped(toolName, input, func(s string, _ int) string { return previewText(s, len(s)) })
+}
+
+// toolInputPreviewCapped extracts and formats the field(s) that matter for
+// toolName's input, running each through cap (a length-limiting or identity
+// function depending on caller) rather than hardcoding truncation — the one
+// switch backs both the always-truncated collapsed summary and the
+// expand-on-demand full body.
+func toolInputPreviewCapped(toolName string, input []byte, cap func(string, int) string) string {
 	if len(input) == 0 {
 		return "..."
 	}
@@ -98,14 +119,14 @@ func toolInputPreview(toolName string, input []byte) string {
 			Content string `json:"content"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Path != "" {
-			return fmt.Sprintf("%s (%d bytes)", previewText(in.Path, 80), len(in.Content))
+			return fmt.Sprintf("%s (%d bytes)", cap(in.Path, 80), len(in.Content))
 		}
 	case "read", "@file":
 		var in struct {
 			Path string `json:"path"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Path != "" {
-			return previewText(in.Path, 100)
+			return cap(in.Path, 100)
 		}
 	case "edit":
 		var in struct {
@@ -119,14 +140,14 @@ func toolInputPreview(toolName string, input []byte) string {
 			if n != 1 {
 				unit = "edits"
 			}
-			return fmt.Sprintf("%s (%d %s)", previewText(in.Path, 80), n, unit)
+			return fmt.Sprintf("%s (%d %s)", cap(in.Path, 80), n, unit)
 		}
 	case "search", "grep", "glob":
 		var in struct {
 			Pattern string `json:"pattern"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Pattern != "" {
-			return previewText(in.Pattern, 100)
+			return cap(in.Pattern, 100)
 		}
 	case "batch":
 		var in struct {
@@ -145,7 +166,7 @@ func toolInputPreview(toolName string, input []byte) string {
 					}
 				}
 				if len(names) > 0 {
-					return previewText(fmt.Sprintf("%d calls: %s", len(names), strings.Join(names, ", ")), 100)
+					return cap(fmt.Sprintf("%d calls: %s", len(names), strings.Join(names, ", ")), 100)
 				}
 			}
 			return fmt.Sprintf("%d calls", len(calls))
@@ -156,7 +177,7 @@ func toolInputPreview(toolName string, input []byte) string {
 			Provider string `json:"provider"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.URL != "" {
-			return previewText(in.URL, 100)
+			return cap(in.URL, 100)
 		}
 	case "web_search", "web_ask":
 		var in struct {
@@ -164,7 +185,7 @@ func toolInputPreview(toolName string, input []byte) string {
 			Provider string `json:"provider"`
 		}
 		if json.Unmarshal(input, &in) == nil && in.Query != "" {
-			return previewText(in.Query, 100)
+			return cap(in.Query, 100)
 		}
 	case "@image":
 		var in struct {
@@ -173,12 +194,67 @@ func toolInputPreview(toolName string, input []byte) string {
 		}
 		if json.Unmarshal(input, &in) == nil && in.Name != "" {
 			if in.Size > 0 {
-				return fmt.Sprintf("%s · %s", previewText(in.Name, 80), humanBytes(in.Size))
+				return fmt.Sprintf("%s · %s", cap(in.Name, 80), humanBytes(in.Size))
 			}
-			return previewText(in.Name, 80)
+			return cap(in.Name, 80)
+		}
+	case "create_sandbox":
+		if s := createSandboxPreview(input, cap); s != "" {
+			return s
+		}
+	case "sandbox_cp":
+		var in struct {
+			Direction     string `json:"direction"`
+			HostPath      string `json:"hostPath"`
+			WorkspacePath string `json:"workspacePath"`
+		}
+		if json.Unmarshal(input, &in) == nil && in.HostPath != "" {
+			arrow := "→"
+			left, right := in.HostPath, in.WorkspacePath
+			if in.Direction == "out" {
+				left, right = in.WorkspacePath, in.HostPath
+			}
+			return cap(fmt.Sprintf("%s %s %s", left, arrow, right), 200)
 		}
 	}
-	return previewText(strings.TrimSpace(string(input)), 80)
+	return cap(strings.TrimSpace(string(input)), 80)
+}
+
+// createSandboxPreview formats a create_sandbox call's name/hostPath/mounts
+// as plain text instead of dumping the raw JSON — the JSON braces and key
+// names waste most of a truncated line's width, cutting off the actual host
+// path (the one thing the human approval prompt exists to show) well before
+// its end. Name and hostPath come first so a narrow terminal truncates the
+// least important part (extra mounts) rather than the path itself.
+func createSandboxPreview(input []byte, cap func(string, int) string) string {
+	var in struct {
+		Name     string `json:"name"`
+		HostPath string `json:"hostPath"`
+		Mounts   []struct {
+			HostPath      string `json:"hostPath"`
+			ContainerPath string `json:"containerPath"`
+		} `json:"mounts"`
+	}
+	if json.Unmarshal(input, &in) != nil {
+		return ""
+	}
+	var b strings.Builder
+	if in.Name != "" {
+		b.WriteString(in.Name)
+	}
+	if in.HostPath != "" {
+		if b.Len() > 0 {
+			b.WriteString(" — ")
+		}
+		b.WriteString(in.HostPath)
+	}
+	for _, m := range in.Mounts {
+		fmt.Fprintf(&b, " +%s", m.HostPath)
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return cap(b.String(), 200)
 }
 
 // diffToolPathAndSuffix returns the raw (untruncated) path plus the trailing
