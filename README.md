@@ -21,9 +21,10 @@ tracks every token and dollar, and keeps your whole history in a local SQLite
 database you own — just one static binary and your terminal.
 
 It talks to **Anthropic** (Claude), **OpenAI** (ChatGPT subscription),
-**xAI** (Grok, SuperGrok), **Ollama** (local + cloud), and **llama.cpp**
-(local `llama-server`) — paste images, search past sessions full-text,
-compact context, approve risky shell commands from a popup.
+**xAI** (Grok, SuperGrok), **OpenRouter** (400+ models, API key), **Ollama**
+(local + cloud), and **llama.cpp** (local `llama-server`) — paste images,
+search past sessions full-text, compact context, approve risky shell
+commands from a popup.
 
 ```bash
 go install github.com/mq37/poisson/cmd/px@latest   # needs Go 1.25+; installs to $(go env GOPATH)/bin
@@ -48,26 +49,21 @@ px                                                   # launch the TUI
   and 13 built-in skills ([below](#-built-in-skills)), user-extendable via
   `~/.poisson/skills/`. `bash` is stateless — pass `workdir` explicitly on
   any call that needs a directory other than session cwd.
-- **Recovers leaked tool calls** — a weak or local model whose chat template
-  doesn't reliably route to real, provider-native tool-calling sometimes
-  echoes poisson's own tool-call XML template as plain text instead, so
-  nothing it describes ever runs. Poisson parses the leaked block back into
-  a real tool call and dispatches it — same approval/guard path as any
-  normal tool call — when it resolves cleanly against a registered tool's
-  schema; an ambiguous or unresolvable one is left as-is, never retried.
+- **Recovers leaked tool calls** — a weak/local model that echoes poisson's
+  own tool-call template as plain text instead of a real call gets it
+  parsed back and dispatched (same approval path as any tool call);
+  ambiguous or unresolvable ones are left as-is, never retried.
 - **Bash safety guard, two speeds** — Fast mode (default): a deterministic
   guard auto-approves read-only commands with zero LLM calls; anything else
   is LLM risk-classified — low auto-approves too, medium/high/unknown asks
   you. Paranoid mode (Shift+Tab) asks for every command. Installs,
   destructive ops, and `npx`/`dlx`-style commands are always high risk and
   never auto-approve.
-- **Secret redaction** — tool output (bash, read, grep, ...) is scanned for
-  secret-shaped substrings — vendor token formats (AWS/GitHub/Slack/Stripe/
-  OpenAI/Google, PEM private keys, JWTs, embedded URL credentials) and
-  `KEY=VALUE` pairs whose key name looks credential-related — and masked
-  with `[REDACTED]` before it reaches the model, the TUI, or the session
-  store. Runs unconditionally, one choke point for every tool; best-effort,
-  not a guarantee.
+- **Secret redaction** — every tool result (bash, read, grep, ...) is
+  scanned for secret-shaped substrings (vendor token formats, PEM keys,
+  JWTs, URL credentials, credential-named `KEY=VALUE` pairs) and masked
+  with `[REDACTED]` before reaching the model, TUI, or session store.
+  Best-effort, not a guarantee.
 - **Podman sandboxes** — `create_sandbox` gives an isolated, named container
   (passwordless sudo, matching-uid mount); `bash` calls that pass its
   `sandboxId` then run with **no approval gate at all** — the container is
@@ -128,10 +124,11 @@ on it) still works: `./build.sh` (compiles `CGO_ENABLED=0` -> `./px`).
 Authenticate a provider (stored in `~/.poisson/auth.json`, mode `0600`):
 
 ```bash
-px login anthropic  # Claude Pro/Max — browser OAuth (subscription billing)
-px login openai     # ChatGPT Plus/Pro — browser OAuth (Codex subscription)
-px login xai        # SuperGrok — browser OAuth
-px login ollama     # local Ollama at http://localhost:11434 (no auth needed)
+px login anthropic   # Claude Pro/Max — browser OAuth (subscription billing)
+px login openai      # ChatGPT Plus/Pro — browser OAuth (Codex subscription)
+px login xai         # SuperGrok — browser OAuth
+px login openrouter  # plain API key from https://openrouter.ai/keys
+px login ollama      # local Ollama at http://localhost:11434 (no auth needed)
 # llamacpp: local llama-server at http://localhost:11212, no auth needed either
 ```
 
@@ -164,6 +161,7 @@ px -p --yolo "run the test suite and fix failures"
 | `openai` | `gpt-5.5` — previous generation | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
 | `xai` | `grok-build` *(default)* | OAuth (SuperGrok) | ✅ |
 | `xai` | `grok-4.5` | OAuth (SuperGrok) | ✅ |
+| `openrouter` | `deepseek/deepseek-v4-flash-0731` *(default)* | API key ([openrouter.ai/keys](https://openrouter.ai/keys)) | ❌ |
 | `ollama` | `glm-5.2:cloud` *(default)* | local daemon / Ollama cloud | ❌ |
 | `ollama` | `minimax-m3:cloud` | local daemon / Ollama cloud | ✅ |
 | `ollama` | `kimi-k2.7-code:cloud` | local daemon / Ollama cloud | ✅ |
@@ -171,8 +169,10 @@ px -p --yolo "run the test suite and fix failures"
 | `llamacpp` | `unsloth/Qwen3.6-27B-MTP-GGUF` | local `llama-server`, no auth | ✅ |
 | `llamacpp` | `poolside/Laguna-XS-2.1-GGUF` | local `llama-server`, no auth | ❌ |
 
-Provider notes: OpenAI/Codex ([details](docs/openai.md)) and Ollama caching /
-`keep_alive` ([details](docs/ollama.md)). `llamacpp` talks to the same
+Provider notes: `openrouter` is a plain API-key provider (`px login
+openrouter`) — one OpenAI-compatible endpoint proxying 400+ models across
+many labs, no OAuth and no local daemon. OpenAI/Codex ([details](docs/openai.md))
+and Ollama caching / `keep_alive` ([details](docs/ollama.md)). `llamacpp` talks to the same
 OpenAI-compatible `/v1/chat/completions` endpoint as Ollama — point it at any
 local `llama-server` instance (default port `11212`). To discover cached GGUF
 models and launch `llama-server`/`llama-cli` with sane defaults (GPU offload,
@@ -185,8 +185,10 @@ launcher built for this.
 daemon on a remote host, alongside your local one. Works everywhere a
 built-in provider does: `/providers`, `/model`, `px -p <name>/<model>`,
 subagent provider pinning. No login needed (same as `ollama`/`llamacpp`).
-See the `[custom_providers.*]` block in the shipped `config.toml` template
-for the full example.
+`model` is optional — omit it to discover models live via that instance's
+own `/api/tags`; curate one with the same `[models.<name>."<model>"]` table
+a built-in provider uses. See the `[custom_providers.*]` block in
+`config.toml` below for the full example.
 
 Switch anytime: `/model`, `/effort`, `/providers` (or the Ctrl+P palette).
 Reasoning effort levels: `low · medium · high · xhigh · max` (default `medium`;
@@ -219,7 +221,7 @@ via `/providers` without naming a model):
 # effort = "medium"
 
 [provider]
-# default = "ollama"                 # anthropic | ollama | xai | openai | llamacpp
+# default = "ollama"                 # anthropic | ollama | xai | openai | openrouter | llamacpp
 
 [anthropic]
 # model = "claude-opus-5"          # or claude-sonnet-5 (both adaptive-reasoning)
@@ -233,6 +235,11 @@ via `/providers` without naming a model):
 [xai]
 # model = "grok-build"          # via SuperGrok subscription (px login xai)
 
+[openrouter]
+# model = "deepseek/deepseek-v4-flash-0731"  # via API key (px login openrouter)
+# api_key = "sk-or-..."                       # optional; prompted by px login openrouter
+# base_url = "https://openrouter.ai/api/v1"
+
 [ollama]
 # base_url = "http://localhost:11434"
 # model = "glm-5.2:cloud"
@@ -244,7 +251,10 @@ via `/providers` without naming a model):
 # [custom_providers.bastion]              # a second Ollama instance, any name
 # type = "ollama"                         # only "ollama" supported
 # base_url = "http://bastion-host:11434"
-# model = "laguna-s-2.1:q4_K_M"
+# model = "laguna-s-2.1:q4_K_M"           # optional — omit to discover live via /api/tags
+#
+# [models.bastion."laguna-s-2.1:q4_K_M"]  # same [models.*] schema as any built-in provider
+# context_window = 262144
 
 [classifier]
 # model = ""                         # fallback bash-risk classifier (bare = all providers, "provider/model" = one)
@@ -393,8 +403,8 @@ codebase one person can hold in their head.
 - **Local-first & private** — your data lives in `~/.poisson/poisson.db`. No
   telemetry, no analytics, no phone-home.
 - **Suckless-ish** — simplicity over features, delete-before-add, readable code.
-- **Tested without the network** — the suite (1,200+ tests) mocks every
-  provider; it never makes a real API call.
+- **Tested without the network** — the suite mocks every provider; it never
+  makes a real API call.
 
 ---
 
