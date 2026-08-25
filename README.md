@@ -88,24 +88,13 @@ px                                                   # launch the TUI
 ## 🧰 Built-in skills
 
 Thirteen skills ship baked into the `px` binary — no setup, no config directory
-needed. The `skill` tool loads one by name and works the same for subagents
-as it does in the main session.
-
-| Skill | What |
-|---|---|
-| `code-quality` | Suckless-style simplicity/clarity principles — bloat, over-abstraction, needless defensiveness. Use before writing or reviewing code. |
-| `code-review` | Full multi-lens review of a diff (correctness, security, API design, tests) with subagent-verified findings and apply/escalate/skip fixes. |
-| `tdd` | Red-green-refactor discipline — failing test before production code, minimum code to pass, refactor under green. |
-| `feature-impact` | Blast-radius inventory for a change that adds a path beside an existing one — enumerates every mode, flag, and consumer on the shared seam and classifies each as handled, rejected, or unknown. |
-| `review-pr` | Gathers a PR/branch diff (local, GitHub, or fresh checkout) for review; hands off to `code-review` + `stacked-diff-review`. |
-| `stacked-diff-review` | Risk-tiered (🔴/🟡/🟢) write-up format for presenting a review. |
-| `check-work` | Spawns a fresh-context subagent to independently verify finished work actually satisfies the original request — PASS/FAIL verdict. |
-| `council` | Convenes parallel subagent personas (Torvalds, Hotz, Davis, ...) to critique code/architecture and synthesizes a ranked verdict. |
-| `grilling` | Relentless one-question-at-a-time interview mapping a plan as a design tree, to stress-test it before acting. |
-| `create-issue` | Drafts a tight, single-focus issue or bug report. |
-| `create-pr` | Picks a conventional-commit title, writes a What/Why/Testing description, self-reviews the diff before pushing. |
-| `sandbox` | Sets up an isolated podman sandbox for a work session — right directory mounted from the start, build/test through the container, commit only from host. |
-| `create-skill` | Authors a new SKILL.md, builtin (Go, embedded) or user-scoped (`~/.poisson/skills/`). |
+needed. The `skill` tool loads one by name (each is a `SKILL.md`) and works the
+same for subagents as it does in the main session: `code-quality`,
+`code-review`, `tdd`, `feature-impact`, `review-pr`, `stacked-diff-review`,
+`check-work`, `council`, `grilling`, `create-issue`, `create-pr`, `sandbox`,
+`create-skill` — covering code review, TDD discipline, blast-radius impact
+analysis, independent self-verification, multi-persona critique, and issue/PR
+drafting.
 
 Add your own under `~/.poisson/skills/<name>/SKILL.md` — a user skill with the
 same name as a built-in one overrides it, so you can customize any of the
@@ -141,8 +130,8 @@ px resume <id>      # open the TUI resumed straight into a past session
 px cost             # total spend
 px version
 
-# Headless one-shot (no TUI). Risky bash is denied unless --yolo.
-# --yolo is for *you* in a real shell — the agent cannot nest it via the bash tool.
+# Headless one-shot (no TUI). Risky bash is denied unless --yolo (for *you*
+# in a real shell only — the agent cannot nest it via the bash tool).
 px -p "summarize this repo"
 px -p --yolo "run the test suite and fix failures"
 ```
@@ -256,23 +245,9 @@ via `/providers` without naming a model):
 # show_tokens = true                 # context % in the status bar
 # show_cost = true                   # $ in the status bar
 
-# Pricing per 1M tokens (USD). Subscription/OAuth providers default to 0.
-# [pricing.anthropic.claude-opus-5]
-# input = 5.0
-# output = 25.0
-# cache_read = 0.5
-# cache_write = 10.0
-
-# Model metadata: context window, effort levels, vision, adaptive thinking.
-# Teaches Poisson about a model it doesn't ship a built-in entry for (still
-# works without this — just a generic fallback context window and no
-# effort/vision support), or overrides one that's built in. Every field
-# optional; omitted ones keep the built-in default. Shows up in /model too.
-# [models.anthropic."claude-opus-4-9"]
-# context_window = 1000000
-# effort_levels = ["low", "medium", "high", "xhigh", "max"]
-# vision = true
-# adaptive_thinking = true
+# Pricing (per 1M tokens) and model metadata (context window, effort levels,
+# vision) overrides — see "Adding a custom / unlisted model" below for the
+# full [pricing.*] / [models.*] example.
 ```
 
 ### Adding a custom / unlisted model
@@ -331,26 +306,12 @@ Slash commands: `/help` `/status` `/model` `/effort` `/classifier-model`
 Type `@` to fuzzy-attach a file (or `@image.png` for an image).
 
 `/classifier-model` picks which model rates bash-command risk for the
-approval gate, for the currently selected provider — usually worth pointing
-at something small and fast, since the answer is one word, and an expensive
-session model otherwise pays its own rate once per gated command. It never
-touches the model running the conversation, works mid-turn, and lasts for the
-session. To make it permanent, set it next to that provider's own model in
-`config.toml`:
-
-```toml
-[anthropic]
-model = "claude-opus-5"
-classifier = "claude-sonnet-5"
-
-[xai]
-classifier = "grok-build-0.1"
-```
-
-`[classifier] model` remains the fallback for providers that declare no
-classifier of their own (bare = all of them, `"provider/model"` = that one
-only). Resolution order: `/classifier-model` pin → `[<provider>] classifier`
-→ `[classifier] model` → the session's own model.
+approval gate — usually worth pointing at something small and fast, since the
+answer is one word and an expensive session model otherwise pays its own rate
+per gated command. Mid-turn only unless made permanent via that provider's own
+`classifier = "..."` in `config.toml` (see the `[anthropic]` block above).
+Resolution order: `/classifier-model` pin → `[<provider>] classifier` →
+`[classifier] model` → the session's own model.
 
 ---
 
