@@ -301,6 +301,12 @@ func TestBuildSystemPromptRenderTagGuideline(t *testing.T) {
 	if !strings.Contains(prompt, "own line") {
 		t.Error("missing the never-mid-sentence rule")
 	}
+	if !strings.Contains(prompt, "ambiguous") {
+		t.Error("missing the multi-repo ambiguous-path warning for ref citations")
+	}
+	if !strings.Contains(prompt, "from must be <= to") {
+		t.Error("missing the reversed-range warning")
+	}
 }
 
 // TestBuildSystemPromptTitleGuideline guards the set_title nudge's strength

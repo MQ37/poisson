@@ -68,6 +68,12 @@ func TestSliceLinesFromBeyondEndErrors(t *testing.T) {
 	}
 }
 
+func TestSliceLinesRejectsReversedRange(t *testing.T) {
+	if _, _, _, err := sliceLines("a\nb\nc\nd\n", 3, 1); err == nil {
+		t.Fatal("expected error for from > to")
+	}
+}
+
 func TestSliceLinesCapsAtMaxRenderTagLines(t *testing.T) {
 	var b strings.Builder
 	for i := 1; i <= maxRenderTagLines+100; i++ {

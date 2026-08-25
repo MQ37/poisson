@@ -279,6 +279,9 @@ func sliceLines(content string, from, to int) (body string, effFrom, effTo int, 
 	if to <= 0 || to-from+1 > maxRenderTagLines {
 		to = from + maxRenderTagLines - 1
 	}
+	if to < from {
+		return "", 0, 0, fmt.Errorf("invalid range: from=%d > to=%d", from, to)
+	}
 	if from > len(lines) {
 		return "", 0, 0, fmt.Errorf("from=%d beyond end of content (%d lines)", from, len(lines))
 	}
