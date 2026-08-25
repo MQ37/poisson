@@ -2,12 +2,43 @@ package tui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mq37/poisson/internal/testutil"
 )
+
+// initGitRepo creates a bare-minimum git repo in dir with one committed file
+// at two revisions (so a test can cite an older ref, not just HEAD). Own
+// copy: internal/citetag has an identical helper for its own resolver
+// tests, but this package's only remaining git-repo fixture need is this
+// one layout test, not worth a shared export for.
+func initGitRepo(t *testing.T) (dir string) {
+	t.Helper()
+	dir = testutil.TempDir(t)
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	path := filepath.Join(dir, "sample.txt")
+	os.WriteFile(path, []byte("old1\nold2\n"), 0644)
+	run("add", "sample.txt")
+	run("commit", "-q", "-m", "first")
+	os.WriteFile(path, []byte("new1\nnew2\nnew3\n"), 0644)
+	run("add", "sample.txt")
+	run("commit", "-q", "-m", "second")
+	return dir
+}
 
 func TestLayoutRichMarkdownRendersFileWidget(t *testing.T) {
 	dir := testutil.TempDir(t)

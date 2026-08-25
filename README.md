@@ -75,6 +75,8 @@ px                                                   # launch the TUI
 - **`<render>` file citations** — cites a snippet (`<render file="path"
   from="10" to="50"/>`) instead of retyping it, zero output-token cost;
   `ref="<commit-or-branch>"` cites a git ref instead of the working tree.
+  A citation that fails to resolve (bad path/ref) gets one automatic,
+  visibly-marked retry in the same turn before the answer is considered done.
 - **Message queueing** — type while the agent works; sent at the next turn
   boundary instead of waiting for the whole turn to finish.
 

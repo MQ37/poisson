@@ -1,4 +1,4 @@
-package tui
+package citetag
 
 import (
 	"os"
@@ -10,6 +10,67 @@ import (
 
 	"github.com/mq37/poisson/internal/testutil"
 )
+
+func TestParseTagFileOnly(t *testing.T) {
+	file, ref, from, to, ok := ParseTag(`<render file="internal/tui/block.go"/>`)
+	if !ok || file != "internal/tui/block.go" || ref != "" || from != 0 || to != 0 {
+		t.Fatalf("got file=%q ref=%q from=%d to=%d ok=%v", file, ref, from, to, ok)
+	}
+}
+
+func TestParseTagWithRange(t *testing.T) {
+	file, ref, from, to, ok := ParseTag(`<render file="foo.go" from="10" to="50"/>`)
+	if !ok || file != "foo.go" || ref != "" || from != 10 || to != 50 {
+		t.Fatalf("got file=%q ref=%q from=%d to=%d ok=%v", file, ref, from, to, ok)
+	}
+}
+
+// TestParseTagUnquotedNumbers matches the shape from the original feature
+// request (from=0 to=50, no quotes on the numeric attributes).
+func TestParseTagUnquotedNumbers(t *testing.T) {
+	file, _, from, to, ok := ParseTag(`<render file="foo.go" from=0 to=50/>`)
+	if !ok || file != "foo.go" || from != 0 || to != 50 {
+		t.Fatalf("got file=%q from=%d to=%d ok=%v", file, from, to, ok)
+	}
+}
+
+func TestParseTagWithRef(t *testing.T) {
+	file, ref, from, to, ok := ParseTag(`<render file="foo.go" ref="HEAD~2" from="1" to="20"/>`)
+	if !ok || file != "foo.go" || ref != "HEAD~2" || from != 1 || to != 20 {
+		t.Fatalf("got file=%q ref=%q from=%d to=%d ok=%v", file, ref, from, to, ok)
+	}
+}
+
+// TestParseTagAttributeOrderIndependent guards against a model that emits
+// ref/from/to in a different order than this repo's own examples.
+func TestParseTagAttributeOrderIndependent(t *testing.T) {
+	file, ref, from, to, ok := ParseTag(`<render to="20" file="foo.go" from="1" ref="main"/>`)
+	if !ok || file != "foo.go" || ref != "main" || from != 1 || to != 20 {
+		t.Fatalf("got file=%q ref=%q from=%d to=%d ok=%v", file, ref, from, to, ok)
+	}
+}
+
+func TestParseTagMissingFileNotOk(t *testing.T) {
+	if _, _, _, _, ok := ParseTag(`<render from="1" to="20"/>`); ok {
+		t.Fatal("expected not-ok with no file attribute")
+	}
+}
+
+// TestParseTagMidSentenceNotOk is the exact rule the system prompt must
+// teach the model: the tag has to be alone on its own line. Anything else
+// on the same line means the whole line is left as literal text instead of
+// expanding into a widget.
+func TestParseTagMidSentenceNotOk(t *testing.T) {
+	if _, _, _, _, ok := ParseTag(`see <render file="foo.go"/> for details`); ok {
+		t.Fatal("expected not-ok when the tag shares a line with other text")
+	}
+}
+
+func TestParseTagNotATagNotOk(t *testing.T) {
+	if _, _, _, _, ok := ParseTag(`just some prose`); ok {
+		t.Fatal("expected not-ok for plain text")
+	}
+}
 
 func writeLinesFile(t *testing.T, dir string, n int) string {
 	t.Helper()
@@ -74,18 +135,18 @@ func TestSliceLinesRejectsReversedRange(t *testing.T) {
 	}
 }
 
-func TestSliceLinesCapsAtMaxRenderTagLines(t *testing.T) {
+func TestSliceLinesCapsAtMaxLines(t *testing.T) {
 	var b strings.Builder
-	for i := 1; i <= maxRenderTagLines+100; i++ {
+	for i := 1; i <= MaxLines+100; i++ {
 		b.WriteString(strconv.Itoa(i))
 		b.WriteByte('\n')
 	}
-	_, from, to, err := sliceLines(b.String(), 1, maxRenderTagLines+100)
+	_, from, to, err := sliceLines(b.String(), 1, MaxLines+100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := to - from + 1; got != maxRenderTagLines {
-		t.Fatalf("range size = %d, want capped at %d", got, maxRenderTagLines)
+	if got := to - from + 1; got != MaxLines {
+		t.Fatalf("range size = %d, want capped at %d", got, MaxLines)
 	}
 }
 

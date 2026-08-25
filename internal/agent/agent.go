@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mq37/poisson/internal/citetag"
 	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/pricing"
 	"github.com/mq37/poisson/internal/project"
@@ -849,6 +850,12 @@ const maxEmptyResponseRetries = 3
 // after being cut off by the provider's output-token cap (stop_reason=max_tokens).
 const maxTurnContinuations = 8
 
+// maxRenderTagRetries bounds how many times a single turn may auto-continue
+// after the model's own <render> citation(s) failed to resolve (see
+// appendRenderTagRetryMessage) — a model that can't fix a bad path/ref after
+// a couple of tries should surface the error as-is instead of looping.
+const maxRenderTagRetries = 2
+
 // maxConcurrentToolCalls bounds how many tool_use blocks from one model
 // response run at once — see the dispatch loop in runTurn.
 const maxConcurrentToolCalls = 8
@@ -1022,6 +1029,78 @@ func flattenSegments(segments []TextSegment) string {
 	return b.String()
 }
 
+// renderTagFailure is one <render> citation in the model's own message that
+// didn't resolve.
+type renderTagFailure struct {
+	tag string // the citation's own literal text, e.g. `<render file="README.md"/>`
+	err error
+}
+
+// findFailedRenderTags scans assistantText for <render> citations — the same
+// "alone on its own line" rule citetag.ParseTag enforces, so this only ever
+// flags exactly what the TUI would have tried to expand into a widget — and
+// resolves each one with the identical resolver the TUI paints with (see
+// internal/citetag's own doc comment for why the two share it). Returning
+// early after the model's turn is otherwise done, rather than only when the
+// TUI happens to repaint, means a citation typo gets one automatic chance at
+// self-correction instead of silently sitting broken until a human notices
+// and asks.
+func findFailedRenderTags(assistantText string) []renderTagFailure {
+	var failures []renderTagFailure
+	// A "```"-prefixed line toggles fenced-code state, same rule the TUI's
+	// own splitFenceSegments uses (highlight.go) to keep a tag shown as a
+	// literal syntax example (inside a fence) from ever being resolved into
+	// a widget in the first place. Without mirroring that here, a model
+	// merely explaining <render> syntax in a code fence would get a false
+	// "failed citation" retry — the TUI never tried to render it at all, so
+	// the retry message's claim ("shown to the user as an error box") would
+	// be false.
+	inFence := false
+	for _, line := range strings.Split(assistantText, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			continue
+		}
+		file, ref, from, to, ok := citetag.ParseTag(trimmed)
+		if !ok {
+			continue
+		}
+		if _, _, _, err := citetag.Resolve(file, ref, from, to); err != nil {
+			failures = append(failures, renderTagFailure{tag: trimmed, err: err})
+		}
+	}
+	return failures
+}
+
+// appendRenderTagRetryMessage adds a synthetic user turn reporting every
+// failed <render> citation from the model's last response, so it gets one
+// automatic chance to fix the path/ref and continue — see
+// findFailedRenderTags. Visibly marked (not just plain user text) so
+// reviewing history later — or watching it happen live, since this is
+// still the exact same OutputEvent-then-store-append shape as any other
+// turn — never reads as something a human actually typed.
+func (a *Agent) appendRenderTagRetryMessage(failures []renderTagFailure) error {
+	var b strings.Builder
+	b.WriteString("[poisson: automatic check] The following citation(s) in your last message failed to resolve and were shown to the user as error boxes, not file content:\n\n")
+	for _, f := range failures {
+		fmt.Fprintf(&b, "%s\n  error: %s\n\n", f.tag, f.err)
+	}
+	b.WriteString("Fix the path/ref (or drop the citation if it isn't essential), then continue your answer.")
+	content, err := contentBlocksToJSON([]provider.ContentBlock{{Type: "text", Text: b.String()}})
+	if err != nil {
+		return err
+	}
+	return a.store.AppendMessage(&store.Message{
+		SessionID: a.sessionID,
+		Role:      "user",
+		Content:   content,
+	})
+}
+
 // appendContinueMessage adds a synthetic user turn asking the model to resume
 // after its previous response was truncated by the output-token cap. A user
 // turn (rather than a second assistant message) keeps roles alternating, which
@@ -1074,6 +1153,7 @@ func (a *Agent) streamWithRetryNotice(ctx context.Context, req *provider.Request
 func (a *Agent) runTurn(ctx context.Context) error {
 	emptyAttempts := 0
 	continuations := 0
+	renderRetries := 0
 	midStreamRetries := 0
 roundLoop:
 	for {
@@ -1333,6 +1413,23 @@ roundLoop:
 					"response hit the output limit — continuing (%d/%d)", continuations, maxTurnContinuations)})
 				if err := a.appendContinueMessage(); err != nil {
 					return a.failTurn(fmt.Sprintf("Store error: %v", err), fmt.Errorf("append continue message: %w", err))
+				}
+				continue
+			}
+			// The model's final answer cited a <render> file that doesn't
+			// actually resolve (bad path/ref/range) — give it one automatic
+			// chance to notice and fix it instead of leaving a silently
+			// broken citation for the human to catch. Checked only on the
+			// no-tool-calls path: a round that also calls a tool already
+			// continues on its own, and the human sees the error box live
+			// either way.
+			if failures := findFailedRenderTags(assistantText); len(failures) > 0 && renderRetries < maxRenderTagRetries {
+				renderRetries++
+				a.sendEvent(OutputEvent{Type: OutputError, Text: fmt.Sprintf(
+					"%d citation(s) failed to resolve — asking the model to fix and continue (%d/%d)",
+					len(failures), renderRetries, maxRenderTagRetries)})
+				if err := a.appendRenderTagRetryMessage(failures); err != nil {
+					return a.failTurn(fmt.Sprintf("Store error: %v", err), fmt.Errorf("append render-tag retry message: %w", err))
 				}
 				continue
 			}
