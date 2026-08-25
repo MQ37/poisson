@@ -38,51 +38,39 @@ px                                                   # launch the TUI
 
 ## ✨ Features
 
-- **Streaming REPL TUI** — hand-rolled ANSI, no framework. Foldable thinking
-  blocks, expandable tool cards with colored diffs, command palette
-  (Ctrl+P), mouse scroll, status bar with live context % and cost.
-- **Real tools, not just bash** — `read`/`write`/`edit`/`grep`/`glob` for file
-  work, `batch` for independent calls in one step, plus `web_search`,
-  `web_ask`, `fetch` (selectable backends, [details](docs/web-tools.md)),
-  `recall` (cross-session full-text search), `set_title` (rename the current
-  session, kept as history), subagents,
-  and 13 built-in skills ([below](#-built-in-skills)), user-extendable via
-  `~/.poisson/skills/`. `bash` is stateless — pass `workdir` explicitly on
-  any call that needs a directory other than session cwd.
+- **Streaming REPL TUI** — hand-rolled ANSI, no framework. Thinking blocks,
+  tool cards with diffs, command palette (Ctrl+P), status bar with context %
+  and cost.
+- **Real tools, not just bash** — `read`/`write`/`edit`/`grep`/`glob`,
+  `batch`, `web_search`/`web_ask`/`fetch` ([details](docs/web-tools.md)),
+  `recall`, `set_title`, subagents, and 13 built-in skills
+  ([below](#-built-in-skills), user-extendable). `bash` is stateless — pass
+  `workdir` explicitly.
 - **Recovers leaked `<invoke>` tool calls** — a weak/local model sometimes
-  echoes the `<invoke name="..."><parameter .../></invoke>` XML shape other
-  agent harnesses use for tool calls (pattern-matched from training data,
-  never poisson's own format) as plain text instead of issuing a real call.
-  Poisson parses it back into a real, dispatchable one — well-formed or
-  garbled (bare parameter, no invoke name) — same approval path as normal;
-  unresolvable blocks are left as-is, never retried.
-- **Bash safety guard, two speeds** — Fast mode (default): a deterministic
-  guard auto-approves read-only commands with zero LLM calls; anything else
-  is LLM risk-classified — low auto-approves too, medium/high/unknown asks
-  you. Paranoid mode (Shift+Tab) asks for every command. Installs,
-  destructive ops, and `npx`/`dlx`-style commands are always high risk and
-  never auto-approve.
-- **Secret redaction** — every tool result (bash, read, grep, ...) is
-  scanned for secret-shaped substrings (vendor token formats, PEM keys,
-  JWTs, URL credentials, credential-named `KEY=VALUE` pairs) and masked
+  echoes other harnesses' `<invoke>`/`<parameter>` XML as plain text instead
+  of a real call (never poisson's own format). Parsed back into a real,
+  dispatchable call when it resolves cleanly; left as-is otherwise.
+- **Bash safety guard, two speeds** — Fast mode (default): deterministic
+  auto-approve for read-only commands, LLM risk-classifies the rest (low
+  auto-approves, medium/high/unknown asks you). Paranoid mode (Shift+Tab)
+  asks for everything; installs/destructive/`npx`-style always ask.
+- **Secret redaction** — tool output is scanned for secret-shaped text
+  (vendor tokens, PEM keys, JWTs, credential `KEY=VALUE` pairs) and masked
   with `[REDACTED]` before reaching the model, TUI, or session store.
   Best-effort, not a guarantee.
-- **Podman sandboxes** — `create_sandbox` gives an isolated, named container
-  (passwordless sudo, matching-uid mount); `bash` calls that pass its
-  `sandboxId` then run with **no approval gate at all** — the container is
-  the safety boundary, not the prompt. `sandbox_cp`/`sandbox_destroy`/
-  `list_sandboxes` manage it from any session, even after a crash; `/sandbox
-  ls`/`kill <id>` are the TUI equivalent. Requires `podman` on `PATH`.
-  ([details](docs/sandbox-plan.md))
-- **Sessions in SQLite** — every message/tool/API call persisted, full-text
-  search (FTS5), resume any session, auto-compaction when context fills up.
+- **Podman sandboxes** — `create_sandbox` gives an isolated container;
+  `bash` calls passing its `sandboxId` skip the approval gate entirely — the
+  container is the boundary. Managed from any session via `sandbox_cp`/
+  `sandbox_destroy`/`list_sandboxes` or `/sandbox ls`/`kill`. Requires
+  `podman`. ([details](docs/sandbox-plan.md))
+- **Sessions in SQLite** — every message/tool/API call persisted, FTS5
+  full-text search, resume any session, auto-compaction when context fills up.
 - **Exact cost & tokens**, live in the status bar and `/cost`, plus live
   usage-limit tracking for Anthropic/OpenAI subscription accounts.
 - **Image input** — paste (Ctrl+V) or `@screenshot.png`. ([details](docs/images.md))
-- **`<render>` file citations** — the agent cites `<render file="path"
-  from="10" to="50"/>` instead of retyping a snippet, expanded into a
-  full-width widget at zero output-token cost; `ref="<commit-or-branch>"`
-  cites the file as of a git ref instead of the working tree.
+- **`<render>` file citations** — cites a snippet (`<render file="path"
+  from="10" to="50"/>`) instead of retyping it, zero output-token cost;
+  `ref="<commit-or-branch>"` cites a git ref instead of the working tree.
 - **Message queueing** — type while the agent works; sent at the next turn
   boundary instead of waiting for the whole turn to finish.
 
