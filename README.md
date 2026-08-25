@@ -49,10 +49,13 @@ px                                                   # launch the TUI
   and 13 built-in skills ([below](#-built-in-skills)), user-extendable via
   `~/.poisson/skills/`. `bash` is stateless — pass `workdir` explicitly on
   any call that needs a directory other than session cwd.
-- **Recovers leaked tool calls** — a weak/local model that echoes poisson's
-  own tool-call template as plain text instead of a real call gets it
-  parsed back and dispatched (same approval path as any tool call);
-  ambiguous or unresolvable ones are left as-is, never retried.
+- **Recovers leaked `<invoke>` tool calls** — a weak/local model sometimes
+  echoes the `<invoke name="..."><parameter .../></invoke>` XML shape other
+  agent harnesses use for tool calls (pattern-matched from training data,
+  never poisson's own format) as plain text instead of issuing a real call.
+  Poisson parses it back into a real, dispatchable one — well-formed or
+  garbled (bare parameter, no invoke name) — same approval path as normal;
+  unresolvable blocks are left as-is, never retried.
 - **Bash safety guard, two speeds** — Fast mode (default): a deterministic
   guard auto-approves read-only commands with zero LLM calls; anything else
   is LLM risk-classified — low auto-approves too, medium/high/unknown asks
