@@ -151,44 +151,31 @@ px -p --yolo "run the test suite and fix failures"
 
 ## 🤖 Providers & models
 
-| Provider | Model | Auth | Vision |
-|---|---|---|---|
-| `anthropic` | `claude-opus-5` *(default)* | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
-| `anthropic` | `claude-sonnet-5` | OAuth (Pro/Max, stealth) or `api_key` | ✅ |
-| `openai` | `gpt-5.6-terra` *(default)* — balanced | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
-| `openai` | `gpt-5.6-sol` — frontier | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
-| `openai` | `gpt-5.6-luna` — cost-optimized | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
-| `openai` | `gpt-5.5` — previous generation | OAuth (ChatGPT Plus/Pro, Codex) | ✅ |
-| `xai` | `grok-build` *(default)* | OAuth (SuperGrok) | ✅ |
-| `xai` | `grok-4.5` | OAuth (SuperGrok) | ✅ |
-| `openrouter` | `deepseek/deepseek-v4-flash-0731` *(default)* | API key ([openrouter.ai/keys](https://openrouter.ai/keys)) | ❌ |
-| `ollama` | `glm-5.2:cloud` *(default)* | local daemon / Ollama cloud | ❌ |
-| `ollama` | `minimax-m3:cloud` | local daemon / Ollama cloud | ✅ |
-| `ollama` | `kimi-k2.7-code:cloud` | local daemon / Ollama cloud | ✅ |
-| `llamacpp` | `unsloth/Laguna-S-2.1-GGUF` *(default)* | local `llama-server`, no auth | ❌ |
-| `llamacpp` | `unsloth/Qwen3.6-27B-MTP-GGUF` | local `llama-server`, no auth | ✅ |
-| `llamacpp` | `poolside/Laguna-XS-2.1-GGUF` | local `llama-server`, no auth | ❌ |
-
-Provider notes: `openrouter` is a plain API-key provider (`px login
-openrouter`) — one OpenAI-compatible endpoint proxying 400+ models across
-many labs, no OAuth and no local daemon. OpenAI/Codex ([details](docs/openai.md))
-and Ollama caching / `keep_alive` ([details](docs/ollama.md)). `llamacpp` talks to the same
-OpenAI-compatible `/v1/chat/completions` endpoint as Ollama — point it at any
-local `llama-server` instance (default port `11212`). To discover cached GGUF
-models and launch `llama-server`/`llama-cli` with sane defaults (GPU offload,
-context size, MTP speculative decoding), use
-[**alpaca**](https://github.com/MQ37/alpaca) — a small standalone session
-launcher built for this.
+**Anthropic** (Claude, OAuth or `api_key`), **OpenAI** (ChatGPT/Codex
+subscription, OAuth), **xAI** (Grok, SuperGrok OAuth), **OpenRouter** (400+
+models, API key), **Ollama** (local daemon or cloud, no auth), and
+**llama.cpp** (local `llama-server`, no auth). Each ships a curated default
+and tracks that provider's latest model lineup — any `<provider>/<model-name>`
+works even before poisson has a built-in entry for it (see
+[Adding a custom / unlisted model](#adding-a-custom--unlisted-model)).
+`llamacpp`/Ollama share the same wire format; [**alpaca**](https://github.com/MQ37/alpaca)
+discovers cached GGUF models and launches `llama-server` with sane defaults.
 
 **Custom provider instances**: `[custom_providers.<name>]` defines a second
 (third, ...) Ollama-compatible endpoint under a name you pick — e.g. a
-daemon on a remote host, alongside your local one. Works everywhere a
-built-in provider does: `/providers`, `/model`, `px -p <name>/<model>`,
-subagent provider pinning. No login needed (same as `ollama`/`llamacpp`).
-`model` is optional — omit it to discover models live via that instance's
-own `/api/tags`; curate one with the same `[models.<name>."<model>"]` table
-a built-in provider uses. See the `[custom_providers.*]` block in
-`config.toml` below for the full example.
+daemon on a remote host, alongside your local one:
+
+```toml
+[custom_providers.bastion]              # a second Ollama instance, any name
+type = "ollama"                         # only "ollama" supported today
+base_url = "http://bastion-host:11434"
+model = "laguna-s-2.1:q4_K_M"           # optional — omit to discover live via /api/tags
+```
+
+Works everywhere a built-in provider does: `/providers`, `/model`,
+`px -p bastion/<model>`, subagent provider pinning. No login needed (same as
+`ollama`/`llamacpp`). Curate a model with the same `[models.<name>."<model>"]`
+table a built-in provider uses (context window, effort levels, vision).
 
 Switch anytime: `/model`, `/effort`, `/providers` (or the Ctrl+P palette).
 Reasoning effort levels: `low · medium · high · xhigh · max` (default `medium`;
