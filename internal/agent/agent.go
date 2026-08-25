@@ -1042,8 +1042,9 @@ type renderTagFailure struct {
 // resolves each one with the identical resolver the TUI paints with (see
 // internal/citetag's own doc comment for why the two share it). Returning
 // early after the model's turn is otherwise done, rather than only when the
-// TUI happens to repaint, means a citation typo gets one automatic chance at
-// self-correction instead of silently sitting broken until a human notices
+// TUI happens to repaint, means a citation typo gets a bounded number of
+// automatic chances at self-correction (maxRenderTagRetries) instead of
+// silently sitting broken until a human notices
 // and asks.
 func findFailedRenderTags(assistantText string) []renderTagFailure {
 	var failures []renderTagFailure
