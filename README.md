@@ -61,6 +61,13 @@ px                                                   # launch the TUI
   you. Paranoid mode (Shift+Tab) asks for every command. Installs,
   destructive ops, and `npx`/`dlx`-style commands are always high risk and
   never auto-approve.
+- **Secret redaction** — tool output (bash, read, grep, ...) is scanned for
+  secret-shaped substrings — vendor token formats (AWS/GitHub/Slack/Stripe/
+  OpenAI/Google, PEM private keys, JWTs, embedded URL credentials) and
+  `KEY=VALUE` pairs whose key name looks credential-related — and masked
+  with `[REDACTED]` before it reaches the model, the TUI, or the session
+  store. Runs unconditionally, one choke point for every tool; best-effort,
+  not a guarantee.
 - **Podman sandboxes** — `create_sandbox` gives an isolated, named container
   (passwordless sudo, matching-uid mount); `bash` calls that pass its
   `sandboxId` then run with **no approval gate at all** — the container is

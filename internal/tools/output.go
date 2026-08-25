@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/mq37/poisson/internal/guard"
 )
 
 const maxToolOutputBytes = 50 * 1024
@@ -49,7 +51,11 @@ func sweepStaleSpillFiles() {
 	})
 }
 
-// TrimToolResult bounds tool output before it reaches the model, store, or UI.
+// TrimToolResult bounds tool output — and scrubs secret-shaped substrings
+// out of it (see guard.RedactSecrets) — before it reaches the model, store,
+// or UI. Registry.Execute calls this on every tool's result unconditionally
+// (bash, read, grep, edit, subagent hand-offs, ...), so this one call site
+// is the single choke point all three sinks share.
 func TrimToolResult(result ToolResult) ToolResult {
 	result.Content = trimToolText(result.Content)
 	result.Error = trimToolText(result.Error)
@@ -58,6 +64,11 @@ func TrimToolResult(result ToolResult) ToolResult {
 
 func trimToolText(s string) string {
 	s = sanitizeToolText(s)
+	// Secrets are scrubbed before the truncation check below and thus
+	// before spillToolOutput ever runs — a spilled file must not carry the
+	// real value out to /tmp (7-day TTL, see spillFileTTL) just because
+	// the output was too big to inline.
+	s = guard.RedactSecrets(s)
 	if len(s) <= maxToolOutputBytes {
 		return s
 	}
