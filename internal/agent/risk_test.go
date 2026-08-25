@@ -384,6 +384,30 @@ func TestParseBashRisk(t *testing.T) {
 	}
 }
 
+func TestParseBashRiskDeny(t *testing.T) {
+	cases := []struct {
+		in         string
+		wantDeny   bool
+		wantReason string
+	}{
+		{"deny: prints AWS_SECRET_ACCESS_KEY to stdout", true, "prints AWS_SECRET_ACCESS_KEY to stdout"},
+		{"Deny - leaks a credential", true, "leaks a credential"},
+		{"DENY", true, ""},
+		{"  deny:  extra spaces  ", true, "extra spaces"},
+		{"low", false, ""},
+		{"high", false, ""},
+		{"", false, ""},
+		{"denying is not a verdict", false, ""},            // must not match on a prefix that isn't the whole word
+		{"deny-listing the following packages", false, ""}, // glued "-" right after "deny" isn't a boundary either
+	}
+	for _, tc := range cases {
+		deny, reason := ParseBashRiskDeny(tc.in)
+		if deny != tc.wantDeny || reason != tc.wantReason {
+			t.Errorf("ParseBashRiskDeny(%q) = (%v, %q), want (%v, %q)", tc.in, deny, reason, tc.wantDeny, tc.wantReason)
+		}
+	}
+}
+
 func TestMaxBashRisk(t *testing.T) {
 	if got := MaxBashRisk(BashRiskLow, BashRiskHigh); got != BashRiskHigh {
 		t.Fatalf("MaxBashRisk(low, high) = %q", got)

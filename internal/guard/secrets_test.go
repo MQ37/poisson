@@ -88,6 +88,53 @@ func TestRedactSecretsIdempotent(t *testing.T) {
 	}
 }
 
+func TestLooksLikeSecretVarName(t *testing.T) {
+	yes := []string{"AWS_SECRET_ACCESS_KEY", "SOLANA_TESTING_KEY", "DB_PASSWORD", "API_TOKEN", "AUTH_HEADER"}
+	for _, name := range yes {
+		if !looksLikeSecretVarName(name) {
+			t.Errorf("looksLikeSecretVarName(%q) = false, want true", name)
+		}
+	}
+	no := []string{"AWS_REGION", "MODEL", "MONGO_URL", "AUTHOR_NAME", "HOME"}
+	// AUTHOR_NAME is a deliberate contrast with RedactSecrets' substring
+	// check: this is whole-word, so "author" alone never matches "auth".
+	// (PRIMARY_KEY is NOT in this list on purpose — bare "key" as its own
+	// word is documented, accepted over-inclusion; see secretVarNameWords.)
+	for _, name := range no {
+		if looksLikeSecretVarName(name) {
+			t.Errorf("looksLikeSecretVarName(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestPrintsSecretShapedVar(t *testing.T) {
+	yes := []string{
+		`echo "$AWS_SECRET_ACCESS_KEY"`,
+		`echo $SOLANA_TESTING_KEY`,
+		`cat "${DB_PASSWORD}"`,
+	}
+	for _, cmd := range yes {
+		safe, reason := Classify(cmd)
+		if safe {
+			t.Errorf("Classify(%q) = safe, want demoted off the SAFE list", cmd)
+		}
+		if reason == "" || !strings.Contains(reason, "secret-shaped variable") {
+			t.Errorf("Classify(%q) reason = %q, want secret-shaped-variable reason", cmd, reason)
+		}
+	}
+	no := []string{
+		`echo hello world`,
+		`echo "$HOME/bin"`,
+		`cat README.md`,
+	}
+	for _, cmd := range no {
+		safe, reason := Classify(cmd)
+		if !safe {
+			t.Errorf("Classify(%q) = unsafe (%s), want safe", cmd, reason)
+		}
+	}
+}
+
 func FuzzRedactSecretsNoPanic(f *testing.F) {
 	seeds := []string{
 		"",

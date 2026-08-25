@@ -101,6 +101,78 @@ func isSecretKeyName(key string) bool {
 	return false
 }
 
+// secretVarNameWords are whole-word (underscore-split) matches for a shell
+// variable *name*, used by looksLikeSecretVarName — the pre-execution
+// bash-guard check (printsSecretShapedVar) that decides whether echo/cat get
+// to skip approval entirely, not the RedactSecrets text scan above. Bare
+// "key" is deliberately included here (unlike secretKeywords, which skips it
+// to avoid over-redacting output text like PRIMARY_KEY/FOREIGN_KEY): a false
+// positive here just costs one extra classifier call, while a false negative
+// costs a real credential (e.g. SOLANA_TESTING_KEY) sailing through the
+// SAFE-list fast path with zero review — the two checks trade off false
+// positives differently because a deny-gate miss is far more expensive than
+// a redaction-text miss.
+var secretVarNameWords = map[string]bool{
+	"secret": true, "token": true, "password": true, "passwd": true,
+	"pass": true, "credential": true, "credentials": true, "bearer": true,
+	"auth": true, "key": true,
+}
+
+// looksLikeSecretVarName reports whether a shell variable name (already
+// extracted, no leading $/{}) looks credential-related — split into
+// underscore-delimited words (env var convention is SCREAMING_SNAKE_CASE,
+// so no camelCase normalization is needed here unlike isSecretKeyName)
+// and matched whole-word against secretVarNameWords.
+func looksLikeSecretVarName(name string) bool {
+	for _, part := range strings.Split(strings.ToLower(name), "_") {
+		if secretVarNameWords[part] {
+			return true
+		}
+	}
+	return false
+}
+
+// extractVarRefName finds a $NAME or ${NAME} shell variable reference
+// inside a raw token (quotes, if any, still attached — tokenize() keeps
+// them) and returns NAME. Best-effort: doesn't require a closing "}" for
+// the braced form, since the token is already known-bounded.
+func extractVarRefName(tok string) (string, bool) {
+	i := strings.IndexByte(tok, '$')
+	if i < 0 || i+1 >= len(tok) {
+		return "", false
+	}
+	rest := tok[i+1:]
+	rest = strings.TrimPrefix(rest, "{")
+	j := 0
+	for j < len(rest) {
+		c := rest[j]
+		isNameByte := c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+			(j > 0 && c >= '0' && c <= '9')
+		if !isNameByte {
+			break
+		}
+		j++
+	}
+	if j == 0 {
+		return "", false
+	}
+	return rest[:j], true
+}
+
+// printsSecretShapedVar reports whether any argument of a printer command
+// (echo/cat — see checkPerCommandDetectors) references a shell variable
+// whose name looks secret-related, e.g. `echo "$AWS_SECRET_ACCESS_KEY"` or
+// `echo "$SOLANA_TESTING_KEY"`. tokens[0] (the command name itself) is
+// skipped.
+func printsSecretShapedVar(tokens []string) (string, bool) {
+	for _, tok := range tokens[1:] {
+		if name, ok := extractVarRefName(tok); ok && looksLikeSecretVarName(name) {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // redactKeyValuePairs replaces the value half of every KEY=VALUE/KEY: VALUE
 // match whose key name looks secret-related, leaving the key and every
 // non-matching pair untouched.

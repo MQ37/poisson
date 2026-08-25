@@ -57,16 +57,20 @@ const (
 
 // BashRiskLLMRun is one LLM classification attempt.
 type BashRiskLLMRun struct {
-	Risk BashRisk
-	Raw  string
+	Risk       BashRisk
+	Deny       bool   // see ParseBashRiskDeny — an unconditional deny verdict
+	DenyReason string // classifier's stated reason when Deny is true
+	Raw        string
 }
 
 // BashRiskEvalResult is the detailed outcome of a risk assessment (for evals).
 type BashRiskEvalResult struct {
-	Risk    BashRisk
-	Source  BashRiskSource
-	RawLLM  string
-	LLMRuns []BashRiskLLMRun
+	Risk       BashRisk
+	Deny       bool
+	DenyReason string
+	Source     BashRiskSource
+	RawLLM     string
+	LLMRuns    []BashRiskLLMRun
 }
 
 const bashRiskSystem = `You classify bash command risk for a human approval gate. Be strict: when unsure, choose the higher level.
@@ -108,7 +112,25 @@ Rules:
 - npx, pnpm dlx, yarn dlx, pipx run, bunx download and execute untrusted code — always high.
 - Never output low for a command that deletes files, writes disks, or runs remote code.
 
-No explanation. One word only.`
+No explanation. One word only.
+
+Exception — secret leak to stdout: if the command's own output (what this
+tool call actually returns, stdout or stderr) would directly contain a
+secret/credential/private-key value in human-readable form, reply
+"deny: <short reason>" instead of a risk word. This is an unconditional
+block — no human review — so only use it when the leak is unambiguous.
+  Deny: bare "env" or "printenv"; echo/printf/cat of a variable or file
+    holding a secret; a secrets-manager/vault/password-store CLI (doppler,
+    vault, op, aws secretsmanager/ssm, gcloud secrets, az keyvault,
+    kubectl get secret, pass, gpg/sops decrypt) whose output is not
+    redirected to a file; piping any of those into something that still
+    prints it (cat, less, head, tail, an unfiltered jq) instead of into a
+    file redirect.
+  NOT deny — classify normally instead (usually already medium/high for
+    other reasons): the same commands redirected to a file (> file,
+    >> file), or consumed silently by another process without being
+    echoed back (doppler run -- cmd, export $(...), piped into something
+    that doesn't print it).`
 
 // AssessBashRisk asks the active provider (LLM) to rate command risk. It never
 // consults the deterministic guard for a LOW verdict: on failure or ambiguous
@@ -122,6 +144,24 @@ No explanation. One word only.`
 // never auto-approve any of them (WrapRiskGatedApproval only auto-approves
 // BashRiskLow).
 func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdir string) BashRisk {
+	risk, _, _ := a.AssessBashRiskWithReason(ctx, command, description, workdir)
+	return risk
+}
+
+// AssessBashRiskWithReason is AssessBashRisk plus the classifier's optional
+// unconditional-deny verdict — deny is true only when the LLM classified the
+// command with "deny: <reason>" instead of a risk word (see bashRiskSystem's
+// "secret leak to stdout" exception), meaning its own output would directly
+// expose a secret. WrapRiskGatedApproval acts on deny before ever asking a
+// human — see its own doc comment for why that's a deliberate, and the only,
+// exception to this codebase's rule that a hard, no-override block must rest
+// on deterministic analysis, never a single LLM call.
+//
+// The fast-path escalations below (obfuscated shell content, destructive
+// commands, untrusted exec, package installs) never call the LLM at all, so
+// deny is always false for them — this deny signal only exists on the path
+// that already reaches the classifier.
+func (a *Agent) AssessBashRiskWithReason(ctx context.Context, command, description, workdir string) (risk BashRisk, deny bool, denyReason string) {
 	// A pipe into a shell interpreter or $(...)/backtick substitution hands
 	// the actual command to run through stdin or an opaque substituted
 	// string — content no argv-token-based check below can ever inspect
@@ -134,18 +174,19 @@ func (a *Agent) AssessBashRisk(ctx context.Context, command, description, workdi
 	// except unconditionally high, the same policy already used below for
 	// npx/pnpm dlx/etc.
 	if guard.PipesIntoDangerousShell(command) || guard.HasCommandSubstitution(command) {
-		return BashRiskHigh
+		return BashRiskHigh, false, ""
 	}
 	if isDestructiveCommand(command) {
-		return BashRiskHigh
+		return BashRiskHigh, false, ""
 	}
 	if isUntrustedExecCommand(command) {
-		return BashRiskHigh
+		return BashRiskHigh, false, ""
 	}
 	if isPackageInstallCommand(command) {
-		return BashRiskMedium
+		return BashRiskMedium, false, ""
 	}
-	return a.AssessBashRiskEval(ctx, command, description, workdir, BashRiskEvalLLM).Risk
+	res := a.AssessBashRiskEval(ctx, command, description, workdir, BashRiskEvalLLM)
+	return res.Risk, res.Deny, res.DenyReason
 }
 
 // ClassifierModel returns the model that rates bash-command risk for the
@@ -586,13 +627,15 @@ func (a *Agent) AssessBashRiskEval(ctx context.Context, command, description, wo
 	case BashRiskEvalLLM:
 		out := a.assessBashRiskLLM(ctx, command, description, workdir)
 		return BashRiskEvalResult{
-			Risk: out.Risk, Source: BashRiskSourceLLM, RawLLM: out.RawLLM, LLMRuns: out.Runs,
+			Risk: out.Risk, Deny: out.Deny, DenyReason: out.DenyReason,
+			Source: BashRiskSourceLLM, RawLLM: out.RawLLM, LLMRuns: out.Runs,
 		}
 	default:
 		out := a.assessBashRiskLLM(ctx, command, description, workdir)
 		if out.Risk != BashRiskUnknown {
 			return BashRiskEvalResult{
-				Risk: out.Risk, Source: BashRiskSourceLLM, RawLLM: out.RawLLM, LLMRuns: out.Runs,
+				Risk: out.Risk, Deny: out.Deny, DenyReason: out.DenyReason,
+				Source: BashRiskSourceLLM, RawLLM: out.RawLLM, LLMRuns: out.Runs,
 			}
 		}
 		return BashRiskEvalResult{
@@ -605,13 +648,17 @@ func (a *Agent) AssessBashRiskEval(ctx context.Context, command, description, wo
 }
 
 type bashRiskLLMOutcome struct {
-	Risk   BashRisk
-	RawLLM string
-	Runs   []BashRiskLLMRun
+	Risk       BashRisk
+	Deny       bool
+	DenyReason string
+	RawLLM     string
+	Runs       []BashRiskLLMRun
 }
 
 // assessBashRiskLLM runs bashRiskLLMRuns LLM classifications and keeps the
-// strictest result (a single round by default).
+// strictest result (a single round by default). Deny wins outright over any
+// risk word — one run denying is enough, regardless of what a sibling run
+// (if bashRiskLLMRuns is ever raised above 1) said instead.
 func (a *Agent) assessBashRiskLLM(ctx context.Context, command, description, workdir string) bashRiskLLMOutcome {
 	var out bashRiskLLMOutcome
 	if a == nil || a.provider == nil {
@@ -625,10 +672,13 @@ func (a *Agent) assessBashRiskLLM(ctx context.Context, command, description, wor
 			break
 		}
 		runCtx, cancel := context.WithTimeout(ctx, bashRiskRunTimeout)
-		risk, raw := a.assessBashRiskLLMOnce(runCtx, command, description, workdir)
+		risk, deny, denyReason, raw := a.assessBashRiskLLMOnce(runCtx, command, description, workdir)
 		cancel()
 
-		out.Runs = append(out.Runs, BashRiskLLMRun{Risk: risk, Raw: raw})
+		out.Runs = append(out.Runs, BashRiskLLMRun{Risk: risk, Deny: deny, DenyReason: denyReason, Raw: raw})
+		if deny && !out.Deny {
+			out.Deny, out.DenyReason = true, denyReason
+		}
 		best = MaxBashRisk(best, risk)
 		if raw != "" {
 			rawParts = append(rawParts, fmt.Sprintf("%s=%s", risk, raw))
@@ -641,7 +691,7 @@ func (a *Agent) assessBashRiskLLM(ctx context.Context, command, description, wor
 	return out
 }
 
-func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description, workdir string) (BashRisk, string) {
+func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description, workdir string) (risk BashRisk, deny bool, denyReason string, raw string) {
 	if description == "" {
 		description = "(none)"
 	}
@@ -688,22 +738,31 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 	// Usage is recorded per attempt and priced against the classifier model,
 	// not the session model — /classifier-model can point this call at a
 	// cheaper (or pricier) model than the conversation's.
-	out, err := streamAndCollect(ctx, a.provider, req, func(u *provider.Usage) {
+	res, err := streamAndCollect(ctx, a.provider, req, func(u *provider.Usage) {
 		if _, rerr := a.recordAPICallFor(u, "risk", a.providerID(), model); rerr != nil {
 			log.Printf("warning: record risk classifier api call: %v", rerr)
 		}
 	})
-	raw := out.Any()
+	raw = res.Any()
 	if err != nil {
-		return BashRiskUnknown, raw
+		return BashRiskUnknown, false, "", raw
 	}
-	if r := ParseBashRisk(out.Text); r != BashRiskUnknown {
-		return r, raw
+	// Deny checked before the plain risk word on both text and thinking:
+	// a model that reasons before answering still puts "deny: ..." as its
+	// literal final word, same place a bare risk word would land.
+	if d, reason := ParseBashRiskDeny(res.Text); d {
+		return BashRiskHigh, true, reason, raw
 	}
-	if r := ParseBashRisk(out.Thinking); r != BashRiskUnknown {
-		return r, raw
+	if d, reason := ParseBashRiskDeny(res.Thinking); d {
+		return BashRiskHigh, true, reason, raw
 	}
-	return BashRiskUnknown, raw
+	if r := ParseBashRisk(res.Text); r != BashRiskUnknown {
+		return r, false, "", raw
+	}
+	if r := ParseBashRisk(res.Thinking); r != BashRiskUnknown {
+		return r, false, "", raw
+	}
+	return BashRiskUnknown, false, "", raw
 }
 
 // MaxBashRisk returns the stricter of two risk levels (high > medium > low > unknown).
@@ -781,4 +840,38 @@ func ParseBashRisk(text string) BashRisk {
 		return BashRiskLow
 	}
 	return BashRiskUnknown
+}
+
+// ParseBashRiskDeny reports whether the classifier's reply is an
+// unconditional deny (see bashRiskSystem's "secret leak to stdout"
+// exception) and, if so, its stated reason. Only the first non-empty line
+// is checked — the classifier is instructed to answer "deny: <reason>" as
+// its entire reply, so a deny anywhere else in a longer, off-contract
+// response is not trusted as one.
+func ParseBashRiskDeny(text string) (deny bool, reason string) {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		line = strings.Trim(line, `"'`+"`")
+		lower := strings.ToLower(line)
+		if !strings.HasPrefix(lower, "deny") {
+			return false, ""
+		}
+		rest := line[len("deny"):]
+		// Word-boundary check: "denying is not a verdict" and "deny-listing
+		// the following" both start with the literal prefix "deny" too, but
+		// aren't the verdict word — only end-of-string, ":", or whitespace
+		// immediately after "deny" counts as a real match. A bare "-" alone
+		// doesn't (it's ambiguous with a glued word like "deny-listing");
+		// "deny - reason" still matches fine since the space right after
+		// "deny" is the boundary, independent of the dash that follows it.
+		if rest != "" && rest[0] != ':' && rest[0] != ' ' && rest[0] != '\t' {
+			return false, ""
+		}
+		rest = strings.TrimLeft(rest, " \t:-–—")
+		return true, strings.TrimSpace(rest)
+	}
+	return false, ""
 }

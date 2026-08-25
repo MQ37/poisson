@@ -491,6 +491,17 @@ func checkPerCommandDetectors(tokens []string) (string, bool) {
 	tokens = stripEmbeddedQuotesTokens(tokens)
 	cmd := normalizeToken(tokens[0])
 	switch cmd {
+	case "echo", "cat":
+		// Both commands are on the SAFE list for their common read-only use
+		// (echo for plain text, cat for reading a file) — printing a
+		// secret-shaped shell variable ($AWS_SECRET_ACCESS_KEY, $DB_PASSWORD,
+		// ...) is neither, and must not ride that fast path to zero-approval.
+		// Demotes to the classifier only — never denies by itself; the
+		// bash-risk classifier's own "secret leak to stdout" rule (see
+		// agent.bashRiskSystem) decides what happens to it from there.
+		if name, ok := printsSecretShapedVar(tokens); ok {
+			return "prints secret-shaped variable: $" + name, true
+		}
 	case "find":
 		if findHasDangerousFlag(tokens) {
 			return "find with dangerous flag (-exec/-delete/...)", true

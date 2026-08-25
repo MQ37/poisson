@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/mq37/poisson/internal/provider"
@@ -32,6 +33,42 @@ func TestWrapRiskGatedApprovalAutoLow(t *testing.T) {
 	}
 	if asked {
 		t.Fatal("human approval should not run for low risk")
+	}
+}
+
+// TestWrapRiskGatedApprovalDeniesSecretLeakWithoutAskingHuman verifies a
+// classifier "deny: ..." verdict is denied outright — the human callback
+// must never even run — and the reason is forwarded so the model
+// understands why (see secretLeakDenyMessage).
+func TestWrapRiskGatedApprovalDeniesSecretLeakWithoutAskingHuman(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("deny: prints AWS_SECRET_ACCESS_KEY to stdout", nil),
+	})
+
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	asked := false
+	approve := WrapRiskGatedApproval(a, func(_ context.Context, _, _, _ string, _ BashRisk, _ ApprovalOrigin) (bool, string) {
+		asked = true
+		return true, ""
+	})
+
+	allowed, reason := approve(context.Background(), `lockbox run -c 'echo "$AWS_SECRET_ACCESS_KEY"'`, "check key", "/tmp")
+	if allowed {
+		t.Fatal("expected deny")
+	}
+	if asked {
+		t.Fatal("human approval must not run for a classifier deny — that's the whole point")
+	}
+	if !strings.Contains(reason, "AWS_SECRET_ACCESS_KEY") {
+		t.Errorf("reason = %q, want the classifier's own explanation forwarded", reason)
+	}
+	if !strings.Contains(reason, "Paranoid") {
+		t.Errorf("reason = %q, want the Paranoid-mode override hint", reason)
 	}
 }
 

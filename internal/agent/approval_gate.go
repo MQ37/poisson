@@ -28,9 +28,15 @@ type HumanApprovalFunc func(ctx context.Context, command, description, workdir s
 //     call and no human prompt at all. Anything the guard doesn't clear goes
 //     to LLM risk classification, which auto-approves ONLY an LLM "low";
 //     medium, high, and any failed or ambiguous classification (provider
-//     error, timeout, unparseable output) fall through to the human.
+//     error, timeout, unparseable output) fall through to the human. A
+//     classifier "deny" (AssessBashRiskWithReason) is denied outright,
+//     before the human is ever asked — see its own doc comment.
 //   - Paranoid: both the guard fast path and the LLM classifier are skipped
-//     entirely — every command asks the human, unconditionally.
+//     entirely — every command asks the human, unconditionally. The
+//     classifier never runs here, so a deny verdict never fires either;
+//     Paranoid mode is the manual escape hatch if Fast mode's classifier
+//     denies a command that's actually fine (false positive) — switching
+//     modes puts the decision back in the human's hands.
 //
 // The guard fast path and the LLM path are independent auto-approve
 // decisions; neither is ever consulted to silently allow what the other
@@ -65,10 +71,15 @@ func WrapRiskGatedApproval(a *Agent, ask HumanApprovalFunc) func(ctx context.Con
 				pause.Begin()
 			}
 			rctx, cancel := context.WithTimeout(ctx, approvalRiskTimeout)
-			risk = a.AssessBashRisk(rctx, command, description, workdir)
+			var deny bool
+			var denyReason string
+			risk, deny, denyReason = a.AssessBashRiskWithReason(rctx, command, description, workdir)
 			cancel()
 			if hasPause && pause.End != nil {
 				pause.End()
+			}
+			if deny {
+				return false, secretLeakDenyMessage(denyReason)
 			}
 			if risk == BashRiskLow {
 				return true, ""
@@ -79,4 +90,18 @@ func WrapRiskGatedApproval(a *Agent, ask HumanApprovalFunc) func(ctx context.Con
 		}
 		return ask(ctx, command, description, workdir, risk, origin)
 	}
+}
+
+// secretLeakDenyMessage builds the reason text for a classifier deny —
+// forwarded to the model as the bash tool's error (see BashTool.Execute),
+// same as any other rejection, so it understands *why*, not just that it
+// was rejected: the classifier's own stated reason, plus how to get a human
+// to review it if this looks like a false positive.
+func secretLeakDenyMessage(reason string) string {
+	if reason == "" {
+		reason = "its own output would likely print a secret or credential value directly"
+	}
+	return "risk classifier auto-denied this command: " + reason +
+		". This is unconditional in Fast mode — no human was asked. " +
+		"If this is a false positive, switch to Paranoid mode (Shift+Tab) and retry; a human can approve it there."
 }

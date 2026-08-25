@@ -52,8 +52,12 @@ px                                                   # launch the TUI
   dispatchable call when it resolves cleanly; left as-is otherwise.
 - **Bash safety guard, two speeds** — Fast mode (default): deterministic
   auto-approve for read-only commands, LLM risk-classifies the rest (low
-  auto-approves, medium/high/unknown asks you). Paranoid mode (Shift+Tab)
-  asks for everything; installs/destructive/`npx`-style always ask.
+  auto-approves, medium/high/unknown asks you). The classifier also
+  auto-denies — no human asked — a command whose own output would leak a
+  secret to stdout (`echo $AWS_SECRET_KEY`, an unredirected `doppler
+  secrets download`, ...); switch to Paranoid mode to review and approve
+  one yourself if that's a false positive. Paranoid mode (Shift+Tab) asks
+  for everything; installs/destructive/`npx`-style always ask.
 - **Secret redaction** — tool output is scanned for secret-shaped text
   (vendor tokens, PEM keys, JWTs, credential `KEY=VALUE` pairs) and masked
   with `[REDACTED]` before reaching the model, TUI, or session store.
