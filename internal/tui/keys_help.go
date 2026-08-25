@@ -35,9 +35,9 @@ func renderHelp() string {
   /help        Show this help
   /quit        Exit Poisson
   /clear       Clear scrollback
-  /name <t>    Set session display title
+  /name <t>    Set session display title (no args: show current title)
   /new         Start a new session
-  /resume <id> Resume a session
+  /resume <id> Resume a session (no args: picker)
   /sessions    Session picker
   /search <q>  Search across sessions (no args: find in scrollback)
   /compact     Compact context now

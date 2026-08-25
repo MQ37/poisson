@@ -22,10 +22,11 @@ var paletteCommands = []paletteItem{
 	{"/search", "find in scrollback; /search <q> searches all sessions"},
 	{"/compact", "compact context now"},
 	{"/name", "set session title (/name <title>)"},
-	{"/reload", "reload config"},
+	{"/reload", "reload config and skills"},
 	{"/effort", "set reasoning effort"},
 	{"/classifier-model", "model that rates bash-command risk"},
 	{"/btw", "side question (floating box; or Ctrl+B)"},
+	{"/openai-reset-usage", "reset OpenAI usage window now (spends a free credit)"},
 	{"/quit", "exit"},
 }
 
