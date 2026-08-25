@@ -356,31 +356,8 @@ only). Resolution order: `/classifier-model` pin → `[<provider>] classifier`
 
 ## 📦 Dependencies — deliberately tiny
 
-poisson has **3 direct dependencies**; everything else below is *transitive*,
-pulled in only by those three. The rest is stdlib: hand-rolled ANSI TUI,
-`net/http` for providers, `encoding/json`, a hand-written TOML parser.
-
-### Direct (3)
-
-| Dependency | Why it's here |
-|---|---|
-| **`modernc.org/sqlite`** | Pure-Go SQLite — durable local storage for sessions, messages, the cost ledger, and **FTS5** full-text search. Being pure Go is the whole point: it keeps the build **CGo-free**, so `go build` produces a single static binary with no C toolchain and no external database. |
-| **`golang.org/x/term`** | Correct raw-mode terminal handling for the REPL/TUI across platforms. The standard library has no portable equivalent. |
-| **`golang.org/x/image`** | Quality image downscaling (CatmullRom resampling) + WebP decoding for pasted/attached images. Stdlib decodes PNG/JPEG/GIF but ships no resampler and no WebP decoder. |
-
-### Transitive
-
-Everything else in `go.sum` is pulled in by those three, not by us — mostly
-`modernc.org/sqlite`'s pure-Go C runtime shims. See `go.mod` for the full list.
-
-**What we deliberately *don't* depend on:** no TUI framework, no web framework,
-no HTTP client library, no JSON library, no CLI/flags library, no TOML library,
-no ORM. Fewer moving parts, faster builds, a smaller attack surface, and a
-codebase one person can hold in their head.
-
-> New dependencies are only added when the standard library genuinely can't do
-> the job, and are pinned to a release **≥ 14 days old** to dodge fresh-release
-> bugs and supply-chain surprises.
+poisson has **3 direct dependencies** (`modernc.org/sqlite`, `golang.org/x/term`,
+`golang.org/x/image`); everything else is stdlib.
 
 ---
 
