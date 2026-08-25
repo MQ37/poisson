@@ -313,11 +313,11 @@ Ollama model at $0; model metadata overrides always need the exact name.
 Bottom-bar keys (input focus):
 
 ```
-Enter send · Ctrl+V image · Ctrl+F find · Ctrl+P palette
-Ctrl+L effort · Ctrl+T fold thinking · Ctrl+E expand tool
-Ctrl+M model picker · Ctrl+S session picker · Ctrl+B /btw prompt
-Ctrl+R/Ctrl+N step input history · Ctrl+G finish subagents now
-Shift+Tab fast/paranoid approval mode
+Enter send · Tab switch input/conversation focus · Ctrl+V image
+Ctrl+F find · Ctrl+P palette · Ctrl+L effort · Ctrl+T fold thinking
+Ctrl+E expand tool · Ctrl+M model picker · Ctrl+S session picker
+Ctrl+B /btw prompt · Ctrl+R/Ctrl+N step input history
+Ctrl+G finish subagents now · Shift+Tab fast/paranoid approval mode
 Esc cancel running turn · Ctrl+C clear input (twice to exit)
 ```
 
