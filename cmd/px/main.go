@@ -133,6 +133,8 @@ func main() {
 		cmdLogout(cmdArgs[1:])
 	case "-v", "--version", "version":
 		fmt.Println("poisson", version)
+	case "-h", "--help", "help":
+		fmt.Print(helpText())
 	case "sessions":
 		cmdSessions()
 	case "cost":
@@ -146,17 +148,32 @@ func main() {
 		}
 		runREPL(noSkills, cmdArgs[1])
 	default:
-		fmt.Println("poisson", version)
-		fmt.Println("usage: Poisson [command] [options]")
-		fmt.Println("  Poisson                     interactive REPL")
-		fmt.Println("  Poisson login <provider>    OAuth login")
-		fmt.Println("  Poisson logout <provider>   clear stored tokens")
-		fmt.Println("  Poisson sessions            list sessions")
-		fmt.Println("  Poisson resume <session-id> resume a session in the TUI")
-		fmt.Println("  Poisson cost [session-id]   show cost")
-		fmt.Println("  Poisson search <query>      list sessions whose messages match query")
-		fmt.Println("  Poisson -v                  print version")
+		fmt.Print(helpText())
 	}
+}
+
+func helpText() string {
+	return fmt.Sprintf(`poisson %s
+usage: Poisson [command] [options]
+
+Commands:
+  Poisson                     interactive REPL
+  Poisson login <provider>    OAuth login
+  Poisson logout <provider>   clear stored tokens
+  Poisson sessions            list sessions
+  Poisson resume <session-id> resume a session in the TUI
+  Poisson cost [session-id]   show session cost
+  Poisson search <query>      search session history
+
+Options:
+  -p, --print <prompt>        run one prompt without TUI; reads stdin if omitted
+  --no-skills                 disable all skills, including skills in subagents
+  --yolo                      auto-approve risky bash in headless mode
+  --model <provider/model>    select provider and model
+  --session <id>              reuse session in headless mode
+  -v, --version               print version
+  -h, --help                  show this help
+`, version)
 }
 
 // parseArgs parses the top-level CLI flags/args, returning the accumulated

@@ -103,6 +103,18 @@ func TestParseArgsModelAndSessionDoNotSwallowNextFlag(t *testing.T) {
 	}
 }
 
+func TestHelpDocumentsTopLevelOptions(t *testing.T) {
+	help := helpText()
+	for _, option := range []string{"-p, --print", "--no-skills", "--yolo", "--model", "--session", "-v, --version", "-h, --help"} {
+		if !strings.Contains(help, option) {
+			t.Errorf("help omits %q", option)
+		}
+	}
+	if !strings.Contains(help, "disable all skills, including skills in subagents") {
+		t.Error("help does not explain --no-skills scope")
+	}
+}
+
 func TestResolvePrintRuntimeRestoresExistingSession(t *testing.T) {
 	cfg := config.DefaultConfig()
 	sess := &store.Session{ID: "s1", Provider: "xai", Model: "grok-build"}
