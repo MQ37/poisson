@@ -197,7 +197,7 @@ via `/providers` without naming a model):
 # default = "ollama"                 # anthropic | ollama | xai | openai | openrouter | llamacpp
 
 [anthropic]
-# model = "claude-opus-5"          # or claude-sonnet-5 (both adaptive-reasoning)
+# model = "claude-opus-5"          # or claude-sonnet-5 / claude-fable-5 (all adaptive-reasoning)
 # classifier = "claude-sonnet-5"    # bash-risk classifier for this provider
 # api_key = "sk-ant-..."             # optional; OAuth (auth.json) preferred
 

@@ -22,7 +22,17 @@ type ModelSettings struct {
 
 // KnownModels is a registry of model metadata indexed by provider/model ID.
 var KnownModels = map[string]ModelSettings{
-	// Anthropic — claude-opus-5 and claude-sonnet-5, both adaptive-thinking.
+	// Anthropic — claude-fable-5, claude-opus-5, claude-sonnet-5, all
+	// adaptive-thinking. claude-haiku-4-5 is deliberately absent here: it's
+	// never a session model, only the fixed web-search helper (see
+	// anthropic_web.go's anthropicWebModel).
+	"anthropic/claude-fable-5": {
+		ContextWindow:    1000000,
+		SupportsEffort:   true,
+		EffortLevels:     []string{"low", "medium", "high", "xhigh", "max"},
+		Vision:           true,
+		AdaptiveThinking: true,
+	},
 	"anthropic/claude-opus-5": {
 		ContextWindow:    1000000,
 		SupportsEffort:   true,
