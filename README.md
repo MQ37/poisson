@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.jpg" alt="poisson — a coding agent that lives in your terminal" width="600">
+  <img src="assets/logo.jpg" alt="poisson — a coding agent that lives in your terminal" width="420">
 </p>
 
 <p align="center">
