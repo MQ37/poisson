@@ -135,7 +135,7 @@ func (p *OpenAIProvider) fetchUsage(ctx context.Context) (*CodexUsage, error) {
 		_, rerr := auth.ForceRefresh(p.auth, "openai", auth.RefreshOpenAIToken)
 		auth.StoreMu.Unlock()
 		if rerr != nil {
-			return nil, fmt.Errorf("token expired, refresh failed: %w", rerr)
+			return nil, fmt.Errorf("token expired, refresh failed: %w — run: px login openai", rerr)
 		}
 		resp, err = do()
 		if err != nil {

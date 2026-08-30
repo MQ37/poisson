@@ -93,7 +93,7 @@ func (p *XAIProvider) streamWithRetry(ctx context.Context, req *Request, retry i
 	if resp.StatusCode == 401 && retry == 0 {
 		resp.Body.Close()
 		if _, err := auth.ForceRefreshXAI(p.auth); err != nil {
-			return nil, fmt.Errorf("token expired, refresh failed: %w", err)
+			return nil, fmt.Errorf("token expired, refresh failed: %w — run: px login xai", err)
 		}
 		return p.streamWithRetry(ctx, req, 1)
 	}

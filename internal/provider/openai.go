@@ -124,7 +124,7 @@ func (p *OpenAIProvider) streamWithRetry(ctx context.Context, req *Request, retr
 		if rerr == nil {
 			return p.streamWithRetry(ctx, req, 1)
 		}
-		return nil, fmt.Errorf("token expired, refresh failed: %w", rerr)
+		return nil, fmt.Errorf("token expired, refresh failed: %w — run: px login openai", rerr)
 	}
 
 	if resp.StatusCode != 200 {

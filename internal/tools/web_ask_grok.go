@@ -51,7 +51,7 @@ func execGrokSearch(ctx context.Context, store auth.AuthStore, query string, num
 	if err != nil && statusCode == 401 {
 		refreshed, rerr := auth.ForceRefreshXAI(store)
 		if rerr != nil {
-			return "", WebCall{}, fmt.Errorf("token expired, refresh failed: %w", rerr)
+			return "", WebCall{}, fmt.Errorf("token expired, refresh failed: %w — run: px login xai", rerr)
 		}
 		result, spend, _, err = doGrokSearch(ctx, query, num, refreshed.Access)
 	}

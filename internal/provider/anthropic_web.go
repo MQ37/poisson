@@ -184,7 +184,7 @@ func (p *AnthropicProvider) webHelper(ctx context.Context, systemExtra, userText
 	reply, status, err := p.doWebHelper(ctx, payload, isOAuth)
 	if err != nil && status == 401 && isOAuth {
 		if rerr := p.forceRefreshOAuth(); rerr != nil {
-			return anthropicWebReply{}, fmt.Errorf("token expired, refresh failed: %w", rerr)
+			return anthropicWebReply{}, fmt.Errorf("token expired, refresh failed: %w — run: px login anthropic", rerr)
 		}
 		reply, _, err = p.doWebHelper(ctx, payload, isOAuth)
 	}

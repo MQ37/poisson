@@ -165,7 +165,7 @@ func (p *AnthropicProvider) streamWithRetry(ctx context.Context, req *Request, r
 	if resp.StatusCode == 401 && isOAuth && retry == 0 {
 		resp.Body.Close()
 		if err := p.forceRefreshOAuth(); err != nil {
-			return nil, fmt.Errorf("token expired, refresh failed: %w", err)
+			return nil, fmt.Errorf("token expired, refresh failed: %w — run: px login anthropic", err)
 		}
 		return p.streamWithRetry(ctx, req, 1)
 	}

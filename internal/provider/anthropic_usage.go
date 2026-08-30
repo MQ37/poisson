@@ -124,7 +124,7 @@ func (p *AnthropicProvider) fetchUsage(ctx context.Context) (*AnthropicUsageLimi
 		_, rerr := auth.ForceRefresh(p.auth, "anthropic", auth.RefreshAnthropicToken)
 		auth.StoreMu.Unlock()
 		if rerr != nil {
-			return nil, fmt.Errorf("token expired, refresh failed: %w", rerr)
+			return nil, fmt.Errorf("token expired, refresh failed: %w — run: px login anthropic", rerr)
 		}
 		resp, err = do()
 		if err != nil {
