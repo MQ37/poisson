@@ -165,6 +165,11 @@ Commands:
   Poisson cost [session-id]   show session cost
   Poisson search <query>      search session history
 
+Login flags (anthropic, openai):
+  --manual                    paste the auth code instead of waiting on a
+                               local browser callback — for headless/SSH
+                               sessions where no browser can reach this host
+
 Options:
   -p, --print <prompt>        run one prompt without TUI; reads stdin if omitted
   --no-skills                 disable all skills, including skills in subagents
@@ -721,16 +726,22 @@ func runSearch(st *store.Store, args []string) (stdout, stderr string, code int)
 
 func cmdLogin(args []string) {
 	if len(args) == 0 {
-		fmt.Println("usage: Poisson login <provider>")
+		fmt.Println("usage: Poisson login <provider> [--manual]")
 		fmt.Println("providers: anthropic, xai, openai, openrouter")
 		return
 	}
 	prov := strings.ToLower(args[0])
+	manual := false
+	for _, a := range args[1:] {
+		if a == "--manual" {
+			manual = true
+		}
+	}
 
 	switch prov {
 	case "anthropic":
 		fmt.Println("Starting Anthropic OAuth login (Claude Pro/Max)...")
-		entry, err := auth.LoginAnthropic()
+		entry, err := auth.LoginAnthropic(manual)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
 			os.Exit(1)
@@ -757,7 +768,7 @@ func cmdLogin(args []string) {
 
 	case "openai":
 		fmt.Println("Starting OpenAI Codex OAuth login (ChatGPT Plus/Pro)...")
-		entry, err := auth.LoginOpenAI()
+		entry, err := auth.LoginOpenAI(manual)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "login failed: %v\n", err)
 			os.Exit(1)

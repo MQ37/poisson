@@ -46,8 +46,9 @@ func createState() (string, error) {
 
 // LoginOpenAI performs the OpenAI Codex OAuth flow: PKCE, a loopback callback
 // server on the fixed port 1455, browser redirect, then code→token exchange.
-// Falls back to manual code paste if the port is busy.
-func LoginOpenAI() (*AuthEntry, error) {
+// Falls back to manual code paste if the port is busy, or unconditionally
+// when manual is true (headless/SSH session — see LoginAnthropic's doc).
+func LoginOpenAI(manual bool) (*AuthEntry, error) {
 	verifier, challenge, err := generatePKCE()
 	if err != nil {
 		return nil, fmt.Errorf("pkce: %w", err)
@@ -61,8 +62,11 @@ func LoginOpenAI() (*AuthEntry, error) {
 	var codeCh chan string
 	var errCh chan error
 
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", openaiRedirectPort))
-	if err == nil {
+	var listener net.Listener
+	if !manual {
+		listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", openaiRedirectPort))
+	}
+	if err == nil && !manual {
 		usedServer = true
 		codeCh = make(chan string, 1)
 		errCh = make(chan error, 1)
@@ -129,7 +133,11 @@ func LoginOpenAI() (*AuthEntry, error) {
 		}
 	}
 
-	fmt.Printf("Port %d is busy. Open this URL manually:\n%s\n", openaiRedirectPort, authURL)
+	if manual {
+		fmt.Printf("Open this URL manually:\n%s\n", authURL)
+	} else {
+		fmt.Printf("Port %d is busy. Open this URL manually:\n%s\n", openaiRedirectPort, authURL)
+	}
 	fmt.Printf("After login, paste the redirect URL or just the code here:\n")
 	var input string
 	fmt.Scanln(&input)

@@ -58,20 +58,28 @@ func openBrowser(url string) {
 
 // LoginAnthropic performs the full OAuth flow: PKCE, callback server,
 // browser redirect, token exchange. Uses fixed port 53692 (registered
-// with Anthropic). Falls back to manual paste if the port is busy.
-func LoginAnthropic() (*AuthEntry, error) {
+// with Anthropic). Falls back to manual paste if the port is busy, or
+// unconditionally when manual is true — for a headless/SSH session where
+// the port binds fine locally but a real browser on another machine can
+// never reach it, so waiting on the callback would just time out after 5
+// minutes instead of failing fast into the paste prompt.
+func LoginAnthropic(manual bool) (*AuthEntry, error) {
 	verifier, challenge, err := generatePKCE()
 	if err != nil {
 		return nil, fmt.Errorf("pkce: %w", err)
 	}
 
-	// Try to start callback server on the fixed registered port.
+	// Try to start callback server on the fixed registered port, unless the
+	// caller already knows it can't be reached (manual).
 	usedServer := false
 	var codeCh chan string
 	var errCh chan error
 
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", anthropicRedirectPort))
-	if err == nil {
+	var listener net.Listener
+	if !manual {
+		listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", anthropicRedirectPort))
+	}
+	if err == nil && !manual {
 		usedServer = true
 		codeCh = make(chan string, 1)
 		errCh = make(chan error, 1)
@@ -129,7 +137,11 @@ func LoginAnthropic() (*AuthEntry, error) {
 		fmt.Printf("Open this URL in your browser:\n%s\n", authURL)
 		openBrowser(authURL)
 	} else {
-		fmt.Printf("Port %d is busy. Open this URL manually:\n%s\n", anthropicRedirectPort, authURL)
+		if manual {
+			fmt.Printf("Open this URL manually:\n%s\n", authURL)
+		} else {
+			fmt.Printf("Port %d is busy. Open this URL manually:\n%s\n", anthropicRedirectPort, authURL)
+		}
 		fmt.Printf("After login, paste the redirect URL or just the code here:\n")
 	}
 

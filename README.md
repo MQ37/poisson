@@ -116,6 +116,10 @@ px login xai         # SuperGrok — browser OAuth
 px login openrouter  # plain API key from https://openrouter.ai/keys
 px login ollama      # local Ollama at http://localhost:11434 (no auth needed)
 # llamacpp: local llama-server at http://localhost:11212, no auth needed either
+
+# anthropic/openai on a headless/SSH host: add --manual to paste the auth
+# code instead of waiting on a local browser callback that can't be reached.
+px login anthropic --manual
 ```
 
 Then just:
