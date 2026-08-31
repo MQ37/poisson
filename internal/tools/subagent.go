@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/sandbox"
 	"github.com/mq37/poisson/internal/store"
@@ -54,6 +55,12 @@ type SubagentTool struct {
 	providerFn      func() string
 	modelFn         func() string
 	effortFn        func() string
+	// cfgFn resolves the live config, used to validate a model/effort
+	// override in Execute and to build the curated model list Description()
+	// surfaces. nil (the default, until SetConfigFn is called) means overrides
+	// are rejected outright — same fail-closed default this file already uses
+	// for provider/model resolution.
+	cfgFn           func() *config.Config
 	skillsEnabledFn func() bool // nil, or unset result, means "enabled" (matches the main session's default)
 	approvalFn      SubagentApproval
 
@@ -146,6 +153,11 @@ func (t *SubagentTool) SetRuntime(providerFn, modelFn, effortFn func() string) {
 	t.effortFn = effortFn
 }
 
+// SetConfigFn supplies a live config resolver (see cfgFn's doc comment).
+func (t *SubagentTool) SetConfigFn(cfgFn func() *config.Config) {
+	t.cfgFn = cfgFn
+}
+
 // SetSkillsEnabledFn supplies a live resolver for whether the main session
 // has skills enabled, so a spawned subagent mirrors that (SetSkills(false)
 // / --no-skills means the whole tree, not just the parent, goes without).
@@ -174,8 +186,35 @@ func (t *SubagentTool) SetClassifierModelFn(fn func() string) {
 
 func (t *SubagentTool) Name() string { return "subagent" }
 
+// subagentBaseDescription is the tool description's static part — the
+// model/effort override section is appended dynamically by Description(),
+// since the available models depend on which provider is live.
+const subagentBaseDescription = "Spawn a one-shot child Poisson agent to complete a specific task. The child has every tool you do (read, write, edit, bash, web_search, web_ask, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. The child returns its final output when done. It cannot ask questions — give it a complete, self-contained task. Optional sandboxIds shares specific sandboxes (from create_sandbox) with the child — it can only use ones named here, it cannot create its own."
+
+// subagentEffortGuide is shared across every model — the five levels mean
+// roughly the same thing regardless of which model they're applied to (per
+// Anthropic's own effort docs), so this doesn't need a per-model variant.
+const subagentEffortGuide = "Effort levels (low -> max) trade capability for cost: low = cheap/scoped, medium = balanced, high = default, xhigh = hardest coding/agentic tasks, max = frontier-only and unconstrained. Reach for xhigh/max sparingly — they cost the most, both in dollars and in Claude subscription usage quota."
+
+// Description lists the calling provider's available models (with a
+// one-line rationale each) and the effort cheatsheet above, so the model
+// knows what it can escalate a subagent to and when it's worth it. Falls
+// back to the static base text when the runtime resolvers (SetRuntime/
+// SetConfigFn) haven't been wired yet, or the provider has no curated
+// models — never a broken or half-rendered description.
 func (t *SubagentTool) Description() string {
-	return "Spawn a one-shot child Poisson agent to complete a specific task. The child has every tool you do (read, write, edit, bash, web_search, web_ask, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. The child returns its final output when done. It cannot ask questions — give it a complete, self-contained task. Optional sandboxIds shares specific sandboxes (from create_sandbox) with the child — it can only use ones named here, it cannot create its own."
+	if t.cfgFn == nil || t.providerFn == nil {
+		return subagentBaseDescription
+	}
+	prov := t.providerFn()
+	if prov == "" {
+		return subagentBaseDescription
+	}
+	list := provider.FormatModelsForPrompt(t.cfgFn(), prov)
+	if list == "" {
+		return subagentBaseDescription
+	}
+	return subagentBaseDescription + "\n\nOptional model/effort override for this subagent only (default: inherit the main session's model/effort). Every subagent runs on the same provider as the main session (" + prov + ") — only the model within it is choosable. Available models:\n" + list + "\n\n" + subagentEffortGuide
 }
 
 func (t *SubagentTool) Schema() json.RawMessage {
@@ -184,7 +223,9 @@ func (t *SubagentTool) Schema() json.RawMessage {
 		"properties": {
 			"task": {"type": "string", "description": "Complete, self-contained task for the subagent. Include context, file paths, and expected output format."},
 			"name": {"type": "string", "description": "Display name for the subagent. If omitted, a name is chosen automatically."},
-			"sandboxIds": {"type": "array", "items": {"type": "string"}, "description": "Sandboxes (from create_sandbox) to let this child use — each id must be one this session actually created. The child cannot create its own sandboxes."}
+			"sandboxIds": {"type": "array", "items": {"type": "string"}, "description": "Sandboxes (from create_sandbox) to let this child use — each id must be one this session actually created. The child cannot create its own sandboxes."},
+			"model": {"type": "string", "description": "Override model for this subagent only, same provider as the main session — see this tool's description for available models. Default: inherit the main session's model."},
+			"effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"], "description": "Override effort for this subagent only. Default: inherit the main session's effort."}
 		},
 		"required": ["task"]
 	}`)
@@ -195,6 +236,8 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		Task       string   `json:"task"`
 		Name       string   `json:"name"`
 		SandboxIDs []string `json:"sandboxIds"`
+		Model      string   `json:"model"`
+		Effort     string   `json:"effort"`
 	}
 	if err := json.Unmarshal(input, &params); err != nil {
 		return ToolResult{Error: "invalid input: " + err.Error()}, nil
@@ -244,11 +287,37 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	if model == "" {
 		return ToolResult{Error: "subagent cannot start: main session reported no model"}, nil
 	}
-	childSessionID := store.NewSubagentID()
 	effort := ""
 	if t.effortFn != nil {
 		effort = t.effortFn()
 	}
+
+	// Optional per-subagent model/effort override, same provider as the
+	// main session always (prov above — never taken from the request).
+	// Rejects unknown models/efforts loudly instead of silently falling
+	// back to the inherited default, same fail-closed discipline as every
+	// other input this tool validates.
+	if params.Model != "" || params.Effort != "" {
+		if t.cfgFn == nil {
+			return ToolResult{Error: "model/effort override requested but not supported in this session"}, nil
+		}
+		cfg := t.cfgFn()
+		if params.Model != "" {
+			if _, ok := provider.MergedModelSettings(cfg, prov, params.Model); !ok {
+				return ToolResult{Error: fmt.Sprintf("unknown model %q for provider %q — see this tool's description for available models", params.Model, prov)}, nil
+			}
+			model = params.Model
+		}
+		if params.Effort != "" {
+			settings, _ := provider.MergedModelSettings(cfg, prov, model)
+			if !effortLevelAllowed(settings, params.Effort) {
+				return ToolResult{Error: fmt.Sprintf("effort %q not supported by model %q", params.Effort, model)}, nil
+			}
+			effort = params.Effort
+		}
+	}
+
+	childSessionID := store.NewSubagentID()
 	classifierModel := ""
 	if t.classifierModelFn != nil {
 		classifierModel = t.classifierModelFn()
@@ -488,4 +557,17 @@ done:
 		result += " (subagent reported failure)"
 	}
 	return ToolResult{Content: result}, nil
+}
+
+// effortLevelAllowed reports whether level is one of settings' EffortLevels.
+// A model with none listed (SupportsEffort false, or effort simply unlisted)
+// rejects every explicit override — same fail-closed default as everything
+// else in this override path.
+func effortLevelAllowed(settings provider.ModelSettings, level string) bool {
+	for _, l := range settings.EffortLevels {
+		if l == level {
+			return true
+		}
+	}
+	return false
 }

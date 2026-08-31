@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/subagent"
 )
@@ -656,5 +657,88 @@ printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindo
 	// being timing-flaky on a loaded CI box.
 	if elapsed > 2*sleep {
 		t.Errorf("wall-clock elapsed = %v, want well under %v (n=%d * %v serial) — subagents ran one at a time somewhere in the real dispatch path", elapsed, n*sleep, n, sleep)
+	}
+}
+
+// TestSubagentToolModelEffortOverrideReachesChildEnv proves the override
+// path end-to-end with a REAL spawned process: a per-call model/effort in
+// the tool input must reach the child as POISSON_SUBAGENT_MODEL/_EFFORT
+// (see subagent.buildSpawnEnv), overriding the main session's own
+// claude-sonnet-5/"" — not just validate cleanly and then silently spawn
+// with the inherited values.
+func TestSubagentToolModelEffortOverrideReachesChildEnv(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-echo-env.sh"
+	script := `#!/bin/sh
+printf '{"type":"text","text":"model=%s effort=%s"}\n' "$POISSON_SUBAGENT_MODEL" "$POISSON_SUBAGENT_EFFORT"
+printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindow":200000}\n'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := NewSubagentTool(".", alwaysApproveSubagent)
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-sonnet-5" }, // main session's own model
+		func() string { return "" },
+	)
+	tool.SetConfigFn(func() *config.Config { return nil })
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something","model":"claude-opus-5","effort":"xhigh"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error: %q", res.Error)
+	}
+	if !strings.Contains(res.Content, "model=claude-opus-5 effort=xhigh") {
+		t.Fatalf("override did not reach the child env: %q", res.Content)
+	}
+}
+
+// TestSubagentToolEffortOnlyOverridePreservesInheritedModel proves effort
+// can be overridden independently of model (same model, different effort —
+// explicitly a supported combination): the child must see the inherited
+// claude-sonnet-5 alongside the overridden effort, not fall back to some
+// other model just because effort was the only field set.
+func TestSubagentToolEffortOnlyOverridePreservesInheritedModel(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-echo-env-2.sh"
+	script := `#!/bin/sh
+printf '{"type":"text","text":"model=%s effort=%s"}\n' "$POISSON_SUBAGENT_MODEL" "$POISSON_SUBAGENT_EFFORT"
+printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindow":200000}\n'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := NewSubagentTool(".", alwaysApproveSubagent)
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-sonnet-5" },
+		func() string { return "" },
+	)
+	tool.SetConfigFn(func() *config.Config { return nil })
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something","effort":"xhigh"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error: %q", res.Error)
+	}
+	if !strings.Contains(res.Content, "model=claude-sonnet-5 effort=xhigh") {
+		t.Fatalf("expected inherited model + overridden effort, got: %q", res.Content)
 	}
 }

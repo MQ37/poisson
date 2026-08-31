@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mq37/poisson/internal/config"
@@ -181,5 +182,43 @@ func TestMergedCuratedModelsOverridesKnownModelContextWindow(t *testing.T) {
 		if m.ID == "claude-opus-5" && m.ContextWindow != 42 {
 			t.Errorf("ContextWindow = %d, want 42 (overridden)", m.ContextWindow)
 		}
+	}
+}
+
+func TestFormatModelsForPromptListsEveryAnthropicModelWithDescription(t *testing.T) {
+	cfg := config.DefaultConfig()
+	got := FormatModelsForPrompt(cfg, "anthropic")
+	for _, id := range []string{"claude-fable-5", "claude-opus-5", "claude-sonnet-5"} {
+		if !strings.Contains(got, id) {
+			t.Errorf("output missing model %q:\n%s", id, got)
+		}
+	}
+	if strings.Contains(got, "(no description)") {
+		t.Errorf("every curated Anthropic model should have a real description:\n%s", got)
+	}
+}
+
+func TestFormatModelsForPromptEmptyForUncuratedProvider(t *testing.T) {
+	if got := FormatModelsForPrompt(config.DefaultConfig(), "nope"); got != "" {
+		t.Errorf("expected empty string for a provider with no curated models, got %q", got)
+	}
+}
+
+func TestFormatModelsForPromptFallsBackForMissingDescription(t *testing.T) {
+	// ollama's curated models don't have a Description set yet.
+	got := FormatModelsForPrompt(config.DefaultConfig(), "ollama")
+	if !strings.Contains(got, "(no description)") {
+		t.Errorf("expected the placeholder for a model with no Description:\n%s", got)
+	}
+}
+
+func TestFormatModelsForPromptSurfacesConfigOnlyModel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelOverrides["anthropic"] = map[string]config.ModelOverride{
+		"claude-made-up": {ContextWindow: 300000},
+	}
+	got := FormatModelsForPrompt(cfg, "anthropic")
+	if !strings.Contains(got, "claude-made-up") {
+		t.Errorf("expected config-only model to be listed:\n%s", got)
 	}
 }

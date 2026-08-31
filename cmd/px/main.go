@@ -515,6 +515,7 @@ func runREPL(noSkills bool, resumeSessionID string) {
 	agentRef = a
 	tools.BindSessionTitle(reg, a.SessionID, a.EnsureSession)
 	tools.BindSubagentRuntime(reg, func() string { return a.Provider().ID() }, func() string { return a.Model() }, func() string { return a.Effort() })
+	tools.BindSubagentConfig(reg, a.Config)
 	tools.BindSubagentProgress(reg, a.SendSubagentProgress)
 	tools.BindSubagentSkills(reg, a.SkillsEnabled)
 	tools.BindSubagentUsage(reg, a.RecordSubagentUsage)

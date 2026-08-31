@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/sandbox"
 	"github.com/mq37/poisson/internal/store"
@@ -150,6 +151,15 @@ func withSubagentTool(reg *Registry, fn func(*SubagentTool)) {
 // BindSubagentRuntime wires live provider/model/effort resolvers on the subagent tool.
 func BindSubagentRuntime(reg *Registry, providerFn, modelFn, effortFn func() string) {
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetRuntime(providerFn, modelFn, effortFn) })
+}
+
+// BindSubagentConfig wires a live config resolver onto the subagent tool —
+// used to validate a per-call model/effort override in Execute and to build
+// the curated model list Description() surfaces. A separate setter from
+// BindSubagentRuntime (rather than widening its signature) so every existing
+// caller/test of BindSubagentRuntime/SetRuntime keeps compiling unchanged.
+func BindSubagentConfig(reg *Registry, cfgFn func() *config.Config) {
+	withSubagentTool(reg, func(st *SubagentTool) { st.SetConfigFn(cfgFn) })
 }
 
 // BindSessionTitle wires the live current-session-id getter and

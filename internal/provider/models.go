@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -18,6 +19,12 @@ type ModelSettings struct {
 	// how much to think, driven by output_config.effort, instead of a fixed
 	// budget_tokens. Matches what the real Claude Code client sends.
 	AdaptiveThinking bool
+	// Description is a one-line, model-picking rationale surfaced to the LLM
+	// itself (see FormatModelsForPrompt) — what this model is good for and
+	// when to reach for it, not documentation for a human. Empty is fine
+	// (FormatModelsForPrompt falls back to a placeholder); only Anthropic's
+	// session models are filled in so far.
+	Description string
 }
 
 // KnownModels is a registry of model metadata indexed by provider/model ID.
@@ -32,6 +39,7 @@ var KnownModels = map[string]ModelSettings{
 		EffortLevels:     []string{"low", "medium", "high", "xhigh", "max"},
 		Vision:           true,
 		AdaptiveThinking: true,
+		Description:      "Frontier-only: long-horizon agents, deepest reasoning, hardest research. Expensive — reserve for tasks Opus 5 measurably can't handle.",
 	},
 	"anthropic/claude-opus-5": {
 		ContextWindow:    1000000,
@@ -39,6 +47,7 @@ var KnownModels = map[string]ModelSettings{
 		EffortLevels:     []string{"low", "medium", "high", "xhigh", "max"},
 		Vision:           true,
 		AdaptiveThinking: true,
+		Description:      "Complex agentic coding, large refactors, multihour autonomous work, hard planning/design decisions. Default high effort; xhigh for the hardest coding/agentic tasks.",
 	},
 	"anthropic/claude-sonnet-5": {
 		ContextWindow:    1000000,
@@ -46,6 +55,7 @@ var KnownModels = map[string]ModelSettings{
 		EffortLevels:     []string{"low", "medium", "high", "xhigh", "max"},
 		Vision:           true,
 		AdaptiveThinking: true,
+		Description:      "Best speed/cost balance — default choice for routine execution and most coding. xhigh for hard coding tasks needing more depth.",
 	},
 	// OpenAI — gpt-5.5 via the ChatGPT Codex subscription (Responses API).
 	// Codex caps the subscription context at 400K; effort tops out at xhigh.
@@ -233,4 +243,27 @@ func MergedCuratedModels(cfg *config.Config, providerID string) []Model {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
+}
+
+// FormatModelsForPrompt lists providerID's curated models (including any
+// config.toml-only additions) with their descriptions, one per line, for
+// injection into a prompt that needs to choose one (see the subagent tool's
+// Description()). Every model is listed, including whichever one is
+// currently active — "here's everything on this provider" reads clearer
+// than a silently-shortened list. Empty string when the provider has no
+// curated entries at all.
+func FormatModelsForPrompt(cfg *config.Config, providerID string) string {
+	models := MergedCuratedModels(cfg, providerID)
+	if len(models) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, m := range models {
+		desc := "(no description)"
+		if s, ok := MergedModelSettings(cfg, providerID, m.ID); ok && s.Description != "" {
+			desc = s.Description
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", m.ID, desc)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
