@@ -670,6 +670,43 @@ func TestTUIInteg_SubagentWidgetShown(t *testing.T) {
 	}
 }
 
+// TestTUIInteg_SubagentWidgetShowsModelOverride verifies a per-call model/
+// effort override (subagent tool's "model"/"effort" input fields) shows up
+// in the widget instead of the main session's own model — proving the
+// widget reports what this subagent call actually runs on, not just
+// whatever the parent session happens to be on.
+func TestTUIInteg_SubagentWidgetShowsModelOverride(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	input := mustJSONTUI(t, map[string]string{
+		"task":   "Design the migration plan",
+		"name":   "planner",
+		"model":  "claude-opus-5",
+		"effort": "xhigh",
+	})
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolStart,
+		ToolName:   "subagent",
+		ToolCallID: "call_1",
+		ToolInput:  input,
+	})
+
+	meta := e.blockMeta(0)
+	if !strings.Contains(meta.SubagentModel, "claude-opus-5") {
+		t.Errorf("widget model = %q, want it to contain the overridden claude-opus-5, not the session's own test-model", meta.SubagentModel)
+	}
+	if strings.Contains(meta.SubagentModel, "test-model") {
+		t.Errorf("widget model = %q, should not show the session's own model when overridden", meta.SubagentModel)
+	}
+	if !strings.Contains(meta.SubagentModel, "xhigh") {
+		t.Errorf("widget model = %q, want the overridden xhigh effort", meta.SubagentModel)
+	}
+
+	line := e.renderBlock(0, 100)
+	if !strings.Contains(line, "claude-opus-5") || !strings.Contains(line, "xhigh") {
+		t.Errorf("rendered widget missing overridden model/effort: %q", line)
+	}
+}
+
 // TestTUIInteg_SubagentWidgetTimerRuns verifies the widget shows an increasing
 // elapsed time while running (the layout is not frozen by the cache).
 func TestTUIInteg_SubagentWidgetTimerRuns(t *testing.T) {

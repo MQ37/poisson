@@ -169,11 +169,11 @@ func (t *TUI) hydrateScrollbackLocked() {
 					// Subagents replay as the same compact widget shown live, not a
 					// full tool card, so resume matches the live view.
 					if b.ToolName == "subagent" {
-						name, task := subagentTaskFromInput(input)
+						name, task, modelOv, effortOv := subagentTaskFromInput(input)
 						if name == "" {
 							name = "subagent"
 						}
-						t.scroll.appendSubagentCard(id, b.ToolCallID, name, task, modelLabel(t.agent))
+						t.scroll.appendSubagentCard(id, b.ToolCallID, name, task, subagentModelEffortLabel(t.agent, modelOv, effortOv))
 					} else {
 						t.scroll.appendToolCallReplay(id, b.ToolCallID, b.ToolName, input)
 					}

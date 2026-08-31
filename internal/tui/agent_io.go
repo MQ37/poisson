@@ -279,11 +279,11 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 			// their internal steps never touch the main conversation.
 			id := t.nextToolID
 			t.nextToolID++
-			name, task := subagentTaskFromInput(ev.ToolInput)
+			name, task, modelOv, effortOv := subagentTaskFromInput(ev.ToolInput)
 			if name == "" {
 				name = "subagent"
 			}
-			t.scroll.appendSubagentCard(id, ev.ToolCallID, name, task, modelLabel(t.agent))
+			t.scroll.appendSubagentCard(id, ev.ToolCallID, name, task, subagentModelEffortLabel(t.agent, modelOv, effortOv))
 			break
 		}
 		id := t.nextToolID

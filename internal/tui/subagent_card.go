@@ -369,13 +369,18 @@ func collapseWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-// subagentTaskFromInput extracts the "task" and "name" fields from a subagent
-// tool-call input payload.
-func subagentTaskFromInput(input []byte) (name, task string) {
+// subagentTaskFromInput extracts the "task", "name", "model", and "effort"
+// fields from a subagent tool-call input payload. model/effort are "" when
+// the call didn't set them (i.e. it inherits the parent session's own —
+// see subagentModelEffortLabel, the only caller that cares about telling
+// the two cases apart).
+func subagentTaskFromInput(input []byte) (name, task, model, effort string) {
 	var in struct {
-		Task string `json:"task"`
-		Name string `json:"name"`
+		Task   string `json:"task"`
+		Name   string `json:"name"`
+		Model  string `json:"model"`
+		Effort string `json:"effort"`
 	}
 	_ = json.Unmarshal(input, &in)
-	return in.Name, in.Task
+	return in.Name, in.Task, in.Model, in.Effort
 }

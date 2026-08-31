@@ -29,7 +29,7 @@ type BlockMeta struct {
 	ProviderCallID        string
 	ToolInput             []byte
 	SubagentTask          string  // subagent widget: the task prompt (truncated for display)
-	SubagentModel         string  // subagent widget: provider/model label
+	SubagentModel         string  // subagent widget: "effort · provider/model" label (see subagentModelEffortLabel) — the actual model/effort this call runs on, which may differ from the main session's own via a per-call override
 	SubagentTurns         int     // subagent widget: live/final turn count reported by the child
 	SubagentContextTokens int     // subagent widget: live/final context tokens used, reported by the child
 	SubagentContextWindow int     // subagent widget: the child's own model context window

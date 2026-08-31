@@ -232,6 +232,33 @@ func modelLabel(a *agent.Agent) string {
 	return a.Provider().ID() + "/" + a.Model()
 }
 
+// subagentModelEffortLabel returns the "effort · provider/model" label for a
+// subagent widget — the actual model/effort THIS subagent call runs on,
+// which can differ from the main session's own (see the subagent tool's
+// per-call model/effort override, internal/tools/subagent.go). modelOverride/
+// effortOverride are the raw "model"/"effort" fields read straight from the
+// tool call's input JSON (see subagentTaskFromInput) — empty means that
+// field wasn't set on this call, i.e. it inherited the parent's own
+// model/effort, same as modelLabel already shows for the main session.
+func subagentModelEffortLabel(a *agent.Agent, modelOverride, effortOverride string) string {
+	if a == nil {
+		return "-"
+	}
+	model := modelOverride
+	if model == "" {
+		model = a.Model()
+	}
+	effort := effortOverride
+	if effort == "" {
+		effort = a.Effort()
+	}
+	label := a.Provider().ID() + "/" + model
+	if effort != "" {
+		label = effort + " · " + label
+	}
+	return label
+}
+
 // inputHeight returns how many screen rows the input currently needs.
 // Caps at a third of total rows so the scrollback stays readable.
 func (t *TUI) inputHeight(width int) int {

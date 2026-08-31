@@ -5,6 +5,20 @@ import (
 	"testing"
 )
 
+func TestSubagentTaskFromInputParsesModelEffort(t *testing.T) {
+	name, task, model, effort := subagentTaskFromInput([]byte(`{"task":"do x","name":"n","model":"claude-opus-5","effort":"xhigh"}`))
+	if name != "n" || task != "do x" || model != "claude-opus-5" || effort != "xhigh" {
+		t.Errorf("got (%q,%q,%q,%q)", name, task, model, effort)
+	}
+}
+
+func TestSubagentTaskFromInputEmptyModelEffortWhenOmitted(t *testing.T) {
+	_, _, model, effort := subagentTaskFromInput([]byte(`{"task":"do x"}`))
+	if model != "" || effort != "" {
+		t.Errorf("model=%q effort=%q, want both empty (no override) when omitted", model, effort)
+	}
+}
+
 func TestUpdateSubagentTurnsLiveWhileRunning(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendSubagentCard(1, "call-1", "explore", "check the flow", "glm-5.2:cloud")
