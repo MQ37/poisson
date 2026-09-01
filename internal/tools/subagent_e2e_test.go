@@ -700,6 +700,53 @@ printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindo
 	if !strings.Contains(res.Content, "model=claude-opus-5 effort=xhigh") {
 		t.Fatalf("override did not reach the child env: %q", res.Content)
 	}
+	// The durable "Ran on ..." record (see subagent.go's Execute) must
+	// reflect the OVERRIDDEN model/effort, not the session's own inherited
+	// claude-sonnet-5 — this is what the TUI widget's authoritative label
+	// (subagentRanOnFromResult) reads back once the call is done.
+	if !strings.Contains(res.Content, "Ran on anthropic/claude-opus-5 (xhigh effort).") {
+		t.Fatalf("result text missing authoritative Ran-on record: %q", res.Content)
+	}
+}
+
+// TestSubagentToolResultRecordsInheritedModelWhenNoOverride proves the
+// "Ran on ..." record is present even on a plain call with no override —
+// this is the value a resumed session (or one where the main model later
+// changed) must be able to read back, instead of re-deriving "whatever the
+// CURRENT agent happens to be on" at render time.
+func TestSubagentToolResultRecordsInheritedModelWhenNoOverride(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-done.sh"
+	script := `#!/bin/sh
+printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindow":200000}\n'
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := NewSubagentTool(".", alwaysApproveSubagent)
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-sonnet-5" },
+		func() string { return "high" },
+	)
+	tool.SetConfigFn(func() *config.Config { return nil })
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error: %q", res.Error)
+	}
+	if !strings.Contains(res.Content, "Ran on anthropic/claude-sonnet-5 (high effort).") {
+		t.Fatalf("result text missing authoritative Ran-on record for the inherited case: %q", res.Content)
+	}
 }
 
 // TestSubagentToolEffortOnlyOverridePreservesInheritedModel proves effort

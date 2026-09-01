@@ -218,6 +218,31 @@ func subagentCostFromResult(content string) (cost float64, ok bool) {
 	return v, true
 }
 
+// subagentRanOnRe extracts the "Ran on <provider>/<model> (<effort> effort)."
+// sentence subagent.go's Execute appends to its own result text — the
+// durable, authoritative record of what a finished call actually ran on
+// (see that file's comment for why). The effort group is optional (a model
+// with no effort knob omits the parenthetical entirely).
+var subagentRanOnRe = regexp.MustCompile(`Ran on (\S+)(?: \((\w+) effort\))?\.`)
+
+// subagentRanOnFromResult extracts the "effort · provider/model" label a
+// finished subagent call actually ran on, from its own result text.
+// ok=false means the text carries no such marker — an old session recorded
+// before this feature existed, or a run that never reached that summary
+// line (e.g. cancelled before completion) — the caller then keeps whatever
+// label was set at append time instead of clobbering it with nothing.
+func subagentRanOnFromResult(content string) (label string, ok bool) {
+	m := subagentRanOnRe.FindStringSubmatch(content)
+	if m == nil {
+		return "", false
+	}
+	label = m[1]
+	if m[2] != "" {
+		label = m[2] + " · " + label
+	}
+	return label, true
+}
+
 // completeSubagentCard marks the matching subagent widget done and reports
 // whether a widget matched. Match is by providerCallID when set, otherwise the
 // most recent still-running widget. content is the tool_result text (see
@@ -237,6 +262,14 @@ func (s *scrollback) completeSubagentCard(providerCallID, content, errMsg string
 		b.meta.ToolError = errMsg
 		if cost, ok := subagentCostFromResult(content); ok {
 			b.meta.SubagentCost, b.meta.SubagentCostKnown = cost, true
+		}
+		// Overwrite the append-time guess (main session's live model/effort
+		// at spawn) with the authoritative value the child actually ran on —
+		// correct even after the main session later switches models, or on
+		// a resumed session where the live agent's CURRENT model would
+		// otherwise silently mislabel old history.
+		if label, ok := subagentRanOnFromResult(content); ok {
+			b.meta.SubagentModel = label
 		}
 		switch {
 		case durationMs < 0:

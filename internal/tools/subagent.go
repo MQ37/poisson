@@ -549,6 +549,20 @@ done:
 	if recorded {
 		result += fmt.Sprintf(" Cost: $%.4f.", recordedCost)
 	}
+	// "Ran on <provider>/<model> (<effort> effort)." — the durable record of
+	// what this call actually ran on, parsed back out by the TUI (see
+	// subagentRanOnFromResult) to label the widget correctly even after the
+	// main session later switches models, or on a resumed session where
+	// re-deriving it from the CURRENT agent would silently show the wrong,
+	// ever-changing model for old history. Same "smuggle it in the result
+	// text" pattern this file already uses for Cost above, for the same
+	// reason: the child's ephemeral DB is gone by the time anyone would want
+	// to ask it directly.
+	result += fmt.Sprintf(" Ran on %s/%s", prov, model)
+	if effort != "" {
+		result += " (" + effort + " effort)"
+	}
+	result += "."
 	if childErr != "" {
 		result += "\nError: " + childErr
 		return ToolResult{Content: result, Error: childErr}, nil
