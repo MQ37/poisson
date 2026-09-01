@@ -9,14 +9,21 @@ import (
 )
 
 // layoutSubagentCard renders a compact one-line subagent widget in the spirit
-// of the Grok CLI. The spinner/glyph, name, and elapsed timer are anchored on
-// the LEFT so the runtime is always visible no matter how long the task is;
-// the task (+ model) fills the remaining width and is truncated with an
-// ellipsis. Turn count and context usage (once reported) ride the same
-// segment as the timer.
+// of the Grok CLI. The spinner/glyph, name, duration, turn count, context
+// usage, speed, model/effort, and cost are anchored on the LEFT so they're
+// always visible no matter how long the task is; the task alone fills the
+// remaining width and is truncated with an ellipsis.
 //
-//	⁘ explore  3.2s  3 turns  1,234 / 200,000  Explore checkout flow · glm-5.2:cloud
-//	✓ explore  5.6s  4 turns  8,000 / 200,000  Explore checkout flow · glm-5.2:cloud
+// IMPORTANT for future fields: anything that must never silently disappear
+// belongs in the left segment (the `dur` accumulator below), never appended
+// to `detail`/task. `detail` is the only part of this line ever truncated,
+// from the end — a real task description routinely fills the whole
+// available width on its own, so anything tacked onto the end of it (this
+// is exactly how the model/effort label was originally, and silently wrong
+// bug that shipped) gets cut off first, before the task itself does.
+//
+//	⁘ explore  3.2s  3 turns  1,234 / 200,000  high · anthropic/claude-opus-5  Explore checkout flow
+//	✓ explore  5.6s  4 turns  8,000 / 200,000  high · anthropic/claude-opus-5  $0.0071  Explore checkout flow
 func layoutSubagentCard(b *Block, width int) []ScreenRow {
 	if width < 12 {
 		width = 12
@@ -83,6 +90,20 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 		}
 	}
 
+	// Model/effort lives in this always-visible left segment, not the task
+	// detail below — detail competes for space with the task text and gets
+	// truncated from the end whenever the task is long (a real-world task
+	// description routinely fills the whole available width on its own),
+	// which silently dropped the model/effort info entirely. This segment
+	// is never truncated.
+	if m := b.meta.SubagentModel; m != "" {
+		if dur != "" {
+			dur += "  " + m
+		} else {
+			dur = m
+		}
+	}
+
 	// Cost is only known once the child is done and its spend was actually
 	// recorded (see completeSubagentCard/subagentCostFromResult) — never
 	// shown on a still-running widget, and never fabricated as $0.0000 for a
@@ -96,14 +117,12 @@ func layoutSubagentCard(b *Block, width int) []ScreenRow {
 		}
 	}
 
+	// detail is ONLY the task text from here on — see this function's own
+	// doc comment above: anything appended here can and will be truncated
+	// away first whenever the task text alone is already long, which is the
+	// common case for a real task description. Model/effort/cost/etc. all
+	// live in the never-truncated `dur` left segment instead.
 	detail := b.meta.SubagentTask
-	if m := b.meta.SubagentModel; m != "" {
-		if detail != "" {
-			detail += " · " + m
-		} else {
-			detail = m
-		}
-	}
 
 	// While the subagent is wrapping up after Ctrl+G, surface it in the card.
 	expediteTag := ""

@@ -5,6 +5,26 @@ import (
 	"testing"
 )
 
+// TestLayoutSubagentCard_ModelSurvivesLongTask is the actual bug reported
+// live: a real task description ("Read-only security review, round 3, of
+// apify/apify-agi PR #113 (branch feat/mpp-pull-mod...") routinely fills the
+// entire available width on its own, and the model/effort label — appended
+// to the END of that same truncated string — silently vanished. Model/effort
+// must survive regardless of task length, at any width the card renders at.
+func TestLayoutSubagentCard_ModelSurvivesLongTask(t *testing.T) {
+	s := newScrollback(200)
+	longTask := "Read-only security review, round 3, of apify/apify-agi PR #113 (branch feat/mpp-pull-mod-recovery) — focus on the recovery-feature path end to end"
+	s.appendSubagentCard(1, "call-1", "security-review-round3-recovery-feature", longTask, "high · anthropic/claude-opus-5")
+
+	for _, width := range []int{80, 100, 120} {
+		rows := layoutSubagentCard(&s.blocks[0], width)
+		plain := stripANSI(rows[0].Text)
+		if !strings.Contains(plain, "claude-opus-5") {
+			t.Errorf("width=%d: model missing from rendered card: %q", width, plain)
+		}
+	}
+}
+
 func TestSubagentTaskFromInputParsesModelEffort(t *testing.T) {
 	name, task, model, effort := subagentTaskFromInput([]byte(`{"task":"do x","name":"n","model":"claude-opus-5","effort":"xhigh"}`))
 	if name != "n" || task != "do x" || model != "claude-opus-5" || effort != "xhigh" {
