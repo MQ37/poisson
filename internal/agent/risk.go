@@ -699,7 +699,13 @@ func (a *Agent) assessBashRiskLLMOnce(ctx context.Context, command, description,
 		workdir = "(unknown)"
 	}
 
-	prompt := fmt.Sprintf("Command:\n%s\n\nPurpose: %s\n\nWorking directory: %s", command, description, workdir)
+	// Redact before this leaves the machine: the classifier call is a real
+	// network request to a (possibly different, possibly remote) model, and
+	// command can carry a live credential a prior command echoed into it —
+	// see guard.RedactSecrets. Risk classification never needs the actual
+	// secret value, only the shape of the command around it.
+	safeCommand := guard.RedactSecrets(command)
+	prompt := fmt.Sprintf("Command:\n%s\n\nPurpose: %s\n\nWorking directory: %s", safeCommand, description, workdir)
 	temp := 0.0
 	// Risk is a coarse one-word label, so classify at the model's LOWEST effort
 	// rather than the agent's configured effort — deep reasoning here just burns

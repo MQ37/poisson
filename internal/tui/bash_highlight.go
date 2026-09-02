@@ -13,7 +13,13 @@ func bashDangerStyle() string   { return fgRed + bold }
 
 // formatBashCommandHighlight styles a bash command like bash-guard: safe tokens
 // in toolTitle yellow, dangerous tokens/patterns in error red (both bold).
+// Redacts secret-shaped substrings first — this is the one place a pending
+// (not-yet-approved) or already-run command reaches a human's eyes, and the
+// one place its text is sent to the risk-classifier LLM's prompt shares the
+// same underlying command string, so a real credential a prior command
+// echoed into this one must never render or leave the machine in the clear.
 func formatBashCommandHighlight(command string) string {
+	command = guard.RedactSecrets(command)
 	var b strings.Builder
 	for _, span := range guard.HighlightSpans(command) {
 		if span.Danger {

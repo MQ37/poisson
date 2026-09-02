@@ -75,6 +75,39 @@ func TestWrapRiskGatedApproval_NeverAutoApprovesObfuscatedDestructiveCommand(t *
 // call never carries the conversation: even with a populated session history,
 // the request must be a single synthetic user message + the fixed classifier
 // system prompt, with none of the prior conversation leaking in.
+// TestAssessBashRiskRedactsSecretFromPrompt guards the risk-classifier LLM
+// call — a real network request, possibly to a different/remote model —
+// against forwarding a live credential the command line happens to carry
+// (e.g. echoed in from an earlier command's output). See risk.go's
+// assessBashRiskLLMOnce and guard.RedactSecrets.
+func TestAssessBashRiskRedactsSecretFromPrompt(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	fp.SetResponses([][]provider.StreamEvent{
+		provider.FakeTextResponse("medium", nil),
+	})
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+
+	token := "apify_api_0000000000000000000000000000000000"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	a.AssessBashRisk(ctx, `curl -H "Authorization: Bearer `+token+`" https://example.com`, "check balance", "/tmp")
+
+	req := fp.LastRequest()
+	if req == nil || len(req.Messages) == 0 {
+		t.Fatal("no risk request captured")
+	}
+	prompt := req.Messages[0].Content[0].Text
+	if strings.Contains(prompt, token) {
+		t.Fatalf("secret leaked into risk-classifier prompt: %q", prompt)
+	}
+	if !strings.Contains(prompt, "[REDACTED]") {
+		t.Fatalf("expected redaction marker in prompt, got %q", prompt)
+	}
+}
+
 func TestAssessBashRiskUsesIsolatedContext(t *testing.T) {
 	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
 	fp.SetResponses([][]provider.StreamEvent{

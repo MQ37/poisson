@@ -403,6 +403,13 @@ func (s *scrollback) selectedText(width, loRow, loCol, hiRow, hiCol int) string 
 	var lines []string
 	for r := loRow; r <= hiRow; r++ {
 		runes := []rune(stripANSI(wrapped[r].Text))
+		cStart, cEnd, drop := rowContentBounds(runes)
+		if drop {
+			// Whole row is border/separator chrome (table divider, code-fence
+			// top/bottom edge) — contributes nothing to a copy, regardless of
+			// how far the drag actually covered it.
+			continue
+		}
 		start, end := 0, len(runes)
 		if r == loRow {
 			start = clampInt(loCol, 0, len(runes))
@@ -410,10 +417,16 @@ func (s *scrollback) selectedText(width, loRow, loCol, hiRow, hiCol int) string 
 		if r == hiRow {
 			end = clampInt(hiCol+1, 0, len(runes))
 		}
+		if start < cStart {
+			start = cStart
+		}
+		if end > cEnd {
+			end = cEnd
+		}
 		if start > end {
 			start = end
 		}
-		lines = append(lines, strings.TrimRight(string(runes[start:end]), " "))
+		lines = append(lines, strings.TrimRight(string(stripInteriorBorders(runes[start:end])), " "))
 	}
 	return strings.Join(lines, "\n")
 }

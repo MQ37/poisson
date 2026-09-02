@@ -54,6 +54,7 @@ var vendorTokenPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`),             // OpenAI / Anthropic-style key
 	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),             // Google API key
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`), // JWT
+	regexp.MustCompile(`\bapify_api_[A-Za-z0-9]{20,}\b`),        // Apify API token
 }
 
 // pemPrivateKeyRe matches a full PEM private-key block, header to footer.

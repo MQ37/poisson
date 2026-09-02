@@ -39,7 +39,7 @@ func TestRedactSecretsVendorPatterns(t *testing.T) {
 		name string
 		in   string
 	}{
-		{"aws access key", "aws_access_key_id = AKIAABCDEFGHIJKLMNOP"},
+		{"aws access key", "aws_access_key_id = AKIAIOSFODNN7EXAMPLE"},
 		{"github token", "GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwx"},
 		{"slack token", "token: xoxb-1234567890-abcdefghijklmnop"},
 		{"stripe key", "STRIPE_KEY=sk_live_4242424242424242424242"},
@@ -47,6 +47,7 @@ func TestRedactSecretsVendorPatterns(t *testing.T) {
 		{"google api key", "AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ0123456"},
 		{"jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ_dQw4w9WgXcQ"},
 		{"bearer header", "Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789"},
+		{"apify token", "curl -H 'Authorization: Bearer apify_api_0000000000000000000000000000000000'"},
 		{"url credentials", "mongodb://admin:sup3rSecret@db.internal:27017/app"},
 		{"pem private key", "-----BEGIN RSA PRIVATE KEY-----\nMIIBVQIBADANBgkqhkiG9w0B\n-----END RSA PRIVATE KEY-----"},
 	}

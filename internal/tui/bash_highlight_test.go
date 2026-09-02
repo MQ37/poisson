@@ -39,6 +39,31 @@ func TestApprovalCommandLinesHaveBar(t *testing.T) {
 	}
 }
 
+// TestFormatBashCommandHighlightRedactsSecret guards the approval-preview
+// and tool-card command display (both funnel through this one function —
+// see wrapHighlightedBashMultiline) against showing a live credential a
+// prior command echoed into this one's arguments.
+func TestFormatBashCommandHighlightRedactsSecret(t *testing.T) {
+	token := "apify_api_0000000000000000000000000000000000"
+	got := stripANSI(formatBashCommandHighlight(`curl -H "Authorization: Bearer ` + token + `" https://example.com`))
+	if strings.Contains(got, token) {
+		t.Fatalf("secret leaked into command display: %q", got)
+	}
+	if !strings.Contains(got, "[REDACTED]") {
+		t.Fatalf("expected redaction marker, got %q", got)
+	}
+}
+
+func TestApprovalCommandLinesRedactSecret(t *testing.T) {
+	token := "apify_api_0000000000000000000000000000000000"
+	lines := approvalCommandLines(`curl -H "Authorization: Bearer `+token+`" https://example.com`, 200)
+	for _, ln := range lines {
+		if strings.Contains(ln, token) {
+			t.Fatalf("secret leaked into approval overlay line: %q", ln)
+		}
+	}
+}
+
 func TestBashToolCardHighlight(t *testing.T) {
 	// Expanded view shows the command body with risk highlighting.
 	b := Block{
