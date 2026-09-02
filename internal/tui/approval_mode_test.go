@@ -34,8 +34,21 @@ func TestToggleApprovalMode_ShiftTabFlipsAgentAndStatus(t *testing.T) {
 	if _, err := tui.feedKey(Key{Kind: KeyShiftTab}); err != nil {
 		t.Fatalf("feedKey: %v", err)
 	}
+	if tui.agent.ApprovalMode() != agent.ApprovalModeYolo {
+		t.Fatal("expected second Shift+Tab to switch to Yolo")
+	}
+	if tui.status.ApprovalMode != agent.ApprovalModeYolo {
+		t.Fatal("expected status.ApprovalMode to mirror the agent")
+	}
+	if !strings.Contains(tui.status.Hint, "yolo") {
+		t.Errorf("hint = %q, want a yolo-mode notice", tui.status.Hint)
+	}
+
+	if _, err := tui.feedKey(Key{Kind: KeyShiftTab}); err != nil {
+		t.Fatalf("feedKey: %v", err)
+	}
 	if tui.agent.ApprovalMode() != agent.ApprovalModeFast {
-		t.Fatal("expected second Shift+Tab to switch back to Fast")
+		t.Fatal("expected third Shift+Tab to cycle back to Fast")
 	}
 	if tui.status.ApprovalMode != agent.ApprovalModeFast {
 		t.Fatal("expected status.ApprovalMode to mirror the agent back to Fast")
@@ -61,6 +74,12 @@ func TestRenderHintLine_ShowsModeBottomRight(t *testing.T) {
 	line = stripANSI(tui.renderHintLine(width))
 	if !strings.HasSuffix(strings.TrimRight(line, " "), "PARANOID") {
 		t.Errorf("line = %q, want it to end with the PARANOID tag", line)
+	}
+
+	tui.status.ApprovalMode = agent.ApprovalModeYolo
+	line = stripANSI(tui.renderHintLine(width))
+	if !strings.HasSuffix(strings.TrimRight(line, " "), "YOLO") {
+		t.Errorf("line = %q, want it to end with the YOLO tag", line)
 	}
 }
 

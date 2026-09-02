@@ -20,7 +20,7 @@ const approvalRiskTimeout = 45 * time.Second
 // the prompt can say so — see ApprovalOrigin.
 type HumanApprovalFunc func(ctx context.Context, command, description, workdir string, risk BashRisk, origin ApprovalOrigin) (allowed bool, reason string)
 
-// WrapRiskGatedApproval returns an approval callback with two speeds,
+// WrapRiskGatedApproval returns an approval callback with three speeds,
 // selected by a.ApprovalMode() (see ApprovalMode):
 //
 //   - Fast (default): a deterministic guard fast path (guard.ClassifyInDir)
@@ -37,6 +37,9 @@ type HumanApprovalFunc func(ctx context.Context, command, description, workdir s
 //     Paranoid mode is the manual escape hatch if Fast mode's classifier
 //     denies a command that's actually fine (false positive) — switching
 //     modes puts the decision back in the human's hands.
+//   - Yolo: guard, classifier, AND human prompt are all skipped — every
+//     command runs immediately, unconditionally, no matter the risk. Never
+//     the default; the human opts in explicitly via Shift+Tab.
 //
 // The guard fast path and the LLM path are independent auto-approve
 // decisions; neither is ever consulted to silently allow what the other
@@ -45,6 +48,9 @@ type HumanApprovalFunc func(ctx context.Context, command, description, workdir s
 func WrapRiskGatedApproval(a *Agent, ask HumanApprovalFunc) func(ctx context.Context, command, description, workdir string) (bool, string) {
 	return func(ctx context.Context, command, description, workdir string) (bool, string) {
 		origin := ApprovalOriginFromContext(ctx)
+		if a != nil && a.ApprovalMode() == ApprovalModeYolo {
+			return true, ""
+		}
 		if a != nil && a.ApprovalMode() == ApprovalModeParanoid {
 			if ask == nil {
 				return false, ""

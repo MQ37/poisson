@@ -286,6 +286,37 @@ func TestWrapRiskGatedApprovalParanoidModeAsksAlways(t *testing.T) {
 	}
 }
 
+// TestWrapRiskGatedApprovalYoloModeSkipsEverything verifies Yolo mode
+// auto-approves unconditionally — no guard check needed to prove it (a
+// trivially unsafe command is used deliberately), no LLM classification, and
+// no human prompt.
+func TestWrapRiskGatedApprovalYoloModeSkipsEverything(t *testing.T) {
+	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
+	// No responses queued: any provider call would panic/fail, proving Yolo
+	// never reaches the LLM.
+	s := newTestStore(t)
+	sid := newTestSession(t, s, "m")
+	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
+	a.SetModel("m")
+	a.SetApprovalMode(ApprovalModeYolo)
+
+	asked := false
+	approve := WrapRiskGatedApproval(a, func(_ context.Context, _, _, _ string, _ BashRisk, _ ApprovalOrigin) (bool, string) {
+		asked = true
+		return false, ""
+	})
+	allowed, _ := approve(context.Background(), "rm -rf /", "delete everything", "/tmp")
+	if !allowed {
+		t.Fatal("expected yolo mode to auto-approve unconditionally, even a destructive command")
+	}
+	if asked {
+		t.Fatal("yolo mode must never ask a human")
+	}
+	if fp.CallCount() != 0 {
+		t.Fatalf("LLM was called %d times, want 0 (yolo mode must not classify)", fp.CallCount())
+	}
+}
+
 // TestWrapRiskGatedApprovalPausesTimerDuringClassification verifies the risk
 // classification LLM call is bracketed by ctx's tools.ApprovalPause hook —
 // so a sibling bash call still queued behind this one (they run one at a

@@ -41,9 +41,9 @@ type StatusSnapshot struct {
 	AvgTokensPerSec float64
 
 	// ApprovalMode is the bash approval gate's current speed (Fast, the
-	// default, or Paranoid — toggled by Shift+Tab), shown bottom-right of the
-	// input hint line so it's always visible, not just at the moment it's
-	// toggled.
+	// default, Paranoid, or Yolo — cycled by Shift+Tab), shown bottom-right
+	// of the input hint line so it's always visible, not just at the moment
+	// it's toggled.
 	ApprovalMode agent.ApprovalMode
 
 	// Anthropic-only 5h/7-day usage (see internal/provider/anthropic_usage.go).

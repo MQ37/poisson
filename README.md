@@ -50,14 +50,17 @@ px                                                   # launch the TUI
   echoes other harnesses' `<invoke>`/`<parameter>` XML as plain text instead
   of a real call (never poisson's own format). Parsed back into a real,
   dispatchable call when it resolves cleanly; left as-is otherwise.
-- **Bash safety guard, two speeds** — Fast mode (default): deterministic
+- **Bash safety guard, three speeds** — Fast mode (default): deterministic
   auto-approve for read-only commands, LLM risk-classifies the rest (low
   auto-approves, medium/high/unknown asks you). The classifier also
   auto-denies — no human asked — a command whose own output would leak a
   secret to stdout (`echo $AWS_SECRET_KEY`, an unredirected `doppler
   secrets download`, ...); switch to Paranoid mode to review and approve
-  one yourself if that's a false positive. Paranoid mode (Shift+Tab) asks
-  for everything; installs/destructive/`npx`-style always ask.
+  one yourself if that's a false positive. Paranoid mode asks for
+  everything; installs/destructive/`npx`-style always ask. Shift+Tab cycles
+  Fast → Paranoid → **Yolo** — every command runs immediately, no approval
+  of any kind, any risk. Opt-in only, never the default; use on a box/
+  sandbox you're fine handing full unattended shell access to.
 - **Secret redaction** — tool output is scanned for secret-shaped text
   (vendor tokens, PEM keys, JWTs, credential `KEY=VALUE` pairs) and masked
   with `[REDACTED]` before reaching the model, TUI, or session store.
@@ -293,7 +296,7 @@ Enter send · Tab switch input/conversation focus · Ctrl+V image
 Ctrl+F find · Ctrl+P palette · Ctrl+L effort · Ctrl+T fold thinking
 Ctrl+E expand tool · Ctrl+M model picker · Ctrl+S session picker
 Ctrl+B /btw prompt · Ctrl+R/Ctrl+N step input history
-Ctrl+G finish subagents now · Shift+Tab fast/paranoid approval mode
+Ctrl+G finish subagents now · Shift+Tab cycle fast/paranoid/yolo approval mode
 Esc cancel running turn · Ctrl+C clear input (twice to exit)
 ```
 

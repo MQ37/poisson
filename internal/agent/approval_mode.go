@@ -1,7 +1,8 @@
 package agent
 
 // ApprovalMode selects how much of the bash approval gate runs automatically.
-// Toggled at runtime by the TUI (Shift+Tab) and shown in the status bar.
+// Cycled at runtime by the TUI (Shift+Tab: Fast -> Paranoid -> Yolo -> Fast)
+// and shown in the status bar.
 type ApprovalMode int32
 
 const (
@@ -14,13 +15,22 @@ const (
 	// ApprovalModeParanoid disables both the guard fast path and the LLM
 	// classifier — every bash command, no matter how trivial, asks a human.
 	ApprovalModeParanoid
+	// ApprovalModeYolo disables the guard fast path, the LLM classifier, AND
+	// the human prompt — every bash command runs immediately, no matter the
+	// risk. Opt-in, explicit, never the default; the human chose this by
+	// cycling Shift+Tab past Paranoid.
+	ApprovalModeYolo
 )
 
 func (m ApprovalMode) String() string {
-	if m == ApprovalModeParanoid {
+	switch m {
+	case ApprovalModeParanoid:
 		return "paranoid"
+	case ApprovalModeYolo:
+		return "yolo"
+	default:
+		return "fast"
 	}
-	return "fast"
 }
 
 // ApprovalMode returns the agent's current approval mode.

@@ -174,10 +174,10 @@ func (t *TUI) renderInputScreenRow(lineIdx int, screenLines []string, sr, sc int
 }
 
 // renderHintLine renders the bottom-most row of the input region: keybinding
-// hints on the left, the current approval mode (Fast/Paranoid, Shift+Tab to
-// toggle) right-aligned to width. Falls back to the left part alone when
-// there isn't room for both — the hint must never be sacrificed to make
-// space for the mode tag.
+// hints on the left, the current approval mode (Fast/Paranoid/Yolo,
+// Shift+Tab to cycle) right-aligned to width. Falls back to the left part
+// alone when there isn't room for both — the hint must never be sacrificed
+// to make space for the mode tag.
 func (t *TUI) renderHintLine(width int) string {
 	left := t.hintLineLeft()
 	if width < 1 {
@@ -217,13 +217,18 @@ func (t *TUI) renderInfoLine() string {
 
 // approvalModeTag renders the current bash-approval mode for the status
 // line's bottom-right corner. Paranoid is called out in yellow — it means
-// every command, however trivial, stops for a human; Fast is dim/green since
+// every command, however trivial, stops for a human; Yolo is called out in
+// red — it means NO command ever stops, any risk; Fast is dim/green since
 // it's the default, low-friction path.
 func (t *TUI) approvalModeTag() string {
-	if t.status.ApprovalMode == agent.ApprovalModeParanoid {
+	switch t.status.ApprovalMode {
+	case agent.ApprovalModeParanoid:
 		return fgYellow + "⇥ PARANOID" + reset
+	case agent.ApprovalModeYolo:
+		return bold + fgRed + "⇥ YOLO" + reset
+	default:
+		return dim + fgGreen + "⇥ FAST" + reset
 	}
-	return dim + fgGreen + "⇥ FAST" + reset
 }
 
 // scrollByDelta scrolls the scrollback viewport. Caller must hold t.mu.

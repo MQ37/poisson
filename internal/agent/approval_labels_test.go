@@ -11,6 +11,7 @@ func TestApprovalModeString(t *testing.T) {
 	}{
 		{ApprovalModeFast, "fast"},
 		{ApprovalModeParanoid, "paranoid"},
+		{ApprovalModeYolo, "yolo"},
 	}
 	for _, c := range cases {
 		if got := c.mode.String(); got != c.want {

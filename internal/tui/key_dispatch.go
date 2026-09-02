@@ -379,17 +379,24 @@ func (t *TUI) processEditorKey(k Key) (bool, error) {
 	return false, nil
 }
 
-// toggleApprovalModeLocked flips the bash approval gate between Fast
-// (deterministic guard fast path + LLM classification, the default) and
-// Paranoid (every command asks a human, no auto-approval of any kind).
-// Caller holds t.mu.
+// toggleApprovalModeLocked cycles the bash approval gate through its three
+// speeds: Fast (deterministic guard fast path + LLM classification, the
+// default) -> Paranoid (every command asks a human) -> Yolo (nothing ever
+// asks, any risk) -> back to Fast. Caller holds t.mu.
 func (t *TUI) toggleApprovalModeLocked() {
 	if t.agent == nil {
 		return
 	}
-	next := agent.ApprovalModeParanoid
-	label := "paranoid mode — every command now asks for approval"
-	if t.agent.ApprovalMode() == agent.ApprovalModeParanoid {
+	var next agent.ApprovalMode
+	var label string
+	switch t.agent.ApprovalMode() {
+	case agent.ApprovalModeFast:
+		next = agent.ApprovalModeParanoid
+		label = "paranoid mode — every command now asks for approval"
+	case agent.ApprovalModeParanoid:
+		next = agent.ApprovalModeYolo
+		label = "yolo mode — bash runs immediately, no approval, any risk"
+	default: // Yolo
 		next = agent.ApprovalModeFast
 		label = "fast mode — safe commands run automatically"
 	}
