@@ -18,6 +18,11 @@ body = """
 """
 trim = true
 footer = ""
+# Escape bare @word (poisson's own @file/@dir chat-reference syntax shows up
+# verbatim in commit subjects) so GitHub's markdown renderer doesn't treat it
+# as a user mention — it did, twice, for real accounts named "file" and
+# "dir", listing them as bogus release contributors.
+postprocessors = [{ pattern = '@(\w+)', replace = '`@$1`' }]
 
 [git]
 conventional_commits = true
