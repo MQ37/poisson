@@ -87,7 +87,12 @@ var camelBoundaryRe = regexp.MustCompile(`([a-z0-9])([A-Z])`)
 // whole-word: catches "apiKey"/"api_key"/"APIKEY" and compounds like
 // "client_secret" alike without a bespoke rule per naming convention.
 var secretKeywords = []string{
-	"secret", "token", "password", "passwd", "credential", "bearer",
+	// "bearer" deliberately excluded: the real "Bearer <token>" header
+	// shape (space, not colon) is already caught unconditionally by
+	// bearerHeaderRe above. A bare "Bearer:" here only ever comes from
+	// prose (commit messages, docs) explaining the scheme, not a real
+	// credential — every prior hit was that false positive.
+	"secret", "token", "password", "passwd", "credential",
 	"auth", "apikey", "api_key", "accesskey", "access_key",
 	"privatekey", "private_key",
 }
@@ -174,8 +179,41 @@ func printsSecretShapedVar(tokens []string) (string, bool) {
 	return "", false
 }
 
+// looksSecretShapedValue filters out values too short or too plain to be a
+// real credential — single-digit line numbers (grep's "file:line:" prefix,
+// which also collides with isSecretKeyName whenever the filename itself
+// contains a word like "secrets.go"), "true"/"false" in a map or JSON
+// literal, small counters — so a secret-sounding key next to ordinary data
+// doesn't get masked along with genuine leaks.
+func looksSecretShapedValue(val string) bool {
+	if len(val) >= 2 && (val[0] == '"' || val[0] == '\'') && val[len(val)-1] == val[0] {
+		val = val[1 : len(val)-1]
+	}
+	if len(val) < 4 {
+		return false
+	}
+	switch strings.ToLower(val) {
+	case "true", "false", "null", "nil", "none", "yes", "no":
+		return false
+	}
+	if isAllDigits(val) && len(val) < 8 {
+		return false
+	}
+	return true
+}
+
+func isAllDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // redactKeyValuePairs replaces the value half of every KEY=VALUE/KEY: VALUE
-// match whose key name looks secret-related, leaving the key and every
+// match whose key name looks secret-related AND whose value is plausibly a
+// real secret (see looksSecretShapedValue), leaving the key and every
 // non-matching pair untouched.
 func redactKeyValuePairs(s string) string {
 	matches := kvPairRe.FindAllStringSubmatchIndex(s, -1)
@@ -189,7 +227,7 @@ func redactKeyValuePairs(s string) string {
 		keyStart, keyEnd := m[2], m[3]
 		valStart, valEnd := m[4], m[5]
 		b.WriteString(s[last:fullStart])
-		if isSecretKeyName(s[keyStart:keyEnd]) {
+		if isSecretKeyName(s[keyStart:keyEnd]) && looksSecretShapedValue(s[valStart:valEnd]) {
 			b.WriteString(s[fullStart:valStart])
 			val := s[valStart:valEnd]
 			if len(val) > 0 && (val[0] == '"' || val[0] == '\'') {

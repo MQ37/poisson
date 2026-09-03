@@ -80,6 +80,41 @@ func TestRedactSecretsLeavesOrdinaryTextAlone(t *testing.T) {
 	}
 }
 
+func TestRedactSecretsDoesNotMaskProseColons(t *testing.T) {
+	// Regression: "Bearer" as a bare prose key (not the real "Bearer <token>"
+	// HTTP-header shape, which bearerHeaderRe still catches unconditionally
+	// below) must not eat the next word — e.g. a commit message explaining
+	// the auth scheme.
+	cases := []string{
+		`git commit -m "docs: explain Bearer: token validation logic"`,
+		`"secret": true, "token": true, "password": true`,
+		`internal/guard/secrets.go:8: some comment text`,
+	}
+	for _, in := range cases {
+		if out := RedactSecrets(in); out != in {
+			t.Errorf("RedactSecrets(%q) = %q, want unchanged", in, out)
+		}
+	}
+}
+
+func TestRedactSecretsStillCatchesRealBearerAndKVSecrets(t *testing.T) {
+	cases := []struct{ name, in string }{
+		{"bearer header", "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig"},
+		{"bearer env var", "BEARER_TOKEN=abcDEF123456realvalue"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := RedactSecrets(tc.in)
+			if out == tc.in {
+				t.Errorf("RedactSecrets(%q) left input unchanged, want redaction", tc.in)
+			}
+			if !strings.Contains(out, "[REDACTED]") {
+				t.Errorf("RedactSecrets(%q) = %q, want a [REDACTED] marker", tc.in, out)
+			}
+		})
+	}
+}
+
 func TestRedactSecretsIdempotent(t *testing.T) {
 	in := `API_TOKEN="abc123"`
 	once := RedactSecrets(in)
