@@ -94,7 +94,9 @@ func resolveChildSandboxManager(envValue string) *sandbox.Manager {
 	return mgr
 }
 
-const version = "v0.1.0"
+// version is bumped by .github/workflows/release.yml in the release commit —
+// don't edit by hand.
+var version = "v0.1.0"
 
 func main() {
 	// Child subagent mode.
