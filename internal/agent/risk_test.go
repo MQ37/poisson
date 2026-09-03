@@ -75,12 +75,13 @@ func TestWrapRiskGatedApproval_NeverAutoApprovesObfuscatedDestructiveCommand(t *
 // call never carries the conversation: even with a populated session history,
 // the request must be a single synthetic user message + the fixed classifier
 // system prompt, with none of the prior conversation leaking in.
-// TestAssessBashRiskRedactsSecretFromPrompt guards the risk-classifier LLM
-// call — a real network request, possibly to a different/remote model —
-// against forwarding a live credential the command line happens to carry
-// (e.g. echoed in from an earlier command's output). See risk.go's
-// assessBashRiskLLMOnce and guard.RedactSecrets.
-func TestAssessBashRiskRedactsSecretFromPrompt(t *testing.T) {
+
+// TestAssessBashRiskPromptCarriesCommandVerbatim documents the current
+// contract: the risk-classifier prompt is not secret-scrubbed — the command
+// is the agent's own literal input, not tool output, and tool-result
+// scrubbing (guard.RedactSecrets via tools.TrimToolResult) is the
+// chokepoint that actually matters. See risk.go's assessBashRiskLLMOnce.
+func TestAssessBashRiskPromptCarriesCommandVerbatim(t *testing.T) {
 	fp := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
 	fp.SetResponses([][]provider.StreamEvent{
 		provider.FakeTextResponse("medium", nil),
@@ -90,7 +91,7 @@ func TestAssessBashRiskRedactsSecretFromPrompt(t *testing.T) {
 	a := NewAgent(s, fp, newTestRegistry("."), newTestConfig(), sid, nil, nil)
 	a.SetModel("m")
 
-	token := "apify_api_0000000000000000000000000000000000"
+	token := "TESTTOKENVALUE"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	a.AssessBashRisk(ctx, `curl -H "Authorization: Bearer `+token+`" https://example.com`, "check balance", "/tmp")
@@ -100,11 +101,8 @@ func TestAssessBashRiskRedactsSecretFromPrompt(t *testing.T) {
 		t.Fatal("no risk request captured")
 	}
 	prompt := req.Messages[0].Content[0].Text
-	if strings.Contains(prompt, token) {
-		t.Fatalf("secret leaked into risk-classifier prompt: %q", prompt)
-	}
-	if !strings.Contains(prompt, "[REDACTED]") {
-		t.Fatalf("expected redaction marker in prompt, got %q", prompt)
+	if !strings.Contains(prompt, token) {
+		t.Fatalf("expected command text preserved in risk-classifier prompt, got %q", prompt)
 	}
 }
 

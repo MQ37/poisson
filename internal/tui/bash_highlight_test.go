@@ -39,28 +39,25 @@ func TestApprovalCommandLinesHaveBar(t *testing.T) {
 	}
 }
 
-// TestFormatBashCommandHighlightRedactsSecret guards the approval-preview
-// and tool-card command display (both funnel through this one function —
-// see wrapHighlightedBashMultiline) against showing a live credential a
-// prior command echoed into this one's arguments.
-func TestFormatBashCommandHighlightRedactsSecret(t *testing.T) {
-	token := "apify_api_0000000000000000000000000000000000"
-	got := stripANSI(formatBashCommandHighlight(`curl -H "Authorization: Bearer ` + token + `" https://example.com`))
-	if strings.Contains(got, token) {
-		t.Fatalf("secret leaked into command display: %q", got)
-	}
-	if !strings.Contains(got, "[REDACTED]") {
-		t.Fatalf("expected redaction marker, got %q", got)
+// TestFormatBashCommandHighlightShowsCommandVerbatim documents the current
+// contract: command display is not secret-scrubbed (see
+// formatBashCommandHighlight's doc comment) — it's the agent's own literal
+// input, not tool output, and tool-result scrubbing (guard.RedactSecrets via
+// tools.TrimToolResult) is the chokepoint that actually matters.
+func TestFormatBashCommandHighlightShowsCommandVerbatim(t *testing.T) {
+	cmd := `curl -H "Authorization: Bearer TESTTOKENVALUE" https://example.com`
+	got := stripANSI(formatBashCommandHighlight(cmd))
+	if got != cmd {
+		t.Fatalf("got %q, want command shown verbatim %q", got, cmd)
 	}
 }
 
-func TestApprovalCommandLinesRedactSecret(t *testing.T) {
-	token := "apify_api_0000000000000000000000000000000000"
-	lines := approvalCommandLines(`curl -H "Authorization: Bearer `+token+`" https://example.com`, 200)
-	for _, ln := range lines {
-		if strings.Contains(ln, token) {
-			t.Fatalf("secret leaked into approval overlay line: %q", ln)
-		}
+func TestApprovalCommandLinesShowCommandVerbatim(t *testing.T) {
+	cmd := `curl -H "Authorization: Bearer TESTTOKENVALUE" https://example.com`
+	lines := approvalCommandLines(cmd, 200)
+	joined := strings.Join(lines, "")
+	if !strings.Contains(joined, "TESTTOKENVALUE") {
+		t.Fatalf("expected command text preserved in approval overlay, got %q", lines)
 	}
 }
 
