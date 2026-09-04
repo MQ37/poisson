@@ -65,6 +65,11 @@ px                                                   # launch the TUI
   (vendor tokens, PEM keys, JWTs, credential `KEY=VALUE` pairs) and masked
   with `[REDACTED]` before reaching the model, TUI, or session store.
   Best-effort, not a guarantee.
+- **Subagents on any provider** — a spawned subagent inherits the main
+  session's model/effort by default; override either, or hand it a
+  `provider/model` qualified ID to run it on a completely different
+  provider. Same-provider overrides auto-run like today; a different
+  provider always asks you first, same popup as a risky bash command.
 - **Podman sandboxes** — `create_sandbox` gives an isolated container;
   `bash` calls passing its `sandboxId` skip the approval gate entirely — the
   container is the boundary. Managed from any session via `sandbox_cp`/
@@ -204,7 +209,7 @@ via `/providers` without naming a model):
 # default = "ollama"                 # anthropic | ollama | xai | openai | openrouter | llamacpp
 
 [anthropic]
-# model = "claude-opus-5"          # or claude-sonnet-5 / claude-fable-5 (all adaptive-reasoning)
+# model = "claude-opus-5"          # or claude-sonnet-5 / claude-fable-5-1 (all adaptive-reasoning)
 # classifier = "claude-sonnet-5"    # bash-risk classifier for this provider
 # api_key = "sk-ant-..."             # optional; OAuth (auth.json) preferred
 

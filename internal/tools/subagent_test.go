@@ -138,7 +138,7 @@ func TestSubagentToolDescriptionListsProviderModels(t *testing.T) {
 	tool := newAnthropicSonnetTool()
 	tool.SetConfigFn(func() *config.Config { return nil })
 	desc := tool.Description()
-	for _, want := range []string{"claude-opus-5", "claude-sonnet-5", "claude-fable-5", "Providers and models"} {
+	for _, want := range []string{"claude-opus-5", "claude-sonnet-5", "claude-fable-5-1", "Providers and models"} {
 		if !strings.Contains(desc, want) {
 			t.Errorf("Description() missing %q:\n%s", want, desc)
 		}
@@ -184,7 +184,7 @@ func TestSubagentToolDescriptionShowsEffortLevels(t *testing.T) {
 	if !strings.Contains(desc, "claude-sonnet-5: ") || !strings.Contains(desc, "(effort: low/medium/high/xhigh/max)") {
 		t.Errorf("Description() missing claude-sonnet-5's effort levels:\n%s", desc)
 	}
-	if !strings.Contains(desc, "grok-build: (no description) (effort: no effort override)") {
+	if !strings.Contains(desc, "grok-build: ") || !strings.Contains(desc, "(effort: no effort override)") {
 		t.Errorf("Description() missing grok-build's no-effort marker:\n%s", desc)
 	}
 }

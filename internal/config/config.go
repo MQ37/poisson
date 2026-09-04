@@ -244,9 +244,12 @@ func defaultPricing() map[string]map[string]Pricing {
 	return map[string]map[string]Pricing{
 		"anthropic": {
 			// cacheRead 0.1x input, cacheWrite 2x input — Poisson's 1h cache pool.
-			"claude-fable-5":  {InputPerMTok: 10.0, OutputPerMTok: 50.0, CacheReadPerMTok: 1.0, CacheWritePerMTok: 20.0},
-			"claude-opus-5":   {InputPerMTok: 5.0, OutputPerMTok: 25.0, CacheReadPerMTok: 0.5, CacheWritePerMTok: 10.0},
-			"claude-sonnet-5": {InputPerMTok: 3.0, OutputPerMTok: 15.0, CacheReadPerMTok: 0.3, CacheWritePerMTok: 6.0},
+			// claude-fable-5-1 is the one exception: Anthropic cut its cache-read
+			// rate to a quarter of Fable 5's (0.025x input, not the usual 0.1x)
+			// as part of the 5.1 pricing update — input/output/cacheWrite unchanged.
+			"claude-fable-5-1": {InputPerMTok: 10.0, OutputPerMTok: 50.0, CacheReadPerMTok: 0.25, CacheWritePerMTok: 20.0},
+			"claude-opus-5":    {InputPerMTok: 5.0, OutputPerMTok: 25.0, CacheReadPerMTok: 0.5, CacheWritePerMTok: 10.0},
+			"claude-sonnet-5":  {InputPerMTok: 3.0, OutputPerMTok: 15.0, CacheReadPerMTok: 0.3, CacheWritePerMTok: 6.0},
 			// Haiku 4.5 is never a session model: it is the small model behind
 			// the web_search/fetch Anthropic backends (provider/anthropic_web.go),
 			// which is also the only place the $10/1000 web-search fee applies.
@@ -311,7 +314,7 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 # default = "ollama"             # {{PROVIDERS}}
 
 [anthropic]
-# model = "claude-opus-5"         # or claude-sonnet-5 / claude-fable-5
+# model = "claude-opus-5"         # or claude-sonnet-5 / claude-fable-5-1
 # classifier = "claude-sonnet-5"  # bash-risk classifier for this provider
 # If auth.json has OAuth tokens for anthropic, stealth mode is active.
 # Otherwise set an API key here or in auth.json.

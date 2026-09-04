@@ -188,7 +188,7 @@ func TestMergedCuratedModelsOverridesKnownModelContextWindow(t *testing.T) {
 func TestFormatModelsForPromptListsEveryAnthropicModelWithDescription(t *testing.T) {
 	cfg := config.DefaultConfig()
 	got := FormatModelsForPrompt(cfg, "anthropic")
-	for _, id := range []string{"claude-fable-5", "claude-opus-5", "claude-sonnet-5"} {
+	for _, id := range []string{"claude-fable-5-1", "claude-opus-5", "claude-sonnet-5"} {
 		if !strings.Contains(got, id) {
 			t.Errorf("output missing model %q:\n%s", id, got)
 		}
@@ -205,8 +205,14 @@ func TestFormatModelsForPromptEmptyForUncuratedProvider(t *testing.T) {
 }
 
 func TestFormatModelsForPromptFallsBackForMissingDescription(t *testing.T) {
-	// ollama's curated models don't have a Description set yet.
-	got := FormatModelsForPrompt(config.DefaultConfig(), "ollama")
+	// A config-only model (config.ModelOverride carries no Description field
+	// at all — see MergedModelSettings) always has an empty Description,
+	// guaranteed independent of which models KnownModels happens to fill in.
+	cfg := config.DefaultConfig()
+	cfg.ModelOverrides["anthropic"] = map[string]config.ModelOverride{
+		"claude-made-up": {ContextWindow: 300000},
+	}
+	got := FormatModelsForPrompt(cfg, "anthropic")
 	if !strings.Contains(got, "(no description)") {
 		t.Errorf("expected the placeholder for a model with no Description:\n%s", got)
 	}
