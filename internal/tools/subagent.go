@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mq37/poisson/internal/auth"
 	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/sandbox"
@@ -51,10 +52,10 @@ type SubagentApproval func(command, description, workdir, agentName, risk string
 // returned to the calling model. The parent UI shows a compact widget derived
 // from the tool_start / tool_result events, not the child's steps.
 type SubagentTool struct {
-	cwd             string
-	providerFn      func() string
-	modelFn         func() string
-	effortFn        func() string
+	cwd        string
+	providerFn func() string
+	modelFn    func() string
+	effortFn   func() string
 	// cfgFn resolves the live config, used to validate a model/effort
 	// override in Execute and to build the curated model list Description()
 	// surfaces. nil (the default, until SetConfigFn is called) means overrides
@@ -102,6 +103,19 @@ type SubagentTool struct {
 	// all — a sandboxIds request then fails clearly instead of silently
 	// being ignored.
 	sandboxMgr *sandbox.Manager
+
+	// authStore backs the IsConfigured check a cross-provider override runs
+	// before ever asking a human or spawning a child (see
+	// crossProviderApprovalFn) — nil-safe (auth.AuthStore is a plain map),
+	// so an unset value just makes every provider read as unconfigured.
+	authStore auth.AuthStore
+
+	// crossProviderApprovalFn gates a model override that names a DIFFERENT
+	// provider than the main session's own (see Execute's "provider/model"
+	// parsing). nil means cross-provider overrides fail closed with a clear
+	// error instead of silently denying or panicking — same discipline as
+	// cfgFn being nil for a same-provider override.
+	crossProviderApprovalFn ApprovalFn
 }
 
 // SetSandboxManager wires the Manager that a sandboxIds request validates
@@ -109,6 +123,21 @@ type SubagentTool struct {
 // input fail with a clear error instead of a nil pointer panic.
 func (t *SubagentTool) SetSandboxManager(mgr *sandbox.Manager) {
 	t.sandboxMgr = mgr
+}
+
+// SetAuth wires the auth store a cross-provider override's IsConfigured
+// check reads. Optional — nil (the default) makes every provider read as
+// unconfigured, which only matters once a cross-provider override is
+// actually requested.
+func (t *SubagentTool) SetAuth(a auth.AuthStore) {
+	t.authStore = a
+}
+
+// SetCrossProviderApprovalFn wires the human-approval gate a model override
+// naming a different provider than the main session's must pass before this
+// tool spawns anything on it (see crossProviderApprovalFn's doc comment).
+func (t *SubagentTool) SetCrossProviderApprovalFn(fn ApprovalFn) {
+	t.crossProviderApprovalFn = fn
 }
 
 // NewSubagentTool creates a subagent tool.
@@ -193,28 +222,60 @@ const subagentBaseDescription = "Spawn a one-shot child Poisson agent to complet
 
 // subagentEffortGuide is shared across every model — the five levels mean
 // roughly the same thing regardless of which model they're applied to (per
-// Anthropic's own effort docs), so this doesn't need a per-model variant.
+// Anthropic's own effort docs); each model's own listing below states which
+// of them it actually supports.
 const subagentEffortGuide = "Effort levels (low -> max) trade capability for cost: low = cheap/scoped, medium = balanced, high = default, xhigh = hardest coding/agentic tasks, max = frontier-only and unconstrained. Reach for xhigh/max sparingly — they cost the most, both in dollars and in Claude subscription usage quota."
 
-// Description lists the calling provider's available models (with a
-// one-line rationale each) and the effort cheatsheet above, so the model
-// knows what it can escalate a subagent to and when it's worth it. Falls
-// back to the static base text when the runtime resolvers (SetRuntime/
-// SetConfigFn) haven't been wired yet, or the provider has no curated
-// models — never a broken or half-rendered description.
+// subagentModelHelpHeader explains the "provider/model" qualified override
+// syntax and its approval gate — see Execute's model-parsing comment for the
+// one documented edge case (a model ID whose own first path segment
+// happens to collide with a configured custom provider's name).
+const subagentModelHelpHeader = "Optional model/effort override for this subagent only (default: inherit the main session's model/effort). Model may be a bare model ID — same provider as the main session, runs immediately, no approval — or a \"provider/model\" qualified ID to run the subagent on a DIFFERENT provider, which always needs human approval before the subagent starts, same as a risky bash command. (If a bare model ID's own first path segment happens to name a configured custom provider, qualify it explicitly with its real provider to avoid misparsing, e.g. \"llamacpp/unsloth/Laguna-S-2.1-GGUF\".) Providers and models:"
+
+// Description lists every provider Poisson knows about — not just the one
+// currently active — since a subagent may now be spawned on any of them (a
+// bare model ID stays on the main session's provider and auto-runs; a
+// "provider/model" qualified ID targets any other one but always needs
+// human approval first). A provider is skipped only when it has nothing
+// nameable to offer: no curated models AND not configured AND isn't the
+// main provider. Falls back to the static base text when the runtime
+// resolvers (SetRuntime/SetConfigFn) haven't been wired yet, or no provider
+// has anything to list — never a broken or half-rendered description.
 func (t *SubagentTool) Description() string {
 	if t.cfgFn == nil || t.providerFn == nil {
 		return subagentBaseDescription
 	}
-	prov := t.providerFn()
-	if prov == "" {
+	mainProv := t.providerFn()
+	if mainProv == "" {
 		return subagentBaseDescription
 	}
-	list := provider.FormatModelsForPrompt(t.cfgFn(), prov)
-	if list == "" {
+	cfg := t.cfgFn()
+	var b strings.Builder
+	for _, meta := range config.AllProviderMeta(cfg) {
+		configured := provider.IsConfigured(meta.ID, t.authStore, cfg)
+		list := provider.FormatModelsForPrompt(cfg, meta.ID)
+		if list == "" && !configured && meta.ID != mainProv {
+			continue
+		}
+		tag := "different provider — requires human approval before spawning, same as a risky bash command"
+		switch {
+		case meta.ID == mainProv:
+			tag = "current provider — auto-runs, no approval needed"
+		case !configured:
+			tag = "different provider, NOT CONFIGURED — requires approval AND will fail to spawn until credentials are set"
+		}
+		fmt.Fprintf(&b, "\n%s (%s):\n", meta.ID, tag)
+		if list == "" {
+			b.WriteString("  (no curated models listed — pass an exact model ID you already know is valid)\n")
+		} else {
+			b.WriteString(list)
+			b.WriteString("\n")
+		}
+	}
+	if b.Len() == 0 {
 		return subagentBaseDescription
 	}
-	return subagentBaseDescription + "\n\nOptional model/effort override for this subagent only (default: inherit the main session's model/effort). Every subagent runs on the same provider as the main session (" + prov + ") — only the model within it is choosable. Available models:\n" + list + "\n\n" + subagentEffortGuide
+	return subagentBaseDescription + "\n\n" + subagentModelHelpHeader + b.String() + "\n" + subagentEffortGuide
 }
 
 func (t *SubagentTool) Schema() json.RawMessage {
@@ -224,7 +285,7 @@ func (t *SubagentTool) Schema() json.RawMessage {
 			"task": {"type": "string", "description": "Complete, self-contained task for the subagent. Include context, file paths, and expected output format."},
 			"name": {"type": "string", "description": "Display name for the subagent. If omitted, a name is chosen automatically."},
 			"sandboxIds": {"type": "array", "items": {"type": "string"}, "description": "Sandboxes (from create_sandbox) to let this child use — each id must be one this session actually created. The child cannot create its own sandboxes."},
-			"model": {"type": "string", "description": "Override model for this subagent only, same provider as the main session — see this tool's description for available models. Default: inherit the main session's model."},
+			"model": {"type": "string", "description": "Override model for this subagent only. A bare model ID stays on the main session's provider (auto-runs, no approval). A \"provider/model\" qualified ID targets a different provider — requires human approval before the subagent starts. See this tool's description for available providers/models. Default: inherit the main session's model."},
 			"effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"], "description": "Override effort for this subagent only. Default: inherit the main session's effort."}
 		},
 		"required": ["task"]
@@ -270,12 +331,13 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		}
 	}
 
-	// A subagent must always run the same provider + model as the main
+	// A subagent defaults to the exact same provider + model as the main
 	// session — never a silent fallback to some other model, which would
 	// change cost/behavior/quality without the user ever choosing it. If the
 	// resolvers aren't wired or the main session can't report a provider/model
 	// right now, that's a real configuration problem: fail loudly instead of
-	// guessing.
+	// guessing. An explicit, human-approved cross-provider override is the
+	// one deliberate exception — see the params.Model handling below.
 	if t.providerFn == nil || t.modelFn == nil {
 		return ToolResult{Error: "subagent runtime not configured: provider/model resolver missing"}, nil
 	}
@@ -292,21 +354,58 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		effort = t.effortFn()
 	}
 
-	// Optional per-subagent model/effort override, same provider as the
-	// main session always (prov above — never taken from the request).
-	// Rejects unknown models/efforts loudly instead of silently falling
-	// back to the inherited default, same fail-closed discipline as every
-	// other input this tool validates.
+	// Optional per-subagent model/effort override. params.Model may be a
+	// bare model ID (same provider as the main session, prov above) or a
+	// "provider/model" qualified ID naming a DIFFERENT provider — split on
+	// the first "/" only (provider IDs never contain one; a model ID that
+	// does, e.g. llamacpp's "unsloth/Laguna-S-2.1-GGUF", is safe because its
+	// own first segment isn't a real provider name — see
+	// subagentModelHelpHeader's documented exception for the rare case a
+	// custom provider happens to collide with one). Rejects unknown
+	// models/efforts, an unconfigured target provider, or a denied approval
+	// loudly instead of silently falling back to the inherited default —
+	// same fail-closed discipline as every other input this tool validates.
 	if params.Model != "" || params.Effort != "" {
 		if t.cfgFn == nil {
 			return ToolResult{Error: "model/effort override requested but not supported in this session"}, nil
 		}
 		cfg := t.cfgFn()
 		if params.Model != "" {
-			if _, ok := provider.MergedModelSettings(cfg, prov, params.Model); !ok {
-				return ToolResult{Error: fmt.Sprintf("unknown model %q for provider %q — see this tool's description for available models", params.Model, prov)}, nil
+			reqProv, reqModel := prov, params.Model
+			if p, m, hasSlash := strings.Cut(params.Model, "/"); hasSlash && m != "" {
+				if _, ok := config.ResolveProviderMeta(p, cfg); ok {
+					reqProv, reqModel = p, m
+				}
 			}
-			model = params.Model
+			crossProvider := reqProv != prov
+			if crossProvider {
+				// Check the more fundamental failures — no approval gate
+				// wired, target provider unconfigured — before ever
+				// validating the model name or asking a human about a
+				// spawn that's guaranteed to fail anyway.
+				if t.crossProviderApprovalFn == nil {
+					return ToolResult{Error: "cross-provider subagent spawn requested but approval isn't wired in this session"}, nil
+				}
+				if !provider.IsConfigured(reqProv, t.authStore, cfg) {
+					return ToolResult{Error: fmt.Sprintf("provider %q is not configured — no credentials found", reqProv)}, nil
+				}
+			}
+			if _, ok := provider.MergedModelSettings(cfg, reqProv, reqModel); !ok {
+				return ToolResult{Error: fmt.Sprintf("unknown model %q for provider %q — see this tool's description for available models", reqModel, reqProv)}, nil
+			}
+			if crossProvider {
+				command := fmt.Sprintf("subagent -> %s/%s", reqProv, reqModel)
+				reason := fmt.Sprintf("cross-provider subagent spawn (main session runs %s/%s)", prov, model)
+				approved, denyReason := t.crossProviderApprovalFn(ctx, command, reason, t.cwd)
+				if !approved {
+					msg := "cross-provider subagent spawn denied"
+					if denyReason != "" {
+						msg += ": " + denyReason
+					}
+					return ToolResult{Error: msg}, nil
+				}
+			}
+			prov, model = reqProv, reqModel
 		}
 		if params.Effort != "" {
 			settings, _ := provider.MergedModelSettings(cfg, prov, model)

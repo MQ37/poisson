@@ -2,9 +2,13 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/mq37/poisson/internal/auth"
+	"github.com/mq37/poisson/internal/config"
 	"github.com/mq37/poisson/internal/provider"
 	"github.com/mq37/poisson/internal/sandbox"
 	"github.com/mq37/poisson/internal/store"
@@ -150,6 +154,45 @@ func TestBuildRegistry_WithSandboxManager_ChildOmitsCreateSandbox(t *testing.T) 
 		if _, ok := reg.Get(name); !ok {
 			t.Errorf("child registry with SandboxManager missing %q", name)
 		}
+	}
+}
+
+// TestBuildRegistry_WiresCrossProviderApproval proves BuildRegistry's
+// CrossProviderApprovalFn/Auth wiring onto the subagent tool is live, not
+// just present: a cross-provider override must actually reach the supplied
+// approval function and Auth store, not the tool's own zero-value defaults.
+func TestBuildRegistry_WiresCrossProviderApproval(t *testing.T) {
+	dir := testutil.TempDir(t)
+	asked := false
+	reg := BuildRegistry(BuildOptions{
+		Cwd:         dir,
+		Auth:        auth.AuthStore{"xai": {Type: "oauth"}},
+		SubApproval: func(string, string, string, string, string) (bool, string) { return true, "" },
+		CrossProviderApprovalFn: func(context.Context, string, string, string) (bool, string) {
+			asked = true
+			return false, "policy"
+		},
+	})
+	st, ok := reg.Get("subagent")
+	if !ok {
+		t.Fatal("subagent not registered")
+	}
+	tool := st.(*SubagentTool)
+	tool.SetRuntime(
+		func() string { return "anthropic" },
+		func() string { return "claude-sonnet-5" },
+		func() string { return "" },
+	)
+	tool.SetConfigFn(func() *config.Config { return config.DefaultConfig() })
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"x","model":"xai/grok-build"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if !asked {
+		t.Fatal("BuildRegistry's CrossProviderApprovalFn was never invoked — wiring is dead")
+	}
+	if res.Error == "" || !strings.Contains(res.Error, "policy") {
+		t.Fatalf("expected the wired approval fn's denial reason in the error, got %+v", res)
 	}
 }
 

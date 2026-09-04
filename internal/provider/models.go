@@ -246,12 +246,12 @@ func MergedCuratedModels(cfg *config.Config, providerID string) []Model {
 }
 
 // FormatModelsForPrompt lists providerID's curated models (including any
-// config.toml-only additions) with their descriptions, one per line, for
-// injection into a prompt that needs to choose one (see the subagent tool's
-// Description()). Every model is listed, including whichever one is
-// currently active — "here's everything on this provider" reads clearer
-// than a silently-shortened list. Empty string when the provider has no
-// curated entries at all.
+// config.toml-only additions) with their descriptions and effort support,
+// one per line, for injection into a prompt that needs to choose one (see
+// the subagent tool's Description()). Every model is listed, including
+// whichever one is currently active — "here's everything on this provider"
+// reads clearer than a silently-shortened list. Empty string when the
+// provider has no curated entries at all.
 func FormatModelsForPrompt(cfg *config.Config, providerID string) string {
 	models := MergedCuratedModels(cfg, providerID)
 	if len(models) == 0 {
@@ -260,10 +260,16 @@ func FormatModelsForPrompt(cfg *config.Config, providerID string) string {
 	var b strings.Builder
 	for _, m := range models {
 		desc := "(no description)"
-		if s, ok := MergedModelSettings(cfg, providerID, m.ID); ok && s.Description != "" {
-			desc = s.Description
+		effort := "no effort override"
+		if s, ok := MergedModelSettings(cfg, providerID, m.ID); ok {
+			if s.Description != "" {
+				desc = s.Description
+			}
+			if s.SupportsEffort && len(s.EffortLevels) > 0 {
+				effort = strings.Join(s.EffortLevels, "/")
+			}
 		}
-		fmt.Fprintf(&b, "- %s: %s\n", m.ID, desc)
+		fmt.Fprintf(&b, "- %s: %s (effort: %s)\n", m.ID, desc, effort)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

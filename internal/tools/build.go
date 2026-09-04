@@ -53,6 +53,13 @@ type BuildOptions struct {
 	// request itself carry extra host access," decided before any of those
 	// even apply. Defaults to deny-all, matching the other two.
 	SandboxApprovalFn ApprovalFn
+	// CrossProviderApprovalFn gates a subagent spawn requesting a DIFFERENT
+	// provider than the main session's own — same "deterministic, ask the
+	// human directly" shape as FileApprovalFn/SandboxApprovalFn (no LLM risk
+	// classification: the provider either matches or it doesn't). A
+	// same-provider subagent call never reaches this — it auto-runs exactly
+	// as before. Defaults to deny-all, matching the other two.
+	CrossProviderApprovalFn ApprovalFn
 }
 
 // BuildRegistry constructs the tool registry. A child (subagent) receives every
@@ -73,6 +80,10 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	sandboxApproval := opts.SandboxApprovalFn
 	if sandboxApproval == nil {
 		sandboxApproval = func(context.Context, string, string, string) (bool, string) { return false, "" }
+	}
+	crossProviderApproval := opts.CrossProviderApprovalFn
+	if crossProviderApproval == nil {
+		crossProviderApproval = func(context.Context, string, string, string) (bool, string) { return false, "" }
 	}
 
 	bashTool := NewBashTool(opts.Cwd, approval)
@@ -125,6 +136,8 @@ func BuildRegistry(opts BuildOptions) *Registry {
 			// never a foreign one.
 			subagentTool.SetSandboxManager(opts.SandboxManager)
 		}
+		subagentTool.SetAuth(opts.Auth)
+		subagentTool.SetCrossProviderApprovalFn(crossProviderApproval)
 		reg.Register(subagentTool)
 	}
 	// batch last so it can dispatch into every tool already registered.

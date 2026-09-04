@@ -500,16 +500,25 @@ func runREPL(noSkills bool, resumeSessionID string) {
 	sandboxApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
 		return humanApproval(ctx, action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
 	}
+	// A subagent call naming a DIFFERENT provider than this session's own is
+	// exactly the same "sensitive, ask the human directly" shape as
+	// fileApprovalFn/sandboxApprovalFn — the provider either matches or it
+	// doesn't, no LLM risk classification needed. A same-provider subagent
+	// call never reaches this.
+	crossProviderApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
+		return humanApproval(ctx, action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
+	}
 
 	reg := tools.BuildRegistry(tools.BuildOptions{
-		Cwd:               cwd,
-		Store:             st,
-		Auth:              authStore,
-		ApprovalFn:        approvalFn,
-		FileApprovalFn:    fileApprovalFn,
-		SubApproval:       subApprovalFn,
-		SandboxManager:    newSandboxManager(sessionID),
-		SandboxApprovalFn: sandboxApprovalFn,
+		Cwd:                     cwd,
+		Store:                   st,
+		Auth:                    authStore,
+		ApprovalFn:              approvalFn,
+		FileApprovalFn:          fileApprovalFn,
+		SubApproval:             subApprovalFn,
+		SandboxManager:          newSandboxManager(sessionID),
+		SandboxApprovalFn:       sandboxApprovalFn,
+		CrossProviderApprovalFn: crossProviderApprovalFn,
 	})
 
 	// Set up agent.
