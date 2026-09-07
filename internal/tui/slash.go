@@ -167,6 +167,11 @@ func (t *TUI) handleSlash(cmd string) error {
 	case "/status":
 		cmdStatus(h)
 		return nil
+	case "/subscriptions":
+		// No busy guard: read-only network fetch, doesn't touch turn/session
+		// state, safe mid-turn (see liveSafeCommands).
+		cmdSubscriptions(h)
+		return nil
 	case "/btw":
 		question := strings.TrimSpace(strings.TrimPrefix(cmd, parts[0]))
 		if question == "" {

@@ -47,7 +47,7 @@ func (c *completion) cycle(dir int) {
 var slashCommands = []string{
 	"/quit", "/clear", "/help", "/name", "/new", "/resume", "/sessions",
 	"/search", "/compact", "/model", "/effort", "/classifier-model",
-	"/providers", "/reload", "/cost", "/status", "/btw",
+	"/providers", "/reload", "/cost", "/status", "/subscriptions", "/btw",
 	"/openai-reset-usage", "/sandbox",
 }
 

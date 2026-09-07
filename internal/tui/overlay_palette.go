@@ -17,6 +17,7 @@ var paletteCommands = []paletteItem{
 	{"/providers", "provider picker"},
 	{"/cost", "token cost breakdown"},
 	{"/status", "session info + context files & skills"},
+	{"/subscriptions", "login status & usage for every subscription provider"},
 	{"/sandbox", "list/kill podman sandboxes (ls | kill <id>)"},
 	{"/clear", "clear scrollback"},
 	{"/search", "find in scrollback; /search <q> searches all sessions"},

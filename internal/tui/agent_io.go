@@ -140,11 +140,12 @@ func (t *TUI) startTurn(segments []agent.TextSegment, images ...agent.ImageAttac
 // liveSafeCommands are the slash commands that may run while a turn is in
 // flight, because none of them mutates turn or session state.
 var liveSafeCommands = map[string]bool{
-	"/btw":     true,
-	"/name":    true,
-	"/status":  true,
-	"/cost":    true,
-	"/sandbox": true,
+	"/btw":           true,
+	"/name":          true,
+	"/status":        true,
+	"/cost":          true,
+	"/sandbox":       true,
+	"/subscriptions": true,
 }
 
 // enqueueLocked queues a message typed while a turn is in flight. It shows in

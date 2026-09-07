@@ -309,9 +309,10 @@ Click-drag selects text (auto-scrolls past the edge); **Ctrl+Y** copies to
 the system clipboard via OSC 52 (works over SSH) — plain Ctrl+<letter>
 because most terminals already claim Ctrl+Shift+C for their own copy action.
 
-Slash commands: `/help` `/status` `/model` `/effort` `/classifier-model`
-`/providers` `/sessions` `/resume` `/search` `/new` `/clear` `/name`
-`/compact` `/cost` `/reload` `/sandbox` `/btw` `/openai-reset-usage` `/quit`.
+Slash commands: `/help` `/status` `/subscriptions` `/model` `/effort`
+`/classifier-model` `/providers` `/sessions` `/resume` `/search` `/new`
+`/clear` `/name` `/compact` `/cost` `/reload` `/sandbox` `/btw`
+`/openai-reset-usage` `/quit`.
 Type `@` to fuzzy-attach a file (or `@image.png` for an image).
 
 `/classifier-model` picks which model rates bash-command risk for the
