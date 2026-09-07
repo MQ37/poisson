@@ -194,6 +194,9 @@ func (t *TUI) Run() error {
 							t.approvalDenyAndMaybeCancelRun("")
 							continue
 						}
+						if t.feedSudoPasswordKey(k) {
+							continue
+						}
 						if t.feedDenyReasonKey(k) {
 							continue
 						}
@@ -298,7 +301,24 @@ func (t *TUI) restoreTerminal() {
 // continues normally, letting the model adjust its plan instead of being cut
 // off mid-turn.
 func (t *TUI) approvalDenyAndMaybeCancelRun(reason string) {
-	reply := approvalReply{Allowed: false, Reason: reason}
+	t.sendApprovalReply(approvalReply{Allowed: false, Reason: reason})
+	if reason != "" {
+		return
+	}
+	t.cancelMu.Lock()
+	cancel := t.cancelRun
+	t.cancelMu.Unlock()
+	if cancel != nil {
+		t.cancelActiveRun()
+	}
+}
+
+// sendApprovalReply delivers reply to whichever runModalApproval call is
+// currently waiting on t.approvalAnswer (Approve or AskSudoPassword — only
+// one is ever outstanding at a time, serialized by approvalMu). The channel
+// is buffered 1; a non-blocking send that finds it already full (a stale
+// reply nothing ever consumed) drains it first so this one lands.
+func (t *TUI) sendApprovalReply(reply approvalReply) {
 	select {
 	case t.approvalAnswer <- reply:
 	default:
@@ -311,15 +331,48 @@ func (t *TUI) approvalDenyAndMaybeCancelRun(reason string) {
 		default:
 		}
 	}
-	if reason != "" {
-		return
+}
+
+// feedSudoPasswordKey routes a keystroke to the masked password field while
+// a sudo-password overlay is up (see AskSudoPassword). Enter submits
+// whatever's typed; Escape cancels this one tool call without touching the
+// rest of the turn (unlike Ctrl+C, handled by the caller before this is
+// reached, which always cancels the whole turn — same as any other
+// approval prompt). Returns false when there's no pending password prompt,
+// so the caller falls through to its normal approval-key handling.
+func (t *TUI) feedSudoPasswordKey(k Key) bool {
+	var handled, doSubmit, doCancel bool
+	var password []byte
+	t.withLock(func() {
+		ao, ok := t.activeOverlay.(*approvalOverlay)
+		if !ok || !ao.passwordMode {
+			return
+		}
+		handled = true
+		switch k.Kind {
+		case KeyEnter:
+			password = []byte(ao.passwordText())
+			doSubmit = true
+		case KeyEscape:
+			doCancel = true
+		default:
+			// Same editor the main input box uses, so every key (word-wise
+			// Alt+Backspace/Alt+Arrow, Ctrl+W, Home/End, paste, ...) behaves
+			// identically here; only the render masks it.
+			if ao.passwordEditor.wrapWidth < 1 && t.cols > 0 {
+				ao.passwordEditor.wrapWidth = inputWrapWidth(t.cols)
+			}
+			ao.passwordEditor.applyKey(k)
+			t.dirty.markInput()
+		}
+	})
+	switch {
+	case doSubmit:
+		t.sendApprovalReply(approvalReply{Allowed: true, Password: password})
+	case doCancel:
+		t.sendApprovalReply(approvalReply{Allowed: false})
 	}
-	t.cancelMu.Lock()
-	cancel := t.cancelRun
-	t.cancelMu.Unlock()
-	if cancel != nil {
-		t.cancelActiveRun()
-	}
+	return handled
 }
 
 // feedDenyReasonKey routes a keystroke to the reason text field once the user

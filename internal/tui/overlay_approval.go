@@ -2,16 +2,23 @@ package tui
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mq37/poisson/internal/agent"
 )
 
-// approvalReply is the user's answer to a pending bash approval: whether it
-// was allowed, and (when denied) an optional human-supplied reason forwarded
-// to the model so it understands why, not just that.
+// approvalReply answers a pending modal overlay — approvalOverlay covers
+// two distinct shapes:
+//   - allow/deny (the ordinary case): Allowed is the decision, Reason an
+//     optional human-supplied explanation forwarded to the model when
+//     denied.
+//   - password mode (see approvalOverlay.passwordMode): Allowed means
+//     "password submitted" (false only for a Ctrl+C/Esc cancel), Password
+//     carries the raw bytes and Reason is unused.
 type approvalReply struct {
-	Allowed bool
-	Reason  string
+	Allowed  bool
+	Reason   string
+	Password []byte
 }
 
 // approvalOverlay replaces the input region while the user approves a bash command.
@@ -34,6 +41,15 @@ type approvalOverlay struct {
 	// stand-in that only handled plain runes.
 	denying      bool
 	reasonEditor *editor
+
+	// passwordMode replaces the whole panel with a masked password prompt
+	// (see newSudoPasswordOverlay) instead of the ordinary allow/deny UI —
+	// mutually exclusive with denying, and never risk-assessed (risk stays
+	// "pending" but renderPasswordPanel never reads it). passwordEditor is
+	// the same editor type reasonEditor uses, so it gets identical key
+	// handling for free; only the render masks it.
+	passwordMode   bool
+	passwordEditor *editor
 }
 
 // reasonText returns the currently typed deny reason, or "" before
@@ -45,6 +61,16 @@ func (o *approvalOverlay) reasonText() string {
 	return o.reasonEditor.text()
 }
 
+// passwordText returns the currently typed sudo password, or "" before
+// newSudoPasswordOverlay has run (never true in practice — passwordEditor is
+// always set at construction for a password-mode overlay).
+func (o *approvalOverlay) passwordText() string {
+	if o.passwordEditor == nil {
+		return ""
+	}
+	return o.passwordEditor.text()
+}
+
 func newApprovalOverlay(command, description, workdir string, origin agent.ApprovalOrigin) *approvalOverlay {
 	return &approvalOverlay{
 		command:     command,
@@ -53,6 +79,16 @@ func newApprovalOverlay(command, description, workdir string, origin agent.Appro
 		risk:        "pending",
 		origin:      origin,
 	}
+}
+
+// newSudoPasswordOverlay builds an approvalOverlay already in password mode —
+// used by AskSudoPassword, always for a command whose own allow/deny
+// approval has already been granted (see guard.RequiresSudoPassword).
+func newSudoPasswordOverlay(command, description, workdir string, origin agent.ApprovalOrigin) *approvalOverlay {
+	o := newApprovalOverlay(command, description, workdir, origin)
+	o.passwordMode = true
+	o.passwordEditor = newEditor()
+	return o
 }
 
 // approvalOriginLabel renders where the command came from, for the panel
@@ -194,6 +230,58 @@ func (o *approvalOverlay) renderDenyReasonPanel(panelRows, cols int) []string {
 	return out
 }
 
+// renderPasswordPanel paints the masked sudo-password prompt — shown after
+// a sudo-needing command's own allow/deny approval already went through
+// (see AskSudoPassword). The typed text is never rendered, only its rune
+// count as '*'.
+func (o *approvalOverlay) renderPasswordPanel(panelRows, cols int) []string {
+	if panelRows < 3 {
+		panelRows = 3
+	}
+	if cols < 12 {
+		cols = 12
+	}
+	bg := approvalPanelBG()
+	mk := func(content string) string { return fillWidthBG(bg, content, cols) }
+	blank := mk("")
+
+	title := mk(fgYellow + bold + "Sudo password required" + approvalOriginLabel(o.origin) + reset)
+	footer := mk(dim + "[Enter] submit · [Esc] cancel this command · [Ctrl+C] stop turn — never sent to the model" + reset)
+
+	oneLine := strings.ReplaceAll(strings.TrimSpace(o.command), "\n", " ")
+	cmdSummary := mk(dim + "Command: " + reset + truncatePlain(oneLine, cols-12))
+
+	label := "Password: "
+	avail := cols - len([]rune(label)) - 3 // "  " indent + trailing cursor glyph
+	if avail < 4 {
+		avail = 4
+	}
+	n := utf8.RuneCountInString(o.passwordText())
+	if n > avail {
+		n = avail
+	}
+	inputLine := mk("  " + label + strings.Repeat("*", n) + reset + fgYellow + "█" + reset)
+
+	out := make([]string, panelRows)
+	out[0] = title
+	out[panelRows-1] = footer
+	idx := 1
+	out[idx] = cmdSummary
+	idx++
+	if idx < panelRows-1 {
+		out[idx] = blank
+		idx++
+	}
+	if idx < panelRows-1 {
+		out[idx] = inputLine
+		idx++
+	}
+	for i := idx; i < panelRows-1; i++ {
+		out[i] = blank
+	}
+	return out
+}
+
 // renderInputPanel paints the approval UI into the bottom input region. Each
 // line is a full-width opaque background band (panelRows lines total).
 func (o *approvalOverlay) renderInputPanel(panelRows, cols int) []string {
@@ -202,6 +290,9 @@ func (o *approvalOverlay) renderInputPanel(panelRows, cols int) []string {
 	}
 	if cols < 12 {
 		cols = 12
+	}
+	if o.passwordMode {
+		return o.renderPasswordPanel(panelRows, cols)
 	}
 	if o.denying {
 		return o.renderDenyReasonPanel(panelRows, cols)

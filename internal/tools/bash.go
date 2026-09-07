@@ -29,9 +29,10 @@ import (
 // called, so a registry with no sandbox support just errors clearly on a
 // sandboxId instead of nil-panicking.
 type BashTool struct {
-	cwd        string // session workspace root, used when workdir is empty
-	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)
-	sandboxMgr *sandbox.Manager
+	cwd            string // session workspace root, used when workdir is empty
+	approvalFn     func(ctx context.Context, command, description, workdir string) (bool, string)
+	sandboxMgr     *sandbox.Manager
+	sudoPasswordFn SudoPasswordFn
 }
 
 // NewBashTool creates a bash tool. The approval function is called when a
@@ -39,6 +40,17 @@ type BashTool struct {
 // nil to auto-deny all unsafe commands.
 func NewBashTool(cwd string, approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)) *BashTool {
 	return &BashTool{cwd: cwd, approvalFn: approvalFn}
+}
+
+// SetSudoPasswordFn wires the prompt a host (non-sandboxed) command asks for
+// when it contains a bare sudo/pkexec (see guard.RequiresSudoPassword) —
+// there's no controlling terminal for sudo to read from otherwise. Optional:
+// a nil sudoPasswordFn (the default) just makes such a command fail with a
+// clear error instead of hanging or silently running unauthenticated. Never
+// consulted for a sandboxed call — the sandbox already grants passwordless
+// sudo at bootstrap.
+func (t *BashTool) SetSudoPasswordFn(fn SudoPasswordFn) {
+	t.sudoPasswordFn = fn
 }
 
 // SetSandboxManager wires the Manager that sandboxId-carrying calls route
@@ -146,6 +158,33 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		return ToolResult{Error: msg}, nil
 	}
 
+	// A bare sudo/pkexec has no controlling terminal to read a password
+	// from here (no tty allocated below, cmd.Stdin left nil). Get one
+	// through the same approval-adjacent prompt path as everything else
+	// sensitive (fileApprovalFn, sandboxApprovalFn, ...) rather than
+	// failing opaquely mid-exec — see SetSudoPasswordFn.
+	runCommand := in.Command
+	var askpassHelper *sudoAskpassHelper
+	if guard.RequiresSudoPassword(in.Command) {
+		if t.sudoPasswordFn == nil {
+			return ToolResult{Error: "command needs a sudo password but this session has no prompt for one available (headless mode, or sudo support not wired up)"}, nil
+		}
+		password, ok := t.sudoPasswordFn(ctx, in.Command, in.Description, dir)
+		if !ok {
+			return ToolResult{Error: "sudo password entry cancelled by user"}, nil
+		}
+		helper, err := newSudoAskpassHelper(password)
+		for i := range password {
+			password[i] = 0 // best-effort zero; see newSudoAskpassHelper's own doc comment
+		}
+		if err != nil {
+			return ToolResult{Error: "sudo askpass setup failed: " + err.Error()}, nil
+		}
+		defer helper.cleanup()
+		askpassHelper = helper
+		runCommand = injectSudoAskpass(in.Command)
+	}
+
 	// Determine timeout.
 	timeoutSec := 120
 	if in.Timeout > 0 {
@@ -157,16 +196,38 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	childCtx, cancel := context.WithTimeout(ctx, timeoutDur)
 	defer cancel()
 
-	cmd := exec.CommandContext(childCtx, "bash", "-c", in.Command)
+	cmd := exec.CommandContext(childCtx, "bash", "-c", runCommand)
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	// cmd.Env left nil: exec.Cmd falls back to os.Environ() (no persisted
-	// env from a prior call — every call inherits the process environment
-	// fresh).
-	// Run in its own process group and kill the whole group on timeout/cancel,
-	// otherwise only the bash shell dies and its spawned children are orphaned.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// cmd.Env left nil (falls back to os.Environ(), same as every other
+	// call — no persisted env from a prior call) UNLESS this call needed a
+	// sudo password, in which case SUDO_ASKPASS must point at the one-shot
+	// helper script above. The path is the only new thing a plain `env`
+	// inside the command would ever see — never the password itself (that
+	// only ever touches the 0600 file the script cats, never argv/env — see
+	// sudoAskpassHelper's own doc comment for the residual risk this
+	// doesn't close).
+	if askpassHelper != nil {
+		cmd.Env = append(os.Environ(), "SUDO_ASKPASS="+askpassHelper.scriptPath)
+	}
+	// Setsid (not just Setpgid) detaches the child from px's own controlling
+	// terminal entirely — it becomes both a new session and process group
+	// leader (pgid == pid), so the same -pid group-kill below still works.
+	// Found necessary for sudo specifically: even with -A and cmd.Stdin left
+	// at /dev/null, sudo's retry message ("Sorry, try again.") opens
+	// /dev/tty *directly* rather than going through stdin/stdout/stderr —
+	// bypassing this call's own capture entirely and writing straight onto
+	// whatever terminal the child's session is still attached to. Without
+	// Setsid that's still px's real terminal (Setpgid alone only changes
+	// the process group, not the controlling-terminal association), so a
+	// wrong sudo password mid-session showed up smeared across the live
+	// TUI's screen instead of coming back as ordinary captured stderr.
+	// Setsid gives the child no controlling terminal at all — open("/dev/tty")
+	// then fails outright, forcing every retry message through stderr like
+	// everything else this call captures. General hygiene beyond sudo too:
+	// no bash-tool child should ever be able to write to px's own screen.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process == nil {
 			return nil

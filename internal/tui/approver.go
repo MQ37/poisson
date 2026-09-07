@@ -17,3 +17,13 @@ import (
 type Approver interface {
 	Approve(ctx context.Context, command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (allowed bool, reason string)
 }
+
+// SudoPasswordAsker prompts for the sudo password a host bash command needs
+// (see guard.RequiresSudoPassword and tools.SudoPasswordFn), always after
+// that command's own Approve above already granted it. ok is false on
+// cancel. password must never be logged or handed to the model — the only
+// caller (BashTool's host exec path) writes it straight into a private
+// one-shot askpass file and zeroes its own copy right after.
+type SudoPasswordAsker interface {
+	AskSudoPassword(ctx context.Context, command, description, workdir string) (password []byte, ok bool)
+}

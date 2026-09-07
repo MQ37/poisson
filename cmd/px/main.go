@@ -508,6 +508,16 @@ func runREPL(noSkills bool, resumeSessionID string) {
 	crossProviderApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
 		return humanApproval(ctx, action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
 	}
+	// Same "delegates to the TUI, set below" shape as approveUI/humanApproval
+	// above — a bare sudo/pkexec in a host bash command has no controlling
+	// terminal to read a password from otherwise (see guard.RequiresSudoPassword).
+	var sudoUI tui.SudoPasswordAsker
+	sudoPasswordFn := func(ctx context.Context, command, description, workdir string) ([]byte, bool) {
+		if sudoUI != nil {
+			return sudoUI.AskSudoPassword(ctx, command, description, workdir)
+		}
+		return nil, false
+	}
 
 	reg := tools.BuildRegistry(tools.BuildOptions{
 		Cwd:                     cwd,
@@ -519,6 +529,7 @@ func runREPL(noSkills bool, resumeSessionID string) {
 		SandboxManager:          newSandboxManager(sessionID),
 		SandboxApprovalFn:       sandboxApprovalFn,
 		CrossProviderApprovalFn: crossProviderApprovalFn,
+		SudoPasswordFn:          sudoPasswordFn,
 	})
 
 	// Set up agent.
@@ -551,6 +562,7 @@ func runREPL(noSkills bool, resumeSessionID string) {
 		t.ResumeAtStartup(resumeSessionID)
 	}
 	approveUI = t
+	sudoUI = t
 	// A message queued while a turn is running is spliced into that same
 	// turn's next iteration (see agent.SetPendingInputFn's doc comment)
 	// instead of only being sent once the whole turn finishes.

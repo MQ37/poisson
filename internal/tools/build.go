@@ -60,6 +60,12 @@ type BuildOptions struct {
 	// same-provider subagent call never reaches this — it auto-runs exactly
 	// as before. Defaults to deny-all, matching the other two.
 	CrossProviderApprovalFn ApprovalFn
+	// SudoPasswordFn prompts for the sudo password a host (non-sandboxed)
+	// bash command needs (see guard.RequiresSudoPassword) — there's no
+	// controlling terminal for sudo to read from otherwise. Nil by default
+	// (headless callers, cost-eval, ...): such a command then just fails
+	// with a clear error instead of hanging or running unauthenticated.
+	SudoPasswordFn SudoPasswordFn
 }
 
 // BuildRegistry constructs the tool registry. A child (subagent) receives every
@@ -89,6 +95,9 @@ func BuildRegistry(opts BuildOptions) *Registry {
 	bashTool := NewBashTool(opts.Cwd, approval)
 	if opts.SandboxManager != nil {
 		bashTool.SetSandboxManager(opts.SandboxManager)
+	}
+	if opts.SudoPasswordFn != nil {
+		bashTool.SetSudoPasswordFn(opts.SudoPasswordFn)
 	}
 	reg.Register(bashTool)
 	reg.Register(NewReadTool(opts.Cwd, fileApproval))

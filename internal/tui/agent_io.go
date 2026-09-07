@@ -365,6 +365,56 @@ func (t *TUI) Approve(ctx context.Context, command, description, workdir string,
 	// tool card of its own to mark).
 	defer func() { tools.RecordApproval(ctx, allowed) }()
 
+	reply := t.runModalApproval(origin,
+		func() *approvalOverlay {
+			overlay := newApprovalOverlay(command, description, workdir, origin)
+			if r := bashRiskLabel(risk); r != "" {
+				overlay.setRisk(r)
+			}
+			return overlay
+		},
+		func(overlay *approvalOverlay) context.CancelFunc {
+			if risk != agent.BashRiskUnknown && risk != "" {
+				return nil
+			}
+			riskCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			go t.assessApprovalRisk(riskCtx, overlay, command, description, workdir)
+			return cancel
+		},
+	)
+	return reply.Allowed, reply.Reason
+}
+
+// AskSudoPassword prompts for the sudo password a host bash command needs
+// (see guard.RequiresSudoPassword) — always AFTER that command's own
+// approval already went through Approve above; this is a second, separate
+// modal, not a replacement for the allow/deny decision. ok is false on
+// Ctrl+C/Esc (cancelled, same as any other denied tool call — see
+// feedSudoPasswordKey). password is the masked input's raw bytes; the only
+// caller (BashTool's host exec path) writes it straight into a private
+// 0600 askpass file for sudo's own -A flag and zeroes both copies
+// immediately after — never logged, never part of the command text or
+// output handed back to the model.
+func (t *TUI) AskSudoPassword(ctx context.Context, command, description, workdir string) (password []byte, ok bool) {
+	origin := agent.ApprovalOriginFromContext(ctx)
+	reply := t.runModalApproval(origin,
+		func() *approvalOverlay { return newSudoPasswordOverlay(command, description, workdir, origin) },
+		nil,
+	)
+	return reply.Password, reply.Allowed
+}
+
+// runModalApproval is the skeleton shared by Approve (allow/deny) and
+// AskSudoPassword (masked password entry) — the only two flows that show a
+// modal overlay in the input region and block on a t.approvalAnswer reply.
+// build runs under t.mu (via withLock), after any foreign /btw panel has
+// been parked past, and returns the *approvalOverlay to install. extra (may
+// be nil) runs supplementary work once the overlay is up but before the
+// wait below — Approve's own background risk-classification call, whose
+// returned CancelFunc (if non-nil) is deferred here so it fires the moment
+// this function returns, exactly like the risk call it replaces used to
+// scope itself to Approve's own return.
+func (t *TUI) runModalApproval(origin agent.ApprovalOrigin, build func() *approvalOverlay, extra func(overlay *approvalOverlay) context.CancelFunc) approvalReply {
 	if origin != agent.ApprovalOriginBTW {
 		var b *btwOverlay
 		t.withLock(func() { b = t.currentBTW })
@@ -372,7 +422,7 @@ func (t *TUI) Approve(ctx context.Context, command, description, workdir string,
 			select {
 			case <-b.closedCh():
 			case <-t.done:
-				return false, ""
+				return approvalReply{}
 			}
 			// b itself is done; check whether a (possibly different) /btw
 			// session has since been opened.
@@ -395,8 +445,8 @@ drained:
 	// Freeze every live elapsed timer for as long as the human is deciding —
 	// bash cards, edit/write cards, thinking blocks and subagent widgets all
 	// measure from their own StartedAt, and none of them is doing any work
-	// while this prompt is up. Started before the overlay is built so the
-	// risk-classification call made on its behalf is inside the window too.
+	// while this prompt is up. Started before the overlay is built so any
+	// classification call made on its behalf is inside the window too.
 	approvalClock.begin()
 	defer approvalClock.end()
 
@@ -428,25 +478,20 @@ drained:
 			// same as any other overlay.
 			t.cancelOverlayWork()
 		}
-		overlay = newApprovalOverlay(command, description, workdir, origin)
-		if r := bashRiskLabel(risk); r != "" {
-			overlay.setRisk(r)
-		}
+		overlay = build()
 		t.activeOverlay = overlay
 		t.dirty.markFull()
 	})
 
+	if extra != nil {
+		if cancel := extra(overlay); cancel != nil {
+			defer cancel()
+		}
+	}
+
 	t.cancelMu.Lock()
 	runCtx := t.cancelCtx
 	t.cancelMu.Unlock()
-
-	var riskCancel context.CancelFunc
-	if risk == agent.BashRiskUnknown || risk == "" {
-		var riskCtx context.Context
-		riskCtx, riskCancel = context.WithTimeout(context.Background(), 45*time.Second)
-		go t.assessApprovalRisk(riskCtx, overlay, command, description, workdir)
-		defer riskCancel()
-	}
 
 	var cancelCh <-chan struct{}
 	// A /btw approval must survive the main turn's own cancellation — the two
@@ -472,7 +517,7 @@ drained:
 			restoreOverlay()
 			t.lastOverlayLines = 0
 		})
-		return false, ""
+		return approvalReply{}
 	case <-cancelCh:
 		reply = approvalReply{Allowed: false}
 	}
@@ -482,7 +527,7 @@ drained:
 		t.lastOverlayLines = 0
 		t.markScrollDirty()
 	})
-	return reply.Allowed, reply.Reason
+	return reply
 }
 
 func bashRiskLabel(risk agent.BashRisk) string {
