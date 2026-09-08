@@ -87,7 +87,7 @@ type Pricing struct {
 ```go
 cfg, err := config.Load()
 // cfg.Compaction.Threshold == 0.8
-// cfg.Stealth.CCVersion == "2.1.156"
+// cfg.Stealth.CCVersion == "2.1.220"
 // cfg.Stealth.CCHPositions == []int{4, 7, 20}
 ```
 

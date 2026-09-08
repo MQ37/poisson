@@ -155,7 +155,7 @@ const DefaultEffort = "medium"
 // StealthConfig's built-in default and as the provider package's fallback
 // user-agent when no *Config is available — one constant, not two literals
 // that could drift apart.
-const DefaultCCVersion = "2.1.156"
+const DefaultCCVersion = "2.1.220"
 
 // effortLevels are the accepted reasoning-effort levels.
 var effortLevels = map[string]bool{"low": true, "medium": true, "high": true, "xhigh": true, "max": true}
@@ -384,7 +384,7 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 
 [stealth]
 # Anthropic Claude Code stealth constants.
-# cc_version = "2.1.156"
+# cc_version = "2.1.220"
 # cc_entrypoint = "sdk-cli"
 # cch_salt = "59cf53e54c78"
 # cch_positions = [4, 7, 20]     # character positions sampled from first user msg
