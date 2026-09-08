@@ -189,7 +189,7 @@ func TestBuildBillingHeaderValue(t *testing.T) {
 	if !strings.HasPrefix(val, "x-anthropic-billing-header: ") {
 		t.Errorf("expected billing header prefix, got %q", val)
 	}
-	if !strings.Contains(val, "cc_version=2.1.220.") {
+	if !strings.Contains(val, "cc_version=2.1.263.") {
 		t.Errorf("expected cc_version, got %q", val)
 	}
 	if !strings.Contains(val, "cc_entrypoint=sdk-cli") {

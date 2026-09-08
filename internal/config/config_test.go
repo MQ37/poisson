@@ -55,7 +55,7 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Compaction.Model != "" {
 		t.Errorf("Compaction.Model = %q, want empty", cfg.Compaction.Model)
 	}
-	if cfg.Stealth.CCVersion != "2.1.220" {
+	if cfg.Stealth.CCVersion != "2.1.263" {
 		t.Errorf("Stealth.CCVersion = %q", cfg.Stealth.CCVersion)
 	}
 	if cfg.Stealth.CCEntrypoint != "sdk-cli" {
