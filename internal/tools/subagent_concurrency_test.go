@@ -94,6 +94,20 @@ printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindo
 		}()
 	}
 	wg.Wait()
+
+	// Each nested subagent call now returns almost instantly (async spawn
+	// ack) — bt.Execute returning says nothing about whether the actual
+	// child processes have even started yet. Wait for every registered job
+	// to reach a terminal state before checking peak, or the marker-file
+	// measurement races against children that never got polled.
+	jobs := tool.listJobs()
+	if want := nBatches * perBatch; len(jobs) != want {
+		t.Fatalf("expected %d jobs registered, got %d", want, len(jobs))
+	}
+	for _, j := range jobs {
+		waitForJob(t, tool, j.id, 5*time.Second)
+	}
+
 	close(stopPolling)
 	<-pollDone
 

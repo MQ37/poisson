@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mq37/poisson/internal/sandbox"
 	"github.com/mq37/poisson/internal/subagent"
@@ -111,6 +112,13 @@ printf '{"type":"done","success":true}\n'
 	if res.Error != "" {
 		t.Fatalf("Execute reported an error: %q (content=%q)", res.Error, res.Content)
 	}
+	// Execute now only returns a spawn ack — wait for the job to actually
+	// finish before checking seenCommand, or the background goroutine may
+	// not have reached the approval_request yet. This wait's job.mu
+	// lock/unlock also establishes the happens-before edge that makes
+	// reading seenCommand below race-free (written by runJob's goroutine
+	// strictly before its own job.mu.Unlock() in finishJob).
+	waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
 	if seenCommand == "" {
 		t.Fatal("approvalFn spy never saw an approval_request from the fake child")
 	}

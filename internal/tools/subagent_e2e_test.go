@@ -68,6 +68,7 @@ printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWind
 	if res.Error != "" {
 		t.Fatalf("Execute reported an error: %q (content=%q)", res.Error, res.Content)
 	}
+	waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
 
 	// Expect exactly: turn 1 (status clear), retrying (status set), turn 2
 	// (status clear again), final done (status clear) — proving the "clears
@@ -134,6 +135,7 @@ printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWind
 	if res.Error != "" {
 		t.Fatalf("Execute reported an error: %q (content=%q)", res.Error, res.Content)
 	}
+	waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
 
 	// Expect exactly: turn 1 (no reading yet), speed reading, turn 2 (reading
 	// persists), final done (reading still persists).
@@ -194,6 +196,7 @@ printf '{"type":"done","success":true,"turns":2,"contextTokens":150,"contextWind
 	if res.Error != "" {
 		t.Fatalf("Execute reported an error: %q (content=%q)", res.Error, res.Content)
 	}
+	waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
 
 	// Round 1 alone averages to itself; round 2 pulls it toward the heavier
 	// round; the final "done" tick keeps the running average.
@@ -258,9 +261,10 @@ printf '{"type":"done","success":true}\n'
 			if res.Error != "" {
 				t.Fatalf("Execute reported an error: %q", res.Error)
 			}
+			job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
 			want := "flag=" + tc.wantFlag
-			if !strings.Contains(res.Content, want) {
-				t.Fatalf("child argv result = %q, want it to contain %q", res.Content, want)
+			if !strings.Contains(job.result.Content, want) {
+				t.Fatalf("child argv result = %q, want it to contain %q", job.result.Content, want)
 			}
 		})
 	}
@@ -315,9 +319,10 @@ printf '{"type":"done","success":true}\n'
 			if res.Error != "" {
 				t.Fatalf("Execute reported an error: %q", res.Error)
 			}
+			job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
 			want := "classifier=" + tc.wantValue
-			if !strings.Contains(res.Content, want) {
-				t.Fatalf("child env result = %q, want it to contain %q", res.Content, want)
+			if !strings.Contains(job.result.Content, want) {
+				t.Fatalf("child env result = %q, want it to contain %q", job.result.Content, want)
 			}
 		})
 	}
@@ -364,8 +369,12 @@ exit 1
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
-	if res.Error == "" {
-		t.Fatal("expected a ToolResult.Error when the child died without a done event")
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error on the async spawn ack: %q", res.Error)
+	}
+	job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
+	if job.result.Error == "" {
+		t.Fatal("expected the job to report an error when the child died without a done event")
 	}
 	if lastStatus != "connection lost - giving up soon" {
 		t.Errorf("last non-empty progress status = %q, want the retrying text to have been relayed before the child died", lastStatus)
@@ -418,6 +427,7 @@ printf '{"type":"done","success":true,"turns":2,"usage":{"InputTokens":300,"Outp
 	if res.Error != "" {
 		t.Fatalf("Execute reported an error: %q", res.Error)
 	}
+	job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
 
 	if len(calls) != 1 {
 		t.Fatalf("usageFn called %d times, want exactly 1: %+v", len(calls), calls)
@@ -430,17 +440,19 @@ printf '{"type":"done","success":true,"turns":2,"usage":{"InputTokens":300,"Outp
 	if got.usage != want {
 		t.Fatalf("usageFn usage = %+v, want the final done event's totals %+v (not the earlier tool tick)", got.usage, want)
 	}
-	if !strings.Contains(res.Content, fmt.Sprintf("$%.4f", 0.0042)) {
-		t.Fatalf("result text = %q, want it to contain the recorded cost", res.Content)
+	if !strings.Contains(job.result.Content, fmt.Sprintf("$%.4f", 0.0042)) {
+		t.Fatalf("result text = %q, want it to contain the recorded cost", job.result.Content)
 	}
 }
 
 // TestSubagentToolRecordsUsageFromLastTickWhenCancelled verifies the
-// council-flagged gap: a subagent killed by a cancelled parent turn (e.g.
-// user hits Esc) skips the "done" event and the normal `done:` label
-// entirely (subagent.go's ctx.Done()/ctx.Err() early returns) — but it must
-// still get credit for whatever the child had already reported spending as
-// of its last progress tick, via the deferred usageFn fallback.
+// council-flagged gap: a job killed by its background context being
+// cancelled (e.g. process shutdown — see SetBackgroundContext; a per-turn
+// Ctrl+C no longer touches an already-spawned async job at all, by design)
+// skips the "done" event and the normal `done:` label entirely
+// (subagent.go's ctx.Done()/ctx.Err() early returns) — but it must still
+// get credit for whatever the child had already reported spending as of
+// its last progress tick, via the deferred usageFn fallback.
 func TestSubagentToolRecordsUsageFromLastTickWhenCancelled(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
@@ -474,14 +486,20 @@ sleep 30
 		return 0.01, nil
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	res, err := tool.Execute(ctx, json.RawMessage(`{"task":"do something"}`))
+	bgCtx, bgCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer bgCancel()
+	tool.SetBackgroundContext(bgCtx)
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
-	if res.Error == "" {
-		t.Fatal("expected a ToolResult.Error when the parent turn was cancelled")
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error on the async spawn ack: %q", res.Error)
+	}
+	job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
+	if job.result.Error == "" {
+		t.Fatal("expected the job to report an error when its background context was cancelled")
 	}
 	if calls != 1 {
 		t.Fatalf("usageFn called %d times, want exactly 1 (via the deferred fallback)", calls)
@@ -495,11 +513,11 @@ sleep 30
 // TestSubagentToolRecordsUsageFromApprovalRequestWhenCancelled covers the
 // bash-risk-classifier accounting gap: the classifier LLM call runs inside the
 // child, immediately before it raises an approval prompt, and the child's
-// usage snapshot rides along on the approval_request event. If the parent turn
-// is cancelled while the human is still deciding, no "tool" or "done" event
-// ever follows — so without banking the approval_request's usage the
-// classifier's tokens (and every earlier round's) would be dropped from the
-// parent's cost entirely.
+// usage snapshot rides along on the approval_request event. If the job's
+// background context is cancelled (e.g. process shutdown) while the human is
+// still deciding, no "tool" or "done" event ever follows — so without
+// banking the approval_request's usage the classifier's tokens (and every
+// earlier round's) would be dropped from the parent's cost entirely.
 func TestSubagentToolRecordsUsageFromApprovalRequestWhenCancelled(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")
@@ -538,11 +556,15 @@ sleep 30
 		return 0.02, nil
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
-	if _, err := tool.Execute(ctx, json.RawMessage(`{"task":"do something"}`)); err != nil {
+	bgCtx, bgCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer bgCancel()
+	tool.SetBackgroundContext(bgCtx)
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
+	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
+	waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
 	if calls != 1 {
 		t.Fatalf("usageFn called %d times, want exactly 1 (the approval_request's usage, banked before the wait)", calls)
 	}
@@ -591,8 +613,9 @@ printf '{"type":"done","success":true,"usage":{"InputTokens":100,"OutputTokens":
 	if res.Error != "" {
 		t.Fatalf("Execute reported an error: %q", res.Error)
 	}
-	if strings.Contains(res.Content, "Cost:") {
-		t.Fatalf("result text = %q, should not mention a cost with no usageFn wired", res.Content)
+	job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
+	if strings.Contains(job.result.Content, "Cost:") {
+		t.Fatalf("result text = %q, should not mention a cost with no usageFn wired", job.result.Content)
 	}
 }
 
@@ -644,13 +667,25 @@ printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindo
 
 	start := time.Now()
 	res, err := bt.Execute(context.Background(), mustJSON(t, map[string]interface{}{"calls": calls}))
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if !strings.Contains(res.Content, fmt.Sprintf("%d ok", n)) {
 		t.Fatalf("expected all %d calls to succeed, got: %q", n, res.Content)
 	}
+	// bt.Execute itself now returns almost instantly (each nested subagent
+	// call is an async spawn ack) — it says nothing about the real children.
+	// Wait for every registered job to actually finish before measuring wall
+	// clock, so this still proves the underlying processes overlap instead
+	// of running one at a time.
+	jobs := tool.listJobs()
+	if len(jobs) != n {
+		t.Fatalf("expected %d jobs registered, got %d", n, len(jobs))
+	}
+	for _, j := range jobs {
+		waitForJob(t, tool, j.id, 2*time.Second)
+	}
+	elapsed := time.Since(start)
 	// Serial execution would take at least n*sleep (1.5s); concurrent
 	// execution takes roughly one child's worth plus process-spawn overhead.
 	// A generous 2x-sleep ceiling comfortably separates the two without
@@ -697,15 +732,16 @@ printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindo
 	if res.Error != "" {
 		t.Fatalf("Execute reported an error: %q", res.Error)
 	}
-	if !strings.Contains(res.Content, "model=claude-opus-5 effort=xhigh") {
-		t.Fatalf("override did not reach the child env: %q", res.Content)
+	job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
+	if !strings.Contains(job.result.Content, "model=claude-opus-5 effort=xhigh") {
+		t.Fatalf("override did not reach the child env: %q", job.result.Content)
 	}
 	// The durable "Ran on ..." record (see subagent.go's Execute) must
 	// reflect the OVERRIDDEN model/effort, not the session's own inherited
 	// claude-sonnet-5 — this is what the TUI widget's authoritative label
 	// (subagentRanOnFromResult) reads back once the call is done.
-	if !strings.Contains(res.Content, "Ran on anthropic/claude-opus-5 (xhigh effort).") {
-		t.Fatalf("result text missing authoritative Ran-on record: %q", res.Content)
+	if !strings.Contains(job.result.Content, "Ran on anthropic/claude-opus-5 (xhigh effort).") {
+		t.Fatalf("result text missing authoritative Ran-on record: %q", job.result.Content)
 	}
 }
 
@@ -744,8 +780,9 @@ printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindo
 	if res.Error != "" {
 		t.Fatalf("Execute reported an error: %q", res.Error)
 	}
-	if !strings.Contains(res.Content, "Ran on anthropic/claude-sonnet-5 (high effort).") {
-		t.Fatalf("result text missing authoritative Ran-on record for the inherited case: %q", res.Content)
+	job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
+	if !strings.Contains(job.result.Content, "Ran on anthropic/claude-sonnet-5 (high effort).") {
+		t.Fatalf("result text missing authoritative Ran-on record for the inherited case: %q", job.result.Content)
 	}
 }
 
@@ -785,7 +822,8 @@ printf '{"type":"done","success":true,"turns":1,"contextTokens":10,"contextWindo
 	if res.Error != "" {
 		t.Fatalf("Execute reported an error: %q", res.Error)
 	}
-	if !strings.Contains(res.Content, "model=claude-sonnet-5 effort=xhigh") {
-		t.Fatalf("expected inherited model + overridden effort, got: %q", res.Content)
+	job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
+	if !strings.Contains(job.result.Content, "model=claude-sonnet-5 effort=xhigh") {
+		t.Fatalf("expected inherited model + overridden effort, got: %q", job.result.Content)
 	}
 }

@@ -65,6 +65,11 @@ px                                                   # launch the TUI
   (vendor tokens, PEM keys, JWTs, credential `KEY=VALUE` pairs) and masked
   with `[REDACTED]` before reaching the model, TUI, or session store.
   Best-effort, not a guarantee.
+- **Subagents run async** — `subagent` spawns a child and returns a job ID
+  immediately; the main agent keeps working (or you keep chatting) while it
+  runs in the background. `subagent_status` polls progress (one job or
+  every job), `subagent_result` retrieves the final output once — see
+  [docs/async-subagent-plan.md](docs/async-subagent-plan.md).
 - **Subagents on any provider** — a spawned subagent inherits the main
   session's model/effort by default; override either, or hand it a
   `provider/model` qualified ID to run it on a completely different

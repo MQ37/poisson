@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mq37/poisson/internal/auth"
 	"github.com/mq37/poisson/internal/config"
@@ -255,8 +256,12 @@ func TestSubagentToolCrossProviderApprovedSpawnsOnOtherProvider(t *testing.T) {
 	if res.Error != "" {
 		t.Fatalf("Execute reported an error: %q (content=%q)", res.Error, res.Content)
 	}
-	if !strings.Contains(res.Content, "Ran on xai/grok-build") {
-		t.Errorf("result should record it ran on the overridden provider/model, got: %q", res.Content)
+	job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
+	if job.result.Error != "" {
+		t.Fatalf("job reported an error: %q (content=%q)", job.result.Error, job.result.Content)
+	}
+	if !strings.Contains(job.result.Content, "Ran on xai/grok-build") {
+		t.Errorf("result should record it ran on the overridden provider/model, got: %q", job.result.Content)
 	}
 	env, err := os.ReadFile(envDump)
 	if err != nil {
@@ -308,7 +313,24 @@ func TestSubagentToolCrossProviderUnknownModelFailsBeforeApproval(t *testing.T) 
 
 // A same-provider override must never call the cross-provider approval
 // function at all — the classic "new gate fires when it shouldn't" bug.
+// Uses a real fake-child spawn (not just "does validation pass") so it also
+// proves the override reaches Spawn at all — wait via waitForJob before
+// returning so the background job is confirmed spawned before this test's
+// deferred restore() reverts the fixture (see waitForJobSpawned's doc
+// comment for why that ordering matters).
 func TestSubagentToolSameProviderOverrideNeverAsksCrossProviderApproval(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-same-provider.sh"
+	script := "#!/bin/sh\nprintf '{\"type\":\"done\",\"success\":true}\\n'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
 	tool := newAnthropicSonnetTool()
 	tool.SetConfigFn(func() *config.Config { return config.DefaultConfig() })
 	asked := false
@@ -326,12 +348,29 @@ func TestSubagentToolSameProviderOverrideNeverAsksCrossProviderApproval(t *testi
 	if strings.Contains(res.Error, "denied") || strings.Contains(res.Error, "not configured") {
 		t.Fatalf("same-provider override should reach Spawn cleanly, got %+v", res)
 	}
+	job := waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
+	if job.result.Error != "" {
+		t.Fatalf("same-provider override should reach Spawn cleanly, job errored: %q", job.result.Error)
+	}
 }
 
 // A model ID whose own first path segment isn't a real provider (llamacpp's
 // naming convention) must resolve against the main provider, not be
-// misparsed as a cross-provider request.
+// misparsed as a cross-provider request. Real fake-child spawn, same
+// waitForJob discipline as the sibling test above.
 func TestSubagentToolModelWithSlashButNoProviderPrefixStaysSameProvider(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-slash-model.sh"
+	script := "#!/bin/sh\nprintf '{\"type\":\"done\",\"success\":true}\\n'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	tool.SetRuntime(
 		func() string { return "llamacpp" },
@@ -351,6 +390,7 @@ func TestSubagentToolModelWithSlashButNoProviderPrefixStaysSameProvider(t *testi
 	if asked {
 		t.Error("a model ID whose prefix isn't a real provider must not trigger cross-provider approval")
 	}
+	waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
 	if strings.Contains(res.Error, "unknown model") || strings.Contains(res.Error, "not configured") {
 		t.Fatalf("expected the bare llamacpp model to resolve against the main provider, got %+v", res)
 	}

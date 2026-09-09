@@ -7,8 +7,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/mq37/poisson/internal/auth"
 	"github.com/mq37/poisson/internal/config"
@@ -116,6 +118,26 @@ type SubagentTool struct {
 	// error instead of silently denying or panicking — same discipline as
 	// cfgFn being nil for a same-provider override.
 	crossProviderApprovalFn ApprovalFn
+
+	// bgCtx is the session-scoped context a spawned job actually runs on —
+	// NOT the per-call ctx Execute receives, which dies the instant the
+	// turn that called Execute ends (internal/tui/agent_io.go's startTurn
+	// unconditionally cancels it in the turn goroutine's deferred cleanup).
+	// A job's own child process would otherwise be killed within
+	// microseconds of its own spawn-ack turn completing — see
+	// docs/async-subagent-plan.md §A. nil (until SetBackgroundContext is
+	// called) falls back to context.Background() in Execute: still correct,
+	// just with no way to bulk-cancel outstanding jobs before process exit.
+	bgCtx context.Context
+
+	// jobs tracks every async job this tool has ever spawned, by ID —
+	// process-lifetime, in-memory only (same "ephemeral, gone on restart"
+	// framing already used for a child's own throwaway DB). Deliberately
+	// NOT keyed to session/store state: /undo and /fork only ever mutate
+	// message rows and have no path to this map, so a running job survives
+	// either untouched (see docs/async-subagent-plan.md's inventory table).
+	jobsMu sync.Mutex
+	jobs   map[string]*subagentJob
 }
 
 // SetSandboxManager wires the Manager that a sandboxIds request validates
@@ -146,7 +168,15 @@ func NewSubagentTool(cwd string, approvalFn SubagentApproval) *SubagentTool {
 		cwd:        cwd,
 		approvalFn: approvalFn,
 		live:       make(map[*subagent.ChildProcess]struct{}),
+		jobs:       make(map[string]*subagentJob),
 	}
+}
+
+// SetBackgroundContext supplies the session-scoped context every spawned
+// job actually runs on (see bgCtx's doc comment). Optional — the safe
+// default (context.Background()) is used when unset.
+func (t *SubagentTool) SetBackgroundContext(ctx context.Context) {
+	t.bgCtx = ctx
 }
 
 func (t *SubagentTool) trackLive(c *subagent.ChildProcess) {
@@ -218,7 +248,7 @@ func (t *SubagentTool) Name() string { return "subagent" }
 // subagentBaseDescription is the tool description's static part — the
 // model/effort override section is appended dynamically by Description(),
 // since the available models depend on which provider is live.
-const subagentBaseDescription = "Spawn a one-shot child Poisson agent to complete a specific task. The child has every tool you do (read, write, edit, bash, web_search, web_ask, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. The child returns its final output when done. It cannot ask questions — give it a complete, self-contained task. Optional sandboxIds shares specific sandboxes (from create_sandbox) with the child — it can only use ones named here, it cannot create its own."
+const subagentBaseDescription = "Spawn a one-shot child Poisson agent to complete a specific task, in the background. Returns immediately with a job ID — it does NOT wait for the child to finish. The child has every tool you do (read, write, edit, bash, web_search, web_ask, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. It cannot ask questions — give it a complete, self-contained task. Use subagent_status to check a job's progress (or list every job) and subagent_result to retrieve the final output once it's done — each job's result can only be retrieved once. Optional sandboxIds shares specific sandboxes (from create_sandbox) with the child — it can only use ones named here, it cannot create its own."
 
 // subagentEffortGuide is shared across every model — the five levels mean
 // roughly the same thing regardless of which model they're applied to (per
@@ -426,21 +456,8 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	// OS temp dir and is deleted when the subagent finishes, so nothing is
 	// persisted to the parent's DB (same policy as /btw).
 	dbPath := filepath.Join(os.TempDir(), "poisson-"+childSessionID+".db")
-	defer removeDBFiles(dbPath)
 
-	// Block for a global concurrency slot before spawning a real OS process
-	// — see maxConcurrentSubagents' doc comment. Released only after the
-	// child is fully reaped below (defer registered before child.Reap's, so
-	// it runs after — LIFO), not merely after Spawn returns, so the slot
-	// reflects an actually-running process the whole time it's alive.
-	select {
-	case subagentSlots <- struct{}{}:
-	case <-ctx.Done():
-		return ToolResult{Error: "subagent cancelled while waiting for a concurrency slot"}, nil
-	}
-	defer func() { <-subagentSlots }()
-
-	child, err := subagent.Spawn(subagent.SpawnInput{
+	spawnInput := subagent.SpawnInput{
 		Task:                params.Task,
 		Cwd:                 t.cwd,
 		SessionID:           childSessionID,
@@ -452,13 +469,169 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 		NoSkills:            t.skillsEnabledFn != nil && !t.skillsEnabledFn(),
 		DBPath:              dbPath,
 		AuthorizedSandboxes: authorizedSandboxes,
-	})
-	if err != nil {
-		return ToolResult{Error: "failed to spawn subagent: " + err.Error()}, nil
 	}
+
+	job := &subagentJob{
+		id: childSessionID, name: agentName, task: params.Task,
+		provider: prov, model: model, effort: effort,
+		startedAt: time.Now(), status: "queued",
+	}
+	t.jobsMu.Lock()
+	t.jobs[job.id] = job
+	t.jobsMu.Unlock()
+
+	// toolCallID is captured from the REQUEST ctx (this call's own tool_use)
+	// before the goroutine below ever starts — runJob runs on bgCtx instead,
+	// which carries no such value (see bgCtx's doc comment).
+	toolCallID, hasToolCallID := ToolCallIDFromContext(ctx)
+	bgCtx := t.bgCtx
+	if bgCtx == nil {
+		bgCtx = context.Background()
+	}
+	go t.runJob(bgCtx, job, spawnInput, dbPath, toolCallID, hasToolCallID)
+
+	return ToolResult{Content: fmt.Sprintf(
+		"Subagent %q spawned as job %s. It runs in the background — use subagent_status to check progress, subagent_result to retrieve the final output once done.",
+		agentName, job.id,
+	)}, nil
+}
+
+// subagentJob tracks one asynchronously-spawned subagent job, independent
+// of the tool_use that spawned it — see docs/async-subagent-plan.md.
+// id/name/task/provider/model/effort/startedAt are set once at creation and
+// never change; everything else is mutable, guarded by mu.
+type subagentJob struct {
+	id, name, task, provider, model, effort string
+	startedAt                               time.Time
+
+	mu            sync.Mutex
+	status        string // "queued" | "running" | "done" | "error"
+	turns         int
+	toolCount     int
+	contextTokens int
+	contextWindow int
+	tokensPerSec  float64
+	doneAt        time.Time
+	result        ToolResult // set once, when status becomes "done" or "error"
+	retrieved     bool
+}
+
+// subagentJobView is a point-in-time, lock-free copy of a subagentJob for
+// subagent_status/subagent_result — copying a struct that embeds
+// sync.Mutex directly would copy the lock itself, which go vet flags.
+type subagentJobView struct {
+	id, name, task, provider, model, effort        string
+	startedAt, doneAt                              time.Time
+	status                                         string
+	turns, toolCount, contextTokens, contextWindow int
+	tokensPerSec                                   float64
+	result                                          ToolResult
+	retrieved                                       bool
+}
+
+func (j *subagentJob) view() subagentJobView {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return subagentJobView{
+		id: j.id, name: j.name, task: j.task, provider: j.provider, model: j.model, effort: j.effort,
+		startedAt: j.startedAt, doneAt: j.doneAt, status: j.status,
+		turns: j.turns, toolCount: j.toolCount, contextTokens: j.contextTokens, contextWindow: j.contextWindow,
+		tokensPerSec: j.tokensPerSec, result: j.result, retrieved: j.retrieved,
+	}
+}
+
+// getJob looks up a job by ID.
+func (t *SubagentTool) getJob(id string) (*subagentJob, bool) {
+	t.jobsMu.Lock()
+	defer t.jobsMu.Unlock()
+	j, ok := t.jobs[id]
+	return j, ok
+}
+
+// listJobs returns every job this tool has spawned, oldest first.
+func (t *SubagentTool) listJobs() []subagentJobView {
+	t.jobsMu.Lock()
+	jobs := make([]*subagentJob, 0, len(t.jobs))
+	for _, j := range t.jobs {
+		jobs = append(jobs, j)
+	}
+	t.jobsMu.Unlock()
+	sort.Slice(jobs, func(i, k int) bool { return jobs[i].startedAt.Before(jobs[k].startedAt) })
+	views := make([]subagentJobView, len(jobs))
+	for i, j := range jobs {
+		views[i] = j.view()
+	}
+	return views
+}
+
+// retrieveJob returns a job's final result exactly once — a second call
+// after the first successful retrieval errors instead of repeating it (see
+// docs/async-subagent-plan.md §C's one-shot decision), forcing the model to
+// use/remember the answer instead of re-fetching it as a free memory jog.
+// subagent_status stays freely repeatable for progress-checking.
+func (t *SubagentTool) retrieveJob(job *subagentJob) ToolResult {
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	switch job.status {
+	case "queued", "running":
+		return ToolResult{Error: fmt.Sprintf("job %s is still %s — check subagent_status", job.id, job.status)}
+	case "done", "error":
+		if job.retrieved {
+			return ToolResult{Error: fmt.Sprintf("job %s result already retrieved", job.id)}
+		}
+		job.retrieved = true
+		return job.result
+	default:
+		return ToolResult{Error: fmt.Sprintf("job %s has unknown status %q", job.id, job.status)}
+	}
+}
+
+// runJob runs one subagent job's entire lifecycle in the background, on ctx
+// (the session-scoped background context — see bgCtx's doc comment), never
+// the per-call ctx Execute received. This is Execute's old synchronous body
+// (unchanged behavior), writing outcomes into job instead of returning them
+// directly, so subagent_status/subagent_result can observe them at any
+// point — including turns long after the spawning call already returned.
+func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput subagent.SpawnInput, dbPath, toolCallID string, hasToolCallID bool) {
+	defer removeDBFiles(dbPath)
+
+	// Block for a global concurrency slot before spawning a real OS process
+	// — see maxConcurrentSubagents' doc comment. Released only after the
+	// child is fully reaped below (defer registered before child.Reap's, so
+	// it runs after — LIFO), not merely after Spawn returns, so the slot
+	// reflects an actually-running process the whole time it's alive.
+	select {
+	case subagentSlots <- struct{}{}:
+	case <-ctx.Done():
+		job.mu.Lock()
+		job.status, job.doneAt = "error", time.Now()
+		job.result = ToolResult{Error: "subagent cancelled while waiting for a concurrency slot"}
+		job.mu.Unlock()
+		return
+	}
+	defer func() { <-subagentSlots }()
+
+	child, err := subagent.Spawn(spawnInput)
+	if err != nil {
+		job.mu.Lock()
+		job.status, job.doneAt = "error", time.Now()
+		job.result = ToolResult{Error: "failed to spawn subagent: " + err.Error()}
+		job.mu.Unlock()
+		return
+	}
+	// "running" means the child process actually exists now — set only
+	// after Spawn succeeds, not merely "we're about to try", so a caller
+	// polling for status != "queued" (e.g. subagent_status, or a test
+	// synchronizing before tearing down a SetLookupExecutableForTest
+	// fixture) has a real guarantee the process is live.
+	job.mu.Lock()
+	job.status = "running"
+	job.mu.Unlock()
 	defer child.Reap()
 	t.trackLive(child)
 	defer t.untrackLive(child)
+
+	prov, model, effort := job.provider, job.model, job.effort
 
 	var output strings.Builder
 	var toolCount, turns, contextTokens, contextWindow int
@@ -474,8 +647,17 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	var tokensPerSec float64
 	var success bool
 	var childErr string
-	toolCallID, hasToolCallID := ToolCallIDFromContext(ctx)
+	// reportProgress both mirrors the live turn/context/speed figures onto
+	// job (so subagent_status can read them at any time) and, when this call
+	// still has a live tool_call widget (hasToolCallID, passed in from
+	// Execute's own request ctx — bgCtx carries no such value), forwards the
+	// same update to the TUI exactly as the old synchronous path did.
 	reportProgress := func(status string) {
+		job.mu.Lock()
+		job.turns, job.toolCount = turns, toolCount
+		job.contextTokens, job.contextWindow = contextTokens, contextWindow
+		job.tokensPerSec = tokensPerSec
+		job.mu.Unlock()
 		if hasToolCallID && t.progressFn != nil {
 			t.progressFn(toolCallID, turns, contextTokens, contextWindow, tokensPerSec, status)
 		}
@@ -523,9 +705,30 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	}
 	defer recordUsage()
 
+	// finishJob records final usage, writes the last-known progress figures,
+	// and stores res as the job's one-shot result (see retrieveJob) — the
+	// single place every exit path below converges on, instead of each
+	// duplicating that bookkeeping.
+	finishJob := func(res ToolResult) {
+		recordUsage()
+		job.mu.Lock()
+		job.doneAt = time.Now()
+		job.turns, job.toolCount = turns, toolCount
+		job.contextTokens, job.contextWindow = contextTokens, contextWindow
+		job.tokensPerSec = tokensPerSec
+		if res.Error != "" {
+			job.status = "error"
+		} else {
+			job.status = "done"
+		}
+		job.result = res
+		job.mu.Unlock()
+	}
+
 	for {
 		if err := ctx.Err(); err != nil {
-			return ToolResult{Content: output.String(), Error: "subagent cancelled"}, nil
+			finishJob(ToolResult{Content: output.String(), Error: "subagent cancelled"})
+			return
 		}
 
 		type readResult struct {
@@ -540,11 +743,13 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 
 		select {
 		case <-ctx.Done():
-			return ToolResult{Content: output.String(), Error: "subagent cancelled"}, nil
+			finishJob(ToolResult{Content: output.String(), Error: "subagent cancelled"})
+			return
 		case res := <-readCh:
 			if res.err != nil {
 				if ctx.Err() != nil {
-					return ToolResult{Content: output.String(), Error: "subagent cancelled"}, nil
+					finishJob(ToolResult{Content: output.String(), Error: "subagent cancelled"})
+					return
 				}
 				if res.err.Error() != "" && childErr == "" {
 					childErr = res.err.Error()
@@ -637,14 +842,13 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	}
 
 done:
-	// Record now (rather than leaving it entirely to the deferred fallback)
-	// so the cost, once known, can be folded into the summary text below.
-	// recordUsage() is idempotent (guarded by `recorded`), so the deferred
-	// call is then a no-op here and only does real work on the return paths
-	// above that jump straight past this label.
-	recordUsage()
 	result := output.String()
 	result += fmt.Sprintf("\n\n---\nSubagent finished. %d tool calls, %d turns.", toolCount, turns)
+	// recordUsage() here (rather than leaving it entirely to finishJob) so
+	// the cost, once known, can be folded into the summary text below —
+	// finishJob's own call is then a no-op (recordUsage is idempotent,
+	// guarded by `recorded`).
+	recordUsage()
 	if recorded {
 		result += fmt.Sprintf(" Cost: $%.4f.", recordedCost)
 	}
@@ -664,12 +868,13 @@ done:
 	result += "."
 	if childErr != "" {
 		result += "\nError: " + childErr
-		return ToolResult{Content: result, Error: childErr}, nil
+		finishJob(ToolResult{Content: result, Error: childErr})
+		return
 	}
 	if !success {
 		result += " (subagent reported failure)"
 	}
-	return ToolResult{Content: result}, nil
+	finishJob(ToolResult{Content: result})
 }
 
 // effortLevelAllowed reports whether level is one of settings' EffortLevels.
