@@ -212,6 +212,19 @@ func (s *scrollback) appendSubagentCard(id int64, providerCallID, name, task, mo
 	s.trim()
 }
 
+// subagentDoneNotificationText builds the nudge injected into the main
+// conversation when an async subagent job finishes (see
+// docs/async-subagent-plan.md phase 3 and TUI.injectSubagentDoneNotification)
+// — a nudge, not the result itself, so subagent_result's one-shot retrieval
+// contract stays meaningful: the model decides whether/when to actually
+// fetch it.
+func subagentDoneNotificationText(jobID, errMsg string) string {
+	if errMsg != "" {
+		return fmt.Sprintf("[Subagent job %s failed — call subagent_result to see the error.]", jobID)
+	}
+	return fmt.Sprintf("[Subagent job %s finished — call subagent_result to retrieve its output.]", jobID)
+}
+
 // subagentAckJobIDRe extracts the async job id from the subagent tool's
 // immediate spawn ack (see tools/subagent.go's Execute: "...spawned as job
 // sub-xxxx. It runs in the background..."). Every direct or batched

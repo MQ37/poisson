@@ -295,3 +295,99 @@ N/A row); session resume alone still means the job map is lost, by design
   jobs are an in-memory field on this process's `SubagentTool`, there is no
   cross-process registry (that's what `docs/server-mode-plan.md` would be
   for, separately).
+
+## Phase 3: notify the main agent when a job finishes — DONE
+
+Implemented as designed below, plus the session-scoping fix it surfaced.
+`subagentJob` gained a `sessionID` field (`SetSessionIDFn`/
+`BindSubagentSession`, fail-open when unwired); `getJob`/`listJobs` now
+filter by it, closing Phase 1's "this session only" open decision;
+`Agent.CompleteSubagentJob` takes the spawning session id and skips the new
+`OutputSubagentJobFinished` push (never the widget-completion push) when it
+no longer matches the live session. `TUI.injectSubagentDoneNotification`
+queues via the existing `t.queued` machinery when `sessionBusyLocked()` or
+an unrelated overlay is active, otherwise appends a `styleSystem` line and
+calls `startTurn` directly. Full test coverage per the inventory table
+below (session-switch leakage, idle/busy/compacting/overlay-active,
+fail-open default, `jobDoneFn` reporting the *spawning* session even after
+the live one changes). Batched jobs needed no dedicated wiring or test:
+`jobDoneFn` lives on `SubagentTool.runJob`, the same goroutine regardless of
+whether `Execute` was called directly or dispatched via `batch` — already
+proven structurally decoupled from `batch.go` in phase 2.
+
+**Goal:** when an async job reaches a terminal state, inject a nudge into
+the main conversation ("job X finished, call subagent_result") and either
+start a fresh turn immediately (main agent idle) or queue it properly
+(main agent mid-turn/compacting) — so the model doesn't have to be asked
+again or poll blind to learn a background job is done.
+
+### Design
+
+Reuses the existing queued-message machinery (`t.queued`,
+`TakeQueuedForInjection`, `drainQueueLocked`, `sessionBusyLocked`) instead
+of building a second delivery path — that machinery already handles the
+subtle cases correctly (park during compaction, poll at every tool-round
+boundary, guaranteed-delivery backstop) and reinventing it would just
+duplicate those bugs-already-fixed.
+
+- New `agent.OutputSubagentJobFinished` event type, pushed by
+  `Agent.CompleteSubagentJob` alongside (not instead of) the existing
+  widget-completion push (`CompleteBatchedSubagent`) — the widget update is
+  always safe to send (a stale widget from a session the user has switched
+  away from simply won't be found, since `/new`/`/resume` fully replace
+  `t.scroll`'s blocks); the new notify event is **session-gated** (see
+  below) before it's sent at all.
+- `TUI.handleEvent`'s new case: under the lock the run loop already holds
+  for every event, `if t.sessionBusyLocked() || t.activeOverlay != nil`
+  append the nudge text straight to `t.queued` (same shape `enqueueLocked`
+  produces, minus the history/editor bookkeeping that only makes sense for
+  literal keystrokes); otherwise append a `styleSystem` scrollback line and
+  call `t.startTurn` directly, exactly like `submit()`'s own tail.
+- Nudge text: `"[Subagent job <id> finished — call subagent_result to
+  retrieve its output.]"` (or a "failed" variant on error) — a nudge, not
+  the result itself: keeps `subagent_result`'s one-shot contract intact,
+  lets the model decide whether/when to actually fetch it.
+
+### Scouting finding that changed the design: cross-session leakage
+
+`SubagentTool` (and its job map) is constructed **once** per process in
+`runREPL`; `/new` and `/resume` call `Agent.SwitchSession(id)` on the
+**same** `Agent`/registry — they never rebuild it. A job spawned under
+session A that finishes after the user has since `/new`'d or `/resume`'d
+to session B would, without a guard, inject its nudge and start an
+unsolicited turn in session B, misattributed to a conversation that never
+asked for it. `subagent_status`/`subagent_result`'s job listing had the
+identical latent gap already (Phase 1's own open decision — "this session
+only" — was never actually implemented).
+
+Fix, done once for both: `subagentJob` gains a `sessionID` field, captured
+at spawn time via a new `sessionIDFn func() string` resolver
+(`SetSessionIDFn`/`BindSubagentSession`, same pattern as
+`SetRuntime`/`providerFn`) — nil-safe fail-open (unset resolver = no
+filtering, matching every other optional resolver in this file, so every
+existing Phase 1 test keeps passing unchanged). `getJob`/`listJobs` filter
+by session once wired; `Agent.CompleteSubagentJob` skips the notify push
+entirely (not the widget push) when the job's session no longer matches
+`a.SessionID()`.
+
+### Feature-impact inventory
+
+Seam: `TUI.handleEvent`'s `OutputToolResult`/`ToolName=="subagent"`
+dispatch (already forked in phase 2 into ack vs. real-completion) gains a
+third consumer of "a job genuinely finished": the new notify path,
+alongside the existing widget-completion path.
+
+| Entry | Classification | Evidence | Test coverage |
+|---|---|---|---|
+| Session switch mid-job (`/new`, `/resume`) | wired | `sessionID` field + fail-closed compare in `CompleteSubagentJob`, see above | needs a test: job spawned in session A, `/new` to B, job finishes, assert no turn starts in B and B's queue stays empty |
+| Main agent idle, no overlay | wired | `handleEvent` calls `startTurn` directly | needs a test: idle main agent, job finishes, assert a turn started with the nudge text |
+| Main agent mid-turn | wired | appended to `t.queued`, delivered by the existing `TakeQueuedForInjection`/`drainQueueLocked` — unchanged | needs a test: turn in flight, job finishes, assert nudge lands in `t.queued`, not a stray immediate turn |
+| Manual `/compact` running (no turn, but busy) | wired | `sessionBusyLocked()` already covers this (`running() \|\| compacting.Load()`) | needs a test: compacting, job finishes, assert queued not started |
+| An overlay is showing (approval, `/btw`, sudo password) for something unrelated | wired | `t.activeOverlay != nil` check — starting a fresh turn while the user is mid-decision on an unrelated modal would be poor UX even though `sessionBusyLocked()` alone might be false | needs a test: idle main turn, `/btw` overlay open, job finishes, assert queued not started |
+| Batched job (nested subagent inside `batch`) | works unchanged | converges on the identical `OutputToolResult` shape via `CompleteBatchedSubagent`, proven pattern from phase 2 | existing batched-completion coverage extends for free; one test confirming a batched job's completion also queues/starts like a direct one |
+| Several jobs finishing close together | **deliberately unsupported (v1): no coalescing** | each finished job gets its own nudge/queue entry independently — if several land while busy, `t.queued` naturally combines them into one follow-up turn via `combineAndDisplayQueuedLocked`'s existing join logic; if the agent is idle for each in turn, each nudge starts (or continues) its own turn | relies on existing queue-combining tests; no new coalescing logic added |
+| `subagent_status`/`subagent_result` cross-session visibility | wired (closes Phase 1's open decision) | same `sessionID` filter, applied to `getJob`/`listJobs` | needs a test: job from session A invisible to `subagent_status`/`subagent_result` called from session B |
+| Headless/`-p` mode | **deliberately unsupported** | `BindSubagentJobDone`/session wiring only happens in `runREPL`; a one-shot process exits right after its single `Prompt` call regardless of any background job — there is no loop left to notify | n/a, matches existing headless framing |
+| Resume/hydrate replay | works unchanged | `hydrate.go` never goes through `handleEvent` — it reconstructs scrollback directly from stored history, so replaying an old ack-only tool_result can't trigger a live notify/turn-start | n/a — different code path entirely, already established in phase 2 |
+
+No `unknown`s — every row above got an explicit answer before implementation, per the same discipline phases 1–2 used.

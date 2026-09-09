@@ -248,9 +248,19 @@ func BindSubagentUsage(reg *Registry, fn func(providerID, model string, usage *p
 // BindSubagentJobDone wires the callback fired once an async subagent job
 // actually finishes (see SubagentTool.jobDoneFn), so the TUI can flip that
 // job's widget from "spawned" to done/error whenever that really happens —
-// arbitrarily later than the tool_use that spawned it.
-func BindSubagentJobDone(reg *Registry, fn func(jobID string, res ToolResult)) {
+// arbitrarily later than the tool_use that spawned it — and notify the main
+// agent (see docs/async-subagent-plan.md phase 3).
+func BindSubagentJobDone(reg *Registry, fn func(jobID, sessionID string, res ToolResult)) {
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetJobDoneFn(fn) })
+}
+
+// BindSubagentSession wires the live current-session-id resolver onto the
+// subagent tool (see SubagentTool.sessionIDFn) — every job spawned after
+// this call records which session spawned it, so a later `/new`/`/resume`
+// away from that session can't leak the job's completion (notify) or
+// visibility (subagent_status/subagent_result) into the new one.
+func BindSubagentSession(reg *Registry, fn func() string) {
+	withSubagentTool(reg, func(st *SubagentTool) { st.SetSessionIDFn(fn) })
 }
 
 // BindWebUsage wires the cost sink on every web tool with a backend that

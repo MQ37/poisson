@@ -187,6 +187,38 @@ func (t *TUI) enqueueLocked(text string) {
 	t.dirty.markFull()
 }
 
+// injectSubagentDoneNotification is Agent.CompleteSubagentJob's
+// OutputSubagentJobFinished handler — see docs/async-subagent-plan.md phase
+// 3. jobID has already been confirmed by the agent layer to belong to the
+// still-live session (or session tracking isn't wired at all), so this only
+// has to decide WHEN to act, not whether. Caller (handleEvent) already
+// holds t.mu.
+//
+// Busy (a turn is running, or a manual /compact is in progress) or an
+// unrelated modal overlay is up (approval/sudo/btw): queue the nudge
+// exactly like a message typed by the user while busy — it rides the
+// existing TakeQueuedForInjection/drainQueueLocked delivery, including
+// combining with any other queued messages into one follow-up turn.
+// Starting a fresh turn on top of an open overlay would be confusing even
+// when sessionBusyLocked() alone is false (e.g. a background subagent's own
+// approval prompt showing while the main turn is otherwise idle — see
+// docs/async-subagent-plan.md's /btw precedent for why that's now possible).
+//
+// Otherwise: idle, nothing else competing for the screen — inject and start
+// a turn immediately, exactly like submit()'s own tail, so the model reacts
+// without the user having to prompt again.
+func (t *TUI) injectSubagentDoneNotification(jobID, errMsg string) {
+	text := subagentDoneNotificationText(jobID, errMsg)
+	if t.sessionBusyLocked() || t.activeOverlay != nil {
+		t.queued = append(t.queued, text)
+		t.dirty.markFull()
+		return
+	}
+	t.scroll.append(StyledLine{Style: styleSystem, Text: text})
+	t.scroll.scrollToBottom()
+	t.startTurn([]agent.TextSegment{{Text: text}})
+}
+
 // drainQueueLocked appends every queued message to the conversation and starts
 // one combined follow-up turn. No-op if the queue is empty or a compaction is
 // running. Caller must hold t.mu.
@@ -312,6 +344,8 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 			break
 		}
 		t.scroll.completeToolCall(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, ev.HumanApproval, 0)
+	case agent.OutputSubagentJobFinished:
+		t.injectSubagentDoneNotification(ev.ToolCallID, ev.ToolError)
 	case agent.OutputApproval:
 	case agent.OutputError:
 		t.scroll.appendRaw(styleError, "error: "+ev.Text)

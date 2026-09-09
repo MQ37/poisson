@@ -65,6 +65,16 @@ const (
 	// the round in flight" bookkeeping, so skipping it would leak this
 	// round's blocks into the next round's figure.
 	OutputInferenceSpeed = "inference_speed"
+	// OutputSubagentJobFinished notifies the TUI that an async subagent job
+	// reached a terminal state AND the session that spawned it is still the
+	// live one (see Agent.CompleteSubagentJob's session check) — the cue to
+	// inject a nudge into the main conversation and either start a fresh
+	// turn (idle) or queue it (busy), so the model learns the job finished
+	// without being re-prompted. ToolCallID carries the job id;
+	// ToolResultContent/ToolError carry the job's own result, in case the
+	// TUI wants to summarize rather than just say "done" (v1 just nudges;
+	// see docs/async-subagent-plan.md phase 3).
+	OutputSubagentJobFinished = "subagent_job_finished"
 )
 
 // OutputEvent is a serialized terminal rendering event. The TUI goroutine
@@ -727,8 +737,24 @@ func (a *Agent) CompleteBatchedSubagent(toolCallID string, res tools.ToolResult)
 // re-keys a subagent widget from its tool-call id to its job id the moment
 // it sees the spawn ack (see tui.scrollback.markSubagentSpawned), so this
 // arrives correlated correctly however long the job actually took.
-func (a *Agent) CompleteSubagentJob(jobID string, res tools.ToolResult) {
+//
+// The widget update always fires — a stale widget from a session the user
+// has since /new'd or /resume'd away from simply won't be found, since
+// switching sessions replaces the TUI's whole scrollback. The main-agent
+// notify (OutputSubagentJobFinished, phase 3) is different: acting on it
+// means injecting a message and possibly starting an unsolicited turn, so
+// it's skipped outright when sessionID names a session that's no longer the
+// live one — an empty sessionID (session tracking not wired) never blocks
+// it, matching SubagentTool's own fail-open default.
+func (a *Agent) CompleteSubagentJob(jobID, sessionID string, res tools.ToolResult) {
 	a.CompleteBatchedSubagent(jobID, res)
+	if sessionID != "" && sessionID != a.SessionID() {
+		return
+	}
+	a.sendEvent(OutputEvent{
+		Type: OutputSubagentJobFinished, ToolCallID: jobID,
+		ToolResultContent: res.Content, ToolError: res.Error,
+	})
 }
 
 // ExpediteSubagents forwards the user's "finish now" nudge to every running

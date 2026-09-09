@@ -143,9 +143,26 @@ type SubagentTool struct {
 	// (done/error) — the TUI's signal to flip that job's widget from
 	// "spawned" to actually finished, arbitrarily later than the tool_use
 	// that spawned it (whose own tool_result was just the immediate spawn
-	// ack — see docs/async-subagent-plan.md §D). nil means no one's
-	// listening (e.g. headless/`-p` mode, or tests that don't care).
-	jobDoneFn func(jobID string, res ToolResult)
+	// ack — see docs/async-subagent-plan.md §D), and to notify the main
+	// agent so it can react without being re-prompted (see phase 3). nil
+	// means no one's listening (e.g. headless/`-p` mode, or tests that
+	// don't care). sessionID is whatever sessionIDFn reported when the job
+	// was spawned ("" if sessionIDFn was never wired) — the caller's cue to
+	// skip reacting if the user has since switched to a different session.
+	jobDoneFn func(jobID, sessionID string, res ToolResult)
+
+	// sessionIDFn resolves the CURRENT session id at spawn time (a job
+	// records it once, permanently, on subagentJob.sessionID) and again on
+	// every getJob/listJobs lookup, so a job spawned under a session the
+	// user has since `/new`'d or `/resume`'d away from doesn't leak into
+	// the new one — neither via subagent_status/subagent_result nor via the
+	// phase-3 auto-notify (see docs/async-subagent-plan.md phase 3's
+	// cross-session-leakage finding). nil (unwired — e.g. most tests, or a
+	// future non-TUI entry point) means "no session concept available":
+	// every job is then visible to every caller, matching pre-phase-3
+	// behavior exactly — fail OPEN, not closed, so nothing already shipped
+	// silently starts hiding jobs just because this resolver isn't wired.
+	sessionIDFn func() string
 }
 
 // SetSandboxManager wires the Manager that a sandboxIds request validates
@@ -189,8 +206,35 @@ func (t *SubagentTool) SetBackgroundContext(ctx context.Context) {
 
 // SetJobDoneFn supplies the callback fired once an async job actually
 // finishes (see jobDoneFn's doc comment).
-func (t *SubagentTool) SetJobDoneFn(fn func(jobID string, res ToolResult)) {
+func (t *SubagentTool) SetJobDoneFn(fn func(jobID, sessionID string, res ToolResult)) {
 	t.jobDoneFn = fn
+}
+
+// SetSessionIDFn supplies the live current-session-id resolver (see
+// sessionIDFn's doc comment).
+func (t *SubagentTool) SetSessionIDFn(fn func() string) {
+	t.sessionIDFn = fn
+}
+
+// currentSessionID reports the live session id, or "" if sessionIDFn isn't
+// wired.
+func (t *SubagentTool) currentSessionID() string {
+	if t.sessionIDFn == nil {
+		return ""
+	}
+	return t.sessionIDFn()
+}
+
+// visibleToCurrentSession reports whether job should be visible/actionable
+// from the CURRENT session — true whenever session tracking isn't wired at
+// all (fail open, see sessionIDFn's doc comment), whenever the job itself
+// was spawned before tracking existed (job.sessionID == ""), or whenever
+// the job's recorded session still matches the live one.
+func (t *SubagentTool) visibleToCurrentSession(job *subagentJob) bool {
+	if t.sessionIDFn == nil || job.sessionID == "" {
+		return true
+	}
+	return job.sessionID == t.currentSessionID()
 }
 
 func (t *SubagentTool) trackLive(c *subagent.ChildProcess) {
@@ -488,6 +532,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	job := &subagentJob{
 		id: childSessionID, name: agentName, task: params.Task,
 		provider: prov, model: model, effort: effort,
+		sessionID: t.currentSessionID(),
 		startedAt: time.Now(), status: "queued",
 	}
 	t.jobsMu.Lock()
@@ -516,7 +561,11 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 // never change; everything else is mutable, guarded by mu.
 type subagentJob struct {
 	id, name, task, provider, model, effort string
-	startedAt                               time.Time
+	// sessionID is the session that spawned this job, captured once at
+	// creation via sessionIDFn — "" if that resolver wasn't wired. See
+	// SubagentTool.visibleToCurrentSession.
+	sessionID string
+	startedAt time.Time
 
 	mu            sync.Mutex
 	status        string // "queued" | "running" | "done" | "error"
@@ -554,20 +603,29 @@ func (j *subagentJob) view() subagentJobView {
 	}
 }
 
-// getJob looks up a job by ID.
+// getJob looks up a job by ID, scoped to the current session (see
+// visibleToCurrentSession) — a job spawned under a session the caller has
+// since switched away from reads as not-found, same as if it never
+// existed, rather than leaking across the switch.
 func (t *SubagentTool) getJob(id string) (*subagentJob, bool) {
 	t.jobsMu.Lock()
-	defer t.jobsMu.Unlock()
 	j, ok := t.jobs[id]
-	return j, ok
+	t.jobsMu.Unlock()
+	if !ok || !t.visibleToCurrentSession(j) {
+		return nil, false
+	}
+	return j, true
 }
 
-// listJobs returns every job this tool has spawned, oldest first.
+// listJobs returns every job this tool has spawned that's visible to the
+// current session (see visibleToCurrentSession), oldest first.
 func (t *SubagentTool) listJobs() []subagentJobView {
 	t.jobsMu.Lock()
 	jobs := make([]*subagentJob, 0, len(t.jobs))
 	for _, j := range t.jobs {
-		jobs = append(jobs, j)
+		if t.visibleToCurrentSession(j) {
+			jobs = append(jobs, j)
+		}
 	}
 	t.jobsMu.Unlock()
 	sort.Slice(jobs, func(i, k int) bool { return jobs[i].startedAt.Before(jobs[k].startedAt) })
@@ -623,7 +681,7 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		job.result = res
 		job.mu.Unlock()
 		if t.jobDoneFn != nil {
-			t.jobDoneFn(job.id, res)
+			t.jobDoneFn(job.id, job.sessionID, res)
 		}
 		return
 	}
@@ -637,7 +695,7 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		job.result = res
 		job.mu.Unlock()
 		if t.jobDoneFn != nil {
-			t.jobDoneFn(job.id, res)
+			t.jobDoneFn(job.id, job.sessionID, res)
 		}
 		return
 	}
@@ -746,7 +804,7 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		job.result = res
 		job.mu.Unlock()
 		if t.jobDoneFn != nil {
-			t.jobDoneFn(job.id, res)
+			t.jobDoneFn(job.id, job.sessionID, res)
 		}
 	}
 
