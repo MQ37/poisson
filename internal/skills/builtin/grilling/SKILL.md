@@ -22,6 +22,19 @@ Ask the whole frontier at once, numbered, each with your recommendation:
 
 Wait for the answers before the next round. Each answer reshapes the tree — settled decisions push the frontier outward, unblocking what depended on them. A question whose answer depends on another still-open question belongs to a later round, not this one.
 
+## Lettered choices
+
+When a question reduces to a handful of concrete options, letter them (A, B, C…) with one marked "(Recommended)":
+
+```
+❓ Q1 — <title>
+- A. (Recommended) <option>
+- B. <option>
+- C. <option>
+```
+
+Lets the user answer a whole round in one terse line: `1) A 2) A 3) B`. If they ask to explain instead of picking, explain plainly and leave the round open on that item — don't re-present the same options or force a re-ask of the rest of the round. Keep open-ended questions (no natural fixed set of answers) as plain prose instead of forcing a letter list.
+
 ## Facts vs decisions
 
 Finding facts is the agent's job, never the user's. A frontier question answerable from the codebase or tools: dispatch a subagent to find it, don't ask. Don't block the round on it — only the questions downstream of that fact wait; ask the rest of the frontier now. Decisions are the user's — put each to them, wait.
