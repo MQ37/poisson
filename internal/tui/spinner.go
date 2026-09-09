@@ -17,6 +17,10 @@ func spinnerChar(frame int) string {
 // needsSpinner reports whether the render loop should keep ticking for
 // animation — also true while compacting, so the header spinner animates
 // and the user has some sign of life during what can be a slow LLM call.
-func needsSpinner(thinking bool, activeTools int, compacting bool) bool {
-	return thinking || activeTools > 0 || compacting
+// runningSubagent covers the case async subagents introduced: the main
+// turn can go fully idle (thinking=false, no active tools) while a
+// background subagent job is still running — its pinned widget still needs
+// its spinner/live timer to animate even though nothing else is happening.
+func needsSpinner(thinking bool, activeTools int, compacting, runningSubagent bool) bool {
+	return thinking || activeTools > 0 || compacting || runningSubagent
 }

@@ -217,7 +217,7 @@ retrieve; old side: today's single blocking call.
 | Batched nested subagent (`batch.go`'s `subagentDoneFn`/`CompleteBatchedSubagent`) | wired, becomes the shared mechanism | §D proposes reusing/generalizing this exact function for the direct-call path too | existing `TestBatch_ParallelSubagentsRunConcurrently` should keep passing; add coverage that a batched subagent job is ALSO independently pollable via `subagent_status`/`subagent_result`, not just fire-and-forget |
 | TUI widget lifecycle (`subagent_card.go`, `ProviderCallID` matching) | wired, but changes meaning | §D — `ProviderCallID` becomes "job ID" for this card type only | needs new tests: card stays open across a turn boundary, completes on a later turn's background event |
 | Turn-scoped `ctx` cancellation (`agent_io.go`'s `startTurn`) | wired | §A's session-scoped bg context is the explicit fix; without it every async job dies within microseconds of its own spawn-ack turn ending | needs a regression test proving a job survives past `PromptSegmentsWithContext` returning |
-| `/undo`, `/fork`, session resume | **resolved: works unchanged, by construction** | Decision: don't special-case it. The job map lives on the `SubagentTool` instance — process lifetime, keyed by job ID, never touches `store`/session history. `/undo` and `/fork` only ever mutate message rows; they have no code path that reaches the job map either way, so a running job simply keeps running through either. If `/undo` removes the `tool_use`/`tool_result` pair that revealed a job's ID to the model, `subagent_status` with no `jobId` still lists every job this process has spawned — the ID isn't lost, just no longer in that exact spot in history. Resume (a new process) does lose it — the map is in-memory only, same ephemeral framing as the child's own throwaway DB. | needs one test: `/undo` immediately after a spawn still leaves the job running and pollable |
+| `/undo`, `/fork`, session resume | **N/A — neither command exists** | Neither is a live slash command (`internal/tui/slash.go`'s dispatch table has no `/undo`/`/fork` case). `/undo` was built once and removed (`CHANGELOG.md`: "Remove abandoned /undo write-path (SoftDeleteMessages)"); `/fork` was only ever planned (`PLAN.md` phase 17) and never actually built — `store.Session` has no `ParentID`/`ForkPoint` fields. Originally analyzed here as a resolved-by-construction risk before this was verified against the real dispatch table; kept as a note so a future re-add of either command starts from "job map is process-lifetime, untouched by store ops" as the design baseline. Session resume alone (no fork/undo involved) still applies: the job map doesn't survive a process restart, by design. | n/a |
 | Process exit / crash mid-job | deliberately unsupported (matches today) | jobs are in-memory only, same as today's live children being killed on process exit; child process itself is already reaped/killed the same way `Reap` does today | existing process-exit-kills-children behavior; no new test needed if behavior is genuinely unchanged — verify `Reap` is still called on bg-context cancellation, not skipped |
 | `subagent_result` called twice on the same finished job | **resolved: one-shot** | §C — `job.retrieved` flag, second call errors `"already retrieved"` | needs a test: retrieve, retrieve again, expect the error |
 | Server mode (`docs/server-mode-plan.md`), if ever built | **unknown**, not yet reachable | that plan's `liveSession` registry is a different, session-level analog of the same "job you can poll" idea — worth designing this job map so it *could* later be exposed the same way (`GET /api/sessions/{id}/subagents`), not guaranteed compatible today | n/a — future work, flagging only |
@@ -277,9 +277,10 @@ is out of scope until that plan is picked up.
 ## Open decisions
 
 Resolved: retrieve-twice (one-shot, §C), approval-while-idle (reuse
-`Approve` unchanged, proven by `/btw`), `/undo`/`/fork`/resume (job map is
-process-lifetime, untouched by store operations by construction). Still
-open:
+`Approve` unchanged, proven by `/btw`). `/undo`/`/fork` turned out to be
+moot — neither command exists in this codebase (see the inventory table's
+N/A row); session resume alone still means the job map is lost, by design
+(process-lifetime, in-memory only). Still open:
 
 - Ack-vs-final signal to the TUI: new `OutputEvent` type + `ToolResult`
   field vs. regex-extracted marker in the ack text (recommended — no

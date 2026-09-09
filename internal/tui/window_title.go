@@ -50,7 +50,7 @@ func formatWindowTitle(title string) string {
 // tick. Caller must hold t.mu and have already called syncHeaderFromAgentLocked
 // (or otherwise populated t.status.Title/SessionID) for this frame.
 func (t *TUI) updateWindowTitleLocked() {
-	processing := needsSpinner(t.status.Thinking, t.activeTools, t.compacting.Load())
+	processing := needsSpinner(t.status.Thinking, t.activeTools, t.compacting.Load(), t.scroll.hasRunningSubagent())
 	want := windowTitleFor(t.status.Title, t.status.SessionID, t.approving.Load(), processing)
 	if want == t.lastWindowTitle {
 		return
