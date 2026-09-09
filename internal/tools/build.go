@@ -245,6 +245,14 @@ func BindSubagentUsage(reg *Registry, fn func(providerID, model string, usage *p
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetUsageFn(fn) })
 }
 
+// BindSubagentJobDone wires the callback fired once an async subagent job
+// actually finishes (see SubagentTool.jobDoneFn), so the TUI can flip that
+// job's widget from "spawned" to done/error whenever that really happens —
+// arbitrarily later than the tool_use that spawned it.
+func BindSubagentJobDone(reg *Registry, fn func(jobID string, res ToolResult)) {
+	withSubagentTool(reg, func(st *SubagentTool) { st.SetJobDoneFn(fn) })
+}
+
 // BindWebUsage wires the cost sink on every web tool with a backend that
 // spends an account's tokens: fetch and web_search (Anthropic's helper model)
 // and web_ask (Grok). Called from agent.ReloadConfigDependentTools, which runs

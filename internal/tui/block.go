@@ -37,7 +37,15 @@ type BlockMeta struct {
 	SubagentTokensPerSec  float64 // subagent widget: the child's own token-weighted average inference speed so far, same measure as the header's (0 = none reported yet)
 	SubagentCost          float64 // subagent widget: recorded spend, meaningful only when SubagentCostKnown
 	SubagentCostKnown     bool    // subagent widget: whether a cost was actually recorded (false ≠ $0 — it means "nothing billed yet/found")
-	Expediting            bool    // subagent widget: user pressed Ctrl+G, child is wrapping up
+	// SubagentJobID is the async job id revealed by the spawn ack (see
+	// tools/subagent.go's Execute) — set once, when the ack arrives (see
+	// scrollback.setSubagentJobID), and checked alongside ProviderCallID by
+	// completeSubagentCard so the eventual real completion (pushed by
+	// Agent.CompleteSubagentJob, arbitrarily later, keyed by job id rather
+	// than the original tool-call id) still finds this widget. Empty until
+	// the ack is seen.
+	SubagentJobID string
+	Expediting    bool // subagent widget: user pressed Ctrl+G, child is wrapping up
 	ToolResult            string
 	ToolError             string
 	// HumanApproval is "" (never asked a human — guard/LLM auto-approved, the

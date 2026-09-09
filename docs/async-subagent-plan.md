@@ -246,12 +246,33 @@ is out of scope until that plan is picked up.
    `SetLookupExecutableForTest` fixture); both now use a real fake-child
    script instead. Full suite (`go build`, `go vet`, `go test ./...`, `-race`
    on `internal/tools`) green.
-2. **TUI widget decoupling** (§D) — not started. Direct (non-batched)
-   subagent calls currently show the raw async ack as their tool-result
-   text in the TUI (ugly but correct — no misleading "done" state, just an
-   uninformative one); the card-lifecycle rework (job-ID-keyed completion,
-   pinned region across turn boundaries, ack-vs-final signal) is deferred to
-   this phase, on top of a stable core.
+2. **TUI widget decoupling (§D) — DONE.** Ack-vs-final distinguished by
+   content (`subagentJobIDFromAck`'s regex marker — no shared-type change,
+   as recommended), not a new `OutputEvent` type. `BlockMeta.SubagentJobID`
+   is a second correlation key checked alongside `ProviderCallID` by
+   `completeSubagentCard`, set (without completing anything) by
+   `setSubagentJobID` the moment an ack is seen — so the widget stays keyed
+   by its original tool-call id for progress updates (`updateSubagentProgress`
+   is untouched, still keyed by tool-call id — the child's progress ticks
+   always carry that, never the job id) while ALSO becoming reachable by job
+   id for the real completion. `Agent.CompleteSubagentJob` (thin wrapper
+   around the pre-existing `CompleteBatchedSubagent`) pushes that completion
+   whenever `SubagentTool`'s `jobDoneFn` fires (wired via
+   `BindSubagentJobDone` in `runREPL` only — headless/`-p` mode has no
+   widget to update, so it's simply never wired there, a no-op). The batched
+   nested-subagent path needed zero special-casing: it already converges on
+   the identical `OutputToolResult`/`ToolName=="subagent"` wire shape via
+   `CompleteBatchedSubagent`, so the same ack-detection in `agent_io.go`'s
+   `handleEvent` covers both — proven by
+   `TestCompleteSubagentCard_BatchedCallSameAckThenFinalPattern`. Pinned
+   region across turn boundaries needed no change either:
+   `scrollback.runningSubagentLines`/`hasRunningSubagent` already just scan
+   for `kind == blockSubagent && !ToolDone`, which now simply stays true
+   correctly longer. Not touched (deliberately, out of scope): `hydrate.go`'s
+   resume-time reconstruction still shows a resumed session's subagent call
+   as "done" with the ack text if that's the only tool_result stored (no
+   live process exists anymore to complete it) — "ugly but correct," matches
+   the phase-1 framing, not a regression.
 
 ## Open decisions
 

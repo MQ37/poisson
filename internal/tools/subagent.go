@@ -138,6 +138,14 @@ type SubagentTool struct {
 	// either untouched (see docs/async-subagent-plan.md's inventory table).
 	jobsMu sync.Mutex
 	jobs   map[string]*subagentJob
+
+	// jobDoneFn, if set, is called once a job reaches a terminal state
+	// (done/error) — the TUI's signal to flip that job's widget from
+	// "spawned" to actually finished, arbitrarily later than the tool_use
+	// that spawned it (whose own tool_result was just the immediate spawn
+	// ack — see docs/async-subagent-plan.md §D). nil means no one's
+	// listening (e.g. headless/`-p` mode, or tests that don't care).
+	jobDoneFn func(jobID string, res ToolResult)
 }
 
 // SetSandboxManager wires the Manager that a sandboxIds request validates
@@ -177,6 +185,12 @@ func NewSubagentTool(cwd string, approvalFn SubagentApproval) *SubagentTool {
 // default (context.Background()) is used when unset.
 func (t *SubagentTool) SetBackgroundContext(ctx context.Context) {
 	t.bgCtx = ctx
+}
+
+// SetJobDoneFn supplies the callback fired once an async job actually
+// finishes (see jobDoneFn's doc comment).
+func (t *SubagentTool) SetJobDoneFn(fn func(jobID string, res ToolResult)) {
+	t.jobDoneFn = fn
 }
 
 func (t *SubagentTool) trackLive(c *subagent.ChildProcess) {
@@ -603,20 +617,28 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 	select {
 	case subagentSlots <- struct{}{}:
 	case <-ctx.Done():
+		res := ToolResult{Error: "subagent cancelled while waiting for a concurrency slot"}
 		job.mu.Lock()
 		job.status, job.doneAt = "error", time.Now()
-		job.result = ToolResult{Error: "subagent cancelled while waiting for a concurrency slot"}
+		job.result = res
 		job.mu.Unlock()
+		if t.jobDoneFn != nil {
+			t.jobDoneFn(job.id, res)
+		}
 		return
 	}
 	defer func() { <-subagentSlots }()
 
 	child, err := subagent.Spawn(spawnInput)
 	if err != nil {
+		res := ToolResult{Error: "failed to spawn subagent: " + err.Error()}
 		job.mu.Lock()
 		job.status, job.doneAt = "error", time.Now()
-		job.result = ToolResult{Error: "failed to spawn subagent: " + err.Error()}
+		job.result = res
 		job.mu.Unlock()
+		if t.jobDoneFn != nil {
+			t.jobDoneFn(job.id, res)
+		}
 		return
 	}
 	// "running" means the child process actually exists now — set only
@@ -723,6 +745,9 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		}
 		job.result = res
 		job.mu.Unlock()
+		if t.jobDoneFn != nil {
+			t.jobDoneFn(job.id, res)
+		}
 	}
 
 	for {

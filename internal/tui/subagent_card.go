@@ -212,6 +212,50 @@ func (s *scrollback) appendSubagentCard(id int64, providerCallID, name, task, mo
 	s.trim()
 }
 
+// subagentAckJobIDRe extracts the async job id from the subagent tool's
+// immediate spawn ack (see tools/subagent.go's Execute: "...spawned as job
+// sub-xxxx. It runs in the background..."). Every direct or batched
+// subagent call's own tool_result is now this ack, not the final outcome —
+// distinguishing the two by content (this marker's presence) is what lets
+// completeSubagentCard's generic per-tool dispatch path (agent.go's runTool,
+// which fires unconditionally for every tool including this one) update the
+// widget instead of prematurely completing it, with no shared-type change.
+var subagentAckJobIDRe = regexp.MustCompile(`spawned as job (\S+)\.`)
+
+// subagentJobIDFromAck reports the job id an ack's content carries, and
+// whether it looked like an ack at all — ok=false means content is a real
+// final result (or hydrated-history text with no such marker), not a spawn
+// acknowledgement.
+func subagentJobIDFromAck(content string) (jobID string, ok bool) {
+	m := subagentAckJobIDRe.FindStringSubmatch(content)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+// setSubagentJobID records the async job id a spawn ack revealed on the
+// widget matched by toolCallID, without marking it done — the eventual real
+// completion (Agent.CompleteSubagentJob, pushed arbitrarily later) is keyed
+// by job id, checked by completeSubagentCard alongside ProviderCallID.
+// Returns whether a widget matched. A no-op call (widget already gone, or
+// already carrying a different job id from a prior ack — shouldn't happen,
+// but must never clobber a real one) is not an error: the eventual
+// completion still finds it by whichever id actually got set first.
+func (s *scrollback) setSubagentJobID(toolCallID, jobID string) bool {
+	for i := len(s.blocks) - 1; i >= 0; i-- {
+		b := &s.blocks[i]
+		if b.kind != blockSubagent || b.meta.ToolDone || b.meta.ProviderCallID != toolCallID {
+			continue
+		}
+		if b.meta.SubagentJobID == "" {
+			b.meta.SubagentJobID = jobID
+		}
+		return true
+	}
+	return false
+}
+
 // subagentCostRe extracts the dollar figure subagent.go's Execute appends to
 // its own result text — " Cost: $0.0071." — right after "N tool calls, N
 // turns.". That sentence is the only place a subagent's recorded spend
@@ -264,16 +308,20 @@ func subagentRanOnFromResult(content string) (label string, ok bool) {
 
 // completeSubagentCard marks the matching subagent widget done and reports
 // whether a widget matched. Match is by providerCallID when set, otherwise the
-// most recent still-running widget. content is the tool_result text (see
-// subagentCostFromResult) — pass "" when unavailable (there is then simply no
-// cost to show, same as any other run that recorded nothing).
+// most recent still-running widget — checked against BOTH the widget's
+// original tool-call id and its async job id (see SubagentJobID's doc
+// comment), since the real completion for an async spawn arrives keyed by
+// job id, arbitrarily later than the tool_use that spawned it. content is
+// the tool_result text (see subagentCostFromResult) — pass "" when
+// unavailable (there is then simply no cost to show, same as any other run
+// that recorded nothing).
 func (s *scrollback) completeSubagentCard(providerCallID, content, errMsg string, durationMs int64) bool {
 	for i := len(s.blocks) - 1; i >= 0; i-- {
 		b := &s.blocks[i]
 		if b.kind != blockSubagent || b.meta.ToolDone {
 			continue
 		}
-		if providerCallID != "" && b.meta.ProviderCallID != providerCallID {
+		if providerCallID != "" && b.meta.ProviderCallID != providerCallID && b.meta.SubagentJobID != providerCallID {
 			continue
 		}
 		b.meta.Streaming = false

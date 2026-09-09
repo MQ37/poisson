@@ -543,6 +543,7 @@ func runREPL(noSkills bool, resumeSessionID string) {
 	tools.BindSubagentUsage(reg, a.RecordSubagentUsage)
 	tools.BindSubagentClassifier(reg, a.ClassifierModel)
 	tools.BindBatchSubagentDone(reg, a.CompleteBatchedSubagent)
+	tools.BindSubagentJobDone(reg, a.CompleteSubagentJob)
 
 	var skillList []skills.Skill
 	if !noSkills {

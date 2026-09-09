@@ -719,6 +719,18 @@ func (a *Agent) CompleteBatchedSubagent(toolCallID string, res tools.ToolResult)
 	})
 }
 
+// CompleteSubagentJob reports an async subagent job's final result to the
+// TUI once it actually finishes — arbitrarily later than the tool_use that
+// spawned it, whose own tool_result was just an immediate spawn ack (see
+// docs/async-subagent-plan.md §B/§D). Same wire shape as
+// CompleteBatchedSubagent, keyed by jobID instead of a tool-call id: the TUI
+// re-keys a subagent widget from its tool-call id to its job id the moment
+// it sees the spawn ack (see tui.scrollback.markSubagentSpawned), so this
+// arrives correlated correctly however long the job actually took.
+func (a *Agent) CompleteSubagentJob(jobID string, res tools.ToolResult) {
+	a.CompleteBatchedSubagent(jobID, res)
+}
+
 // ExpediteSubagents forwards the user's "finish now" nudge to every running
 // subagent child and returns how many were signalled. The main agent's own
 // turn is left untouched. Used by the TUI Ctrl+G handler.

@@ -294,6 +294,20 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		t.scroll.updateSubagentProgress(ev.ToolCallID, ev.SubagentTurns, ev.ContextTokens, ev.ContextWindow, ev.SubagentTokensPerSec, ev.Text)
 	case agent.OutputToolResult:
 		if ev.ToolName == "subagent" {
+			// Every subagent call's own tool_result is now just an
+			// immediate spawn ack (see docs/async-subagent-plan.md) — the
+			// generic per-tool dispatch that fires this event unconditionally
+			// for every tool call has no idea that's different from a real
+			// result. Distinguish by content: an ack updates the widget with
+			// its job id and keeps it running; a real result (pushed later,
+			// out of band, by Agent.CompleteSubagentJob — or replayed from
+			// stored history on resume, which never contains an ack) reaches
+			// this same case via ToolCallID being that job id and actually
+			// completes it.
+			if jobID, ok := subagentJobIDFromAck(ev.ToolResultContent); ok {
+				t.scroll.setSubagentJobID(ev.ToolCallID, jobID)
+				break
+			}
 			t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
 			break
 		}
