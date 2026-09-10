@@ -263,6 +263,29 @@ func (t *SubagentTool) ExpediteAll() int {
 	return n
 }
 
+// KillAll forcefully terminates every currently-live subagent child process
+// — process group and descendant tree, see ChildProcess.Kill — and returns
+// how many were signalled. Unlike ExpediteAll (a cooperative "wrap up"
+// nudge the child can take its time acting on), this is unconditional and
+// immediate: used when px itself is shutting down (Ctrl+C, Ctrl+D, /quit,
+// SIGINT/SIGTERM/SIGHUP — see TUI.prepareShutdownLocked), where a still-
+// running child (and anything it spawned, e.g. a bash sleep) must not be
+// left orphaned just because nothing waited for it. Safe to call from any
+// goroutine; each killed child's own runJob goroutine notices (its blocked
+// ReadEvent returns an error once the pipe closes), finishes normally, and
+// untracks itself from live — no manual cleanup needed here.
+func (t *SubagentTool) KillAll() int {
+	t.liveMu.Lock()
+	defer t.liveMu.Unlock()
+	n := 0
+	for c := range t.live {
+		if c.Kill() == nil {
+			n++
+		}
+	}
+	return n
+}
+
 // SetRuntime supplies live provider/model/effort resolvers (called at spawn time).
 func (t *SubagentTool) SetRuntime(providerFn, modelFn, effortFn func() string) {
 	t.providerFn = providerFn

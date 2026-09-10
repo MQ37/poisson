@@ -287,11 +287,23 @@ func (t *TUI) flashOverlayHintLocked() {
 	t.setEphemeralHintLocked("close overlay first (Esc)", 2*time.Second)
 }
 
-// prepareShutdownLocked cancels overlays and any in-flight agent turn before exit.
-// Caller must hold t.mu.
+// prepareShutdownLocked cancels overlays and any in-flight agent turn before
+// exit, and force-kills every live subagent child so none are left running
+// as orphans. The single chokepoint every quit path converges on — Ctrl+C
+// (double-tap), Ctrl+D, /quit, and SIGINT/SIGTERM/SIGHUP (via
+// waitForAgentStop) — so fixing subagent cleanup here covers all of them at
+// once. A subagent job normally survives its own spawning turn ending (the
+// whole point of running async) or even that turn being cancelled — bgCtx
+// is deliberately independent of the turn's ctx — but px itself exiting is
+// different: nothing is left running to ever reap it otherwise, so this is
+// the one place a hard kill (not the cooperative Ctrl+G "wrap up" nudge) is
+// correct. Caller must hold t.mu.
 func (t *TUI) prepareShutdownLocked() {
 	t.cancelOverlayWork()
 	t.activeOverlay = nil
+	if t.agent != nil {
+		t.agent.KillSubagents()
+	}
 	t.cancelMu.Lock()
 	cancel := t.cancelRun
 	t.cancelMu.Unlock()

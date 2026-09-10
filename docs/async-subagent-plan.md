@@ -391,3 +391,34 @@ alongside the existing widget-completion path.
 | Resume/hydrate replay | works unchanged | `hydrate.go` never goes through `handleEvent` — it reconstructs scrollback directly from stored history, so replaying an old ack-only tool_result can't trigger a live notify/turn-start | n/a — different code path entirely, already established in phase 2 |
 
 No `unknown`s — every row above got an explicit answer before implementation, per the same discipline phases 1–2 used.
+
+## Phase 4: kill live subagents on shutdown — DONE
+
+**Bug found (not shipped as designed):** cancelling the main turn (Esc) or
+quitting px entirely (Ctrl+C double-tap, Ctrl+D, `/quit`,
+SIGINT/SIGTERM/SIGHUP) never touched a running async subagent job at all —
+`runJob` runs on `bgCtx`, deliberately independent of the turn's own ctx
+(the whole point of phase 1). That's correct for Esc/turn-cancel (a
+subagent surviving its spawning turn is the design). It's wrong for process
+shutdown: nothing else is left running to ever reap an orphaned child
+afterward — `ChildProcess.Kill()` already existed (with a doc comment
+anticipating exactly this: "a top-level Ctrl+C reaping every active
+subagent") but nothing called it on any quit path.
+
+Fix: `SubagentTool.KillAll()` (mirrors `ExpediteAll` but unconditional/
+forceful instead of cooperative) → `Agent.KillSubagents()` (mirrors
+`ExpediteSubagents`) → called from `TUI.prepareShutdownLocked`, the single
+chokepoint every quit path already converged on (Ctrl+C double-tap, Ctrl+D,
+`/quit`, and SIGINT/SIGTERM/SIGHUP via `waitForAgentStop`) — so one fix
+point covers all of them.
+
+Test coverage: `KillAll` fan-out (3 live children, all actually exit, not
+just reported killed), `Agent.KillSubagents` reaching a real live child
+stuck mid-run, and — driven through the REAL key-dispatch entry points, not
+just `prepareShutdownLocked` in isolation — Ctrl+D and Ctrl+C-double-tap
+both actually kill a live child. Also fixed in passing: the pre-existing
+`TestExpediteSubagentsReachesLiveChild` had silently become a
+false-positive pass under the async rework (it read `Execute`'s own return
+value, which is now just an instant ack regardless of whether expedite ever
+reached the child) — rewritten to observe the outcome via
+`subagent_status`/`subagent_result`, the same way a model actually would.

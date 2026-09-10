@@ -775,6 +775,25 @@ func (a *Agent) ExpediteSubagents() int {
 	return st.ExpediteAll()
 }
 
+// KillSubagents forcefully terminates every live subagent child process
+// (see tools.SubagentTool.KillAll) and returns how many were signalled.
+// Used on process shutdown (see TUI.prepareShutdownLocked) so a still-
+// running child isn't orphaned just because nothing waited for it.
+func (a *Agent) KillSubagents() int {
+	if a.tools == nil {
+		return 0
+	}
+	t, ok := a.tools.Get("subagent")
+	if !ok {
+		return 0
+	}
+	st, ok := t.(*tools.SubagentTool)
+	if !ok {
+		return 0
+	}
+	return st.KillAll()
+}
+
 // EnsureSession persists the active session row if it does not exist yet.
 // Sessions are created lazily on the first user message, not at process start.
 func (a *Agent) EnsureSession() error {
