@@ -128,18 +128,19 @@ CREATE INDEX IF NOT EXISTS idx_session_title_history_session ON session_title_hi
 // second time).
 //
 // Index 0 and 1 are no-op placeholders, not "empty for now" as an earlier
-// version of this comment claimed: this project's one real, long-lived
-// database (~/.poisson/poisson.db) already sits at PRAGMA user_version 2
-// from two migrations that ran years ago, back when this slice had two real
-// entries, before their schema changes were folded into schemaSQL and the
-// slice was emptied out — leaving user_version permanently ahead of an
-// empty (or short) slice. migrate()'s loop is `for version < len(migrations)`,
-// so on that database an array shorter than 3 entries is simply never
-// entered — any migration appended at index 0 or 1 silently never runs.
-// Padding these two placeholders keeps new indices aligned with the real
-// on-disk version so migrations[2] (below) actually executes. Anyone
-// appending migrations[3] can just append; this alignment is now stable
-// going forward and does not need re-padding.
+// version of this comment claimed: an already-shipped database can sit at
+// PRAGMA user_version 0, 1, or 2 depending on which release last opened it
+// (this slice had one real entry as of 51d5f07, two as of b0c011c, then got
+// emptied back to [] once those schema changes were folded into schemaSQL —
+// leaving user_version permanently ahead of an empty or short slice on any
+// database that already ran them). migrate()'s loop is
+// `for version < len(migrations)`, so on such a database an array shorter
+// than 3 entries is simply never entered for versions 1/2 — a migration
+// appended at index 0 or 1 alone would silently never run for them. Padding
+// these two placeholders keeps new indices aligned with the highest
+// historical on-disk version so migrations[2] (below) actually executes
+// everywhere. Anyone appending migrations[3] can just append; this
+// alignment is now stable going forward and does not need re-padding.
 var migrations = []func(*sql.Tx) error{
 	func(*sql.Tx) error { return nil },
 	func(*sql.Tx) error { return nil },

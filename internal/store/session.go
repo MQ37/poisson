@@ -207,7 +207,7 @@ func (s *Store) GetSession(id string) (*Session, error) {
 func (s *Store) ListSessions(limit, offset int) ([]Session, error) {
 	const base = `SELECT id, is_subagent, title,
 	        compaction_summary, created_at, updated_at, cwd, provider, model, compacted_seq, pinned
-	 FROM sessions ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC`
+	 FROM sessions ORDER BY updated_at DESC, created_at DESC, id DESC`
 	var rows *sql.Rows
 	var err error
 	if limit < 0 {

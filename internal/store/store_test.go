@@ -541,7 +541,13 @@ func TestListSessionsOrdersByUpdatedAt(t *testing.T) {
 	}
 }
 
-func TestListSessionsPinnedSortsFirst(t *testing.T) {
+// TestListSessionsIgnoresPinnedOrdering locks in that ListSessions stays
+// recency-ordered regardless of Pinned — pinning is a session-picker-only
+// display preference (see filterableListOverlay.setPinned), not something
+// that should reorder px sessions/the list_sessions tool, both of which
+// share this same query. A pinned old session must not evict a genuinely
+// newer one from a LIMIT'd page.
+func TestListSessionsIgnoresPinnedOrdering(t *testing.T) {
 	s := newTestStore(t)
 	mustCreateSession(t, s, "old")
 	mustCreateSession(t, s, "recent")
@@ -558,11 +564,11 @@ func TestListSessionsPinnedSortsFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if len(list) < 2 || list[0].ID != "old" || !list[0].Pinned {
-		t.Fatalf("session order = %+v, want pinned 'old' first", list)
+	if len(list) < 2 || list[0].ID != "recent" || list[1].ID != "old" {
+		t.Fatalf("session order = %+v, want recency order unaffected by pinned", list)
 	}
-	if list[1].ID != "recent" || list[1].Pinned {
-		t.Fatalf("session order = %+v, want unpinned 'recent' second", list)
+	if !list[1].Pinned {
+		t.Fatalf("Pinned flag should still be readable: %+v", list)
 	}
 }
 

@@ -249,6 +249,18 @@ func (p *filterableListOverlay) feedKey(k Key) (handled bool, done bool, cancel 
 	// The note is transient — any key clears last frame's status.
 	p.note = ""
 
+	// render() clamps idx to len(filtered()) once per drawn frame, but two
+	// keys can land in the same frame (e.g. Ctrl+N then Ctrl+D back to
+	// back) — namedOnly/filter changes shrink filtered() without an
+	// intervening render, so idx can be stale here. Clamp before any
+	// handler below indexes p.filtered() with it (Ctrl+P, Ctrl+D, Enter).
+	if vis := p.filtered(); p.idx >= len(vis) {
+		p.idx = len(vis) - 1
+	}
+	if p.idx < 0 {
+		p.idx = 0
+	}
+
 	// Delete-confirmation mode: Enter deletes, any other key cancels. Consume
 	// the key either way so Esc cancels the prompt (not the whole overlay).
 	if p.pendingDeleteID != "" {

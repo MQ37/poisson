@@ -286,6 +286,34 @@ func TestFilterableListNamedOnlyIgnoredWhenDisabled(t *testing.T) {
 	}
 }
 
+// TestFilterableListIdxClampedBeforeHandlers is a regression test: idx can
+// go stale between frames (namedOnly toggled, or a filter typed then
+// backspaced via syncIdxToCurrent, without an intervening render() — the
+// only place that used to clamp it) and a handler indexing p.filtered()
+// with a stale idx (Ctrl+D, Ctrl+P, Enter) panics with "index out of
+// range". feedKey must clamp idx against the *current* filtered view
+// before any handler uses it, not just render().
+func TestFilterableListIdxClampedBeforeHandlers(t *testing.T) {
+	ov := newFilterableListOverlay("Sessions", []filterableListItem{
+		{id: "s1", label: "one", named: true},
+		{id: "s2", label: "two"},
+		{id: "s3", label: "three"},
+	}, "", func(string) bool { return true })
+	ov.namedFilterEnabled = true
+	ov.namedOnly = true // set directly, bypassing the Ctrl+N handler's own clamp
+	var pinned string
+	ov.onTogglePin = func(id string, _ bool) error { pinned = id; return nil }
+	ov.idx = 2 // stale: valid against the 3 unfiltered items, not the 1 namedOnly leaves
+
+	handled, _, _ := ov.feedKey(Key{Kind: KeyCtrl, Byte: 16}) // Ctrl+P — would have panicked
+	if !handled {
+		t.Fatal("Ctrl+P should be handled")
+	}
+	if pinned != "s1" {
+		t.Fatalf("pinned = %q, want s1 (the only namedOnly-visible row after idx was clamped)", pinned)
+	}
+}
+
 func TestFilterableListTogglePin(t *testing.T) {
 	var pinnedCalls []string
 	ov := newFilterableListOverlay("Sessions", []filterableListItem{

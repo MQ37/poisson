@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -168,6 +169,14 @@ func pickerSessionItems(h commandHost) ([]pickerItem, error) {
 			pinned: sess.Pinned,
 		})
 	}
+	// Pinned rows sort first, stable otherwise — a display preference local
+	// to this picker. ListSessions itself stays recency-ordered (see its
+	// doc comment) since px sessions and the list_sessions tool share that
+	// same query and must not have a pinned-but-old session evict a
+	// genuinely newer one from their LIMIT'd page.
+	sort.SliceStable(items, func(i, j int) bool {
+		return items[i].pinned && !items[j].pinned
+	})
 	if curID != "" && !curFound {
 		if _, err := a.Store().GetSession(curID); errors.Is(err, store.ErrNotFound) {
 			label := store.DisplaySessionID(curID)
