@@ -375,7 +375,7 @@ func (t *SubagentTool) KillAll() int {
 	var cancels []context.CancelFunc
 	for _, j := range t.jobs {
 		j.mu.Lock()
-		if (j.status == "queued" || j.status == "running") && j.cancel != nil {
+		if !isTerminalJobStatus(j.status) && j.cancel != nil {
 			cancels = append(cancels, j.cancel)
 		}
 		j.mu.Unlock()
@@ -441,7 +441,7 @@ func (t *SubagentTool) Name() string { return "subagent" }
 // subagentBaseDescription is the tool description's static part — the
 // model/effort override section is appended dynamically by Description(),
 // since the available models depend on which provider is live.
-const subagentBaseDescription = "Spawn a one-shot child Poisson agent to complete a specific task, in the background. Returns immediately with a job ID — it does NOT wait for the child to finish. The child has every tool you do (read, write, edit, bash, web_search, web_ask, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. It cannot ask questions — give it a complete, self-contained task. Use subagent_status to check a job's progress (or list every job) and subagent_result to retrieve the final output once it's done — each job's result can only be retrieved once. Optional sandboxIds shares specific sandboxes (from create_sandbox) with the child — it can only use ones named here, it cannot create its own."
+const subagentBaseDescription = "Spawn a one-shot child Poisson agent to complete a specific task, in the background. Returns immediately with a job ID — it does NOT wait for the child to finish. The child has every tool you do (read, write, edit, bash, web_search, web_ask, recall) except the ability to spawn further subagents. Use when you need focused work isolated from the main session. It cannot ask questions — give it a complete, self-contained task. Use subagent_status to check a job's progress (or list every job), subagent_result to retrieve the final output once it's done — each job's result can only be retrieved once — and subagent_kill to stop one early (or every job at once) if it's no longer needed. Optional sandboxIds shares specific sandboxes (from create_sandbox) with the child — it can only use ones named here, it cannot create its own."
 
 // subagentEffortGuide is shared across every model — the five levels mean
 // roughly the same thing regardless of which model they're applied to (per
@@ -716,6 +716,15 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	return ToolResult{Content: ack}, nil
 }
 
+// isTerminalJobStatus reports whether status is one a job never leaves once
+// reached (as opposed to "queued"/"running") — used everywhere a terminal
+// job needs picking out (retrieveJob, pruneJobsLocked, KillAll, JobLive,
+// the subagent_status/subagent_result formatters) so adding "killed" here
+// once covers every one of those sites instead of risking a missed spot.
+func isTerminalJobStatus(status string) bool {
+	return status == "done" || status == "error" || status == "killed"
+}
+
 // subagentJob tracks one asynchronously-spawned subagent job, independent
 // of the tool_use that spawned it — see docs/async-subagent-plan.md.
 // id/name/task/provider/model/effort/startedAt are set once at creation and
@@ -729,19 +738,27 @@ type subagentJob struct {
 	startedAt time.Time
 	// cancel stops this job's per-job timeout context (see subagentJobTimeout)
 	// early — set once, right after creation, never nil once runJob starts.
-	// Currently invoked only by runJob's own cleanup; a future subagent_kill
-	// tool reuses this same field to cancel a job on request.
+	// Invoked by runJob's own cleanup, KillAll (see isTerminalJobStatus), and
+	// SubagentTool.KillJob/KillVisibleJobs (subagent_kill).
 	cancel context.CancelFunc
 
-	mu            sync.Mutex
-	status        string // "queued" | "running" | "done" | "error"
+	mu sync.Mutex
+	// status is "queued" | "running" | one of the terminal states
+	// isTerminalJobStatus recognizes: "done" | "error" | "killed".
+	status string
+	// killRequested marks a job explicitly stopped via KillJob/KillAll,
+	// checked by runJob's exit paths so the terminal status it records is
+	// "killed" rather than the generic "error" a timeout or ordinary
+	// cancellation produces — distinguishable in subagent_status/
+	// subagent_result output.
+	killRequested bool
 	turns         int
 	toolCount     int
 	contextTokens int
 	contextWindow int
 	tokensPerSec  float64
 	doneAt        time.Time
-	result        ToolResult // set once, when status becomes "done" or "error"
+	result        ToolResult // set once, when status becomes terminal
 	retrieved     bool
 }
 
@@ -796,7 +813,55 @@ func (t *SubagentTool) JobLive(id string) bool {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.status == "queued" || j.status == "running"
+	return !isTerminalJobStatus(j.status)
+}
+
+// KillJob stops one job by ID — session-scoped like every other job-facing
+// method (getJob), so a caller can't kill a job it couldn't otherwise see or
+// act on. Cancelling job.cancel reaches both a job still waiting on a
+// concurrency slot (its select sees ctx.Done() and exits before ever calling
+// subagent.Spawn) and a genuinely running one (runJob's read loop sees
+// ctx.Done(), returns, and its deferred child.Reap() force-kills the actual
+// process) — no separate signal to the child is needed here. The terminal
+// status those exit paths record is "killed", not the generic "error" an
+// ordinary cancellation or timeout produces (see killRequested), set by
+// runJob itself so KillJob never races finishJob to write job.status.
+func (t *SubagentTool) KillJob(id string) error {
+	job, ok := t.getJob(id)
+	if !ok {
+		return fmt.Errorf("no such subagent job: %s", id)
+	}
+	job.mu.Lock()
+	if isTerminalJobStatus(job.status) {
+		status := job.status
+		job.mu.Unlock()
+		return fmt.Errorf("job %s already finished (%s)", id, status)
+	}
+	job.killRequested = true
+	cancel := job.cancel
+	job.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	return nil
+}
+
+// KillVisibleJobs stops every non-terminal job visible to the current
+// session (see visibleToCurrentSession) and returns how many were
+// signalled. Session-scoped, unlike KillAll (process shutdown, unscoped by
+// design) — the model-facing subagent_kill tool must never be able to kill
+// a job spawned under a session the caller has since switched away from.
+func (t *SubagentTool) KillVisibleJobs() int {
+	n := 0
+	for _, j := range t.listJobs() {
+		if isTerminalJobStatus(j.status) {
+			continue
+		}
+		if t.KillJob(j.id) == nil {
+			n++
+		}
+	}
+	return n
 }
 
 // listJobs returns every job this tool has spawned that's visible to the
@@ -826,10 +891,10 @@ func (t *SubagentTool) listJobs() []subagentJobView {
 func (t *SubagentTool) retrieveJob(job *subagentJob) ToolResult {
 	job.mu.Lock()
 	defer job.mu.Unlock()
-	switch job.status {
-	case "queued", "running":
+	switch {
+	case !isTerminalJobStatus(job.status):
 		return ToolResult{Error: fmt.Sprintf("job %s is still %s — check subagent_status", job.id, job.status)}
-	case "done", "error":
+	case isTerminalJobStatus(job.status):
 		if job.retrieved {
 			return ToolResult{Error: fmt.Sprintf("job %s result already retrieved", job.id)}
 		}
@@ -876,7 +941,7 @@ func (t *SubagentTool) pruneJobsLocked() {
 		cutoff := time.Now().Add(-jobRetention)
 		for id, j := range t.jobs {
 			j.mu.Lock()
-			evict := (j.status == "done" || j.status == "error") && (j.retrieved || j.doneAt.Before(cutoff))
+			evict := isTerminalJobStatus(j.status) && (j.retrieved || j.doneAt.Before(cutoff))
 			j.mu.Unlock()
 			if evict {
 				delete(t.jobs, id)
@@ -892,7 +957,7 @@ func (t *SubagentTool) pruneJobsLocked() {
 	var terminal []candidate
 	for id, j := range t.jobs {
 		j.mu.Lock()
-		if j.status == "done" || j.status == "error" {
+		if isTerminalJobStatus(j.status) {
 			terminal = append(terminal, candidate{id, j.doneAt})
 		}
 		j.mu.Unlock()
@@ -942,7 +1007,11 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 	fail := func(errText string) {
 		res := ToolResult{Error: errText}
 		job.mu.Lock()
-		job.status, job.doneAt = "error", time.Now()
+		status := "error"
+		if job.killRequested {
+			status = "killed"
+		}
+		job.status, job.doneAt = status, time.Now()
 		job.result = res
 		job.mu.Unlock()
 		if t.jobDoneFn != nil {
@@ -1078,9 +1147,12 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		job.turns, job.toolCount = turns, toolCount
 		job.contextTokens, job.contextWindow = contextTokens, contextWindow
 		job.tokensPerSec = tokensPerSec
-		if res.Error != "" {
+		switch {
+		case job.killRequested:
+			job.status = "killed"
+		case res.Error != "":
 			job.status = "error"
-		} else {
+		default:
 			job.status = "done"
 		}
 		job.result = res

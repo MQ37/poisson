@@ -33,7 +33,7 @@ func waitForJob(t *testing.T, tool *SubagentTool, jobID string, timeout time.Dur
 			t.Fatalf("job %s not found in registry", jobID)
 		}
 		v := job.view()
-		if v.status == "done" || v.status == "error" {
+		if isTerminalJobStatus(v.status) {
 			return v
 		}
 		if time.Now().After(deadline) {
@@ -58,8 +58,8 @@ func waitForJobSpawned(t *testing.T, tool *SubagentTool, jobID string, timeout t
 		if !ok {
 			t.Fatalf("job %s not found in registry", jobID)
 		}
-		switch job.view().status {
-		case "running", "done", "error":
+		status := job.view().status
+		if status == "running" || isTerminalJobStatus(status) {
 			return
 		}
 		if time.Now().After(deadline) {

@@ -148,10 +148,12 @@ func BuildRegistry(opts BuildOptions) *Registry {
 		subagentTool.SetAuth(opts.Auth)
 		subagentTool.SetCrossProviderApprovalFn(crossProviderApproval)
 		reg.Register(subagentTool)
-		// subagent_status/subagent_result poll the same job registry the
-		// subagent tool above just spawned — see docs/async-subagent-plan.md.
+		// subagent_status/subagent_result/subagent_kill all act on the same
+		// job registry the subagent tool above just spawned into — see
+		// docs/async-subagent-plan.md.
 		reg.Register(NewSubagentStatusTool(subagentTool))
 		reg.Register(NewSubagentResultTool(subagentTool))
+		reg.Register(NewSubagentKillTool(subagentTool))
 	}
 	// batch last so it can dispatch into every tool already registered.
 	// Denied inside batch: batch itself (no recursion) — bash and subagent

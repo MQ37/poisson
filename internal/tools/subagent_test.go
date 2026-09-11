@@ -510,6 +510,14 @@ func TestSubagentToolPartialTrustListStillAsks(t *testing.T) {
 		if !asked {
 			t.Errorf("a partial/empty trust list (%v) must still ask", ids)
 		}
+		// Wait for the spawned job to reach a terminal state before this
+		// test returns — without this, its background runJob goroutine (no
+		// fake child script set here, so it execs the real test binary and
+		// fails quickly, but is still a real subprocess/goroutine) can
+		// still be running when the NEXT test calls
+		// subagent.SetLookupExecutableForTest, racing that global var
+		// write against this goroutine's own subagent.Spawn read.
+		waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
 	}
 }
 

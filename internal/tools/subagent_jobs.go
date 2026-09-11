@@ -28,7 +28,7 @@ func formatJobLine(j subagentJobView) string {
 			line += fmt.Sprintf("  %d/%d ctx tokens", j.contextTokens, j.contextWindow)
 		}
 	}
-	if j.status == "done" || j.status == "error" {
+	if isTerminalJobStatus(j.status) {
 		if j.retrieved {
 			line += "  (retrieved)"
 		} else {
@@ -60,7 +60,7 @@ func formatJobStatus(j subagentJobView) string {
 		}
 		b.WriteString("\n")
 	}
-	if j.status == "done" || j.status == "error" {
+	if isTerminalJobStatus(j.status) {
 		if j.retrieved {
 			b.WriteString("result already retrieved via subagent_result\n")
 		} else {
@@ -165,4 +165,60 @@ func (t *SubagentResultTool) Execute(ctx context.Context, input json.RawMessage)
 		return ToolResult{Error: fmt.Sprintf("no such subagent job: %s", params.JobID)}, nil
 	}
 	return t.owner.retrieveJob(job), nil
+}
+
+// SubagentKillTool stops a running/queued subagent job on request — the
+// model-facing counterpart to SubagentTool.KillAll (process shutdown only,
+// unscoped). Session-scoped like subagent_status/subagent_result: a job
+// spawned under a session the caller has since switched away from reads as
+// not found, same as it does for those two tools.
+type SubagentKillTool struct {
+	owner *SubagentTool
+}
+
+// NewSubagentKillTool creates a kill tool acting on owner's job registry.
+func NewSubagentKillTool(owner *SubagentTool) *SubagentKillTool {
+	return &SubagentKillTool{owner: owner}
+}
+
+func (t *SubagentKillTool) Name() string { return "subagent_kill" }
+
+func (t *SubagentKillTool) Description() string {
+	return "Kill one running/queued subagent job by ID, or every job this session has spawned (all: true). Irreversible — the job stops immediately and its partial output (if any) is still retrievable once via subagent_result, but it does no further work. Exactly one of jobId or all is required."
+}
+
+func (t *SubagentKillTool) Schema() json.RawMessage {
+	return json.RawMessage(`{
+		"type": "object",
+		"properties": {
+			"jobId": {"type": "string", "description": "Job ID returned by the subagent tool's spawn ack. Omit when using all."},
+			"all": {"type": "boolean", "description": "Kill every non-finished job this session has spawned instead of a single one."}
+		}
+	}`)
+}
+
+func (t *SubagentKillTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
+	var params struct {
+		JobID string `json:"jobId"`
+		All   bool   `json:"all"`
+	}
+	if len(input) > 0 {
+		if err := json.Unmarshal(input, &params); err != nil {
+			return ToolResult{Error: "invalid input: " + err.Error()}, nil
+		}
+	}
+	switch {
+	case params.All && params.JobID != "":
+		return ToolResult{Error: "specify either jobId or all, not both"}, nil
+	case params.All:
+		n := t.owner.KillVisibleJobs()
+		return ToolResult{Content: fmt.Sprintf("killed %d job(s)", n)}, nil
+	case params.JobID != "":
+		if err := t.owner.KillJob(params.JobID); err != nil {
+			return ToolResult{Error: err.Error()}, nil
+		}
+		return ToolResult{Content: fmt.Sprintf("job %s killed", params.JobID)}, nil
+	default:
+		return ToolResult{Error: "jobId or all is required"}, nil
+	}
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,25 +87,64 @@ func TestKillAllZeroWhenNoLiveChildren(t *testing.T) {
 }
 
 // saturateSubagentSlots fills the package-level subagentSlots channel to
-// capacity with fake acquisitions, draining them again on cleanup — lets a
-// test force a job into "queued behind a full concurrency pool" without
-// actually spawning maxConcurrentSubagents real child processes.
+// capacity with fake acquisitions and keeps it topped up for the rest of the
+// test — lets a test force a job into "queued behind a full concurrency
+// pool" without actually spawning maxConcurrentSubagents real child
+// processes. subagentSlots is process-wide, shared with every other test in
+// this package; a still-finishing background job from an EARLIER test can
+// release a real slot at any moment (its own runJob goroutine isn't
+// necessarily done just because that test function already returned), which
+// would otherwise let the job under test slip through and actually spawn
+// instead of staying queued — a background top-up goroutine (stopped via
+// t.Cleanup) closes that window by re-claiming any slot that frees up for as
+// long as this test is running.
 func saturateSubagentSlots(t *testing.T) {
 	t.Helper()
-	n := 0
-	for {
-		select {
-		case subagentSlots <- struct{}{}:
-			n++
-		default:
-			t.Cleanup(func() {
-				for i := 0; i < n; i++ {
-					<-subagentSlots
-				}
-			})
-			return
+	stop := make(chan struct{})
+	var mu sync.Mutex
+	held := 0
+	fill := func() {
+		for {
+			select {
+			case subagentSlots <- struct{}{}:
+				mu.Lock()
+				held++
+				mu.Unlock()
+			default:
+				return
+			}
 		}
 	}
+	fill()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Tight spin-yield loop, not a ticker: any gap here is a real
+		// window where another test's job releasing a slot could let the
+		// job under test slip through and actually spawn before this
+		// goroutine gets a chance to reclaim it. runtime.Gosched() keeps
+		// this from starving other goroutines while still checking far
+		// more often than a multi-millisecond ticker would.
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				fill()
+				runtime.Gosched()
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		close(stop)
+		<-done
+		mu.Lock()
+		n := held
+		mu.Unlock()
+		for i := 0; i < n; i++ {
+			<-subagentSlots
+		}
+	})
 }
 
 // TestKillAllCancelsQueuedJobsWithoutSpawning is the regression guard for
