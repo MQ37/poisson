@@ -684,6 +684,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	}
 	t.jobsMu.Lock()
 	t.jobs[job.id] = job
+	t.pruneJobsLocked()
 	t.jobsMu.Unlock()
 
 	// toolCallID is captured from the REQUEST ctx (this call's own tool_use)
@@ -753,8 +754,8 @@ type subagentJobView struct {
 	status                                         string
 	turns, toolCount, contextTokens, contextWindow int
 	tokensPerSec                                   float64
-	result                                          ToolResult
-	retrieved                                       bool
+	result                                         ToolResult
+	retrieved                                      bool
 }
 
 func (j *subagentJob) view() subagentJobView {
@@ -833,9 +834,75 @@ func (t *SubagentTool) retrieveJob(job *subagentJob) ToolResult {
 			return ToolResult{Error: fmt.Sprintf("job %s result already retrieved", job.id)}
 		}
 		job.retrieved = true
-		return job.result
+		res := job.result
+		// Free the transcript now that it's been handed out — the one-shot
+		// contract above already forbids reading it twice, so nothing
+		// observable changes; this is what keeps a long session's t.jobs
+		// map from retaining every child's full accumulated output forever
+		// (see pruneJobsLocked's doc comment for the other half of that).
+		job.result = ToolResult{}
+		return res
 	default:
 		return ToolResult{Error: fmt.Sprintf("job %s has unknown status %q", job.id, job.status)}
+	}
+}
+
+// jobRetention is how long a terminal (done/error), already-retrieved job
+// stays in t.jobs after finishing before pruneJobsLocked can evict it — long
+// enough that no realistic subagent_status/subagent_result poll gap ever
+// mistakes an evicted job for one that never existed. maxTrackedJobs is a
+// hard ceiling independent of age, for a session that spawns many jobs in a
+// short burst.
+const (
+	jobRetention   = 1 * time.Hour
+	maxTrackedJobs = 100
+)
+
+// pruneJobsLocked evicts terminal jobs to keep t.jobs from growing for a
+// whole process's lifetime — see docs/async-subagent-plan.md: nothing ever
+// deleted from this map before, so a long session spawning many subagents
+// (or one orphaned by /new/resume, invisible via visibleToCurrentSession but
+// still reachable here) retained every one of them, full result text
+// included, forever. Called with jobsMu already held (right after inserting
+// a new job in Execute). Never evicts "queued"/"running" — only a job that
+// has actually finished is eligible, and even then only once it's been
+// retrieved or has sat past jobRetention, oldest-terminal-first once
+// maxTrackedJobs is exceeded.
+func (t *SubagentTool) pruneJobsLocked() {
+	if len(t.jobs) <= maxTrackedJobs {
+		// Still cheap enough to just sweep every retrieved-and-stale job
+		// unconditionally, even under the cap — no reason to wait for the
+		// cap to bite before reclaiming an already-handed-out result.
+		cutoff := time.Now().Add(-jobRetention)
+		for id, j := range t.jobs {
+			j.mu.Lock()
+			evict := (j.status == "done" || j.status == "error") && (j.retrieved || j.doneAt.Before(cutoff))
+			j.mu.Unlock()
+			if evict {
+				delete(t.jobs, id)
+			}
+		}
+		return
+	}
+
+	type candidate struct {
+		id     string
+		doneAt time.Time
+	}
+	var terminal []candidate
+	for id, j := range t.jobs {
+		j.mu.Lock()
+		if j.status == "done" || j.status == "error" {
+			terminal = append(terminal, candidate{id, j.doneAt})
+		}
+		j.mu.Unlock()
+	}
+	sort.Slice(terminal, func(i, k int) bool { return terminal[i].doneAt.Before(terminal[k].doneAt) })
+	for _, c := range terminal {
+		if len(t.jobs) <= maxTrackedJobs {
+			break
+		}
+		delete(t.jobs, c.id)
 	}
 }
 
