@@ -207,8 +207,8 @@ func (t *TUI) enqueueLocked(text string) {
 // Otherwise: idle, nothing else competing for the screen — inject and start
 // a turn immediately, exactly like submit()'s own tail, so the model reacts
 // without the user having to prompt again.
-func (t *TUI) injectSubagentDoneNotification(jobID, errMsg string) {
-	text := subagentDoneNotificationText(jobID, errMsg)
+func (t *TUI) injectSubagentDoneNotification(jobID, errMsg string, killed bool) {
+	text := subagentDoneNotificationText(jobID, errMsg, killed)
 	if t.sessionBusyLocked() || t.activeOverlay != nil {
 		t.queued = append(t.queued, text)
 		t.dirty.markFull()
@@ -354,7 +354,7 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		// are identical either way.
 		t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
 	case agent.OutputSubagentJobFinished:
-		t.injectSubagentDoneNotification(ev.ToolCallID, ev.ToolError)
+		t.injectSubagentDoneNotification(ev.ToolCallID, ev.ToolError, ev.SubagentKilled)
 	case agent.OutputApproval:
 	case agent.OutputError:
 		t.scroll.appendRaw(styleError, "error: "+ev.Text)

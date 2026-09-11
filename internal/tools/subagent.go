@@ -182,7 +182,12 @@ type SubagentTool struct {
 	// none; the TUI matches its widget on this instead of jobID, which
 	// removes the ack/completion ordering race (see
 	// agent.OutputSubagentJobResult's doc comment).
-	jobDoneFn func(jobID, sessionID, toolCallID string, res ToolResult)
+	// killed reports whether this job ended via an explicit KillJob/KillAll
+	// rather than an ordinary completion, timeout, or shutdown cancellation
+	// — both set res.Error to the same "subagent cancelled" text, but only
+	// an explicit kill is user-intentional and shouldn't be narrated to the
+	// main agent as a failure (see subagentDoneNotificationText).
+	jobDoneFn func(jobID, sessionID, toolCallID string, res ToolResult, killed bool)
 
 	// sessionIDFn resolves the CURRENT session id at spawn time (a job
 	// records it once, permanently, on subagentJob.sessionID) and again on
@@ -283,7 +288,7 @@ func (t *SubagentTool) SetBackgroundContext(ctx context.Context) {
 
 // SetJobDoneFn supplies the callback fired once an async job actually
 // finishes (see jobDoneFn's doc comment).
-func (t *SubagentTool) SetJobDoneFn(fn func(jobID, sessionID, toolCallID string, res ToolResult)) {
+func (t *SubagentTool) SetJobDoneFn(fn func(jobID, sessionID, toolCallID string, res ToolResult, killed bool)) {
 	t.jobDoneFn = fn
 }
 
@@ -1007,15 +1012,16 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 	fail := func(errText string) {
 		res := ToolResult{Error: errText}
 		job.mu.Lock()
+		killed := job.killRequested
 		status := "error"
-		if job.killRequested {
+		if killed {
 			status = "killed"
 		}
 		job.status, job.doneAt = status, time.Now()
 		job.result = res
 		job.mu.Unlock()
 		if t.jobDoneFn != nil {
-			t.jobDoneFn(job.id, job.sessionID, jobToolCallID, res)
+			t.jobDoneFn(job.id, job.sessionID, jobToolCallID, res, killed)
 		}
 	}
 
@@ -1147,8 +1153,9 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		job.turns, job.toolCount = turns, toolCount
 		job.contextTokens, job.contextWindow = contextTokens, contextWindow
 		job.tokensPerSec = tokensPerSec
+		killed := job.killRequested
 		switch {
-		case job.killRequested:
+		case killed:
 			job.status = "killed"
 		case res.Error != "":
 			job.status = "error"
@@ -1158,7 +1165,7 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		job.result = res
 		job.mu.Unlock()
 		if t.jobDoneFn != nil {
-			t.jobDoneFn(job.id, job.sessionID, jobToolCallID, res)
+			t.jobDoneFn(job.id, job.sessionID, jobToolCallID, res, killed)
 		}
 	}
 

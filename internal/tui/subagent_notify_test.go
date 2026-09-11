@@ -8,13 +8,28 @@ import (
 )
 
 func TestSubagentDoneNotificationText(t *testing.T) {
-	ok := subagentDoneNotificationText("sub-abc", "")
+	ok := subagentDoneNotificationText("sub-abc", "", false)
 	if !strings.Contains(ok, "sub-abc") || !strings.Contains(ok, "finished") {
 		t.Fatalf("success text = %q, want it to mention the job id and finished", ok)
 	}
-	failed := subagentDoneNotificationText("sub-abc", "boom")
+	failed := subagentDoneNotificationText("sub-abc", "boom", false)
 	if !strings.Contains(failed, "sub-abc") || !strings.Contains(failed, "failed") {
 		t.Fatalf("error text = %q, want it to mention the job id and failed", failed)
+	}
+}
+
+// TestSubagentDoneNotificationText_Killed is the regression test for the
+// bug where an explicit subagent_kill was narrated to the main agent as a
+// failure — killed jobs carry the same generic "subagent cancelled"
+// errMsg an ordinary timeout/shutdown cancellation does, but killed must
+// win and produce neutral wording, not "failed".
+func TestSubagentDoneNotificationText_Killed(t *testing.T) {
+	killed := subagentDoneNotificationText("sub-abc", "subagent cancelled", true)
+	if !strings.Contains(killed, "sub-abc") || !strings.Contains(killed, "killed") {
+		t.Fatalf("killed text = %q, want it to mention the job id and killed", killed)
+	}
+	if strings.Contains(killed, "failed") {
+		t.Fatalf("killed text = %q, must not say failed", killed)
 	}
 }
 
@@ -25,7 +40,7 @@ func TestSubagentDoneNotificationText(t *testing.T) {
 func TestInjectSubagentDoneNotification_IdleStartsTurn(t *testing.T) {
 	e := newTUIIntegEnv(t, nil)
 	e.tui.mu.Lock()
-	e.tui.injectSubagentDoneNotification("sub-1", "")
+	e.tui.injectSubagentDoneNotification("sub-1", "", false)
 	thinking := e.tui.status.Thinking
 	out := testScrollOutput(e.tui)
 	e.tui.mu.Unlock()
@@ -45,7 +60,7 @@ func TestInjectSubagentDoneNotification_BusyQueues(t *testing.T) {
 	e := newTUIIntegEnv(t, nil)
 	e.tui.mu.Lock()
 	e.tui.status.Thinking = true
-	e.tui.injectSubagentDoneNotification("sub-1", "")
+	e.tui.injectSubagentDoneNotification("sub-1", "", false)
 	n := len(e.tui.queued)
 	var got string
 	if n > 0 {
@@ -67,7 +82,7 @@ func TestInjectSubagentDoneNotification_CompactingQueues(t *testing.T) {
 	e := newTUIIntegEnv(t, nil)
 	e.tui.mu.Lock()
 	e.tui.compacting.Store(true)
-	e.tui.injectSubagentDoneNotification("sub-1", "")
+	e.tui.injectSubagentDoneNotification("sub-1", "", false)
 	n := len(e.tui.queued)
 	e.tui.mu.Unlock()
 
@@ -99,6 +114,30 @@ func TestHandleEvent_SubagentJobFinishedRoutesToInject(t *testing.T) {
 	}
 }
 
+// TestHandleEvent_SubagentKilledDoesNotSayFailed is the full-path
+// regression test: a killed job's event carries the same non-empty
+// ToolError a real failure would, but handleEvent must route it to the
+// neutral "killed" wording, never "failed".
+func TestHandleEvent_SubagentKilledDoesNotSayFailed(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.tui.mu.Lock()
+	e.tui.handleEvent(agent.OutputEvent{
+		Type:           agent.OutputSubagentJobFinished,
+		ToolCallID:     "sub-1",
+		ToolError:      "subagent cancelled",
+		SubagentKilled: true,
+	})
+	out := testScrollOutput(e.tui)
+	e.tui.mu.Unlock()
+
+	if !strings.Contains(out, "killed") {
+		t.Fatalf("scrollback = %q, want the killed nudge text", out)
+	}
+	if strings.Contains(out, "failed") {
+		t.Fatalf("scrollback = %q, must not say failed for an explicit kill", out)
+	}
+}
+
 // TestInjectSubagentDoneNotification_OverlayActiveQueues: main agent idle
 // (sessionBusyLocked false) but an unrelated modal overlay is up — e.g. a
 // background subagent's own bash-approval prompt, or /btw. Starting a fresh
@@ -108,7 +147,7 @@ func TestInjectSubagentDoneNotification_OverlayActiveQueues(t *testing.T) {
 	e := newTUIIntegEnv(t, nil)
 	e.tui.mu.Lock()
 	e.tui.activeOverlay = newApprovalOverlay("ls", "list", "", agent.ApprovalOriginMain)
-	e.tui.injectSubagentDoneNotification("sub-1", "")
+	e.tui.injectSubagentDoneNotification("sub-1", "", false)
 	n := len(e.tui.queued)
 	thinking := e.tui.status.Thinking
 	e.tui.mu.Unlock()

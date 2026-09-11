@@ -127,6 +127,13 @@ type OutputEvent struct {
 	CompactionTokensBefore int  // compacted
 	CompactionTokensAfter  int  // compacted
 	ThinkingRedacted       bool // thinking (opaque redacted block)
+
+	// SubagentKilled reports whether a finished async subagent job ended
+	// via an explicit subagent_kill rather than an ordinary completion,
+	// timeout, or shutdown cancellation (both of the latter also carry a
+	// non-empty ToolError) — the cue subagentDoneNotificationText uses to
+	// avoid narrating a deliberate kill as a failure.
+	SubagentKilled bool // subagent_job_finished
 }
 
 // Agent runs the turn loop for a single session.
@@ -778,7 +785,7 @@ func (a *Agent) CompleteBatchedSubagent(toolCallID string, res tools.ToolResult)
 // it's skipped outright when sessionID names a session that's no longer the
 // live one — an empty sessionID (session tracking not wired) never blocks
 // it, matching SubagentTool's own fail-open default.
-func (a *Agent) CompleteSubagentJob(jobID, sessionID, toolCallID string, res tools.ToolResult) {
+func (a *Agent) CompleteSubagentJob(jobID, sessionID, toolCallID string, res tools.ToolResult, killed bool) {
 	a.sendEvent(OutputEvent{
 		Type: OutputSubagentJobResult, ToolName: "subagent", ToolCallID: toolCallID,
 		ToolResultContent: res.Content, ToolError: res.Error,
@@ -788,7 +795,7 @@ func (a *Agent) CompleteSubagentJob(jobID, sessionID, toolCallID string, res too
 	}
 	a.sendEvent(OutputEvent{
 		Type: OutputSubagentJobFinished, ToolCallID: jobID,
-		ToolResultContent: res.Content, ToolError: res.Error,
+		ToolResultContent: res.Content, ToolError: res.Error, SubagentKilled: killed,
 	})
 }
 

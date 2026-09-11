@@ -12,7 +12,7 @@ func TestCompleteSubagentJob_SameSessionNotifies(t *testing.T) {
 	ch := make(chan OutputEvent, 8)
 	a := newTestAgentForSpeed(t, ch)
 
-	a.CompleteSubagentJob("sub-1", a.SessionID(), "call-1", tools.ToolResult{Content: "did the thing"})
+	a.CompleteSubagentJob("sub-1", a.SessionID(), "call-1", tools.ToolResult{Content: "did the thing"}, false)
 
 	// Widget-completion event always fires first, keyed by the spawning
 	// tool-call id (not the job id) — see OutputSubagentJobResult's doc
@@ -40,7 +40,7 @@ func TestCompleteSubagentJob_DifferentSessionSkipsNotify(t *testing.T) {
 	ch := make(chan OutputEvent, 8)
 	a := newTestAgentForSpeed(t, ch)
 
-	a.CompleteSubagentJob("sub-1", "some-other-session-entirely", "call-1", tools.ToolResult{Content: "did the thing"})
+	a.CompleteSubagentJob("sub-1", "some-other-session-entirely", "call-1", tools.ToolResult{Content: "did the thing"}, false)
 
 	ev, ok := drainOne(ch)
 	if !ok || ev.Type != OutputSubagentJobResult || ev.ToolName != "subagent" {
@@ -59,7 +59,7 @@ func TestCompleteSubagentJob_EmptySessionIDAlwaysNotifies(t *testing.T) {
 	ch := make(chan OutputEvent, 8)
 	a := newTestAgentForSpeed(t, ch)
 
-	a.CompleteSubagentJob("sub-1", "", "call-1", tools.ToolResult{Content: "did the thing"})
+	a.CompleteSubagentJob("sub-1", "", "call-1", tools.ToolResult{Content: "did the thing"}, false)
 
 	drainOne(ch) // widget completion
 	ev, ok := drainOne(ch)
