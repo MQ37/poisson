@@ -32,11 +32,11 @@ func (a *Agent) ContextTokens() (int, int) {
 // there is no usable usage yet or a compaction has invalidated it. Overcounting
 // is safe (compact a little early); undercounting risks a silent overflow.
 func (a *Agent) estimateActiveContextTokens() int {
-	msgs, _ := a.store.GetMessages(a.sessionID)
-	sess, _ := a.store.GetSession(a.sessionID)
+	msgs, _ := a.store.GetMessages(a.SessionID())
+	sess, _ := a.store.GetSession(a.SessionID())
 	fullEstimate := int(a.sysTokensEstimate.Load()) + a.summaryTokens(sess) + a.messagesTokens(msgs, -1)
 
-	last, err := a.store.GetLastAPICall(a.sessionID)
+	last, err := a.store.GetLastAPICall(a.SessionID())
 	if err != nil || last.InputTokensUnknown {
 		return fullEstimate
 	}
@@ -71,8 +71,8 @@ func (a *Agent) estimateActiveContextTokens() int {
 // estimateMessagesTokens is the char/4 estimate of the compaction summary plus
 // every active message (no real-usage anchor).
 func (a *Agent) estimateMessagesTokens() int {
-	msgs, _ := a.store.GetMessages(a.sessionID)
-	sess, _ := a.store.GetSession(a.sessionID)
+	msgs, _ := a.store.GetMessages(a.SessionID())
+	sess, _ := a.store.GetSession(a.SessionID())
 	return a.summaryTokens(sess) + a.messagesTokens(msgs, -1)
 }
 
@@ -236,7 +236,7 @@ func (a *Agent) sendInferenceSpeedEvent(usage *provider.Usage, roundStart time.T
 func (a *Agent) UpdateStatus() {
 	used, total := a.ContextTokens()
 	pct := a.ContextPercent()
-	breakdown, err := a.store.GetSessionTokenBreakdown(a.sessionID)
+	breakdown, err := a.store.GetSessionTokenBreakdown(a.SessionID())
 	if err != nil {
 		log.Printf("warning: status token breakdown: %v", err)
 	}
@@ -253,8 +253,8 @@ func (a *Agent) UpdateStatus() {
 		CacheReadTokens:  breakdown.CacheReadTokens,
 		CacheWriteTokens: breakdown.CacheWriteTokens,
 		CallCount:        breakdown.CallCount,
-		ToolCalls:        a.sessionToolCalls,
-		ToolErrors:       a.sessionToolErrors,
+		ToolCalls:        int(a.sessionToolCalls.Load()),
+		ToolErrors:       int(a.sessionToolErrors.Load()),
 		Effort:           a.effort,
 	})
 }

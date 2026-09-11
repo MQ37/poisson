@@ -114,7 +114,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 	}
 
 	// 1. Collect active messages.
-	msgs, err := a.store.GetMessages(a.sessionID)
+	msgs, err := a.store.GetMessages(a.SessionID())
 	if err != nil {
 		return fmt.Errorf("get messages: %w", err)
 	}
@@ -127,7 +127,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 	// compaction summary too (not just active messages) — that summary is real
 	// context the model already carries on every request, per agent.go's
 	// system-block injection.
-	sessBefore, _ := a.store.GetSession(a.sessionID)
+	sessBefore, _ := a.store.GetSession(a.SessionID())
 	estimatedTokens := a.summaryTokens(sessBefore)
 	for _, m := range msgs {
 		estimatedTokens += a.EstimateTokens(m.Content)
@@ -254,7 +254,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 
 	// 5–6. Atomically store summary and mark messages compacted.
 	upToSeq := toSummarize[len(toSummarize)-1].Seq
-	if err := a.store.ApplyCompaction(a.sessionID, upToSeq, summaryText); err != nil {
+	if err := a.store.ApplyCompaction(a.SessionID(), upToSeq, summaryText); err != nil {
 		return fmt.Errorf("apply compaction: %w", err)
 	}
 
@@ -286,7 +286,7 @@ func (a *Agent) compact(ctx context.Context, notifyUI, keepActiveTail bool) erro
 	}
 	if err := a.store.RecordCompaction(&store.Compaction{
 		ID:           store.NewSessionID(),
-		SessionID:    a.sessionID,
+		SessionID:    a.SessionID(),
 		Summary:      summaryText,
 		TokensBefore: estimatedTokens,
 		TokensAfter:  remainingTokens,
@@ -347,7 +347,7 @@ func (a *Agent) chooseSummarizeCount(msgs []store.Message, keepActiveTail bool, 
 	// config.Compaction.Model is set to a smaller-window model.
 	budget := int(float64(a.contextWindowFor(compactionProvider, compactionModel)) * 0.65)
 	var summary string
-	if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil &&
+	if sess, err := a.store.GetSession(a.SessionID()); err == nil && sess != nil &&
 		sess.CompactionSummary != nil {
 		summary = *sess.CompactionSummary
 	}

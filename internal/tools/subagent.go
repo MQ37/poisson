@@ -90,8 +90,12 @@ type SubagentTool struct {
 	// Returns the computed cost. nil means no recorder wired (e.g. tests
 	// that don't care) — Execute treats that as "nothing to record".
 	// childCost is the child's own cumulative cost, priced per call against
-	// whichever model served it (see subagent.ChildEvent.Cost).
-	usageFn func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error)
+	// whichever model served it (see subagent.ChildEvent.Cost). sessionID is
+	// the session that spawned the job (job.sessionID), not whatever session
+	// happens to be live when the async job finishes — see
+	// Agent.RecordSubagentUsage's doc comment for why that distinction
+	// matters.
+	usageFn func(sessionID, providerID, model string, usage *provider.Usage, childCost float64) (float64, error)
 
 	// classifierModelFn resolves the parent session's bash-risk classifier
 	// model, propagated to the child so a /classifier-model pin covers the
@@ -313,7 +317,7 @@ func (t *SubagentTool) SetProgressFn(fn func(toolCallID string, turns, contextTo
 
 // SetUsageFn supplies the callback that rolls a finished subagent's token
 // usage into the parent session's cost (see usageFn's doc comment).
-func (t *SubagentTool) SetUsageFn(fn func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error)) {
+func (t *SubagentTool) SetUsageFn(fn func(sessionID, providerID, model string, usage *provider.Usage, childCost float64) (float64, error)) {
 	t.usageFn = fn
 }
 
@@ -815,7 +819,7 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 			return // nothing billed yet (e.g. cancelled before the child's first turn completed)
 		}
 		recorded = true
-		cost, err := t.usageFn(prov, model, &lastUsage, lastChildCost)
+		cost, err := t.usageFn(job.sessionID, prov, model, &lastUsage, lastChildCost)
 		if err != nil {
 			log.Printf("warning: record subagent usage: %v", err)
 			return

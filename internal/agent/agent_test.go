@@ -32,6 +32,16 @@ func newTestStore(t *testing.T) *store.Store {
 	return s
 }
 
+// newTestAgentForSession builds a bare-bones Agent (store + session id only)
+// for tests that exercise a single method directly without a full NewAgent
+// setup. sessionIDStore is an atomic.Pointer, so it can't be set via
+// composite literal like the old plain-string field could.
+func newTestAgentForSession(st *store.Store, sessionID string) *Agent {
+	a := &Agent{store: st}
+	a.sessionIDStore.Store(&sessionID)
+	return a
+}
+
 func newTestSession(t *testing.T, s *store.Store, model string) string {
 	t.Helper()
 	id := "test-session-" + strings.ReplaceAll(t.Name(), "/", "-")

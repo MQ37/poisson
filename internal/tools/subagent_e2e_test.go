@@ -415,7 +415,7 @@ printf '{"type":"done","success":true,"turns":2,"usage":{"InputTokens":300,"Outp
 		usage             provider.Usage
 	}
 	var calls []call
-	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
+	tool.SetUsageFn(func(sessionID, providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
 		calls = append(calls, call{providerID, model, *usage})
 		return 0.0042, nil
 	})
@@ -480,7 +480,7 @@ sleep 30
 
 	var calls int
 	var gotUsage provider.Usage
-	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
+	tool.SetUsageFn(func(sessionID, providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
 		calls++
 		gotUsage = *usage
 		return 0.01, nil
@@ -550,7 +550,7 @@ sleep 30
 	var calls int
 	var gotUsage provider.Usage
 	var gotChildCost float64
-	tool.SetUsageFn(func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
+	tool.SetUsageFn(func(sessionID, providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
 		calls++
 		gotUsage, gotChildCost = *usage, childCost
 		return 0.02, nil

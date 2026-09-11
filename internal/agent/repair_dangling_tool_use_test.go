@@ -23,7 +23,7 @@ func TestRepairDanglingToolUse_FullyUnresolved(t *testing.T) {
 	}
 	appendToolUse(t, st, sid, "call_1", "bash", map[string]any{"command": "ls"})
 
-	a := &Agent{store: st, sessionID: sid}
+	a := newTestAgentForSession(st, sid)
 	if err := a.repairDanglingToolUse(); err != nil {
 		t.Fatalf("repairDanglingToolUse: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestRepairDanglingToolUse_PartiallyResolved(t *testing.T) {
 	}
 	appendToolResult(t, st, sid, "call_1", "file contents")
 
-	a := &Agent{store: st, sessionID: sid}
+	a := newTestAgentForSession(st, sid)
 	if err := a.repairDanglingToolUse(); err != nil {
 		t.Fatalf("repairDanglingToolUse: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestRepairDanglingToolUse_CleanHistoryUnchanged(t *testing.T) {
 	appendToolUse(t, st, sid, "call_1", "bash", map[string]any{"command": "ls"})
 	appendToolResult(t, st, sid, "call_1", "ok")
 
-	a := &Agent{store: st, sessionID: sid}
+	a := newTestAgentForSession(st, sid)
 	if err := a.repairDanglingToolUse(); err != nil {
 		t.Fatalf("repairDanglingToolUse: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestRepairDanglingToolUse_PrunesStaleRetryMessages(t *testing.T) {
 	appendUserText(t, st, sid, "continue")
 	appendUserText(t, st, sid, "continue")
 
-	a := &Agent{store: st, sessionID: sid}
+	a := newTestAgentForSession(st, sid)
 	if err := a.repairDanglingToolUse(); err != nil {
 		t.Fatalf("repairDanglingToolUse: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestRepairDanglingToolUse_LoneTrailingUserMessageUntouched(t *testing.T) {
 	}
 	appendUserText(t, st, sid, "old context")
 
-	a := &Agent{store: st, sessionID: sid}
+	a := newTestAgentForSession(st, sid)
 	if err := a.repairDanglingToolUse(); err != nil {
 		t.Fatalf("repairDanglingToolUse: %v", err)
 	}

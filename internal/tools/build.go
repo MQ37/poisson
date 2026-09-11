@@ -241,7 +241,7 @@ func BindBatchSubagentDone(reg *Registry, fn func(toolCallID string, res ToolRes
 
 // BindSubagentUsage wires the callback that rolls a finished subagent's token
 // usage into the parent session's cost (see SubagentTool.usageFn).
-func BindSubagentUsage(reg *Registry, fn func(providerID, model string, usage *provider.Usage, childCost float64) (float64, error)) {
+func BindSubagentUsage(reg *Registry, fn func(sessionID, providerID, model string, usage *provider.Usage, childCost float64) (float64, error)) {
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetUsageFn(fn) })
 }
 

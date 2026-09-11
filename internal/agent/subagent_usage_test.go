@@ -57,7 +57,9 @@ func TestRecordSubagentUsageRollsIntoParentSessionCost(t *testing.T) {
 
 	subagentUsage := &provider.Usage{InputTokens: 500, OutputTokens: 300}
 	// childCost 0 = the child reported none, so the parent prices the blob.
-	subagentCost, err := e.agent.RecordSubagentUsage("fake", "test-model", subagentUsage, 0)
+	// "" sessionID falls back to the agent's own current session — this
+	// test isn't exercising the cross-session-billing distinction.
+	subagentCost, err := e.agent.RecordSubagentUsage("", "fake", "test-model", subagentUsage, 0)
 	if err != nil {
 		t.Fatalf("RecordSubagentUsage: %v", err)
 	}
@@ -118,7 +120,7 @@ func TestRecordSubagentUsagePrefersChildReportedCost(t *testing.T) {
 	// these tokens ($0.0011), so recomputation is distinguishable.
 	const childCost = 0.0075
 	usage := &provider.Usage{InputTokens: 500, OutputTokens: 300}
-	got, err := e.agent.RecordSubagentUsage("fake", "test-model", usage, childCost)
+	got, err := e.agent.RecordSubagentUsage("", "fake", "test-model", usage, childCost)
 	if err != nil {
 		t.Fatalf("RecordSubagentUsage: %v", err)
 	}

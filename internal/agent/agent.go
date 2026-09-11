@@ -119,8 +119,13 @@ type Agent struct {
 	provider   provider.Provider
 	tools      *tools.Registry
 	config     *config.Config
-	sessionID  string
-	outputChan chan OutputEvent
+	// sessionIDStore holds the active session id. An atomic.Pointer, not a
+	// plain string: SwitchSession (input goroutine, /new and /resume) writes
+	// it while an async subagent job's completion goroutine (long after its
+	// spawning turn ended, by design) and the turn-loop goroutine both read
+	// it concurrently via SessionID() — a data race otherwise.
+	sessionIDStore atomic.Pointer[string]
+	outputChan     chan OutputEvent
 	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)
 	model      string
 	effort     string
@@ -140,8 +145,11 @@ type Agent struct {
 	classifierModels map[string]string
 
 	// session tool counters for the status bar (reset on SwitchSession).
-	sessionToolCalls  int
-	sessionToolErrors int
+	// atomic: the turn-loop goroutine increments them with no lock held,
+	// while the TUI's render goroutine reads them every ~33ms via
+	// SessionToolStats — a plain int here is a data race.
+	sessionToolCalls  atomic.Int64
+	sessionToolErrors atomic.Int64
 
 	// sysTokensEstimate caches the estimated token size of the system prompt
 	// (base instructions + AGENTS.md + tool-name list + skills) plus the tool
@@ -270,7 +278,6 @@ func NewAgent(
 		provider:   p,
 		tools:      t,
 		config:     cfg,
-		sessionID:  sessionID,
 		outputChan: outputChan,
 		approvalFn: approvalFn,
 		model:      model,
@@ -278,6 +285,7 @@ func NewAgent(
 
 		loadedContextDirs: map[string]bool{},
 	}
+	a.sessionIDStore.Store(&sessionID)
 	return a
 }
 
@@ -328,19 +336,24 @@ func (a *Agent) Store() *store.Store { return a.store }
 func (a *Agent) Tools() *tools.Registry { return a.tools }
 
 // SessionID returns the current session ID.
-func (a *Agent) SessionID() string { return a.sessionID }
+func (a *Agent) SessionID() string {
+	if p := a.sessionIDStore.Load(); p != nil {
+		return *p
+	}
+	return ""
+}
 
 // SessionToolStats returns the tool-call and tool-error counts for the current
 // session run. Reset on session switch (see SwitchSession).
 func (a *Agent) SessionToolStats() (calls, errors int) {
-	return a.sessionToolCalls, a.sessionToolErrors
+	return int(a.sessionToolCalls.Load()), int(a.sessionToolErrors.Load())
 }
 
 // SwitchSession changes the active session.
 func (a *Agent) SwitchSession(sessionID string) {
-	a.sessionID = sessionID
-	a.sessionToolCalls = 0
-	a.sessionToolErrors = 0
+	a.sessionIDStore.Store(&sessionID)
+	a.sessionToolCalls.Store(0)
+	a.sessionToolErrors.Store(0)
 	a.effort = effectiveEffort(a.config, initialEffort(a.config), a.providerID(), a.model)
 	a.resetContextTracker()
 }
@@ -368,7 +381,7 @@ func (a *Agent) providerID() string {
 }
 
 func (a *Agent) cwd() string {
-	if sess, err := a.store.GetSession(a.sessionID); err == nil && sess != nil && sess.Cwd != "" {
+	if sess, err := a.store.GetSession(a.SessionID()); err == nil && sess != nil && sess.Cwd != "" {
 		return sess.Cwd
 	}
 	if wd, err := os.Getwd(); err == nil {
@@ -383,7 +396,7 @@ func (a *Agent) cwd() string {
 func (a *Agent) SetProvider(p provider.Provider) error {
 	a.provider = p
 	a.effort = effectiveEffort(a.config, a.effort, a.providerID(), a.model)
-	sess, err := a.store.GetSession(a.sessionID)
+	sess, err := a.store.GetSession(a.SessionID())
 	if err != nil {
 		return nil
 	}
@@ -397,7 +410,7 @@ func (a *Agent) SetProvider(p provider.Provider) error {
 func (a *Agent) SetModel(model string) error {
 	a.model = model
 	a.effort = effectiveEffort(a.config, a.effort, a.providerID(), model)
-	sess, err := a.store.GetSession(a.sessionID)
+	sess, err := a.store.GetSession(a.SessionID())
 	if err != nil {
 		return nil
 	}
@@ -797,7 +810,7 @@ func (a *Agent) KillSubagents() int {
 // EnsureSession persists the active session row if it does not exist yet.
 // Sessions are created lazily on the first user message, not at process start.
 func (a *Agent) EnsureSession() error {
-	_, err := a.store.GetSession(a.sessionID)
+	_, err := a.store.GetSession(a.SessionID())
 	if err == nil {
 		return nil
 	}
@@ -807,7 +820,7 @@ func (a *Agent) EnsureSession() error {
 	cwd, _ := os.Getwd()
 	now := time.Now().Unix()
 	return a.store.CreateSession(&store.Session{
-		ID:        a.sessionID,
+		ID:        a.SessionID(),
 		Cwd:       cwd,
 		Provider:  a.providerID(),
 		Model:     a.Model(),
@@ -1044,7 +1057,7 @@ func (a *Agent) appendUserMessage(segments []TextSegment, images []ImageAttachme
 		return fmt.Errorf("marshal user content: %w", err)
 	}
 	return a.store.AppendMessage(&store.Message{
-		SessionID: a.sessionID,
+		SessionID: a.SessionID(),
 		Role:      "user",
 		Content:   content,
 	})
@@ -1153,7 +1166,7 @@ func (a *Agent) appendRenderTagRetryMessage(failures []renderTagFailure) error {
 		return err
 	}
 	return a.store.AppendMessage(&store.Message{
-		SessionID: a.sessionID,
+		SessionID: a.SessionID(),
 		Role:      "user",
 		Content:   content,
 	})
@@ -1171,7 +1184,7 @@ func (a *Agent) appendContinueMessage() error {
 		return err
 	}
 	return a.store.AppendMessage(&store.Message{
-		SessionID: a.sessionID,
+		SessionID: a.SessionID(),
 		Role:      "user",
 		Content:   content,
 	})
@@ -1441,7 +1454,7 @@ roundLoop:
 			return a.failTurn(fmt.Sprintf("Marshal error: %v", err), fmt.Errorf("marshal assistant content: %w", err))
 		}
 		msg := &store.Message{
-			SessionID: a.sessionID,
+			SessionID: a.SessionID(),
 			Role:      "assistant",
 			Content:   assistantContent,
 		}
@@ -1768,16 +1781,16 @@ roundLoop:
 				return a.failTurn(fmt.Sprintf("Marshal error: %v", err), fmt.Errorf("marshal tool result: %w", err))
 			}
 			if err := a.store.AppendMessage(&store.Message{
-				SessionID: a.sessionID,
+				SessionID: a.SessionID(),
 				Role:      "tool",
 				Content:   toolContent,
 			}); err != nil {
 				return a.failTurn(fmt.Sprintf("Store error: %v", err), fmt.Errorf("append tool result message: %w", err))
 			}
 
-			a.sessionToolCalls++
+			a.sessionToolCalls.Add(1)
 			if result.Error != "" {
-				a.sessionToolErrors++
+				a.sessionToolErrors.Add(1)
 			}
 
 		}
@@ -1798,13 +1811,13 @@ roundLoop:
 // system prompt, compaction summary (if set), and tool definitions.
 func (a *Agent) buildRequest() (*provider.Request, error) {
 	// Get session.
-	sess, err := a.store.GetSession(a.sessionID)
+	sess, err := a.store.GetSession(a.SessionID())
 	if err != nil {
 		return nil, fmt.Errorf("get session: %w", err)
 	}
 
 	// Get active messages (deleted_at IS NULL AND compacted = 0).
-	msgs, err := a.store.GetMessages(a.sessionID)
+	msgs, err := a.store.GetMessages(a.SessionID())
 	if err != nil {
 		return nil, fmt.Errorf("get messages: %w", err)
 	}
@@ -1872,7 +1885,7 @@ func (a *Agent) buildRequest() (*provider.Request, error) {
 		Messages: providerMsgs,
 		Tools:    toolDefs,
 		Effort:   a.effort,
-		CacheKey: a.sessionID, // stable per conversation → OpenAI prompt caching
+		CacheKey: a.SessionID(), // stable per conversation → OpenAI prompt caching
 	}, nil
 }
 
@@ -2020,7 +2033,7 @@ func buildAssistantBlocks(thinking, thinkingSig string, redacted []provider.Cont
 // legitimately running in another goroutine of this same process. Idempotent:
 // once repaired, later calls find nothing unresolved and are a no-op.
 func (a *Agent) repairDanglingToolUse() error {
-	msgs, err := a.store.GetMessages(a.sessionID)
+	msgs, err := a.store.GetMessages(a.SessionID())
 	if err != nil {
 		return fmt.Errorf("get messages: %w", err)
 	}
@@ -2076,7 +2089,7 @@ func (a *Agent) repairDanglingToolUse() error {
 		if err != nil {
 			return fmt.Errorf("marshal recovered tool result: %w", err)
 		}
-		if err := a.store.AppendMessage(&store.Message{SessionID: a.sessionID, Role: "tool", Content: content}); err != nil {
+		if err := a.store.AppendMessage(&store.Message{SessionID: a.SessionID(), Role: "tool", Content: content}); err != nil {
 			return fmt.Errorf("append recovered tool result: %w", err)
 		}
 	}
@@ -2118,7 +2131,7 @@ func (a *Agent) persistPartialTurnOnCancel(text, thinkingText, thinkingSig strin
 		log.Printf("warning: marshal cancelled turn: %v", err)
 		return
 	}
-	if err := a.store.AppendMessage(&store.Message{SessionID: a.sessionID, Role: "assistant", Content: content}); err != nil {
+	if err := a.store.AppendMessage(&store.Message{SessionID: a.SessionID(), Role: "assistant", Content: content}); err != nil {
 		log.Printf("warning: append cancelled assistant message: %v", err)
 		return
 	}
@@ -2132,7 +2145,7 @@ func (a *Agent) persistPartialTurnOnCancel(text, thinkingText, thinkingSig strin
 			log.Printf("warning: marshal cancelled tool result: %v", err)
 			continue
 		}
-		if err := a.store.AppendMessage(&store.Message{SessionID: a.sessionID, Role: "tool", Content: toolContent}); err != nil {
+		if err := a.store.AppendMessage(&store.Message{SessionID: a.SessionID(), Role: "tool", Content: toolContent}); err != nil {
 			log.Printf("warning: append cancelled tool result: %v", err)
 		}
 	}
@@ -2228,7 +2241,7 @@ func (a *Agent) recordAPICallCost(usage *provider.Usage, purpose, providerID, mo
 	defer a.apiCallMu.Unlock()
 
 	call := &store.APICall{
-		SessionID:          a.sessionID,
+		SessionID:          a.SessionID(),
 		Provider:           providerID,
 		Model:              model,
 		InputTokens:        usage.InputTokens,
@@ -2305,7 +2318,19 @@ func (a *Agent) CumulativeCost() float64 {
 // child's main model, and re-pricing the whole token blob at one model here
 // would be wrong for that slice. Falls back to pricing the blob at
 // providerID/model when the child reported no cost (nothing recorded yet).
-func (a *Agent) RecordSubagentUsage(providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
+//
+// sessionID is the session that SPAWNED the job (captured once at spawn time
+// by SubagentTool, independent of whatever session is live now) — an async
+// job outlives its spawning turn by design, so by the time it finishes the
+// user may have /new'd or /resume'd to a different session. Billing to
+// a.SessionID() here would silently attribute the cost to whatever happens
+// to be live at completion time instead of the session that actually did the
+// work. Empty sessionID falls back to a.SessionID() so callers that don't
+// track it (tests, any future direct caller) keep the old behavior.
+func (a *Agent) RecordSubagentUsage(sessionID, providerID, model string, usage *provider.Usage, childCost float64) (float64, error) {
+	if sessionID == "" {
+		sessionID = a.SessionID()
+	}
 	cost := childCost
 	if cost <= 0 {
 		cost = a.computeCost(providerID, model,
@@ -2318,7 +2343,7 @@ func (a *Agent) RecordSubagentUsage(providerID, model string, usage *provider.Us
 	defer a.apiCallMu.Unlock()
 
 	call := &store.APICall{
-		SessionID:          a.sessionID,
+		SessionID:          sessionID,
 		Provider:           providerID,
 		Model:              model,
 		InputTokens:        usage.InputTokens,
@@ -2365,7 +2390,7 @@ func (a *Agent) RecordWebToolCall(c tools.WebCall) {
 // currentModel returns the model from the session, falling back to config
 // (via the same config.Providers registry defaultModel uses above).
 func (a *Agent) currentModel() string {
-	sess, err := a.store.GetSession(a.sessionID)
+	sess, err := a.store.GetSession(a.SessionID())
 	if err != nil || sess == nil {
 		return provider.DefaultModel(a.providerID(), a.config)
 	}
