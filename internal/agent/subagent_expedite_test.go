@@ -202,17 +202,32 @@ func TestKillSubagentsReachesLiveChild(t *testing.T) {
 	}
 	jobID := jobIDFromAckForTest(t, res.Content)
 
+	// Unlike ExpediteAll (a repeatable, side-effect-free nudge), KillAll now
+	// also proactively cancels every non-terminal job's own context on its
+	// very first call (see the fix for the "shutdown spawns an orphan"
+	// bug) — a polling loop that calls KillSubagents itself would cancel
+	// this job's context before the child ever gets a chance to actually
+	// spawn and go live, since "queued" already counts as non-terminal.
+	// Poll subagent_status instead (side-effect-free) until the child is
+	// confirmed live, then call KillSubagents exactly once — matching how
+	// it's actually used in production (TUI.prepareShutdownLocked, a single
+	// one-shot call at process exit).
+	statusInput := json.RawMessage(fmt.Sprintf(`{"jobId":%q}`, jobID))
 	deadline := time.Now().Add(5 * time.Second)
-	var got int
 	for time.Now().Before(deadline) {
-		got = e.agent.KillSubagents()
-		if got > 0 {
+		res, err := statusTool.Execute(context.Background(), statusInput)
+		if err != nil {
+			t.Fatalf("subagent_status returned a Go error: %v", err)
+		}
+		if strings.Contains(res.Content, "status: running") {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+
+	got := e.agent.KillSubagents()
 	if got == 0 {
-		t.Fatal("KillSubagents() never signalled the live child within 5s")
+		t.Fatal("KillSubagents() never signalled the live child")
 	}
 
 	final := jobResultForTest(t, statusTool, resultTool, jobID)

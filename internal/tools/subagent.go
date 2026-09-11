@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mq37/poisson/internal/auth"
@@ -29,6 +30,20 @@ import (
 // subagent fan-out — up to 8×8=64 concurrent child processes system-wide
 // (found scouting), well past the documented "8 max concurrent" ceiling.
 const maxConcurrentSubagents = 8
+
+// subagentJobTimeout bounds one async job's total lifetime — from the moment
+// it's spawned (including any time spent queued behind maxConcurrentSubagents)
+// to its own completion. Without this, SubagentTool.bgCtx being nil (falls
+// back to context.Background(), see its doc comment) meant a job could
+// never be cancelled short of the whole process exiting: a wedged provider
+// connection or a child blocked on an approval nobody answers held its
+// concurrency slot forever, and once enough jobs did that, every future
+// spawn queued behind them deadlocked too. 30 minutes comfortably covers a
+// real subagent task; a stuck one now fails with a clear "subagent
+// cancelled" result instead of hanging indefinitely. A var (not const), like
+// agent.midStreamErrorBackoff, so tests can shrink it instead of waiting out
+// the real duration.
+var subagentJobTimeout = 30 * time.Minute
 
 // subagentSlots is acquired before every subagent.Spawn and released only
 // once that child has been fully reaped (see Execute), so the combined
@@ -72,6 +87,15 @@ type SubagentTool struct {
 	// (register/unregister) and the TUI goroutine (ExpediteAll).
 	liveMu sync.Mutex
 	live   map[*subagent.ChildProcess]struct{}
+
+	// spawnMu serializes "check shuttingDown/ctx, subagent.Spawn, trackLive"
+	// into one atomic step per job — see runJob's own comment and KillAll's
+	// doc comment for why this is what closes bugs 8 and 13 together.
+	spawnMu sync.Mutex
+	// shuttingDown is set by KillAll before it does anything else, so any
+	// spawn racing it either sees this and aborts, or already holds spawnMu
+	// and finishes registering before KillAll can proceed past it.
+	shuttingDown atomic.Bool
 
 	// progressFn reports a live turn-count + context-usage update for the
 	// running widget, correlated via the tool_call ID attached to Execute's
@@ -198,11 +222,55 @@ func (t *SubagentTool) SetCrossProviderApprovalFn(fn ApprovalFn) {
 
 // NewSubagentTool creates a subagent tool.
 func NewSubagentTool(cwd string, approvalFn SubagentApproval) *SubagentTool {
+	go sweepStaleTempDBs()
 	return &SubagentTool{
 		cwd:        cwd,
 		approvalFn: approvalFn,
 		live:       make(map[*subagent.ChildProcess]struct{}),
 		jobs:       make(map[string]*subagentJob),
+	}
+}
+
+// staleTempDBAge is how old a subagent scratch DB (see dbPath in Execute)
+// must be before sweepStaleTempDBs considers it abandoned. Since
+// subagentJobTimeout now bounds every job's total lifetime to well under an
+// hour, anything older genuinely was never cleaned up — orphaned by a
+// process that was SIGKILLed, crashed, or lost power before its owning
+// runJob goroutine's own deferred removeDBFiles ever ran (notably: the
+// ordinary SIGINT/SIGTERM/SIGHUP path itself, see lifecycle.go's os.Exit(1),
+// which does not wait for background job goroutines to finish their
+// cleanup before tearing the process down) — never a live job's own file.
+const staleTempDBAge = 24 * time.Hour
+
+// sweepStaleTempDBs removes abandoned poisson-sub-*.db scratch databases (and
+// their -wal/-shm sidecars) from a previous, ungracefully-terminated px
+// process — see staleTempDBAge's doc comment for why this, not a shutdown-
+// time cleanup, is the fix: no defer ever runs across a SIGKILL, a crash, or
+// a lost-power event, so the only place that reliably catches every cause is
+// the next process to start up. Best-effort: every error is ignored, this
+// must never fail or delay startup over stale scratch files.
+func sweepStaleTempDBs() {
+	sweepStaleTempDBsIn(os.TempDir())
+}
+
+// sweepStaleTempDBsIn is sweepStaleTempDBs against an explicit directory —
+// pulled out so tests don't have to contend with the real OS temp dir.
+func sweepStaleTempDBsIn(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-staleTempDBAge)
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasPrefix(name, "poisson-sub-") || !strings.HasSuffix(name, ".db") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		removeDBFiles(filepath.Join(dir, name))
 	}
 }
 
@@ -283,7 +351,42 @@ func (t *SubagentTool) ExpediteAll() int {
 // goroutine; each killed child's own runJob goroutine notices (its blocked
 // ReadEvent returns an error once the pipe closes), finishes normally, and
 // untracks itself from live — no manual cleanup needed here.
+//
+// Also closes two narrower gaps a plain "kill everything in t.live" leaves:
+//
+//   - A job still queued behind a full concurrency pool (never reached
+//     Spawn) is invisible to t.live. Left alone, killing the live children
+//     below frees their slots and that queued job immediately wins one and
+//     calls subagent.Spawn — launching a brand-new child process while the
+//     parent is already exiting, with nothing left to ever reap it. Setting
+//     shuttingDown and cancelling every non-terminal job's own context
+//     FIRST means such a job's slot-wait select sees ctx.Done() and exits
+//     there instead, never reaching Spawn.
+//   - A job whose Spawn call is in flight RIGHT NOW (already past its own
+//     shuttingDown/ctx check) hasn't registered in t.live yet — a plain
+//     "iterate t.live" here would miss it and leave it orphaned the instant
+//     it does register, one line later. Taking spawnMu before liveMu closes
+//     that window: such a spawn always finishes registering (both hold
+//     spawnMu, so they can't interleave) before this call can proceed to
+//     read t.live.
 func (t *SubagentTool) KillAll() int {
+	t.shuttingDown.Store(true)
+	t.jobsMu.Lock()
+	var cancels []context.CancelFunc
+	for _, j := range t.jobs {
+		j.mu.Lock()
+		if (j.status == "queued" || j.status == "running") && j.cancel != nil {
+			cancels = append(cancels, j.cancel)
+		}
+		j.mu.Unlock()
+	}
+	t.jobsMu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+
+	t.spawnMu.Lock()
+	defer t.spawnMu.Unlock()
 	t.liveMu.Lock()
 	defer t.liveMu.Unlock()
 	n := 0
@@ -591,7 +694,16 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	if bgCtx == nil {
 		bgCtx = context.Background()
 	}
-	go t.runJob(bgCtx, job, spawnInput, dbPath, toolCallID, hasToolCallID)
+	// jobCtx bounds this one job's total lifetime (see subagentJobTimeout) —
+	// cancelled early if bgCtx itself is (process shutdown), or once the
+	// deadline passes, or by job.cancel directly (a future kill tool).
+	// Stored on job before runJob starts so it's reachable the moment the
+	// job exists, not just once it's actually running.
+	jobCtx, jobCancel := context.WithTimeout(bgCtx, subagentJobTimeout)
+	job.mu.Lock()
+	job.cancel = jobCancel
+	job.mu.Unlock()
+	go t.runJob(jobCtx, job, spawnInput, dbPath, toolCallID, hasToolCallID)
 
 	ack := fmt.Sprintf(
 		"Subagent %q spawned as job %s. It runs in the background — use subagent_status to check progress, subagent_result to retrieve the final output once done.",
@@ -614,6 +726,11 @@ type subagentJob struct {
 	// SubagentTool.visibleToCurrentSession.
 	sessionID string
 	startedAt time.Time
+	// cancel stops this job's per-job timeout context (see subagentJobTimeout)
+	// early — set once, right after creation, never nil once runJob starts.
+	// Currently invoked only by runJob's own cleanup; a future subagent_kill
+	// tool reuses this same field to cancel a job on request.
+	cancel context.CancelFunc
 
 	mu            sync.Mutex
 	status        string // "queued" | "running" | "done" | "error"
@@ -730,6 +847,18 @@ func (t *SubagentTool) retrieveJob(job *subagentJob) ToolResult {
 // point — including turns long after the spawning call already returned.
 func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput subagent.SpawnInput, dbPath, toolCallID string, hasToolCallID bool) {
 	defer removeDBFiles(dbPath)
+	// Release the per-job timeout context's timer on every exit path — ctx
+	// is this same job's WithTimeout child (see Execute), so this always
+	// stops it promptly instead of leaving it to fire on its own up to
+	// subagentJobTimeout later.
+	defer func() {
+		job.mu.Lock()
+		cancel := job.cancel
+		job.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	}()
 
 	// jobToolCallID is what every jobDoneFn call below reports as the
 	// spawning tool_use's id — "" when this job's request ctx carried none.
@@ -743,10 +872,8 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 	// child is fully reaped below (defer registered before child.Reap's, so
 	// it runs after — LIFO), not merely after Spawn returns, so the slot
 	// reflects an actually-running process the whole time it's alive.
-	select {
-	case subagentSlots <- struct{}{}:
-	case <-ctx.Done():
-		res := ToolResult{Error: "subagent cancelled while waiting for a concurrency slot"}
+	fail := func(errText string) {
+		res := ToolResult{Error: errText}
 		job.mu.Lock()
 		job.status, job.doneAt = "error", time.Now()
 		job.result = res
@@ -754,22 +881,40 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		if t.jobDoneFn != nil {
 			t.jobDoneFn(job.id, job.sessionID, jobToolCallID, res)
 		}
+	}
+
+	select {
+	case subagentSlots <- struct{}{}:
+	case <-ctx.Done():
+		fail("subagent cancelled while waiting for a concurrency slot")
 		return
 	}
 	defer func() { <-subagentSlots }()
 
-	child, err := subagent.Spawn(spawnInput)
-	if err != nil {
-		res := ToolResult{Error: "failed to spawn subagent: " + err.Error()}
-		job.mu.Lock()
-		job.status, job.doneAt = "error", time.Now()
-		job.result = res
-		job.mu.Unlock()
-		if t.jobDoneFn != nil {
-			t.jobDoneFn(job.id, job.sessionID, jobToolCallID, res)
-		}
+	// spawnMu makes "check shuttingDown/ctx, Spawn, trackLive" one atomic
+	// step against KillAll (see its own comment): KillAll sets shuttingDown
+	// and cancels every non-terminal job's ctx BEFORE taking spawnMu itself,
+	// so a spawn that wins this lock afterward always observes one of those
+	// and aborts here — never reaching Spawn to launch a brand-new child
+	// process while the parent is shutting down (bug 8). A spawn already
+	// past this point when KillAll starts finishes registering in t.live
+	// before KillAll's own liveMu.Lock() (taken after spawnMu) can proceed,
+	// so KillAll never misses it either (bug 13's TOCTOU).
+	t.spawnMu.Lock()
+	if t.shuttingDown.Load() || ctx.Err() != nil {
+		t.spawnMu.Unlock()
+		fail("subagent cancelled before spawn (shutting down)")
 		return
 	}
+	child, err := subagent.Spawn(spawnInput)
+	if err != nil {
+		t.spawnMu.Unlock()
+		fail("failed to spawn subagent: " + err.Error())
+		return
+	}
+	t.trackLive(child)
+	t.spawnMu.Unlock()
+
 	// "running" means the child process actually exists now — set only
 	// after Spawn succeeds, not merely "we're about to try", so a caller
 	// polling for status != "queued" (e.g. subagent_status, or a test
@@ -779,7 +924,6 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 	job.status = "running"
 	job.mu.Unlock()
 	defer child.Reap()
-	t.trackLive(child)
 	defer t.untrackLive(child)
 
 	prov, model, effort := job.provider, job.model, job.effort

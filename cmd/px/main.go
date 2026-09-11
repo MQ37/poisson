@@ -545,6 +545,17 @@ func runREPL(noSkills bool, resumeSessionID string) {
 	tools.BindBatchSubagentDone(reg, a.CompleteBatchedSubagent)
 	tools.BindSubagentSession(reg, a.SessionID)
 	tools.BindSubagentJobDone(reg, a.CompleteSubagentJob)
+	// jobCtx bounds every async subagent job's actual lifetime — cancelled
+	// once this process's own run loop returns (below), so a job blocked
+	// waiting for a concurrency slot or mid-run when the user quits isn't
+	// left with no cancellation signal at all (see bgCtx's doc comment and
+	// SubagentTool's per-job timeout in Execute). TUI.prepareShutdownLocked
+	// still does the immediate, synchronous kill of already-live children on
+	// every quit path; this is the backstop for anything that never reached
+	// "live" (still queued behind a full concurrency pool).
+	jobCtx, cancelJobs := context.WithCancel(context.Background())
+	defer cancelJobs()
+	tools.BindSubagentBackgroundContext(reg, jobCtx)
 
 	var skillList []skills.Skill
 	if !noSkills {

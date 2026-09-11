@@ -254,6 +254,16 @@ func BindSubagentJobDone(reg *Registry, fn func(jobID, sessionID, toolCallID str
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetJobDoneFn(fn) })
 }
 
+// BindSubagentBackgroundContext wires the process-lifetime context every
+// spawned async job actually runs on (see SubagentTool.bgCtx's doc
+// comment) — cancelling ctx (e.g. on process shutdown) cancels every
+// still-running job's own per-job timeout context, so KillSubagents'
+// explicit child-killing has a matching cancellation signal instead of
+// leaving runJob's ctx-cancelled exit paths permanently dead code.
+func BindSubagentBackgroundContext(reg *Registry, ctx context.Context) {
+	withSubagentTool(reg, func(st *SubagentTool) { st.SetBackgroundContext(ctx) })
+}
+
 // BindSubagentSession wires the live current-session-id resolver onto the
 // subagent tool (see SubagentTool.sessionIDFn) — every job spawned after
 // this call records which session spawned it, so a later `/new`/`/resume`

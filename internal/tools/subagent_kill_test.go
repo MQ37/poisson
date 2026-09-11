@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"testing"
@@ -79,5 +81,132 @@ func TestKillAllZeroWhenNoLiveChildren(t *testing.T) {
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	if got := tool.KillAll(); got != 0 {
 		t.Fatalf("KillAll() = %d, want 0 (no live children tracked)", got)
+	}
+}
+
+// saturateSubagentSlots fills the package-level subagentSlots channel to
+// capacity with fake acquisitions, draining them again on cleanup — lets a
+// test force a job into "queued behind a full concurrency pool" without
+// actually spawning maxConcurrentSubagents real child processes.
+func saturateSubagentSlots(t *testing.T) {
+	t.Helper()
+	n := 0
+	for {
+		select {
+		case subagentSlots <- struct{}{}:
+			n++
+		default:
+			t.Cleanup(func() {
+				for i := 0; i < n; i++ {
+					<-subagentSlots
+				}
+			})
+			return
+		}
+	}
+}
+
+// TestKillAllCancelsQueuedJobsWithoutSpawning is the regression guard for
+// bug 8: a job still queued behind a full concurrency pool (never reached
+// subagent.Spawn) used to be invisible to KillAll, which iterates only
+// t.live. Killing the live children then freed a slot and let the queued
+// job immediately win it and spawn a brand-new child process while the
+// parent was already exiting, orphaned with nothing left to reap it.
+// KillAll now cancels every non-terminal job's own context (see job.cancel,
+// set at Execute time) BEFORE touching t.live, so a job still waiting on
+// the slot select sees that cancellation and exits there — this proves the
+// underlying script (which would touch a marker file if ever actually
+// spawned) never runs.
+func TestKillAllCancelsQueuedJobsWithoutSpawning(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	markerPath := dir + "/spawned.marker"
+	scriptPath := dir + "/fake-child-marks-spawn.sh"
+	script := "#!/bin/sh\ntouch " + markerPath + "\nprintf '{\"type\":\"done\",\"success\":true}\\n'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	saturateSubagentSlots(t)
+
+	tool := NewSubagentTool(".", alwaysApproveSubagent)
+	tool.SetRuntime(func() string { return "anthropic" }, func() string { return "claude-opus-5" }, func() string { return "" })
+
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
+	if err != nil || res.Error != "" {
+		t.Fatalf("Execute: res=%+v err=%v", res, err)
+	}
+	jobID := jobIDFromAck(t, res.Content)
+
+	// Give runJob a moment to actually reach the slot-acquire select.
+	time.Sleep(50 * time.Millisecond)
+	if job, ok := tool.getJob(jobID); !ok || job.view().status != "queued" {
+		t.Fatalf("job should still be queued (slots saturated) before KillAll")
+	}
+
+	if n := tool.KillAll(); n != 0 {
+		t.Fatalf("KillAll() = %d, want 0 (no live children — only a queued one)", n)
+	}
+
+	job := waitForJob(t, tool, jobID, 2*time.Second)
+	if job.status != "error" {
+		t.Fatalf("queued job status = %q, want error (cancelled without ever spawning)", job.status)
+	}
+	if _, err := os.Stat(markerPath); err == nil {
+		t.Fatal("marker file exists — the queued job's script ran despite KillAll, meaning it spawned an orphan")
+	}
+}
+
+// TestSweepStaleTempDBsRemovesOldFiles and TestSweepStaleTempDBsLeavesFreshFiles
+// cover bug 9: a subagent scratch DB abandoned by a SIGKILLed/crashed
+// process (whose own deferred removeDBFiles never ran) is cleaned up by the
+// NEXT process to start, based on age alone — never touching a file young
+// enough to belong to a still-legitimately-running job.
+func TestSweepStaleTempDBsRemovesOldFiles(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := dir + "/poisson-sub-old12345.db"
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.WriteFile(oldPath+suffix, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Chtimes(oldPath+suffix, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sweepStaleTempDBsIn(dir)
+
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if _, err := os.Stat(oldPath + suffix); !os.IsNotExist(err) {
+			t.Fatalf("%s still exists after sweep", oldPath+suffix)
+		}
+	}
+}
+
+func TestSweepStaleTempDBsLeavesFreshFiles(t *testing.T) {
+	dir := t.TempDir()
+	freshPath := dir + "/poisson-sub-fresh67890.db"
+	if err := os.WriteFile(freshPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unrelatedPath := dir + "/poisson-sub-old12345.db.wal-unrelated-name"
+	if err := os.WriteFile(unrelatedPath, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sweepStaleTempDBsIn(dir)
+
+	if _, err := os.Stat(freshPath); err != nil {
+		t.Fatalf("fresh file was removed by sweep: %v", err)
+	}
+	if _, err := os.Stat(unrelatedPath); err != nil {
+		t.Fatalf("unrelated file was removed by sweep: %v", err)
 	}
 }
