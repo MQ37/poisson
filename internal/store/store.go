@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     cwd                 TEXT NOT NULL,
     provider            TEXT NOT NULL,
     model               TEXT NOT NULL,
-    compacted_seq       INTEGER NOT NULL DEFAULT 0
+    compacted_seq       INTEGER NOT NULL DEFAULT 0,
+    pinned              INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -126,13 +127,42 @@ CREATE INDEX IF NOT EXISTS idx_session_title_history_session ON session_title_hi
 // matches (which could fail differently, or succeed incorrectly, the
 // second time).
 //
-// Empty for now: this project has no released version with an on-disk
-// schema older than schemaSQL's current shape to carry forward (previous
-// schema changes were folded directly into schemaSQL and applied once,
-// by hand, to the sole pre-release database — see git history). The next
-// schema change that needs to reach an already-shipped database is
-// migrations[0].
-var migrations = []func(*sql.Tx) error{}
+var migrations = []func(*sql.Tx) error{
+	// 0: add sessions.pinned for the session-picker pin/unpin feature
+	// (Ctrl+P). Guarded by a table_info check because schemaSQL already
+	// creates the column on a brand-new database (this migration only
+	// matters for a database created before schemaSQL grew it) — an
+	// unconditional ADD COLUMN would fail with "duplicate column name" on
+	// every fresh install.
+	func(tx *sql.Tx) error {
+		rows, err := tx.Query(`PRAGMA table_info(sessions)`)
+		if err != nil {
+			return err
+		}
+		has := false
+		for rows.Next() {
+			var cid int
+			var name, colType string
+			var notNull, pk int
+			var dflt sql.NullString
+			if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+				rows.Close()
+				return err
+			}
+			if name == "pinned" {
+				has = true
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if has {
+			return nil
+		}
+		_, err = tx.Exec(`ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`)
+		return err
+	},
+}
 
 // migrate reads db's PRAGMA user_version and applies any migrations not yet
 // run, bumping the stored version after each one so a later Open resumes

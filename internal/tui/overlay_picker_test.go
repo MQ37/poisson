@@ -286,6 +286,60 @@ func TestFilterableListNamedOnlyIgnoredWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestFilterableListTogglePin(t *testing.T) {
+	var pinnedCalls []string
+	ov := newFilterableListOverlay("Sessions", []filterableListItem{
+		{id: "s1", label: "one"},
+		{id: "s2", label: "two"},
+	}, "", func(string) bool { return true })
+	ov.onTogglePin = func(id string, pinned bool) error {
+		if pinned {
+			pinnedCalls = append(pinnedCalls, id)
+		} else {
+			pinnedCalls = append(pinnedCalls, "un:"+id)
+		}
+		return nil
+	}
+
+	ov.idx = 1 // s2
+	ov.feedKey(Key{Kind: KeyCtrl, Byte: 16})
+	if len(pinnedCalls) != 1 || pinnedCalls[0] != "s2" {
+		t.Fatalf("pinnedCalls = %v, want [s2]", pinnedCalls)
+	}
+	if ov.items[0].id != "s2" || !ov.items[0].pinned {
+		t.Fatalf("s2 should sort first and be marked pinned, got %+v", ov.items)
+	}
+	if ov.note != "pinned" {
+		t.Fatalf("note = %q, want pinned", ov.note)
+	}
+
+	// idx follows the pinned row after the resort.
+	if got := ov.filtered()[ov.idx].id; got != "s2" {
+		t.Fatalf("idx points at %q after resort, want s2", got)
+	}
+
+	// Toggling again unpins (row order stays as-is client-side — a real
+	// reordering by activity only happens on the next ListSessions fetch,
+	// i.e. next time the picker opens).
+	ov.feedKey(Key{Kind: KeyCtrl, Byte: 16})
+	if pinnedCalls[1] != "un:s2" {
+		t.Fatalf("pinnedCalls = %v, want second entry un:s2", pinnedCalls)
+	}
+	if ov.items[0].pinned {
+		t.Fatalf("items = %v, want no row still marked pinned", ov.items)
+	}
+}
+
+func TestFilterableListTogglePinIgnoredWhenDisabled(t *testing.T) {
+	ov := newFilterableListOverlay("Test", []filterableListItem{
+		{id: "a", label: "alpha"},
+	}, "", nil)
+	handled, _, _ := ov.feedKey(Key{Kind: KeyCtrl, Byte: 16})
+	if handled {
+		t.Fatal("Ctrl+P must not be consumed when onTogglePin is nil")
+	}
+}
+
 func TestSessionPickerDeleteConfirmFlow(t *testing.T) {
 	var deleted string
 	newOverlay := func() *filterableListOverlay {

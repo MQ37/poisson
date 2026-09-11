@@ -23,6 +23,9 @@ type pickerItem struct {
 	// named marks a row with an explicit, human-given title (session picker
 	// only) — gates the Ctrl+N named-only filter.
 	named bool
+	// pinned marks a row pinned to the top of the list (session picker
+	// only) — toggled by Ctrl+P there.
+	pinned bool
 }
 
 type pickerOverlay = filterableListOverlay
@@ -30,7 +33,7 @@ type pickerOverlay = filterableListOverlay
 func newPickerOverlay(title string, items []pickerItem, current string, onPick func(string) error) *pickerOverlay {
 	list := make([]filterableListItem, len(items))
 	for i, it := range items {
-		list[i] = filterableListItem{id: it.id, label: it.label, hint: it.hint, named: it.named}
+		list[i] = filterableListItem{id: it.id, label: it.label, hint: it.hint, named: it.named, pinned: it.pinned}
 	}
 	pick := func(id string) bool {
 		if id == "" {
@@ -158,10 +161,11 @@ func pickerSessionItems(h commandHost) ([]pickerItem, error) {
 			hint += " · compacted"
 		}
 		items = append(items, pickerItem{
-			id:    sess.ID,
-			label: label,
-			hint:  hint,
-			named: named,
+			id:     sess.ID,
+			label:  label,
+			hint:   hint,
+			named:  named,
+			pinned: sess.Pinned,
 		})
 	}
 	if curID != "" && !curFound {

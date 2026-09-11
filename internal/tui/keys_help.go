@@ -13,7 +13,7 @@ func keybindingLines() []string {
 		"  Ctrl+F       Find in scrollback",
 		"  Ctrl+B       Side question popup (keeps your draft)",
 		"  Ctrl+P / .   Command palette",
-		"  Ctrl+S       Session picker (Ctrl+D deletes, Ctrl+N named-only filter)",
+		"  Ctrl+S       Session picker (Ctrl+P pins, Ctrl+D deletes, Ctrl+N named-only filter)",
 		"  Ctrl+M       Model picker",
 		"  Ctrl+L       Effort picker",
 		"  Ctrl+T       Toggle thinking block",

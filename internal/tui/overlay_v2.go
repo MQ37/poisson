@@ -155,8 +155,9 @@ func (t *TUI) openSessionPicker() {
 	// Ctrl+D in the session picker deletes the selected session (after an Enter
 	// confirmation). The active session is guarded against deletion in the overlay.
 	ov.onDelete = func(id string) error { return t.agent.Store().DeleteSession(id) }
+	ov.onTogglePin = func(id string, pinned bool) error { return t.agent.Store().SetSessionPinned(id, pinned) }
 	ov.namedFilterEnabled = true
-	ov.footerHint = "↑↓ move · Enter row · Ctrl+D del · Ctrl+N named · Esc · Ctrl+C"
+	ov.footerHint = "↑↓ move · Enter row · Ctrl+P pin · Ctrl+D del · Ctrl+N named · Esc · Ctrl+C"
 	t.setActiveOverlay(ov)
 }
 

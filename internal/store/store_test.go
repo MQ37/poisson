@@ -541,6 +541,38 @@ func TestListSessionsOrdersByUpdatedAt(t *testing.T) {
 	}
 }
 
+func TestListSessionsPinnedSortsFirst(t *testing.T) {
+	s := newTestStore(t)
+	mustCreateSession(t, s, "old")
+	mustCreateSession(t, s, "recent")
+	if _, err := s.db.Exec(`UPDATE sessions SET created_at = 1, updated_at = 100 WHERE id = 'old'`); err != nil {
+		t.Fatalf("update old: %v", err)
+	}
+	if _, err := s.db.Exec(`UPDATE sessions SET created_at = 2, updated_at = 200 WHERE id = 'recent'`); err != nil {
+		t.Fatalf("update recent: %v", err)
+	}
+	if err := s.SetSessionPinned("old", true); err != nil {
+		t.Fatalf("SetSessionPinned: %v", err)
+	}
+	list, err := s.ListSessions(10, 0)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(list) < 2 || list[0].ID != "old" || !list[0].Pinned {
+		t.Fatalf("session order = %+v, want pinned 'old' first", list)
+	}
+	if list[1].ID != "recent" || list[1].Pinned {
+		t.Fatalf("session order = %+v, want unpinned 'recent' second", list)
+	}
+}
+
+func TestSetSessionPinnedUnknownSession(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.SetSessionPinned("no-such-session", true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetSessionPinned on unknown session = %v, want ErrNotFound", err)
+	}
+}
+
 func TestSessionSubagent(t *testing.T) {
 	s := newTestStore(t)
 	sess := &Session{

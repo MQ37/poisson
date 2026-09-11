@@ -1,5 +1,7 @@
 package tui
 
+import "sort"
+
 // filterableListItem is one row in a fuzzy-filtered list overlay.
 type filterableListItem struct {
 	id    string
@@ -8,6 +10,9 @@ type filterableListItem struct {
 	// named marks a row with an explicit, human-given title (session picker
 	// only) — gates the Ctrl+N named-only filter.
 	named bool
+	// pinned marks a row pinned to the top of the list (session picker
+	// only) — toggled by Ctrl+P there.
+	pinned bool
 }
 
 // filterableListOverlay is a boxed, filterable list with keyboard and mouse
@@ -34,6 +39,10 @@ type filterableListOverlay struct {
 	namedFilterEnabled bool
 	namedOnly          bool
 
+	// onTogglePin, when set (session picker only), enables Ctrl+P to pin/unpin
+	// the selected row. Pinned rows always sort first (stable otherwise).
+	onTogglePin func(id string, pinned bool) error
+
 	// footerHint overrides the default keybinding footer (empty = default).
 	footerHint string
 }
@@ -57,6 +66,44 @@ func (p *filterableListOverlay) labelFor(id string) string {
 		}
 	}
 	return id
+}
+
+func (p *filterableListOverlay) itemPinned(id string) bool {
+	for _, it := range p.items {
+		if it.id == id {
+			return it.pinned
+		}
+	}
+	return false
+}
+
+// setPinned updates id's pinned flag and re-sorts pinned rows to the top,
+// stable otherwise — mirrors the store's own "pinned DESC, ..." ordering so
+// the on-screen order matches what a re-opened picker would show.
+func (p *filterableListOverlay) setPinned(id string, pinned bool) {
+	for i := range p.items {
+		if p.items[i].id == id {
+			p.items[i].pinned = pinned
+			break
+		}
+	}
+	sort.SliceStable(p.items, func(i, j int) bool {
+		return p.items[i].pinned && !p.items[j].pinned
+	})
+	p.syncIdxToCurrentOrSelected(id)
+}
+
+// syncIdxToCurrentOrSelected points idx at id's new position after a resort
+// (falls back to currentID if id is gone, e.g. filtered out).
+func (p *filterableListOverlay) syncIdxToCurrentOrSelected(id string) {
+	vis := p.filtered()
+	for i, it := range vis {
+		if it.id == id {
+			p.idx = i
+			return
+		}
+	}
+	p.syncIdxToCurrent()
 }
 
 func (p *filterableListOverlay) removeItem(id string) {
@@ -166,7 +213,11 @@ func (p *filterableListOverlay) render(scrollRows, cols int) (int, []string) {
 		if it.hint != "" {
 			hint = dim + "  " + truncatePlain(it.hint, 48) + reset
 		}
-		body = append(body, style+marker+it.label+reset+cur+hint)
+		label := it.label
+		if it.pinned {
+			label = "📌 " + label
+		}
+		body = append(body, style+marker+label+reset+cur+hint)
 	}
 
 	chrome, lines := renderBoxedList(p.titleForRender(), p.filter, body, scrollRows, cols, p.footerHint)
@@ -229,6 +280,29 @@ func (p *filterableListOverlay) feedKey(k Key) (handled bool, done bool, cancel 
 		}
 		if p.idx < 0 {
 			p.idx = 0
+		}
+		return true, false, false
+	}
+
+	// Ctrl+P pins/unpins the selected row (session picker only; onTogglePin
+	// gates it). Byte 30 mirrors the global command-palette binding's own
+	// fallback (see key_dispatch.go) for terminals that send it instead of 16.
+	if p.onTogglePin != nil && k.Kind == KeyCtrl && (k.Byte == 16 || k.Byte == 30) {
+		vis := p.filtered()
+		if len(vis) == 0 || vis[p.idx].id == "" {
+			return true, false, false
+		}
+		id := vis[p.idx].id
+		newPinned := !p.itemPinned(id)
+		if err := p.onTogglePin(id, newPinned); err != nil {
+			p.note = "pin failed: " + err.Error()
+			return true, false, false
+		}
+		p.setPinned(id, newPinned)
+		if newPinned {
+			p.note = "pinned"
+		} else {
+			p.note = "unpinned"
 		}
 		return true, false, false
 	}

@@ -49,6 +49,9 @@ type Session struct {
 	// compaction, so its usage describes the pre-compaction (larger) prompt, not
 	// the active context. Zero means never compacted.
 	CompactedSeq int
+	// Pinned marks a session to always sort first in the session picker
+	// (Ctrl+P there toggles it). See SetSessionPinned.
+	Pinned bool
 }
 
 // ErrNotFound is returned when a single-row lookup yields no rows.
@@ -188,7 +191,7 @@ func (s *Store) sessionImagePaths(id string) []string {
 func (s *Store) GetSession(id string) (*Session, error) {
 	row := s.db.QueryRow(
 		`SELECT id, is_subagent, title,
-		        compaction_summary, created_at, updated_at, cwd, provider, model, compacted_seq
+		        compaction_summary, created_at, updated_at, cwd, provider, model, compacted_seq, pinned
 		 FROM sessions WHERE id = ?`, id)
 	sess, err := scanSession(row)
 	if err != nil {
@@ -203,8 +206,8 @@ func (s *Store) GetSession(id string) (*Session, error) {
 // (offset ignored); limit == 0 defaults to 50; limit > 0 paginates.
 func (s *Store) ListSessions(limit, offset int) ([]Session, error) {
 	const base = `SELECT id, is_subagent, title,
-	        compaction_summary, created_at, updated_at, cwd, provider, model, compacted_seq
-	 FROM sessions ORDER BY updated_at DESC, created_at DESC, id DESC`
+	        compaction_summary, created_at, updated_at, cwd, provider, model, compacted_seq, pinned
+	 FROM sessions ORDER BY pinned DESC, updated_at DESC, created_at DESC, id DESC`
 	var rows *sql.Rows
 	var err error
 	if limit < 0 {
@@ -333,11 +336,11 @@ type scanner interface {
 func scanSession(sc scanner) (*Session, error) {
 	var sess Session
 	var title, compactionSummary sql.NullString
-	var isSubagent int
+	var isSubagent, pinned int
 	err := sc.Scan(
 		&sess.ID, &isSubagent, &title,
 		&compactionSummary, &sess.CreatedAt, &sess.UpdatedAt,
-		&sess.Cwd, &sess.Provider, &sess.Model, &sess.CompactedSeq,
+		&sess.Cwd, &sess.Provider, &sess.Model, &sess.CompactedSeq, &pinned,
 	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -354,5 +357,27 @@ func scanSession(sc scanner) (*Session, error) {
 		sess.CompactionSummary = &v
 	}
 	sess.IsSubagent = isSubagent != 0
+	sess.Pinned = pinned != 0
 	return &sess, nil
+}
+
+// SetSessionPinned sets whether a session sorts first in the session picker.
+// Does not bump updated_at — pinning is a display preference, not activity.
+func (s *Store) SetSessionPinned(id string, pinned bool) error {
+	v := 0
+	if pinned {
+		v = 1
+	}
+	res, err := s.db.Exec(`UPDATE sessions SET pinned = ? WHERE id = ?`, v, id)
+	if err != nil {
+		return fmt.Errorf("set session pinned: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("set session pinned: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
