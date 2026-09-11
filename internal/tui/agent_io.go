@@ -326,16 +326,17 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		t.scroll.updateSubagentProgress(ev.ToolCallID, ev.SubagentTurns, ev.ContextTokens, ev.ContextWindow, ev.SubagentTokensPerSec, ev.Text)
 	case agent.OutputToolResult:
 		if ev.ToolName == "subagent" {
-			// Every subagent call's own tool_result is now just an
+			// Every LIVE subagent call's own tool_result is now just an
 			// immediate spawn ack (see docs/async-subagent-plan.md) — the
 			// generic per-tool dispatch that fires this event unconditionally
 			// for every tool call has no idea that's different from a real
-			// result. Distinguish by content: an ack updates the widget with
-			// its job id and keeps it running; a real result (pushed later,
-			// out of band, by Agent.CompleteSubagentJob — or replayed from
-			// stored history on resume, which never contains an ack) reaches
-			// this same case via ToolCallID being that job id and actually
-			// completes it.
+			// result. An ack updates the widget with its job id (shown in
+			// subagent_status) and leaves it running; the REAL completion no
+			// longer arrives here at all (see OutputSubagentJobResult below)
+			// — the one case that still reaches this branch with non-ack
+			// content is a batched call cancelled before it ever ran (see
+			// batch.go's runOne), which never gets a job id and must
+			// complete by its own tool-call id directly.
 			if jobID, ok := subagentJobIDFromAck(ev.ToolResultContent); ok {
 				t.scroll.setSubagentJobID(ev.ToolCallID, jobID)
 				break
@@ -344,6 +345,14 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 			break
 		}
 		t.scroll.completeToolCall(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, ev.HumanApproval, 0)
+	case agent.OutputSubagentJobResult:
+		// The real end of an async subagent job — see that event type's doc
+		// comment for why keying by the spawning tool-call id (not job id)
+		// makes this ordering-independent against the ack above. Routed
+		// through the same completeSubagentCard the ack-less/cancelled path
+		// above uses, so cost/model-label extraction and layout invalidation
+		// are identical either way.
+		t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
 	case agent.OutputSubagentJobFinished:
 		t.injectSubagentDoneNotification(ev.ToolCallID, ev.ToolError)
 	case agent.OutputApproval:

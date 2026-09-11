@@ -153,7 +153,12 @@ type SubagentTool struct {
 	// don't care). sessionID is whatever sessionIDFn reported when the job
 	// was spawned ("" if sessionIDFn was never wired) — the caller's cue to
 	// skip reacting if the user has since switched to a different session.
-	jobDoneFn func(jobID, sessionID string, res ToolResult)
+	// toolCallID is the spawning tool_use's own id (from the request ctx
+	// that started this job — see runJob's hasToolCallID), "" if it carried
+	// none; the TUI matches its widget on this instead of jobID, which
+	// removes the ack/completion ordering race (see
+	// agent.OutputSubagentJobResult's doc comment).
+	jobDoneFn func(jobID, sessionID, toolCallID string, res ToolResult)
 
 	// sessionIDFn resolves the CURRENT session id at spawn time (a job
 	// records it once, permanently, on subagentJob.sessionID) and again on
@@ -210,7 +215,7 @@ func (t *SubagentTool) SetBackgroundContext(ctx context.Context) {
 
 // SetJobDoneFn supplies the callback fired once an async job actually
 // finishes (see jobDoneFn's doc comment).
-func (t *SubagentTool) SetJobDoneFn(fn func(jobID, sessionID string, res ToolResult)) {
+func (t *SubagentTool) SetJobDoneFn(fn func(jobID, sessionID, toolCallID string, res ToolResult)) {
 	t.jobDoneFn = fn
 }
 
@@ -660,6 +665,22 @@ func (t *SubagentTool) getJob(id string) (*subagentJob, bool) {
 	return j, true
 }
 
+// JobLive reports whether id names a job, visible to the current session,
+// that hasn't reached a terminal state yet — used on session resume (see
+// tui.hydrateScrollbackLocked, via Agent.SubagentJobLive) to tell a widget
+// replayed from a stored spawn ack ("still running as far as the DB knows")
+// apart from one whose job genuinely finished or was never heard from again
+// (process restarted, job pruned, wrong id) and must be marked done instead.
+func (t *SubagentTool) JobLive(id string) bool {
+	j, ok := t.getJob(id)
+	if !ok {
+		return false
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.status == "queued" || j.status == "running"
+}
+
 // listJobs returns every job this tool has spawned that's visible to the
 // current session (see visibleToCurrentSession), oldest first.
 func (t *SubagentTool) listJobs() []subagentJobView {
@@ -710,6 +731,13 @@ func (t *SubagentTool) retrieveJob(job *subagentJob) ToolResult {
 func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput subagent.SpawnInput, dbPath, toolCallID string, hasToolCallID bool) {
 	defer removeDBFiles(dbPath)
 
+	// jobToolCallID is what every jobDoneFn call below reports as the
+	// spawning tool_use's id — "" when this job's request ctx carried none.
+	jobToolCallID := ""
+	if hasToolCallID {
+		jobToolCallID = toolCallID
+	}
+
 	// Block for a global concurrency slot before spawning a real OS process
 	// — see maxConcurrentSubagents' doc comment. Released only after the
 	// child is fully reaped below (defer registered before child.Reap's, so
@@ -724,7 +752,7 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		job.result = res
 		job.mu.Unlock()
 		if t.jobDoneFn != nil {
-			t.jobDoneFn(job.id, job.sessionID, res)
+			t.jobDoneFn(job.id, job.sessionID, jobToolCallID, res)
 		}
 		return
 	}
@@ -738,7 +766,7 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		job.result = res
 		job.mu.Unlock()
 		if t.jobDoneFn != nil {
-			t.jobDoneFn(job.id, job.sessionID, res)
+			t.jobDoneFn(job.id, job.sessionID, jobToolCallID, res)
 		}
 		return
 	}
@@ -847,7 +875,7 @@ func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput 
 		job.result = res
 		job.mu.Unlock()
 		if t.jobDoneFn != nil {
-			t.jobDoneFn(job.id, job.sessionID, res)
+			t.jobDoneFn(job.id, job.sessionID, jobToolCallID, res)
 		}
 	}
 

@@ -610,6 +610,17 @@ func (t *TUI) markAfterEvent(ev agent.OutputEvent) {
 			t.activeTools--
 		}
 		t.dirty.markScrollAll(t.scrollRows)
+	case agent.OutputSubagentJobResult:
+		// An async subagent's REAL completion, not a second tool_result for
+		// the same call: activeTools was already incremented once at
+		// OutputToolStart and decremented once by the ack's OutputToolResult
+		// (see the case above) — decrementing again here would double-count
+		// and let it go negative-guarded-to-zero on a LATER, unrelated
+		// tool's start, stopping the spinner/window-title early and letting
+		// waitForAgentStop return before that other tool actually finished.
+		// The widget itself still needs a repaint (completeSubagentCard just
+		// flipped its state in handleEvent).
+		t.dirty.markScrollAll(t.scrollRows)
 	case agent.OutputCompacted:
 		t.dirty.markStatus()
 	case agent.OutputDone:

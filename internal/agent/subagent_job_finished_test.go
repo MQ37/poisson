@@ -12,12 +12,14 @@ func TestCompleteSubagentJob_SameSessionNotifies(t *testing.T) {
 	ch := make(chan OutputEvent, 8)
 	a := newTestAgentForSpeed(t, ch)
 
-	a.CompleteSubagentJob("sub-1", a.SessionID(), tools.ToolResult{Content: "did the thing"})
+	a.CompleteSubagentJob("sub-1", a.SessionID(), "call-1", tools.ToolResult{Content: "did the thing"})
 
-	// Widget-completion event always fires first.
+	// Widget-completion event always fires first, keyed by the spawning
+	// tool-call id (not the job id) — see OutputSubagentJobResult's doc
+	// comment for why.
 	ev, ok := drainOne(ch)
-	if !ok || ev.Type != OutputToolResult || ev.ToolName != "subagent" || ev.ToolCallID != "sub-1" {
-		t.Fatalf("expected the widget-completion OutputToolResult first, got %+v (ok=%v)", ev, ok)
+	if !ok || ev.Type != OutputSubagentJobResult || ev.ToolName != "subagent" || ev.ToolCallID != "call-1" {
+		t.Fatalf("expected the widget-completion OutputSubagentJobResult first, got %+v (ok=%v)", ev, ok)
 	}
 	ev, ok = drainOne(ch)
 	if !ok || ev.Type != OutputSubagentJobFinished || ev.ToolCallID != "sub-1" {
@@ -38,11 +40,11 @@ func TestCompleteSubagentJob_DifferentSessionSkipsNotify(t *testing.T) {
 	ch := make(chan OutputEvent, 8)
 	a := newTestAgentForSpeed(t, ch)
 
-	a.CompleteSubagentJob("sub-1", "some-other-session-entirely", tools.ToolResult{Content: "did the thing"})
+	a.CompleteSubagentJob("sub-1", "some-other-session-entirely", "call-1", tools.ToolResult{Content: "did the thing"})
 
 	ev, ok := drainOne(ch)
-	if !ok || ev.Type != OutputToolResult || ev.ToolName != "subagent" {
-		t.Fatalf("expected the widget-completion OutputToolResult, got %+v (ok=%v)", ev, ok)
+	if !ok || ev.Type != OutputSubagentJobResult || ev.ToolName != "subagent" {
+		t.Fatalf("expected the widget-completion OutputSubagentJobResult, got %+v (ok=%v)", ev, ok)
 	}
 	if ev, ok := drainOne(ch); ok {
 		t.Fatalf("expected no OutputSubagentJobFinished for a different session, got %+v", ev)
@@ -57,7 +59,7 @@ func TestCompleteSubagentJob_EmptySessionIDAlwaysNotifies(t *testing.T) {
 	ch := make(chan OutputEvent, 8)
 	a := newTestAgentForSpeed(t, ch)
 
-	a.CompleteSubagentJob("sub-1", "", tools.ToolResult{Content: "did the thing"})
+	a.CompleteSubagentJob("sub-1", "", "call-1", tools.ToolResult{Content: "did the thing"})
 
 	drainOne(ch) // widget completion
 	ev, ok := drainOne(ch)

@@ -269,6 +269,25 @@ func (s *scrollback) setSubagentJobID(toolCallID, jobID string) bool {
 	return false
 }
 
+// markSubagentResumedLive records a resumed widget's job id (same as
+// setSubagentJobID) AND flags it ResumedLiveJob, so finalizeOrphanSubagents
+// leaves it running instead of force-completing it — used by
+// hydrateScrollbackLocked when the stored tool_result is only the spawn ack
+// and Agent.SubagentJobLive says the job genuinely still looks non-terminal.
+func (s *scrollback) markSubagentResumedLive(toolCallID, jobID string) bool {
+	if !s.setSubagentJobID(toolCallID, jobID) {
+		return false
+	}
+	for i := len(s.blocks) - 1; i >= 0; i-- {
+		b := &s.blocks[i]
+		if b.kind == blockSubagent && b.meta.ProviderCallID == toolCallID {
+			b.meta.ResumedLiveJob = true
+			return true
+		}
+	}
+	return false
+}
+
 // subagentCostRe extracts the dollar figure subagent.go's Execute appends to
 // its own result text — " Cost: $0.0071." — right after "N tool calls, N
 // turns.". That sentence is the only place a subagent's recorded spend
@@ -370,7 +389,7 @@ func (s *scrollback) completeSubagentCard(providerCallID, content, errMsg string
 func (s *scrollback) finalizeOrphanSubagents() {
 	for i := range s.blocks {
 		b := &s.blocks[i]
-		if b.kind != blockSubagent || b.meta.ToolDone {
+		if b.kind != blockSubagent || b.meta.ToolDone || b.meta.ResumedLiveJob {
 			continue
 		}
 		b.meta.Streaming = false
@@ -401,6 +420,15 @@ func (s *scrollback) updateSubagentProgress(providerCallID string, turns, contex
 		b := &s.blocks[i]
 		if b.kind != blockSubagent || b.meta.ProviderCallID != providerCallID {
 			continue
+		}
+		// A late progress/retry tick can arrive after the widget is already
+		// done (e.g. a batch cancellation completed it out of band while
+		// this tick was already in flight) — unlike completeSubagentCard and
+		// setSubagentJobID, this had no ToolDone guard, so it could resurrect
+		// a finished card's SubagentStatus and make layoutSubagentCard's
+		// reconnecting check suppress its turn/context/speed/model display.
+		if b.meta.ToolDone {
+			return
 		}
 		b.meta.SubagentTurns = turns
 		b.meta.SubagentContextTokens = contextTokens

@@ -75,6 +75,22 @@ const (
 	// TUI wants to summarize rather than just say "done" (v1 just nudges;
 	// see docs/async-subagent-plan.md phase 3).
 	OutputSubagentJobFinished = "subagent_job_finished"
+	// OutputSubagentJobResult carries an async subagent job's REAL final
+	// result, keyed by ToolCallID = the spawning tool_use's own id (not the
+	// job id) — known synchronously the moment OutputToolStart pre-renders
+	// the widget, unlike the job id, which only exists once the spawn ack
+	// arrives. This is what makes matching ordering-independent: before this
+	// event type existed, both the ack and the real completion were
+	// delivered as OutputToolResult, and the real completion — sent from a
+	// wholly separate goroutine (the background job) with no ordering
+	// guarantee against the ack — was keyed by job id, which the widget
+	// only learns from the ack itself. If the completion happened to be
+	// delivered first, it silently found no matching widget and was
+	// dropped, leaving the "running" widget stuck forever. A dedicated type
+	// also stops it from being double-counted by markAfterEvent's
+	// activeTools bookkeeping, which rightly expects exactly one
+	// OutputToolResult per OutputToolStart.
+	OutputSubagentJobResult = "subagent_job_result"
 )
 
 // OutputEvent is a serialized terminal rendering event. The TUI goroutine
@@ -745,11 +761,14 @@ func (a *Agent) CompleteBatchedSubagent(toolCallID string, res tools.ToolResult)
 // CompleteSubagentJob reports an async subagent job's final result to the
 // TUI once it actually finishes — arbitrarily later than the tool_use that
 // spawned it, whose own tool_result was just an immediate spawn ack (see
-// docs/async-subagent-plan.md §B/§D). Same wire shape as
-// CompleteBatchedSubagent, keyed by jobID instead of a tool-call id: the TUI
-// re-keys a subagent widget from its tool-call id to its job id the moment
-// it sees the spawn ack (see tui.scrollback.markSubagentSpawned), so this
-// arrives correlated correctly however long the job actually took.
+// docs/async-subagent-plan.md §B/§D). Sent as OutputSubagentJobResult keyed
+// by toolCallID — the spawning tool_use's own id, known from the moment its
+// widget was pre-rendered — NOT jobID: see that event type's doc comment for
+// why keying by tool-call id instead of job id removes the ack/completion
+// ordering race entirely. toolCallID is "" when the spawning call's request
+// context carried none (see ToolCallIDFromContext) — completeSubagentCard's
+// existing fallback-to-most-recent-running-widget handles that the same way
+// it always has.
 //
 // The widget update always fires — a stale widget from a session the user
 // has since /new'd or /resume'd away from simply won't be found, since
@@ -759,8 +778,11 @@ func (a *Agent) CompleteBatchedSubagent(toolCallID string, res tools.ToolResult)
 // it's skipped outright when sessionID names a session that's no longer the
 // live one — an empty sessionID (session tracking not wired) never blocks
 // it, matching SubagentTool's own fail-open default.
-func (a *Agent) CompleteSubagentJob(jobID, sessionID string, res tools.ToolResult) {
-	a.CompleteBatchedSubagent(jobID, res)
+func (a *Agent) CompleteSubagentJob(jobID, sessionID, toolCallID string, res tools.ToolResult) {
+	a.sendEvent(OutputEvent{
+		Type: OutputSubagentJobResult, ToolName: "subagent", ToolCallID: toolCallID,
+		ToolResultContent: res.Content, ToolError: res.Error,
+	})
 	if sessionID != "" && sessionID != a.SessionID() {
 		return
 	}
@@ -786,6 +808,26 @@ func (a *Agent) ExpediteSubagents() int {
 		return 0
 	}
 	return st.ExpediteAll()
+}
+
+// SubagentJobLive reports whether jobID names a job (visible to the current
+// session) that hasn't reached a terminal state — used on session resume to
+// tell a widget replayed from a stored spawn ack apart from one whose job
+// has actually finished (or is no longer known at all) since the process
+// last ran; see tools.SubagentTool.JobLive.
+func (a *Agent) SubagentJobLive(jobID string) bool {
+	if a.tools == nil {
+		return false
+	}
+	t, ok := a.tools.Get("subagent")
+	if !ok {
+		return false
+	}
+	st, ok := t.(*tools.SubagentTool)
+	if !ok {
+		return false
+	}
+	return st.JobLive(jobID)
 }
 
 // KillSubagents forcefully terminates every live subagent child process

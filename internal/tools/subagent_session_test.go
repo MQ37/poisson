@@ -143,7 +143,7 @@ func TestSubagentSession_JobDoneFnReceivesSpawningSessionID(t *testing.T) {
 
 	var gotSessionID string
 	done := make(chan struct{})
-	tool.SetJobDoneFn(func(jobID, sessionID string, res ToolResult) {
+	tool.SetJobDoneFn(func(jobID, sessionID, toolCallID string, res ToolResult) {
 		gotSessionID = sessionID
 		close(done)
 	})

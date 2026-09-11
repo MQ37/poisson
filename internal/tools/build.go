@@ -250,7 +250,7 @@ func BindSubagentUsage(reg *Registry, fn func(sessionID, providerID, model strin
 // job's widget from "spawned" to done/error whenever that really happens —
 // arbitrarily later than the tool_use that spawned it — and notify the main
 // agent (see docs/async-subagent-plan.md phase 3).
-func BindSubagentJobDone(reg *Registry, fn func(jobID, sessionID string, res ToolResult)) {
+func BindSubagentJobDone(reg *Registry, fn func(jobID, sessionID, toolCallID string, res ToolResult)) {
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetJobDoneFn(fn) })
 }
 
