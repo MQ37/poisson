@@ -183,6 +183,20 @@ func (t *TUI) hydrateScrollbackLocked() {
 			for _, b := range blocks {
 				if b.Type == "tool_result" {
 					content, errMsg := parseHydratedToolResult(b)
+					// A stored subagent tool_result is, for an async spawn,
+					// ALWAYS just the immediate ack ("spawned as job X") —
+					// the real completion never gets persisted back onto
+					// this tool_call's own row (see docs/async-subagent-plan.md).
+					// Marking the widget done on that ack alone is wrong
+					// when the job genuinely is still running: check the
+					// registry (SubagentJobLive) before deciding. A job
+					// that's unknown or already terminal (process was
+					// restarted since, or it simply finished) still
+					// completes exactly as before.
+					if jobID, ok := subagentJobIDFromAck(content); ok && t.agent != nil && t.agent.SubagentJobLive(jobID) {
+						t.scroll.markSubagentResumedLive(b.ToolCallID, jobID)
+						continue
+					}
 					// Try the subagent widget first; only fall back to a tool card
 					// (which appends an orphan line if unmatched) when it isn't one.
 					if !t.scroll.completeSubagentCard(b.ToolCallID, content, errMsg, -1) {

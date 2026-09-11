@@ -45,7 +45,16 @@ type BlockMeta struct {
 	// than the original tool-call id) still finds this widget. Empty until
 	// the ack is seen.
 	SubagentJobID string
-	Expediting    bool // subagent widget: user pressed Ctrl+G, child is wrapping up
+	// ResumedLiveJob is set by hydrateScrollbackLocked when a replayed
+	// widget's stored tool_result is only the spawn ack AND the job it
+	// names is still non-terminal per Agent.SubagentJobLive — i.e. the job
+	// genuinely looks still running as far as the DB/registry know, so the
+	// widget must stay "running" instead of being marked done on the ack
+	// alone (which the live path never does either). finalizeOrphanSubagents
+	// must not force these done; the job's real completion, if it arrives
+	// later, still lands correctly via completeSubagentCard/SubagentJobID.
+	ResumedLiveJob bool
+	Expediting     bool // subagent widget: user pressed Ctrl+G, child is wrapping up
 	ToolResult            string
 	ToolError             string
 	// HumanApproval is "" (never asked a human — guard/LLM auto-approved, the
