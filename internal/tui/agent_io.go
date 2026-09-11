@@ -367,7 +367,14 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		}
 	case agent.OutputCompacted:
 		t.appendCompactionNoticeLocked(ev.CompactionTokensBefore, ev.CompactionTokensAfter)
-		t.agent.UpdateStatus()
+		// syncHeaderFromAgentLocked re-derives every field UpdateStatus's
+		// OutputStatus event would set, directly from a/a.Store() — no
+		// channel round trip needed. Do NOT call t.agent.UpdateStatus() (or
+		// any other Agent method that sends on outputChan) here: handleEvent
+		// runs on the sole reader goroutine of that channel, under t.mu — a
+		// blocking send from this goroutine while the turn goroutine keeps
+		// producing events deadlocks the whole process the moment the
+		// buffer fills, since nothing is left to drain it.
 		t.syncHeaderFromAgentLocked()
 		t.dirty.markStatus()
 	case agent.OutputStatus:
