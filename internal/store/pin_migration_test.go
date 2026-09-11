@@ -7,10 +7,14 @@ import (
 	"github.com/mq37/poisson/internal/testutil"
 )
 
-// TestPinMigrationBackwardCompat simulates an on-disk database created
-// before sessions.pinned existed (schemaSQL's CREATE TABLE predates it,
-// user_version stuck at 0) and checks Open's migration adds the column
-// without disturbing existing rows.
+// TestPinMigrationBackwardCompat simulates the real shape of every existing
+// user's on-disk database — created before sessions.pinned existed, at
+// PRAGMA user_version 2 (the version every already-shipped database sits
+// at; see the migrations var's doc comment for why) — and checks Open's
+// migration adds the column without disturbing existing rows. Regression
+// test: rewinding to user_version 0 here instead of the real 2 would have
+// hidden the bug where migrations[0]/[1] misaligned against that 2 and the
+// pinned migration silently never ran (reported as "no such column: pinned").
 func TestPinMigrationBackwardCompat(t *testing.T) {
 	dbPath := filepath.Join(testutil.TempDir(t), "pre-pin.db")
 	s, err := Open(dbPath)
@@ -21,11 +25,12 @@ func TestPinMigrationBackwardCompat(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	// Roll the schema back to "before pinned existed": drop the column and
-	// rewind user_version so migrate() has to redo the work on next Open.
+	// rewind user_version to 2 (this project's real pre-pinned baseline —
+	// not 0) so migrate() has to redo the work on next Open.
 	if _, err := s.db.Exec(`ALTER TABLE sessions DROP COLUMN pinned`); err != nil {
 		t.Fatalf("drop pinned (simulating pre-migration schema): %v", err)
 	}
-	if _, err := s.db.Exec(`PRAGMA user_version = 0`); err != nil {
+	if _, err := s.db.Exec(`PRAGMA user_version = 2`); err != nil {
 		t.Fatalf("reset user_version: %v", err)
 	}
 	s.db.Close()

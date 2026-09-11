@@ -127,8 +127,23 @@ CREATE INDEX IF NOT EXISTS idx_session_title_history_session ON session_title_hi
 // matches (which could fail differently, or succeed incorrectly, the
 // second time).
 //
+// Index 0 and 1 are no-op placeholders, not "empty for now" as an earlier
+// version of this comment claimed: this project's one real, long-lived
+// database (~/.poisson/poisson.db) already sits at PRAGMA user_version 2
+// from two migrations that ran years ago, back when this slice had two real
+// entries, before their schema changes were folded into schemaSQL and the
+// slice was emptied out — leaving user_version permanently ahead of an
+// empty (or short) slice. migrate()'s loop is `for version < len(migrations)`,
+// so on that database an array shorter than 3 entries is simply never
+// entered — any migration appended at index 0 or 1 silently never runs.
+// Padding these two placeholders keeps new indices aligned with the real
+// on-disk version so migrations[2] (below) actually executes. Anyone
+// appending migrations[3] can just append; this alignment is now stable
+// going forward and does not need re-padding.
 var migrations = []func(*sql.Tx) error{
-	// 0: add sessions.pinned for the session-picker pin/unpin feature
+	func(*sql.Tx) error { return nil },
+	func(*sql.Tx) error { return nil },
+	// 2: add sessions.pinned for the session-picker pin/unpin feature
 	// (Ctrl+P). Guarded by a table_info check because schemaSQL already
 	// creates the column on a brand-new database (this migration only
 	// matters for a database created before schemaSQL grew it) — an
