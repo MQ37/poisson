@@ -131,6 +131,27 @@ type TUIConfig struct {
 	ShowCost   bool
 }
 
+// SubagentConfig controls the subagent tool's cross-provider spawn gate.
+//
+// TrustedProviders is a flat, symmetric, transitively-trusted set of
+// provider IDs: a cross-provider spawn skips the human-approval prompt only
+// when BOTH the main session's provider and the target are listed. Listing
+// only the target does nothing. Empty (the default) keeps today's behavior —
+// every cross-provider spawn asks.
+//
+// Trust skips ONLY the approval popup: the target must still be configured
+// and the model must still be known. Every [custom_providers.*] instance and
+// every local no-auth built-in (ollama, llamacpp) always reads as configured
+// (provider.IsConfigured), so trusting one sends task prompts to its
+// base_url with no prompt, ever. A trusted spawn on a billed provider spends
+// money with no confirmation.
+//
+// Inert under headless `px -p`: runPrint never wires SubApproval, so
+// BuildRegistry never registers the subagent tool there at all.
+type SubagentConfig struct {
+	TrustedProviders []string
+}
+
 // ModelOverride holds user-declared metadata for one provider/model pair,
 // from [models.<provider>.<model>] in config.toml. It layers on top of (or,
 // for a model the code has never heard of, entirely replaces) the built-in
@@ -173,6 +194,7 @@ type Config struct {
 	Compaction CompactionConfig
 	Stealth    StealthConfig
 	TUI        TUIConfig
+	Subagent   SubagentConfig
 	Effort     string // reasoning effort: low | medium | high | xhigh | max
 	// Pricing is keyed [provider][model] → Pricing.
 	Pricing map[string]map[string]Pricing
@@ -362,6 +384,17 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 # [models.bastion."laguna-s-2.1:q4_K_M"]
 # context_window = 262144
 
+# Providers that may spawn subagents on each other with NO approval prompt.
+# BOTH the main session's provider and the target must be listed — listing
+# only the target does nothing; membership is transitive (3 entries = all 3
+# pairs). Trust skips only the popup: the target must still be configured
+# and the model must still be valid. Trusting a custom_providers.* instance
+# or a local no-auth provider (ollama, llamacpp) means task prompts go to
+# that base_url with no confirmation, ever; a trusted billed provider spends
+# money unprompted. Omit (the default) to always ask.
+# [subagent]
+# trusted_providers = ["anthropic", "openai"]
+
 [classifier]
 # Model that rates bash-command risk for the approval gate. The classifier
 # always runs on the session's provider — only the model differs. A small,
@@ -513,7 +546,27 @@ func Load() (*Config, error) {
 // (anthropic/xai/openai/ollama/llamacpp) and classifier/compaction all have
 // a legitimate "model" field of their own, so they're deliberately excluded
 // here — only tables where "model" can never mean anything real are checked.
-var noModelTables = []string{"tui", "stealth", "provider"}
+var noModelTables = []string{"tui", "stealth", "provider", "subagent"}
+
+// ProvidersMutuallyTrusted reports whether a and b are both listed in
+// [subagent] trusted_providers — the one place membership is decided, read
+// by both SubagentTool.Execute's approval skip and Description()'s tag.
+// Nil-receiver safe: an unconfigured session trusts nothing.
+func (c *Config) ProvidersMutuallyTrusted(a, b string) bool {
+	if c == nil {
+		return false
+	}
+	haveA, haveB := false, false
+	for _, p := range c.Subagent.TrustedProviders {
+		if p == a {
+			haveA = true
+		}
+		if p == b {
+			haveB = true
+		}
+	}
+	return haveA && haveB
+}
 
 // mapToConfig applies parsed TOML values on top of the built-in defaults.
 func mapToConfig(m map[string]interface{}) (*Config, error) {
@@ -643,6 +696,23 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 	// through cfg.CustomProviders too).
 	if err := parseCustomProviders(cfg, m); err != nil {
 		return nil, err
+	}
+
+	// Parsed after parseCustomProviders so a trusted entry may name a
+	// [custom_providers.*] instance, not just a built-in.
+	if v, ok := lookup(m, "subagent", "trusted_providers"); ok {
+		names, err := asStringArray(v)
+		if err != nil {
+			return nil, fmt.Errorf("subagent.trusted_providers: %w", err)
+		}
+		for _, name := range names {
+			if _, ok := ResolveProviderMeta(name, cfg); !ok {
+				return nil, fmt.Errorf(
+					"subagent.trusted_providers: unknown provider %q (want %s, or a [custom_providers.*] name)",
+					name, strings.Join(ProviderIDs(), "|"))
+			}
+		}
+		cfg.Subagent.TrustedProviders = names
 	}
 
 	// Top-level `model = "<provider>/<model>"` is the one-liner default: it sets

@@ -395,3 +395,195 @@ func TestSubagentToolModelWithSlashButNoProviderPrefixStaysSameProvider(t *testi
 		t.Fatalf("expected the bare llamacpp model to resolve against the main provider, got %+v", res)
 	}
 }
+
+// --- [subagent] trusted_providers ---
+
+func trustingConfig(ids ...string) *config.Config {
+	cfg := config.DefaultConfig()
+	cfg.Subagent.TrustedProviders = ids
+	return cfg
+}
+
+// A trusted pair must still hit the unconfigured-provider check — trust
+// skips only the human-approval call, nothing that runs before it.
+func TestSubagentToolTrustedPairStillRejectsUnconfiguredProvider(t *testing.T) {
+	tool := newAnthropicSonnetTool()
+	tool.SetConfigFn(func() *config.Config { return trustingConfig("anthropic", "xai") })
+	asked := false
+	tool.SetCrossProviderApprovalFn(func(ctx context.Context, a, b, c string) (bool, string) {
+		asked = true
+		return true, ""
+	})
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"x","model":"xai/grok-build"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if !strings.Contains(res.Error, "not configured") {
+		t.Fatalf("expected a not-configured error, got %+v", res)
+	}
+	if asked {
+		t.Error("must not ask a human to approve a spawn that's guaranteed to fail (unconfigured provider), even trusted")
+	}
+}
+
+// A trusted pair must still hit the unknown-model check.
+func TestSubagentToolTrustedPairStillRejectsUnknownModel(t *testing.T) {
+	tool := newAnthropicSonnetTool()
+	tool.SetConfigFn(func() *config.Config { return trustingConfig("anthropic", "xai") })
+	tool.SetAuth(auth.AuthStore{"xai": {Type: "oauth"}})
+	asked := false
+	tool.SetCrossProviderApprovalFn(func(ctx context.Context, a, b, c string) (bool, string) {
+		asked = true
+		return true, ""
+	})
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"x","model":"xai/grok-nonexistent-9"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if !strings.Contains(res.Error, "unknown model") {
+		t.Fatalf("expected an unknown-model error, got %+v", res)
+	}
+	if asked {
+		t.Error("must not ask a human to approve an unknown model, even trusted")
+	}
+}
+
+// The actual regression this feature exists to create: a trusted pair,
+// both configured, valid model — spawns WITHOUT ever calling
+// crossProviderApprovalFn, and says so in the spawn ack.
+func TestSubagentToolTrustedPairSpawnsWithoutApproval(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-trusted.sh"
+	script := "#!/bin/sh\nprintf '{\"type\":\"done\",\"success\":true}\\n'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := newAnthropicSonnetTool()
+	tool.SetConfigFn(func() *config.Config { return trustingConfig("anthropic", "xai") })
+	tool.SetAuth(auth.AuthStore{"xai": {Type: "oauth"}})
+	asked := false
+	tool.SetCrossProviderApprovalFn(func(ctx context.Context, a, b, c string) (bool, string) {
+		asked = true
+		return true, ""
+	})
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"x","model":"xai/grok-build"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error: %q", res.Error)
+	}
+	if asked {
+		t.Error("a trusted pair must never call crossProviderApprovalFn")
+	}
+	if !strings.Contains(res.Content, "trusted by config") {
+		t.Errorf("spawn ack should note the approval was skipped by trust, got: %q", res.Content)
+	}
+	waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
+}
+
+// Listing only ONE side of the pair (the target, not the main provider)
+// must change nothing — the existing always-ask behavior applies.
+func TestSubagentToolPartialTrustListStillAsks(t *testing.T) {
+	for _, ids := range [][]string{{"xai"}, {}} {
+		tool := newAnthropicSonnetTool()
+		tool.SetConfigFn(func() *config.Config { return trustingConfig(ids...) })
+		tool.SetAuth(auth.AuthStore{"xai": {Type: "oauth"}})
+		asked := false
+		tool.SetCrossProviderApprovalFn(func(ctx context.Context, a, b, c string) (bool, string) {
+			asked = true
+			return true, ""
+		})
+		res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"x","model":"xai/grok-build"}`))
+		if err != nil {
+			t.Fatalf("Execute returned a Go error: %v", err)
+		}
+		if res.Error != "" {
+			t.Fatalf("Execute reported an error: %q (trust=%v)", res.Error, ids)
+		}
+		if !asked {
+			t.Errorf("a partial/empty trust list (%v) must still ask", ids)
+		}
+	}
+}
+
+// A trusted CUSTOM provider (not a built-in) must skip approval the same
+// way. Without the [models.<name>.<model>] override, MergedModelSettings
+// would return ok=false and the spawn would die at the unknown-model check
+// before trust is ever consulted — this fixture includes it deliberately.
+func TestSubagentToolTrustedCustomProviderSkipsApproval(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+	dir := t.TempDir()
+	scriptPath := dir + "/fake-child-custom-trusted.sh"
+	script := "#!/bin/sh\nprintf '{\"type\":\"done\",\"success\":true}\\n'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake child script: %v", err)
+	}
+	restore := subagent.SetLookupExecutableForTest(scriptPath)
+	defer restore()
+
+	tool := newAnthropicSonnetTool()
+	tool.SetConfigFn(func() *config.Config {
+		cfg := trustingConfig("anthropic", "bastion")
+		cfg.CustomProviders["bastion"] = &config.CustomProviderConfig{Type: "ollama", BaseURL: "http://bastion:11434"}
+		if cfg.ModelOverrides["bastion"] == nil {
+			cfg.ModelOverrides["bastion"] = map[string]config.ModelOverride{}
+		}
+		cfg.ModelOverrides["bastion"]["laguna-s-2.1:q4_K_M"] = config.ModelOverride{ContextWindow: 262144}
+		return cfg
+	})
+	asked := false
+	tool.SetCrossProviderApprovalFn(func(ctx context.Context, a, b, c string) (bool, string) {
+		asked = true
+		return true, ""
+	})
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"x","model":"bastion/laguna-s-2.1:q4_K_M"}`))
+	if err != nil {
+		t.Fatalf("Execute returned a Go error: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("Execute reported an error: %q", res.Error)
+	}
+	if asked {
+		t.Error("a trusted custom provider must never call crossProviderApprovalFn")
+	}
+	waitForJob(t, tool, jobIDFromAck(t, res.Content), 2*time.Second)
+}
+
+// Description() must render the new "mutually trusted" tag for a provider
+// in the trust set with mainProv, while an untrusted provider keeps the
+// original "requires human approval" tag in the SAME call — and a
+// trusted-but-UNCONFIGURED provider must render NOT CONFIGURED, never the
+// trusted tag (Execute() rejects it regardless of trust).
+func TestSubagentToolDescriptionTagsTrustedProvider(t *testing.T) {
+	tool := newAnthropicSonnetTool()
+	tool.SetConfigFn(func() *config.Config { return trustingConfig("anthropic", "xai") })
+	tool.SetAuth(auth.AuthStore{"xai": {Type: "oauth"}})
+	desc := tool.Description()
+	if !strings.Contains(desc, "xai (different provider, mutually trusted") {
+		t.Errorf("Description() missing trusted tag for xai:\n%s", desc)
+	}
+	if !strings.Contains(desc, "openai (different provider, NOT CONFIGURED") {
+		t.Errorf("Description() should keep openai untagged as trusted (not in the list):\n%s", desc)
+	}
+
+	// Second sub-case: openai IS in the trust list but has no credentials —
+	// must still render NOT CONFIGURED, never the trusted tag.
+	tool2 := newAnthropicSonnetTool()
+	tool2.SetConfigFn(func() *config.Config { return trustingConfig("anthropic", "openai") })
+	desc2 := tool2.Description()
+	if !strings.Contains(desc2, "openai (different provider, NOT CONFIGURED") {
+		t.Errorf("trusted-but-unconfigured provider must render NOT CONFIGURED, not the trusted tag:\n%s", desc2)
+	}
+	if strings.Contains(desc2, "openai (different provider, mutually trusted") {
+		t.Errorf("trusted-but-unconfigured provider must never render the trusted tag:\n%s", desc2)
+	}
+}

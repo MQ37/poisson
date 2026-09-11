@@ -587,3 +587,95 @@ func TestModelKeyBeforeFirstSectionStillWorksInRealTemplate(t *testing.T) {
 		t.Errorf("got %s/%s, want ollama/llama3-test", cfg.Provider.Default, cfg.Ollama.Model)
 	}
 }
+
+func TestLoadSubagentTrustedProviders(t *testing.T) {
+	m, err := Parse("[subagent]\ntrusted_providers = [\"anthropic\", \"openai\"]\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	cfg, err := mapToConfig(m)
+	if err != nil {
+		t.Fatalf("mapToConfig: %v", err)
+	}
+	want := []string{"anthropic", "openai"}
+	if !reflect.DeepEqual(cfg.Subagent.TrustedProviders, want) {
+		t.Errorf("Subagent.TrustedProviders = %v, want %v", cfg.Subagent.TrustedProviders, want)
+	}
+}
+
+func TestLoadSubagentTrustedProvidersRejectsUnknownName(t *testing.T) {
+	m, err := Parse("[subagent]\ntrusted_providers = [\"nope\"]\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, err = mapToConfig(m)
+	if err == nil {
+		t.Fatal("expected an error for an unrecognized provider name")
+	}
+	if !strings.Contains(err.Error(), "subagent.trusted_providers") {
+		t.Errorf("error = %q, want it to mention subagent.trusted_providers", err.Error())
+	}
+}
+
+func TestLoadSubagentTrustedProvidersAcceptsCustomProvider(t *testing.T) {
+	m, err := Parse("[custom_providers.bastion]\ntype = \"ollama\"\nbase_url = \"http://bastion:11434\"\n\n[subagent]\ntrusted_providers = [\"anthropic\", \"bastion\"]\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	cfg, err := mapToConfig(m)
+	if err != nil {
+		t.Fatalf("mapToConfig: %v", err)
+	}
+	want := []string{"anthropic", "bastion"}
+	if !reflect.DeepEqual(cfg.Subagent.TrustedProviders, want) {
+		t.Errorf("Subagent.TrustedProviders = %v, want %v", cfg.Subagent.TrustedProviders, want)
+	}
+}
+
+// TestSubagentModelKeyRejected mirrors
+// TestModelKeyAppendedAfterLastSectionErrsInsteadOfSilentlyLandingInTUI: a
+// stray model= under [subagent] must error like every other non-model
+// table, not land silently — this is exactly why "subagent" was added to
+// noModelTables.
+func TestSubagentModelKeyRejected(t *testing.T) {
+	m, err := Parse("[subagent]\nmodel = \"x\"\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, err = mapToConfig(m)
+	if err == nil {
+		t.Fatal("expected an error for model= under [subagent]")
+	}
+	if !strings.Contains(err.Error(), "subagent.model") {
+		t.Errorf("error = %q, want it to mention subagent.model", err.Error())
+	}
+}
+
+func TestProvidersMutuallyTrusted(t *testing.T) {
+	cfg := &Config{Subagent: SubagentConfig{TrustedProviders: []string{"anthropic", "openai"}}}
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"anthropic", "openai", true},
+		{"openai", "anthropic", true},
+		{"anthropic", "xai", false},
+		{"xai", "openai", false},
+		{"xai", "ollama", false},
+	}
+	for _, c := range cases {
+		if got := cfg.ProvidersMutuallyTrusted(c.a, c.b); got != c.want {
+			t.Errorf("ProvidersMutuallyTrusted(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+
+	empty := &Config{}
+	if empty.ProvidersMutuallyTrusted("anthropic", "openai") {
+		t.Error("empty trust list must trust nothing")
+	}
+
+	var nilCfg *Config
+	if nilCfg.ProvidersMutuallyTrusted("anthropic", "openai") {
+		t.Error("nil *Config must trust nothing")
+	}
+}

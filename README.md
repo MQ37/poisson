@@ -74,7 +74,11 @@ px                                                   # launch the TUI
   session's model/effort by default; override either, or hand it a
   `provider/model` qualified ID to run it on a completely different
   provider. Same-provider overrides auto-run like today; a different
-  provider always asks you first, same popup as a risky bash command.
+  provider asks you first by default, same popup as a risky bash command.
+  List a set of providers under `[subagent] trusted_providers` in
+  `config.toml` to let them spawn on each other with no prompt — both sides
+  of the pair must be listed, and trust skips only the popup, never the
+  configured-provider and known-model checks.
 - **Podman sandboxes** — `create_sandbox` gives an isolated container;
   `bash` calls passing its `sandboxId` skip the approval gate entirely — the
   container is the boundary. Managed from any session via `sandbox_cp`/
@@ -245,6 +249,9 @@ via `/providers` without naming a model):
 #
 # [models.bastion."laguna-s-2.1:q4_K_M"]  # same [models.*] schema as any built-in provider
 # context_window = 262144
+
+# [subagent]
+# trusted_providers = ["anthropic", "openai"]  # skip the approval popup spawning subagents between these
 
 [classifier]
 # model = ""                         # fallback bash-risk classifier (bare = all providers, "provider/model" = one)

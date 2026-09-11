@@ -341,7 +341,7 @@ const subagentEffortGuide = "Effort levels (low -> max) trade capability for cos
 // syntax and its approval gate — see Execute's model-parsing comment for the
 // one documented edge case (a model ID whose own first path segment
 // happens to collide with a configured custom provider's name).
-const subagentModelHelpHeader = "Optional model/effort override for this subagent only (default: inherit the main session's model/effort). Model may be a bare model ID — same provider as the main session, runs immediately, no approval — or a \"provider/model\" qualified ID to run the subagent on a DIFFERENT provider, which always needs human approval before the subagent starts, same as a risky bash command. (If a bare model ID's own first path segment happens to name a configured custom provider, qualify it explicitly with its real provider to avoid misparsing, e.g. \"llamacpp/unsloth/Laguna-S-2.1-GGUF\".) Providers and models:"
+const subagentModelHelpHeader = "Optional model/effort override for this subagent only (default: inherit the main session's model/effort). Model may be a bare model ID — same provider as the main session, runs immediately, no approval — or a \"provider/model\" qualified ID to run the subagent on a DIFFERENT provider, which needs human approval before the subagent starts, same as a risky bash command — unless both providers are listed under [subagent] trusted_providers in config.toml, in which case it runs immediately (the tags below say which is which). (If a bare model ID's own first path segment happens to name a configured custom provider, qualify it explicitly with its real provider to avoid misparsing, e.g. \"llamacpp/unsloth/Laguna-S-2.1-GGUF\".) Providers and models:"
 
 // Description lists every provider Poisson knows about — not just the one
 // currently active — since a subagent may now be spawned on any of them (a
@@ -373,7 +373,12 @@ func (t *SubagentTool) Description() string {
 		case meta.ID == mainProv:
 			tag = "current provider — auto-runs, no approval needed"
 		case !configured:
+			// Wins over the trusted case below: Execute() rejects an
+			// unconfigured target regardless of trust, so this must never
+			// be advertised as auto-run.
 			tag = "different provider, NOT CONFIGURED — requires approval AND will fail to spawn until credentials are set"
+		case cfg.ProvidersMutuallyTrusted(mainProv, meta.ID):
+			tag = "different provider, mutually trusted with the current one — auto-runs, no approval needed"
 		}
 		fmt.Fprintf(&b, "\n%s (%s):\n", meta.ID, tag)
 		if list == "" {
@@ -396,7 +401,7 @@ func (t *SubagentTool) Schema() json.RawMessage {
 			"task": {"type": "string", "description": "Complete, self-contained task for the subagent. Include context, file paths, and expected output format."},
 			"name": {"type": "string", "description": "Display name for the subagent. If omitted, a name is chosen automatically."},
 			"sandboxIds": {"type": "array", "items": {"type": "string"}, "description": "Sandboxes (from create_sandbox) to let this child use — each id must be one this session actually created. The child cannot create its own sandboxes."},
-			"model": {"type": "string", "description": "Override model for this subagent only. A bare model ID stays on the main session's provider (auto-runs, no approval). A \"provider/model\" qualified ID targets a different provider — requires human approval before the subagent starts. See this tool's description for available providers/models. Default: inherit the main session's model."},
+			"model": {"type": "string", "description": "Override model for this subagent only. A bare model ID stays on the main session's provider (auto-runs, no approval). A \"provider/model\" qualified ID targets a different provider — may require human approval before the subagent starts, see this tool's description. Default: inherit the main session's model."},
 			"effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"], "description": "Override effort for this subagent only. Default: inherit the main session's effort."}
 		},
 		"required": ["task"]
@@ -476,6 +481,7 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	// models/efforts, an unconfigured target provider, or a denied approval
 	// loudly instead of silently falling back to the inherited default —
 	// same fail-closed discipline as every other input this tool validates.
+	trustNotice := ""
 	if params.Model != "" || params.Effort != "" {
 		if t.cfgFn == nil {
 			return ToolResult{Error: "model/effort override requested but not supported in this session"}, nil
@@ -504,7 +510,13 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 			if _, ok := provider.MergedModelSettings(cfg, reqProv, reqModel); !ok {
 				return ToolResult{Error: fmt.Sprintf("unknown model %q for provider %q — see this tool's description for available models", reqModel, reqProv)}, nil
 			}
-			if crossProvider {
+			if crossProvider && cfg.ProvidersMutuallyTrusted(prov, reqProv) {
+				// Both sides listed under [subagent] trusted_providers: skip
+				// the human gate, but say so — a silent skip is how a config
+				// knob turns into a surprise. The nil-approvalFn and
+				// IsConfigured checks above still ran unconditionally.
+				trustNotice = fmt.Sprintf("cross-provider approval skipped — %s/%s trusted by config.", prov, reqProv)
+			} else if crossProvider {
 				command := fmt.Sprintf("subagent -> %s/%s", reqProv, reqModel)
 				reason := fmt.Sprintf("cross-provider subagent spawn (main session runs %s/%s)", prov, model)
 				approved, denyReason := t.crossProviderApprovalFn(ctx, command, reason, t.cwd)
@@ -572,10 +584,14 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	}
 	go t.runJob(bgCtx, job, spawnInput, dbPath, toolCallID, hasToolCallID)
 
-	return ToolResult{Content: fmt.Sprintf(
+	ack := fmt.Sprintf(
 		"Subagent %q spawned as job %s. It runs in the background — use subagent_status to check progress, subagent_result to retrieve the final output once done.",
 		agentName, job.id,
-	)}, nil
+	)
+	if trustNotice != "" {
+		ack = trustNotice + " " + ack
+	}
+	return ToolResult{Content: ack}, nil
 }
 
 // subagentJob tracks one asynchronously-spawned subagent job, independent
