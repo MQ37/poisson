@@ -2,6 +2,54 @@
 
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+## [0.2.0] - 2026-09-11
+
+
+### Added
+
+- Allow cross-provider spawns, gated by approval
+
+- Describe every known model, rename fable-5 to fable-5.1
+
+- Add /subscriptions command
+
+- Sudo password support via masked TUI prompt + askpass
+
+- Make spawn async — job id, status, one-shot result
+
+- Decouple subagent widget lifecycle from spawn ack
+
+- Notify main agent when an async job finishes
+
+- Pin sessions to top of session picker (Ctrl+P toggles)
+
+
+### Documentation
+
+- Add lettered-choices format to grilling skill
+
+- Describe poisson as opinionated, not small/fast
+
+
+### Fixed
+
+- Escape bare `@word` in changelog so GitHub doesn't autolink it
+
+- Animate subagent spinner while main agent is idle
+
+- Kill live children on px shutdown (Ctrl+C, Ctrl+D, /quit, signals)
+
+- Pinned-column migration never ran on real user_version=2 DB
+
+- Scope pinned ordering to session picker, clamp stale idx
+
+- Name the actual cause when bootstrap times out
+
+
+### Miscellaneous
+
+- Bump spoofed Claude Code version to 2.1.263
+
 ## [0.1.0] - 2026-09-03
 
 
@@ -61,7 +109,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Image content blocks + downscaling + provider serialization
 
-- Paste images via @file and Ctrl+V
+- Paste images via `@file` and Ctrl+V
 
 - Add gpt-5.5 via ChatGPT Codex subscription
 
@@ -97,7 +145,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Colored expandable diffs for edit/write tool cards
 
-- @file references show a collapsible card, not an inline dump
+- `@file` references show a collapsible card, not an inline dump
 
 - Optional reason prompt when denying a bash command
 
@@ -462,7 +510,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Show Ctrl+G:expedite in the idle hint line too
 
-- Expand @dir to a one-level listing instead of erroring
+- Expand `@dir` to a one-level listing instead of erroring
 
 - Retry transient empty model responses instead of erroring
 
@@ -564,7 +612,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Send placeholder content instead of null for filtered-empty messages
 
-- Don't dump oversized @file into message, note it instead
+- Don't dump oversized `@file` into message, note it instead
 
 - Approval deny-reason field supports word-wise editing
 
