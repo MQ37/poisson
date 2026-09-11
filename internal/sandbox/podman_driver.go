@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -134,12 +135,15 @@ func createArgs(name string, opts CreateOpts) []string {
 	return append(args, opts.Image, "sleep", "infinity")
 }
 
-// Create starts a new container per opts: pinned image, opts.HostPath
-// bind-mounted as /workspace, any extra opts.Mounts/opts.Env, then runs the
-// one-time bootstrap (see bootstrapScript) before returning. Cleans up the
-// container itself on any failure after it was created — the caller (e.g.
-// CreateSandboxTool) is responsible for cleaning up anything it made on the
-// host side (its scratch workspace directory) when Create returns an error.
+// Create starts a new container per opts: pinned image (or, if this exact
+// image was already bootstrapped once before on this machine, the cached
+// post-bootstrap copy instead — see cacheTagFor/cacheBootstrapImage),
+// opts.HostPath bind-mounted as /workspace, any extra opts.Mounts/opts.Env,
+// then runs the one-time bootstrap (see bootstrapScript) before returning.
+// Cleans up the container itself on any failure after it was created — the
+// caller (e.g. CreateSandboxTool) is responsible for cleaning up anything
+// it made on the host side (its scratch workspace directory) when Create
+// returns an error.
 func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, error) {
 	if strings.TrimSpace(opts.Image) == "" {
 		return "", fmt.Errorf("podman create: image is required")
@@ -153,6 +157,19 @@ func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, err
 		return "", err
 	}
 
+	// Reuse a previously bootstrapped image for this exact requested image,
+	// if one exists (see cacheBootstrapImage below) — skips bootstrap's
+	// apt-get entirely (sudo, and the matching-uid user, are already baked
+	// in), so it needs no network. requestedImage is what bootstrap must
+	// still consider "the original ask" for caching purposes below, since
+	// opts.Image gets overwritten to the cache tag for createArgs.
+	requestedImage := opts.Image
+	cacheTag := cacheTagFor(requestedImage)
+	usedCache := requestedImage != cacheTag && d.imageExists(ctx, cacheTag)
+	if usedCache {
+		opts.Image = cacheTag
+	}
+
 	args := createArgs(name, opts)
 
 	if _, stderr, err := d.run(ctx, args...); err != nil {
@@ -164,7 +181,60 @@ func (d *podmanDriver) Create(ctx context.Context, opts CreateOpts) (string, err
 		return "", err
 	}
 
+	if !usedCache {
+		d.cacheBootstrapImage(ctx, name, cacheTag)
+	}
+
 	return name, nil
+}
+
+// cacheTagFor maps a requested base image to the local tag its
+// once-bootstrapped copy (sudo installed, matching-uid user created) is
+// cached under — see the Create/cacheBootstrapImage doc comments. A pure
+// string transform, no podman call, so it's cheaply unit-testable and safe
+// to call before any container exists.
+//
+// Deliberately global per image string, not scoped to a container name,
+// uid, or session: this machine's sandboxes are created by one host user
+// (uid stable across every sandbox — see createArgs' --userns=keep-id
+// comment), so the exact same original image always ends up needing the
+// exact same bootstrap work. A different uid still bootstraps correctly
+// against a stale cache (bootstrapScript's own getent-passwd check just
+// adds another user for that uid; no network needed either way) — the
+// cache never has to be "for" a specific uid to stay correct.
+//
+// Accepted limitation: if "ubuntu:26.04" itself later changes upstream
+// (a point release), the cached copy goes stale — no invalidation here.
+// Not worth the complexity for a personal single-user tool; pass a
+// different image string (or manually `podman rmi` the cache tag) to force
+// a fresh bootstrap.
+func cacheTagFor(image string) string {
+	sanitized := strings.NewReplacer("/", "-", ":", "-", "@", "-").Replace(image)
+	return "localhost/poisson-sandbox-cache:" + sanitized
+}
+
+// imageExists reports whether tag is already present in local podman
+// storage — `podman image exists` exits 0/1 for yes/no, never an error
+// worth surfacing (a storage-backend fault here just means Create falls
+// back to bootstrapping the real base image, same as if the cache were
+// simply empty).
+func (d *podmanDriver) imageExists(ctx context.Context, tag string) bool {
+	_, _, err := d.run(ctx, "image", "exists", tag)
+	return err == nil
+}
+
+// cacheBootstrapImage commits container id — just successfully bootstrapped
+// against the real base image — to tag, so the next Create for the same
+// requested image can start from it directly and skip bootstrap's apt-get
+// (and thus the network hit that motivated this: the exact "why does
+// create_sandbox need to reach Canonical" incident this caches around).
+// Best-effort: a commit failure (disk full, storage backend hiccup) must
+// not fail the sandbox Create that already succeeded — it only costs the
+// next Create the same bootstrap work, nothing this one did is lost.
+func (d *podmanDriver) cacheBootstrapImage(ctx context.Context, id, tag string) {
+	if _, stderr, err := d.run(ctx, "commit", id, tag); err != nil {
+		log.Printf("warning: cache bootstrapped sandbox image %s: %v (%s)", tag, err, strings.TrimSpace(stderr))
+	}
 }
 
 // startAndBootstrap starts container id and (re-)resolves its bootstrap

@@ -302,6 +302,30 @@ returning the container id:
 3. Every ordinary `Exec` call after that uses the recorded resolved user
    (`podman exec --user $RESOLVED_USER ...`) — never root by default.
 
+**Caching step 2's `apt-get install sudo` across containers.** Step 2 only
+runs when the base image lacks `sudo` (`ubuntu:26.04` does), and needs a
+package-manager network hit the first time — real-world incident: Canonical's
+archive mirrors went unreachable from this host, and every `create_sandbox`
+call hung for the full 90s bootstrap timeout, because a brand-new container
+starts from the pristine image every time, never remembering that a
+previous container already paid this cost. `Create` now checks for a local
+image tagged `localhost/poisson-sandbox-cache:<sanitized-requested-image>`
+before creating the container at all; if present, the container is built
+from *that* (already has sudo + a matching-uid user from a prior bootstrap)
+instead of the real requested image, so bootstrap's own `command -v sudo`
+check passes immediately and no network call happens. On a cache miss,
+after a successful bootstrap against the real image, the now-bootstrapped
+container is committed to that tag (`podman commit`, best-effort — a
+failure here doesn't fail the `Create` that already succeeded, it just
+costs the next `Create` the same bootstrap work) so the *next* `Create` for
+the same requested image hits the cache. Global per image string, not
+scoped to a uid or session — this machine's sandboxes all come from one host
+user anyway (see `--userns=keep-id` above), and a different uid still
+bootstraps correctly against a stale cache (bootstrap's own
+`getent passwd` check just adds another user, no network either way).
+Accepted staleness: a moving image tag that changes upstream won't be
+noticed — not worth the complexity for a personal single-user tool.
+
 Ordinary commands (build, test, script) land owned by the host uid
 automatically, so host `read/write/edit/grep/glob` work on them with zero
 special-casing. Anything needing real root — `sudo apt-get install foo` —
