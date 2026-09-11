@@ -22,8 +22,10 @@ var podmanBin = "podman"
 // bootstrapTimeout bounds Create's one-time bootstrap exec (matching-uid
 // user creation + a possible `apt-get install sudo`, which needs a package-
 // manager network hit the first time — see docs/sandbox-plan.md's "Root
-// access" section).
-const bootstrapTimeout = 90 * time.Second
+// access" section). A package var, not a const — same idiom as podmanBin
+// above — so a test can shrink it instead of waiting out the real 90s to
+// exercise the timeout branch in bootstrap below.
+var bootstrapTimeout = 90 * time.Second
 
 // podmanDriver shells out to the real podman CLI — no REST API, no new
 // dependency, same style as internal/tools/bash.go and grep.go.
@@ -237,6 +239,13 @@ func (d *podmanDriver) bootstrap(ctx context.Context, id string) (user string, e
 	defer cancel()
 	stdout, stderr, err := d.run(bctx, "exec", "--user", "root", id, "bash", "-c", bootstrapScript(os.Getuid(), os.Getgid()))
 	if err != nil {
+		// A plain "signal: killed" (what exec.CommandContext leaves once it
+		// SIGKILLs the process on deadline) tells neither the agent nor the
+		// user anything actionable — this is almost always apt-get update
+		// hanging on no container network, not podman itself misbehaving.
+		if bctx.Err() == context.DeadlineExceeded {
+			return "", fmt.Errorf("timed out after %s waiting for the container's network (apt-get install sudo needs one the first time a base image lacks sudo) — check host/container connectivity, or pass an image that already ships sudo", bootstrapTimeout)
+		}
 		return "", fmt.Errorf("%w (%s)", err, strings.TrimSpace(stderr))
 	}
 	user = strings.TrimSpace(stdout)

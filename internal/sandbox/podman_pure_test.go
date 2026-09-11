@@ -1,10 +1,15 @@
 package sandbox
 
 import (
+	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestFullArgs_NilGlobalArgs: no globalArgs configured (the production
@@ -146,6 +151,45 @@ func TestBootstrapScript_ControlFlowMarkers(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Errorf("bootstrapScript missing control-flow marker %q\nfull script:\n%s", want, script)
 		}
+	}
+}
+
+// TestBootstrap_TimeoutProducesActionableError is a regression test for the
+// real incident this covers: bootstrap hanging on apt-get update (no
+// container network) used to surface as bare "signal: killed" — meaningless
+// to both the agent and the user. Fakes podmanBin as a script that just
+// sleeps past a shrunk bootstrapTimeout, so exec.CommandContext SIGKILLs it
+// exactly like the real hang did, and checks the error names the actual
+// cause instead.
+func TestBootstrap_TimeoutProducesActionableError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake podman script assumes a POSIX shell")
+	}
+	fake := filepath.Join(t.TempDir(), "podman")
+	// "exec sleep" (not a bare "sleep" line) replaces the shell process
+	// in-place instead of forking a child: cmd.Wait() waits on stdout/
+	// stderr pipe EOF as well as process exit, and a forked grandchild
+	// would keep those pipes open — and the test hanging for the full
+	// sleep duration — even after SIGKILL reaps the direct child shell.
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+
+	origBin, origTimeout := podmanBin, bootstrapTimeout
+	podmanBin = fake
+	bootstrapTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { podmanBin = origBin; bootstrapTimeout = origTimeout })
+
+	d := &podmanDriver{execUser: make(map[string]string)}
+	_, err := d.bootstrap(context.Background(), "fake-container-id")
+	if err == nil {
+		t.Fatal("expected an error from a bootstrap that never returns")
+	}
+	if strings.Contains(err.Error(), "signal: killed") {
+		t.Fatalf("error still leaks the raw signal instead of naming the cause: %v", err)
+	}
+	if !strings.Contains(err.Error(), "timed out after 50ms") || !strings.Contains(err.Error(), "network") {
+		t.Fatalf("error = %v, want it to name the timeout and the network cause", err)
 	}
 }
 
