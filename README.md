@@ -15,7 +15,7 @@
 
 ---
 
-**poisson** is a small, fast coding agent you run in your terminal. It streams
+**poisson** is an opinionated coding agent you run in your terminal. It streams
 a real conversation, calls tools (bash, file read/write/edit, subagents),
 tracks every token and dollar, and keeps your whole history in a local SQLite
 database you own — just one static binary and your terminal.
