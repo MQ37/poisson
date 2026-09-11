@@ -217,6 +217,20 @@ func (t *TUI) resetSessionViewLocked() {
 	t.convUserIdx = 0
 	t.activeOverlay = nil
 	t.completion = nil
+	// A message queued while a turn was running, or a subagent-done nudge
+	// parked behind a busy/overlay-active session (see
+	// injectSubagentDoneNotification), belongs to the session being left —
+	// switching sessions replaces the whole scrollback/conversation, same
+	// reasoning cancelActiveRunLocked already applies when the user hits
+	// stop. Left alone, the next drainQueueLocked would inject it into
+	// the NEW session instead: a stale "subagent finished" nudge naming a
+	// job id that's invisible here (visibleToCurrentSession), or worse, an
+	// actual unsent user message landing in a conversation it was never
+	// meant for.
+	if len(t.queued) > 0 {
+		t.queued = nil
+		t.setEphemeralHintLocked("discarded queued message(s) from the previous session", 3*time.Second)
+	}
 	t.hydrateScrollbackLocked()
 	t.syncHeaderFromAgentLocked()
 	t.dirty.markFull()
