@@ -63,7 +63,7 @@ px                                                   # launch the TUI
   sandbox you're fine handing full unattended shell access to.
 - **Secret redaction** — tool output is scanned for secret-shaped text
   (vendor tokens, PEM keys, JWTs, credential `KEY=VALUE` pairs) and masked
-  with `[REDACTED]` before reaching the model, TUI, or session store.
+  with `[REDACTED BY HARNESS]` before reaching the model, TUI, or session store.
   Best-effort, not a guarantee.
 - **Subagents run async** — `subagent` spawns a child and returns a job ID
   immediately; the main agent keeps working (or you keep chatting) while it

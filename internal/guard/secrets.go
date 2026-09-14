@@ -7,8 +7,11 @@ import (
 
 // redactedPlaceholder replaces a detected secret value verbatim — no key
 // name or hint kept, so a false negative elsewhere can't reconstruct
-// anything from the placeholder itself.
-const redactedPlaceholder = "[REDACTED]"
+// anything from the placeholder itself. Named explicitly as harness output
+// (not just "[REDACTED]") so a reader can tell this text was scrubbed by
+// the tool-output guard, not typed that way by the model or present in the
+// real file/command output.
+const redactedPlaceholder = "[REDACTED BY HARNESS]"
 
 // RedactSecrets scans arbitrary text (tool output, spilled files, anything
 // about to reach the model, the TUI, or the session store) and replaces
@@ -47,14 +50,14 @@ func RedactSecrets(s string) string {
 // prefix — precise enough to redact unconditionally, with no surrounding
 // KEY= context needed.
 var vendorTokenPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),                  // AWS access key ID
-	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}\b`),        // GitHub token
-	regexp.MustCompile(`\bxox[baprs]-[0-9A-Za-z-]{10,}\b`),      // Slack token
-	regexp.MustCompile(`\b(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}\b`), // Stripe key
-	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`),             // OpenAI / Anthropic-style key
-	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),             // Google API key
+	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),                                              // AWS access key ID
+	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}\b`),                                    // GitHub token
+	regexp.MustCompile(`\bxox[baprs]-[0-9A-Za-z-]{10,}\b`),                                  // Slack token
+	regexp.MustCompile(`\b(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}\b`),                      // Stripe key
+	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{20,}\b`),                                         // OpenAI / Anthropic-style key
+	regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`),                                         // Google API key
 	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b`), // JWT
-	regexp.MustCompile(`\bapify_api_[A-Za-z0-9]{20,}\b`),        // Apify API token
+	regexp.MustCompile(`\bapify_api_[A-Za-z0-9]{20,}\b`),                                    // Apify API token
 }
 
 // pemPrivateKeyRe matches a full PEM private-key block, header to footer.

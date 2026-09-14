@@ -168,5 +168,5 @@ func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessa
 		return TrimToolResult(ToolResult{Error: verr.Error()}), nil
 	}
 	res, err = t.Execute(ctx, input)
-	return TrimToolResult(res), err
+	return TrimToolResultForTool(name, res), err
 }

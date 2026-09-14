@@ -51,24 +51,82 @@ func sweepStaleSpillFiles() {
 	})
 }
 
-// TrimToolResult bounds tool output — and scrubs secret-shaped substrings
-// out of it (see guard.RedactSecrets) — before it reaches the model, store,
-// or UI. Registry.Execute calls this on every tool's result unconditionally
-// (bash, read, grep, edit, subagent hand-offs, ...), so this one call site
-// is the single choke point all three sinks share.
+// noRedactionTools are tools whose result can never carry content the agent
+// didn't already author itself, or content already scrubbed once upstream —
+// scanning them again only produces false positives (e.g. a commit message
+// containing "x-secret: dummy" swapped for the redaction marker) with no
+// leak they could otherwise catch:
+//   - write's Content is "wrote <path>", never the bytes written.
+//   - subagent/subagent_result/subagent_status/subagent_kill relay a child's
+//     own synthesized report; anything the child actually read or ran
+//     already passed through this same guard inside the child's own
+//     Registry.Execute before it ever reached the child's context.
+//   - batch aggregates results Registry.Execute already scrubbed
+//     individually per sub-call.
+//   - read_messages/recall replay another session's already-persisted
+//     (already-scrubbed-on-write) history.
+//   - glob/list_sandboxes/list_sessions/set_title/create_sandbox/sandbox_cp/
+//     sandbox_destroy/sandbox_resurrect return filenames or short status
+//     text with no external payload (create_sandbox separately redacts env
+//     values to "<redacted>" before they ever reach ToolResult, see
+//     create_sandbox.go).
+//
+// Deliberately a denylist, not an allowlist: any tool not listed here keeps
+// today's default (scrubbed), matching RedactSecrets' documented
+// over-redaction bias — a new tool that reads files, runs commands, or
+// fetches external content is protected automatically and has to be added
+// here on purpose to opt out.
+var noRedactionTools = map[string]bool{
+	"write":             true,
+	"subagent":          true,
+	"subagent_result":   true,
+	"subagent_status":   true,
+	"subagent_kill":     true,
+	"batch":             true,
+	"read_messages":     true,
+	"recall":            true,
+	"glob":              true,
+	"list_sandboxes":    true,
+	"list_sessions":     true,
+	"set_title":         true,
+	"create_sandbox":    true,
+	"sandbox_cp":        true,
+	"sandbox_destroy":   true,
+	"sandbox_resurrect": true,
+}
+
+// TrimToolResult bounds tool output and scrubs secret-shaped substrings out
+// of it (see guard.RedactSecrets) before it reaches the model, store, or UI.
+// Every call site not dispatching a named tool (panic recovery, unregistered-
+// tool errors, input-validation errors — all synthetic Go error text, never
+// a tool's actual payload) uses this directly, so it's always scrubbed.
+// Registry.Execute's real per-tool dispatch path uses TrimToolResultForTool
+// instead, which gates redaction by name.
 func TrimToolResult(result ToolResult) ToolResult {
-	result.Content = trimToolText(result.Content)
-	result.Error = trimToolText(result.Error)
+	return trimToolResult(result, true)
+}
+
+// TrimToolResultForTool is TrimToolResult with redaction skipped for tools
+// listed in noRedactionTools.
+func TrimToolResultForTool(name string, result ToolResult) ToolResult {
+	return trimToolResult(result, !noRedactionTools[name])
+}
+
+func trimToolResult(result ToolResult, redact bool) ToolResult {
+	result.Content = trimToolText(result.Content, redact)
+	result.Error = trimToolText(result.Error, redact)
 	return result
 }
 
-func trimToolText(s string) string {
+func trimToolText(s string, redact bool) string {
 	s = sanitizeToolText(s)
 	// Secrets are scrubbed before the truncation check below and thus
 	// before spillToolOutput ever runs — a spilled file must not carry the
 	// real value out to /tmp (7-day TTL, see spillFileTTL) just because
 	// the output was too big to inline.
-	s = guard.RedactSecrets(s)
+	if redact {
+		s = guard.RedactSecrets(s)
+	}
 	if len(s) <= maxToolOutputBytes {
 		return s
 	}

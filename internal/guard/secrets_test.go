@@ -19,7 +19,7 @@ MONGO_URL="mongodb://127.0.0.1:27017/?directConnection=true"
 	if strings.Contains(out, "wgt_live_abcDEF123456") {
 		t.Fatalf("secret value leaked through: %q", out)
 	}
-	if !strings.Contains(out, `WIDGET_API_TOKEN="[REDACTED]"`) {
+	if !strings.Contains(out, `WIDGET_API_TOKEN="[REDACTED BY HARNESS]"`) {
 		t.Errorf("expected redacted WIDGET_API_TOKEN, got %q", out)
 	}
 	for _, keep := range []string{
@@ -54,8 +54,8 @@ func TestRedactSecretsVendorPatterns(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			out := RedactSecrets(tc.in)
-			if !strings.Contains(out, "[REDACTED]") {
-				t.Errorf("RedactSecrets(%q) = %q, want a [REDACTED] marker", tc.in, out)
+			if !strings.Contains(out, "[REDACTED BY HARNESS]") {
+				t.Errorf("RedactSecrets(%q) = %q, want a [REDACTED BY HARNESS] marker", tc.in, out)
 			}
 			if out == tc.in {
 				t.Errorf("RedactSecrets(%q) left input unchanged", tc.in)
@@ -108,8 +108,8 @@ func TestRedactSecretsStillCatchesRealBearerAndKVSecrets(t *testing.T) {
 			if out == tc.in {
 				t.Errorf("RedactSecrets(%q) left input unchanged, want redaction", tc.in)
 			}
-			if !strings.Contains(out, "[REDACTED]") {
-				t.Errorf("RedactSecrets(%q) = %q, want a [REDACTED] marker", tc.in, out)
+			if !strings.Contains(out, "[REDACTED BY HARNESS]") {
+				t.Errorf("RedactSecrets(%q) = %q, want a [REDACTED BY HARNESS] marker", tc.in, out)
 			}
 		})
 	}
