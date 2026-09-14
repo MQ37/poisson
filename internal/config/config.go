@@ -152,6 +152,56 @@ type SubagentConfig struct {
 	TrustedProviders []string
 }
 
+// OrchestratorConfig controls the `px orchestrate` Telegram-driven agent
+// orchestrator (see docs/orchestrator-plan.md). Absent entirely (the
+// default) means the feature simply isn't configured — `px orchestrate`
+// refuses to start rather than running with empty/unsafe defaults.
+type OrchestratorConfig struct {
+	// TelegramToken is the config-file fallback only — resolve via
+	// ResolvedTelegramToken, which prefers POISSON_TELEGRAM_TOKEN so the
+	// token itself need never sit in config.toml at all. Never logged,
+	// never echoed back in any error message.
+	TelegramToken string
+	// ChatID is the supergroup's id — always negative for a supergroup, so
+	// this is int64, not int (int is also 64-bit on every platform poisson
+	// actually ships for, but a config value this load-bearing is worth
+	// being explicit about rather than relying on that).
+	ChatID int64
+	// AllowedUserIDs are the only Telegram user ids whose commands are
+	// honored at all. Everyone else is silently ignored — see
+	// OrchestratorModelAllowed's sibling command-dispatch check, an
+	// unauthorized sender never even gets an error reply (docs/orchestrator-
+	// plan.md Step 22: an error reply is itself a "yes, there's a bot here"
+	// oracle to a potential attacker).
+	AllowedUserIDs []string
+	// AllowedModels is the /model allow-list, "provider/model" entries.
+	// Empty means /model refuses everything — never "allow anything".
+	AllowedModels []string
+	// DefaultModel is the "provider/model" a fresh instance starts on.
+	DefaultModel string
+	// MaxInstances caps how many instances may exist at once (separate from
+	// how many turns may run concurrently — see docs/orchestrator-plan.md
+	// Step 19's "two independent caps").
+	MaxInstances int
+	// StateDir is the orchestrator's state root, e.g. /var/lib/px-orchestrate.
+	StateDir string
+	// Image is the golden rootfs's machinectl image name Create clones from.
+	Image string
+	// AllowHostInstances gates /new-host entirely -- false (the default)
+	// means the command is refused outright, not just hidden. A host
+	// instance has no isolation boundary at all (see
+	// docs/orchestrator-host-mode-plan.md §2) -- this must be an explicit,
+	// conscious opt-in, never silently available just because
+	// [orchestrator] is configured for box instances.
+	AllowHostInstances bool
+	// MaxHostInstances caps concurrent host-direct instances, independent
+	// of MaxInstances (which counts box instances only). 0 (the default)
+	// means unlimited, by explicit decision: host instances are gated by
+	// AllowHostInstances plus the per-invocation confirmation flag instead
+	// of a count ceiling. Set to a positive number to also cap the count.
+	MaxHostInstances int
+}
+
 // ModelOverride holds user-declared metadata for one provider/model pair,
 // from [models.<provider>.<model>] in config.toml. It layers on top of (or,
 // for a model the code has never heard of, entirely replaces) the built-in
@@ -183,19 +233,20 @@ var effortLevels = map[string]bool{"low": true, "medium": true, "high": true, "x
 
 // Config is the fully parsed and defaulted Poisson configuration.
 type Config struct {
-	Provider   ProviderConfig
-	Anthropic  AnthropicConfig
-	XAI        XAIConfig
-	OpenAI     OpenAIConfig
-	OpenRouter OpenRouterConfig
-	Ollama     OllamaConfig
-	LlamaCpp   LlamaCppConfig
-	Classifier ClassifierConfig
-	Compaction CompactionConfig
-	Stealth    StealthConfig
-	TUI        TUIConfig
-	Subagent   SubagentConfig
-	Effort     string // reasoning effort: low | medium | high | xhigh | max
+	Provider     ProviderConfig
+	Anthropic    AnthropicConfig
+	XAI          XAIConfig
+	OpenAI       OpenAIConfig
+	OpenRouter   OpenRouterConfig
+	Ollama       OllamaConfig
+	LlamaCpp     LlamaCppConfig
+	Classifier   ClassifierConfig
+	Compaction   CompactionConfig
+	Stealth      StealthConfig
+	TUI          TUIConfig
+	Subagent     SubagentConfig
+	Orchestrator OrchestratorConfig
+	Effort       string // reasoning effort: low | medium | high | xhigh | max
 	// Pricing is keyed [provider][model] → Pricing.
 	Pricing map[string]map[string]Pricing
 	// ModelOverrides is keyed [provider][model] → ModelOverride.
@@ -228,6 +279,11 @@ func defaultConfig() *Config {
 		},
 		OpenRouter: OpenRouterConfig{
 			BaseURL: "https://openrouter.ai/api/v1",
+		},
+		Orchestrator: OrchestratorConfig{
+			MaxInstances: 5,
+			StateDir:     "/var/lib/px-orchestrate",
+			Image:        "px-golden",
 		},
 		Ollama: OllamaConfig{
 			BaseURL: "http://localhost:11434",
@@ -395,6 +451,22 @@ const defaultConfigTomlTemplate = `# Poisson configuration — ~/.poisson/config
 # [subagent]
 # trusted_providers = ["anthropic", "openai"]
 
+# px orchestrate: persistent, isolated, headless agent instances managed
+# over Telegram. See docs/orchestrator-plan.md. telegram_token is better
+# left unset here — POISSON_TELEGRAM_TOKEN takes priority when set, so the
+# token itself need never sit in this file at all.
+# [orchestrator]
+# telegram_token = "123456789:AAExampleBotTokenNotReal"
+# chat_id = -1001234567890         # negative: a supergroup id, from getUpdates
+# allowed_user_ids = ["123456789"]
+# allowed_models = ["anthropic/claude-sonnet-5", "xai/grok-build"]
+# default_model = "anthropic/claude-sonnet-5"
+# max_instances = 5
+# state_dir = "/var/lib/px-orchestrate"
+# image = "px-golden"
+# allow_host_instances = false     # /new-host refused outright unless true
+# max_host_instances = 0           # 0 = unlimited (gated by allow_host_instances + per-command confirmation instead)
+
 [classifier]
 # Model that rates bash-command risk for the approval gate. The classifier
 # always runs on the session's provider — only the model differs. A small,
@@ -546,7 +618,7 @@ func Load() (*Config, error) {
 // (anthropic/xai/openai/ollama/llamacpp) and classifier/compaction all have
 // a legitimate "model" field of their own, so they're deliberately excluded
 // here — only tables where "model" can never mean anything real are checked.
-var noModelTables = []string{"tui", "stealth", "provider", "subagent"}
+var noModelTables = []string{"tui", "stealth", "provider", "subagent", "orchestrator"}
 
 // ProvidersMutuallyTrusted reports whether a and b are both listed in
 // [subagent] trusted_providers — the one place membership is decided, read
@@ -566,6 +638,38 @@ func (c *Config) ProvidersMutuallyTrusted(a, b string) bool {
 		}
 	}
 	return haveA && haveB
+}
+
+// OrchestratorModelAllowed reports whether "provider/model" s is on the
+// orchestrator's /model allow-list. Nil-safe (an unconfigured session
+// allows nothing) and explicit-empty-safe: an empty AllowedModels means
+// refuse everything, never "allow anything" — the orchestrator has no
+// business silently permitting the current default model as a special
+// case if the admin genuinely configured no allow-list at all.
+func (c *Config) OrchestratorModelAllowed(s string) bool {
+	if c == nil {
+		return false
+	}
+	for _, m := range c.Orchestrator.AllowedModels {
+		if m == s {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolvedTelegramToken returns the orchestrator's bot token, preferring
+// the POISSON_TELEGRAM_TOKEN environment variable over the config-file
+// field — env-var-first is the safer default even though config.toml is
+// already mode-0600-protected (see Load). Nil-safe.
+func (c *Config) ResolvedTelegramToken() string {
+	if v := os.Getenv("POISSON_TELEGRAM_TOKEN"); v != "" {
+		return v
+	}
+	if c == nil {
+		return ""
+	}
+	return c.Orchestrator.TelegramToken
 }
 
 // mapToConfig applies parsed TOML values on top of the built-in defaults.
@@ -713,6 +817,88 @@ func mapToConfig(m map[string]interface{}) (*Config, error) {
 			}
 		}
 		cfg.Subagent.TrustedProviders = names
+	}
+
+	// Parsed after parseCustomProviders for the same reason as
+	// subagent.trusted_providers above: allowed_models/default_model may
+	// each name a [custom_providers.*] instance.
+	if v, ok := lookup(m, "orchestrator", "telegram_token"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator.telegram_token: %w", err)
+		}
+		cfg.Orchestrator.TelegramToken = s
+	}
+	if v, ok := lookup(m, "orchestrator", "chat_id"); ok {
+		n, err := asInt64(v)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator.chat_id: %w", err)
+		}
+		cfg.Orchestrator.ChatID = n
+	}
+	if v, ok := lookup(m, "orchestrator", "allowed_user_ids"); ok {
+		ids, err := asStringArray(v)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator.allowed_user_ids: %w", err)
+		}
+		cfg.Orchestrator.AllowedUserIDs = ids
+	}
+	if v, ok := lookup(m, "orchestrator", "allowed_models"); ok {
+		models, err := asStringArray(v)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator.allowed_models: %w", err)
+		}
+		for _, s := range models {
+			if err := validateOrchestratorModelRef("orchestrator.allowed_models", s, cfg); err != nil {
+				return nil, err
+			}
+		}
+		cfg.Orchestrator.AllowedModels = models
+	}
+	if v, ok := lookup(m, "orchestrator", "default_model"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator.default_model: %w", err)
+		}
+		if err := validateOrchestratorModelRef("orchestrator.default_model", s, cfg); err != nil {
+			return nil, err
+		}
+		cfg.Orchestrator.DefaultModel = s
+	}
+	if v, ok := lookup(m, "orchestrator", "max_instances"); ok {
+		n, err := asInt(v)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator.max_instances: %w", err)
+		}
+		cfg.Orchestrator.MaxInstances = n
+	}
+	if v, ok := lookup(m, "orchestrator", "state_dir"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator.state_dir: %w", err)
+		}
+		cfg.Orchestrator.StateDir = s
+	}
+	if v, ok := lookup(m, "orchestrator", "image"); ok {
+		s, err := asString(v)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator.image: %w", err)
+		}
+		cfg.Orchestrator.Image = s
+	}
+	if v, ok := lookup(m, "orchestrator", "allow_host_instances"); ok {
+		b, err := asBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator.allow_host_instances: %w", err)
+		}
+		cfg.Orchestrator.AllowHostInstances = b
+	}
+	if v, ok := lookup(m, "orchestrator", "max_host_instances"); ok {
+		n, err := asInt(v)
+		if err != nil {
+			return nil, fmt.Errorf("orchestrator.max_host_instances: %w", err)
+		}
+		cfg.Orchestrator.MaxHostInstances = n
 	}
 
 	// Top-level `model = "<provider>/<model>"` is the one-liner default: it sets
@@ -1101,6 +1287,49 @@ func asFloat(v interface{}) (float64, error) {
 		return f, nil
 	default:
 		return 0, fmt.Errorf("expected number, got %T", v)
+	}
+}
+
+// validateOrchestratorModelRef checks s is a well-formed "provider/model"
+// string naming a real provider (built-in or [custom_providers.*]) — the
+// same shape/error message subagent.trusted_providers already uses for an
+// unknown provider name, applied to [orchestrator]'s two model fields.
+func validateOrchestratorModelRef(field, s string, cfg *Config) error {
+	prov, _, hasSlash := strings.Cut(s, "/")
+	if !hasSlash {
+		return fmt.Errorf("%s: %q must be \"provider/model\"", field, s)
+	}
+	if _, ok := ResolveProviderMeta(prov, cfg); !ok {
+		return fmt.Errorf("%s: unknown provider %q (want %s, or a [custom_providers.*] name)",
+			field, prov, strings.Join(ProviderIDs(), "|"))
+	}
+	return nil
+}
+
+// asInt64 converts an int (from TOML) to int64 — a config value large
+// enough to matter (e.g. a Telegram supergroup chat_id) is worth an
+// explicit int64 type rather than relying on Go's int already being 64-bit
+// on every platform poisson ships for.
+func asInt64(v interface{}) (int64, error) {
+	switch n := v.(type) {
+	case int:
+		return int64(n), nil
+	case int64:
+		return n, nil
+	default:
+		return 0, fmt.Errorf("expected integer, got %T", v)
+	}
+}
+
+// asInt converts a parsed TOML integer to int.
+func asInt(v interface{}) (int, error) {
+	switch n := v.(type) {
+	case int:
+		return n, nil
+	case int64:
+		return int(n), nil
+	default:
+		return 0, fmt.Errorf("expected integer, got %T", v)
 	}
 }
 

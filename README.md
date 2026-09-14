@@ -96,6 +96,11 @@ px                                                   # launch the TUI
   visibly-marked retries in the same turn before the answer is considered done.
 - **Message queueing** — type while the agent works; sent at the next turn
   boundary instead of waiting for the whole turn to finish.
+- **`px orchestrate`** — run persistent, isolated, headless poisson
+  instances managed remotely over Telegram (one systemd-nspawn container
+  per instance, one forum topic per instance), plus an optional unconfined
+  host-direct instance kind for real approvals with no isolation.
+  ([details](docs/orchestrator-plan.md), [host mode](docs/orchestrator-host-mode-plan.md))
 
 ---
 
@@ -352,6 +357,148 @@ poisson has **3 direct dependencies** (`modernc.org/sqlite`, `golang.org/x/term`
 - **Suckless-ish** — simplicity over features, delete-before-add, readable code.
 - **Tested without the network** — the suite mocks every provider; it never
   makes a real API call.
+
+---
+
+## 🛰️ `px orchestrate` — Telegram-driven agent orchestrator
+
+Runs persistent, isolated, headless poisson instances on a dedicated host,
+managed remotely from a Telegram group — one forum topic per instance. Full
+design/rationale: [`docs/orchestrator-plan.md`](docs/orchestrator-plan.md),
+[`docs/orchestrator-host-mode-plan.md`](docs/orchestrator-host-mode-plan.md).
+
+Two instance kinds:
+
+| Kind | Command | Isolation | Approvals |
+|---|---|---|---|
+| Box (default) | `/new`, `/new-box` | systemd-nspawn container, real root minus `CAP_SYS_MODULE`, host networking | yolo (auto-approved — blast radius is one disposable container) |
+| Host-direct | `/new-host` | **none** — runs directly on the orchestrator host | real Telegram approval round-trip, always |
+
+Host-direct is functionally the same as SSHing into the orchestrator host
+yourself and running `px` there. It's opt-in at the config level and requires
+an explicit confirmation flag on every single invocation — see §4/§5 below.
+
+### 1. Prerequisites
+
+- A Linux host you're comfortable dedicating to this (systemd, `arm64` or
+  `amd64`), reachable over SSH as root. Referred to below as `<host>` —
+  substitute your own hostname or IP everywhere you see it.
+- `systemd-nspawn`/`machinectl`/`systemd-run` (box instances only —
+  `apt install systemd-container` on Debian/Ubuntu).
+- A Telegram bot: message [@BotFather](https://t.me/BotFather), `/newbot`,
+  save the token. In **Bot Settings → Group Privacy**, turn privacy **off**
+  (so the bot sees every message, not just ones addressed to it).
+- A Telegram group with **Topics** enabled (this auto-promotes it to a
+  supergroup) — the group where you'll run everything. Add the bot as an
+  admin with "Manage Topics" and "Post/Delete Messages" permissions.
+
+### 2. Find your chat id and user id
+
+Post any message in the group, then:
+
+```bash
+curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq .
+```
+
+Read `message.chat.id` (a large **negative** number for a supergroup) and
+`message.from.id` (your own numeric Telegram user id) from the response.
+Neither is secret on its own, but treat them the same as any other
+credential-adjacent config value — don't paste them into a public issue/PR.
+
+### 3. Host prep (box instances only)
+
+```bash
+ssh root@<host> 'apt install -y systemd-container
+mkdir -p /var/lib/machines /var/lib/px-orchestrate/instances'
+```
+
+Build a golden rootfs once — every box instance is cloned from it:
+
+```bash
+ssh root@<host> 'machinectl pull-tar https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64-root.tar.xz px-golden'
+```
+
+(use the `amd64` tarball on an x86_64 host). Inside the image, install what
+instances need and disable the guest's own network management (nspawn's
+`--resolv-conf=bind-host` handles DNS instead):
+
+```bash
+ssh root@<host> 'systemd-nspawn --directory=/var/lib/machines/px-golden --bind-ro=/etc/resolv.conf -- \
+  bash -c "apt update && apt install -y git ripgrep ca-certificates curl jq && \
+  systemctl disable systemd-networkd systemd-resolved systemd-networkd.socket && \
+  passwd -l root && mkdir -p /root/.poisson /work"'
+```
+
+### 4. Deploy `px`
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o px ./cmd/px   # arm64; amd64 for an x86_64 host
+scp px root@<host>:/usr/local/bin/px.new
+ssh root@<host> 'mv /usr/local/bin/px.new /usr/local/bin/px && chmod 755 /usr/local/bin/px'
+```
+
+Provider credentials for host-direct instances (and for `px orchestrate`
+itself, which needs its own session) come from `/root/.poisson/auth.json` on
+`<host>` — `px login <provider>` there, or copy over one provider's entry
+from your own `~/.poisson/auth.json` (never the whole file to a shared host).
+Box instances get their own scoped copy automatically, generated per
+instance — see `AuthorizedProviders` in `docs/orchestrator-plan.md`.
+
+### 5. Configure `[orchestrator]`
+
+Append to `/root/.poisson/config.toml` on `<host>`:
+
+```toml
+[orchestrator]
+chat_id = -1001234567890                 # from step 2, negative
+allowed_user_ids = ["123456789"]         # from step 2 — everyone else is silently ignored
+allowed_models = ["anthropic/claude-sonnet-5"]
+default_model = "anthropic/claude-sonnet-5"
+max_instances = 5                        # box instances only
+state_dir = "/var/lib/px-orchestrate"
+image = "px-golden"
+
+# Host-direct instances — leave both at their defaults (off/unlimited-once-
+# allowed) unless you specifically want /new-host available:
+# allow_host_instances = true
+# max_host_instances = 0                 # 0 = unlimited once allowed
+```
+
+The bot token itself does **not** go in `config.toml` — see the next step.
+
+### 6. Secrets + systemd unit
+
+```bash
+ssh root@<host> 'install -m 600 /dev/stdin /etc/px-orchestrate.env <<EOF
+POISSON_TELEGRAM_TOKEN=<your bot token>
+EOF'
+scp deploy/px-orchestrate.service root@<host>:/etc/systemd/system/
+ssh root@<host> 'systemctl daemon-reload && systemctl enable --now px-orchestrate'
+```
+
+Verify: `ssh root@<host> 'HOME=/root px orchestrate --config-check'` prints
+the fully resolved config (token shown as present/missing only, never the
+value itself). `--dry-run` (no root/systemd-nspawn required) smoke-tests the
+command dispatch against fake instances — nothing real gets created.
+
+### 7. Commands (in the Telegram group)
+
+```
+/new [name] [repo-url]        create a box instance (alias for /new-box)
+/new-box [name] [repo-url]    same, explicit
+/new-host [name]              refused with a warning + the exact re-invocation
+/new-host [name] --confirm-unconfined-host
+                               actually creates a host-direct instance
+/list                         every instance's name/status/model
+/status                       this instance's status, cost, sessions
+/model <provider/model>       switch this instance's model (next turn)
+/suspend / /resume            power off (keep state) / power back on
+/kill                         permanently destroy this instance
+/approve / /deny [reason]     resolve a pending bash-approval (host instances only)
+/cancel                       stop the current turn
+```
+
+Send a plain message (no `/`) in an instance's own topic to give it a task.
 
 ---
 

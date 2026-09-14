@@ -651,6 +651,176 @@ func TestSubagentModelKeyRejected(t *testing.T) {
 	}
 }
 
+func TestLoadOrchestratorSection(t *testing.T) {
+	m, err := Parse(`[orchestrator]
+telegram_token = "tok-123"
+chat_id = -1001234567890
+allowed_user_ids = ["111", "222"]
+allowed_models = ["anthropic/claude-sonnet-5", "xai/grok-build"]
+default_model = "anthropic/claude-sonnet-5"
+max_instances = 3
+state_dir = "/tmp/px-orchestrate-test"
+image = "px-golden-test"
+allow_host_instances = true
+max_host_instances = 2
+`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	cfg, err := mapToConfig(m)
+	if err != nil {
+		t.Fatalf("mapToConfig: %v", err)
+	}
+	oc := cfg.Orchestrator
+	if oc.TelegramToken != "tok-123" {
+		t.Errorf("TelegramToken = %q, want tok-123", oc.TelegramToken)
+	}
+	if oc.ChatID != -1001234567890 {
+		t.Errorf("ChatID = %d, want -1001234567890", oc.ChatID)
+	}
+	if !reflect.DeepEqual(oc.AllowedUserIDs, []string{"111", "222"}) {
+		t.Errorf("AllowedUserIDs = %v", oc.AllowedUserIDs)
+	}
+	if !reflect.DeepEqual(oc.AllowedModels, []string{"anthropic/claude-sonnet-5", "xai/grok-build"}) {
+		t.Errorf("AllowedModels = %v", oc.AllowedModels)
+	}
+	if oc.DefaultModel != "anthropic/claude-sonnet-5" {
+		t.Errorf("DefaultModel = %q", oc.DefaultModel)
+	}
+	if oc.MaxInstances != 3 {
+		t.Errorf("MaxInstances = %d, want 3", oc.MaxInstances)
+	}
+	if oc.StateDir != "/tmp/px-orchestrate-test" {
+		t.Errorf("StateDir = %q", oc.StateDir)
+	}
+	if oc.Image != "px-golden-test" {
+		t.Errorf("Image = %q", oc.Image)
+	}
+	if !oc.AllowHostInstances {
+		t.Error("AllowHostInstances = false, want true")
+	}
+	if oc.MaxHostInstances != 2 {
+		t.Errorf("MaxHostInstances = %d, want 2", oc.MaxHostInstances)
+	}
+}
+
+// TestLoadOrchestratorChatIDIsLargeNegative is the explicit Step 23 edge
+// case: a supergroup chat_id is a large negative number and must survive
+// round-tripping through int64, not silently truncate/misbehave.
+func TestLoadOrchestratorChatIDIsLargeNegative(t *testing.T) {
+	m, err := Parse("[orchestrator]\nchat_id = -1001234567890\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	cfg, err := mapToConfig(m)
+	if err != nil {
+		t.Fatalf("mapToConfig: %v", err)
+	}
+	if cfg.Orchestrator.ChatID != -1001234567890 {
+		t.Errorf("ChatID = %d, want -1001234567890", cfg.Orchestrator.ChatID)
+	}
+}
+
+func TestLoadOrchestratorAllowedModelsRejectsUnknownProvider(t *testing.T) {
+	m, err := Parse("[orchestrator]\nallowed_models = [\"nope/some-model\"]\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, err = mapToConfig(m)
+	if err == nil {
+		t.Fatal("expected an error for an unrecognized provider name")
+	}
+	if !strings.Contains(err.Error(), "orchestrator.allowed_models") {
+		t.Errorf("error = %q, want it to mention orchestrator.allowed_models", err.Error())
+	}
+}
+
+func TestLoadOrchestratorDefaultModelRejectsUnknownProvider(t *testing.T) {
+	m, err := Parse("[orchestrator]\ndefault_model = \"nope/some-model\"\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, err = mapToConfig(m)
+	if err == nil {
+		t.Fatal("expected an error for an unrecognized provider name")
+	}
+	if !strings.Contains(err.Error(), "orchestrator.default_model") {
+		t.Errorf("error = %q, want it to mention orchestrator.default_model", err.Error())
+	}
+}
+
+func TestLoadOrchestratorDefaultModelRejectsBareNameWithoutSlash(t *testing.T) {
+	m, err := Parse("[orchestrator]\ndefault_model = \"claude-sonnet-5\"\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, err = mapToConfig(m)
+	if err == nil {
+		t.Fatal("expected an error for a default_model missing \"provider/\"")
+	}
+}
+
+// TestOrchestratorModelKeyRejected mirrors TestSubagentModelKeyRejected:
+// this is exactly why "orchestrator" was added to noModelTables.
+func TestOrchestratorModelKeyRejected(t *testing.T) {
+	m, err := Parse("[orchestrator]\nmodel = \"x\"\n")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, err = mapToConfig(m)
+	if err == nil {
+		t.Fatal("expected an error for model= under [orchestrator]")
+	}
+	if !strings.Contains(err.Error(), "orchestrator.model") {
+		t.Errorf("error = %q, want it to mention orchestrator.model", err.Error())
+	}
+}
+
+func TestOrchestratorModelAllowed(t *testing.T) {
+	cfg := &Config{Orchestrator: OrchestratorConfig{AllowedModels: []string{"anthropic/claude-sonnet-5"}}}
+	if !cfg.OrchestratorModelAllowed("anthropic/claude-sonnet-5") {
+		t.Error("expected the listed model to be allowed")
+	}
+	if cfg.OrchestratorModelAllowed("xai/grok-build") {
+		t.Error("expected an unlisted model to be refused")
+	}
+}
+
+// TestOrchestratorModelAllowedEmptyListRefusesEverything is the explicit
+// Step 23 edge case: an empty AllowedModels means refuse everything, never
+// "allow anything".
+func TestOrchestratorModelAllowedEmptyListRefusesEverything(t *testing.T) {
+	cfg := &Config{}
+	if cfg.OrchestratorModelAllowed("anthropic/claude-sonnet-5") {
+		t.Error("expected an empty allow-list to refuse every model")
+	}
+}
+
+func TestOrchestratorModelAllowedNilConfig(t *testing.T) {
+	var cfg *Config
+	if cfg.OrchestratorModelAllowed("anthropic/claude-sonnet-5") {
+		t.Error("expected a nil *Config to refuse everything")
+	}
+}
+
+// TestResolvedTelegramTokenPrefersEnvVar checks POISSON_TELEGRAM_TOKEN wins
+// over the config-file field when both are set.
+func TestResolvedTelegramTokenPrefersEnvVar(t *testing.T) {
+	t.Setenv("POISSON_TELEGRAM_TOKEN", "env-token")
+	cfg := &Config{Orchestrator: OrchestratorConfig{TelegramToken: "file-token"}}
+	if got := cfg.ResolvedTelegramToken(); got != "env-token" {
+		t.Errorf("ResolvedTelegramToken() = %q, want env-token", got)
+	}
+}
+
+func TestResolvedTelegramTokenFallsBackToConfigFile(t *testing.T) {
+	t.Setenv("POISSON_TELEGRAM_TOKEN", "")
+	cfg := &Config{Orchestrator: OrchestratorConfig{TelegramToken: "file-token"}}
+	if got := cfg.ResolvedTelegramToken(); got != "file-token" {
+		t.Errorf("ResolvedTelegramToken() = %q, want file-token", got)
+	}
+}
+
 func TestProvidersMutuallyTrusted(t *testing.T) {
 	cfg := &Config{Subagent: SubagentConfig{TrustedProviders: []string{"anthropic", "openai"}}}
 	cases := []struct {

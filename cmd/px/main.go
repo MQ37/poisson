@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -107,19 +106,34 @@ func main() {
 
 	opts, noSkills, cmdArgs := parseArgs(os.Args[1:])
 
+	// --print-json without -p is a user error, not silently ignored — it
+	// only makes sense as a -p output mode.
+	if opts.jsonOut && !opts.print {
+		fmt.Fprintln(os.Stderr, "px: --print-json requires -p")
+		os.Exit(2)
+	}
+
 	if opts.print {
 		opts.noSkills = noSkills
 		if opts.prompt == "" {
 			opts.prompt = strings.TrimSpace(strings.Join(cmdArgs, " "))
 		}
-		if opts.prompt == "" {
+		// In --print-json mode stdin is reserved for the approval-response
+		// channel (see childApprovalBroker/Step 8) — never slurp it as a
+		// fallback prompt source the way plain -p does, or the two streams
+		// collide ambiguously.
+		if opts.prompt == "" && !opts.jsonOut {
 			opts.prompt = readStdin()
 		}
 		if strings.TrimSpace(opts.prompt) == "" {
 			fmt.Fprintln(os.Stderr, "px -p: no prompt (pass a string or pipe via stdin)")
 			os.Exit(2)
 		}
-		runPrint(opts)
+		if opts.jsonOut {
+			runPrintJSON(opts)
+		} else {
+			runPrint(opts)
+		}
 		return
 	}
 
@@ -143,6 +157,8 @@ func main() {
 		cmdCost(cmdArgs[1:])
 	case "search":
 		cmdSearch(cmdArgs[1:])
+	case "orchestrate":
+		runOrchestrate(cmdArgs[1:])
 	case "resume":
 		if len(cmdArgs) < 2 || strings.TrimSpace(cmdArgs[1]) == "" {
 			fmt.Fprintln(os.Stderr, "usage: Poisson resume <session-id>")
@@ -166,6 +182,8 @@ Commands:
   Poisson resume <session-id> resume a session in the TUI
   Poisson cost [session-id]   show session cost
   Poisson search <query>      search session history
+  Poisson orchestrate         run the Telegram-driven agent orchestrator
+                               (see docs/orchestrator-plan.md)
 
 Login flags (anthropic, openai):
   --manual                    paste the auth code instead of waiting on a
@@ -174,10 +192,14 @@ Login flags (anthropic, openai):
 
 Options:
   -p, --print <prompt>        run one prompt without TUI; reads stdin if omitted
+  --print-json                with -p: JSON event stream on stdout, approvals
+                               read back from stdin instead of auto-denied
   --no-skills                 disable all skills, including skills in subagents
   --yolo                      auto-approve risky bash in headless mode
   --model <provider/model>    select provider and model
   --session <id>              reuse session in headless mode
+  --                          end of options; rest of the line is the prompt
+                               verbatim (needed if it starts with "-")
   -v, --version               print version
   -h, --help                  show this help
 `, version)
@@ -192,6 +214,15 @@ Options:
 // instead of being parsed as its own flag (e.g. "px --session --no-skills"
 // would create a session literally named "--no-skills" and never actually
 // disable skills).
+//
+// A literal "--" terminates flag parsing: everything after it joins verbatim
+// (space-separated) into opts.prompt, mirroring runChildMode's own parser.
+// Without this, a prompt that happens to start with "-" is silently
+// swallowed by -p/--print's own flag-shaped guard above, and a multi-word
+// prompt given as separate unquoted args (not one quoted string) is
+// silently dropped instead of joined — both real, previously-latent bugs.
+// Only the first "--" terminates; one appearing again inside the message
+// body is just more message text.
 func parseArgs(args []string) (opts printOpts, noSkills bool, cmdArgs []string) {
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -199,6 +230,8 @@ func parseArgs(args []string) (opts printOpts, noSkills bool, cmdArgs []string) 
 			noSkills = true
 		case "--yolo":
 			opts.yolo = true
+		case "--print-json":
+			opts.jsonOut = true
 		case "-p", "--print":
 			opts.print = true
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
@@ -215,6 +248,9 @@ func parseArgs(args []string) (opts printOpts, noSkills bool, cmdArgs []string) 
 				opts.sessionID = args[i+1]
 				i++
 			}
+		case "--":
+			opts.prompt = strings.Join(args[i+1:], " ")
+			i = len(args)
 		default:
 			cmdArgs = append(cmdArgs, args[i])
 		}
@@ -242,6 +278,7 @@ func loadConfigOrDefault() *config.Config {
 type printOpts struct {
 	print     bool
 	yolo      bool
+	jsonOut   bool // --print-json: JSON event stream on stdout, approvals over stdin
 	noSkills  bool
 	prompt    string
 	model     string // "provider/model" (or bare "provider"); empty = config default
@@ -286,113 +323,30 @@ func resolvePrintRuntime(modelArg string, sess *store.Session, cfg *config.Confi
 // runPrint runs a single prompt headlessly: it streams the assistant's text to
 // stdout and tool activity to stderr, then exits. Read-only tools auto-run;
 // risky bash is denied unless --yolo. Used for scripting and pipelines.
+// All setup (config/store/session-resolve, approval closures, registry,
+// agent construction) lives in buildPrintAgent — this function differs from
+// runPrintJSON only in its output pump and how a setup error is reported.
 func runPrint(opts printOpts) {
-	cfg := loadConfigOrDefault()
-	dbPath := filepath.Join(config.ConfigDir(), "poisson.db")
-	st, err := store.Open(dbPath)
+	build, err := buildPrintAgent(opts)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(printSetupExitCode(err))
 	}
-	defer st.Close()
+	defer build.cleanup()
+	a := build.agent
 
-	authStore, _ := auth.Load()
-
-	cwd, _ := os.Getwd()
-	sessionID := opts.sessionID
-	if sessionID == "" {
-		sessionID = store.NewSessionID()
-	}
-	var sess *store.Session
-	if existing, err := st.GetSession(sessionID); err == nil {
-		sess = existing
-	} else if !errors.Is(err, store.ErrNotFound) {
-		fmt.Fprintf(os.Stderr, "error reading session: %v\n", err)
-		os.Exit(1)
-	}
-
-	provName, model, err := resolvePrintRuntime(opts.model, sess, cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "px -p: %v\n", err)
-		os.Exit(2)
-	}
-	prov := provider.NewProvider(provName, authStore, cfg)
-	if prov == nil {
-		fmt.Fprintf(os.Stderr, "px -p: unknown provider %q (want %s, or a [custom_providers.*] name)\n",
-			provName, strings.Join(config.ProviderIDs(), "/"))
-		os.Exit(2)
-	}
-
-	if sess == nil {
-		if err := st.CreateSession(&store.Session{
-			ID: sessionID, Cwd: cwd, Provider: provName, Model: model, CreatedAt: time.Now().Unix(),
-		}); err != nil {
-			fmt.Fprintf(os.Stderr, "error creating session: %v\n", err)
-			os.Exit(1)
-		}
-	} else if sess.Provider != provName || sess.Model != model {
-		// Persist the pair in one UPDATE. Writing provider and model separately can
-		// leave an impossible combination if the second write fails.
-		sess.Provider, sess.Model = provName, model
-		if err := st.UpdateSession(sess); err != nil {
-			fmt.Fprintf(os.Stderr, "error updating session model: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	yolo := opts.yolo
-	var agentRef *agent.Agent
-	humanApproval := func(ctx context.Context, command, description, workdir string, risk agent.BashRisk, origin agent.ApprovalOrigin) (bool, string) {
-		return yolo, "" // headless: only --yolo approves escalated commands; no live human to mark
-	}
-	approvalFn := func(ctx context.Context, command, description, workdir string) (bool, string) {
-		if agentRef != nil {
-			return agent.WrapRiskGatedApproval(agentRef, humanApproval)(ctx, command, description, workdir)
-		}
-		return humanApproval(ctx, command, description, workdir, agent.BashRiskUnknown, agent.ApprovalOriginMain)
-	}
-	// Sensitive files (.env*, SSH/cloud credentials, ~/.poisson secrets, ...)
-	// are deterministically flagged by guard.SensitivePathReason, so this asks
-	// the human directly — no LLM risk classification needed.
-	fileApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
-		return humanApproval(ctx, action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
-	}
-	// create_sandbox asking for mounts/env beyond its own scratch workspace
-	// is exactly the same "sensitive, ask the human directly" shape as
-	// fileApprovalFn — see docs/sandbox-plan.md's "Approval" section.
-	sandboxApprovalFn := func(ctx context.Context, action, reason, workdir string) (bool, string) {
-		return humanApproval(ctx, action, reason, workdir, agent.BashRiskHigh, agent.ApprovalOriginFromContext(ctx))
-	}
-	reg := tools.BuildRegistry(tools.BuildOptions{
-		Cwd:               cwd,
-		Store:             st,
-		Auth:              authStore,
-		ApprovalFn:        approvalFn,
-		FileApprovalFn:    fileApprovalFn,
-		SandboxManager:    newSandboxManager(sessionID),
-		SandboxApprovalFn: sandboxApprovalFn,
-	})
-
-	outputChan := make(chan agent.OutputEvent, 256)
-	a := agent.NewAgent(st, prov, reg, cfg, sessionID, outputChan, approvalFn)
-	agentRef = a
-	tools.BindSessionTitle(reg, a.SessionID, a.EnsureSession)
-	if err := a.SetModel(model); err != nil {
-		fmt.Fprintf(os.Stderr, "error updating session model: %v\n", err)
-		os.Exit(1)
-	}
-	var skillList []skills.Skill
-	if !opts.noSkills {
-		skillList, _ = skills.Discover()
-	}
-	a.SetSkills(!opts.noSkills, skillList)
-	a.ReloadConfigDependentTools()
+	// build.broker is always nil here (buildPrintAgent only wires one for
+	// jsonOut&&!yolo) so this only ever cancels ctx, never touches a broker
+	// — the shared signal handling still applies so a plain -p exits
+	// cleanly on Ctrl-C instead of relying on Go's bare default handling.
+	ctx, stop := printRunContext(build.broker)
+	defer stop()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for ev := range outputChan {
+		for ev := range build.output {
 			switch ev.Type {
 			case agent.OutputText:
 				fmt.Print(ev.Text)
@@ -404,8 +358,8 @@ func runPrint(opts printOpts) {
 		}
 	}()
 
-	runErr := a.Prompt(opts.prompt)
-	close(outputChan)
+	runErr := a.PromptWithContext(ctx, opts.prompt)
+	close(build.output)
 	wg.Wait()
 	fmt.Println()
 	if runErr != nil {

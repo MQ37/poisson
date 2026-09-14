@@ -1,0 +1,38 @@
+# Host-level systemd unit for `px orchestrate` (docs/orchestrator-plan.md
+# Step 27). Install at /etc/systemd/system/px-orchestrate.service.
+#
+# Deploy:
+#   scp deploy/px-orchestrate.service root@<host>:/etc/systemd/system/
+#   install -m 0600 /dev/null /etc/px-orchestrate.env   # then fill it in, see below
+#   systemctl daemon-reload
+#   systemctl enable --now px-orchestrate
+#
+# /etc/px-orchestrate.env (mode 0600, root-only) must contain at minimum:
+#   POISSON_TELEGRAM_TOKEN=<bot token from BotFather>
+# Everything else ([orchestrator] chat_id/allowed_user_ids/allowed_models/
+# default_model/max_instances/state_dir/image) is read from
+# ~/.poisson/config.toml as usual — this unit runs as root, so that's
+# /root/.poisson/config.toml.
+#
+# Confirmed for orchestrator-host specifically (re-verify on a different host):
+# Telegram's API is reached via the plain LAN gateway (eth0), not the
+# tailnet, so no Tailscale-specific After= ordering is needed.
+
+[Unit]
+Description=px orchestrate — Telegram-driven agent orchestrator
+Documentation=https://github.com/mq37/poisson
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+Environment=HOME=/root
+ExecStart=/usr/local/bin/px orchestrate
+EnvironmentFile=/etc/px-orchestrate.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

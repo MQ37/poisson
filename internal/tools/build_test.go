@@ -89,6 +89,27 @@ func TestBuildRegistry_ParentWithStore(t *testing.T) {
 	}
 }
 
+// TestBuildRegistry_NoSetTitle asserts NoSetTitle omits only set_title,
+// leaving every other store-backed tool intact.
+func TestBuildRegistry_NoSetTitle(t *testing.T) {
+	dir := testutil.TempDir(t)
+	dbPath := filepath.Join(dir, "test.db")
+	st, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	reg := BuildRegistry(BuildOptions{Cwd: dir, Store: st, NoSetTitle: true})
+	if _, ok := reg.Get("set_title"); ok {
+		t.Error("NoSetTitle: registry has set_title, want omitted")
+	}
+	for _, w := range []string{"recall", "list_sessions", "read_messages"} {
+		if _, ok := reg.Get(w); !ok {
+			t.Errorf("NoSetTitle: registry missing %q", w)
+		}
+	}
+}
+
 // TestBuildRegistry_Child asserts a child gets every tool except subagent,
 // including web_ask, web_search, and recall (when a store is supplied).
 func TestBuildRegistry_Child(t *testing.T) {

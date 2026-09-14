@@ -269,6 +269,28 @@ func Spawn(input SpawnInput) (*ChildProcess, error) {
 	}, nil
 }
 
+// AttachChild builds a *ChildProcess around a process this package did not
+// itself exec — e.g. a `systemd-run --pipe` invocation the orchestrator
+// started (see internal/orchestrator/nspawn) — reusing ReadEvent/
+// SendApprovalSafe/SendExpedite's JSON-lines framing verbatim instead of
+// forking a second copy of the same protocol. stdin/stdout are the caller's
+// own pipes to that process, however it obtained them; this package never
+// sees the underlying *exec.Cmd (c.cmd stays nil).
+//
+// Because c.cmd is nil, Kill() and Reap() are both no-ops on an attached
+// child (nil-guarded below), and Wait() returns nil immediately — an
+// attached child's process lifecycle belongs entirely to the caller (e.g.
+// nspawnRuntime stopping the turn's transient systemd unit), never to
+// ChildProcess itself. Calling any of these on an attached child is not an
+// error, just a no-op; the caller must use its own mechanism to detect the
+// remote process has exited.
+func AttachChild(stdin io.WriteCloser, stdout io.Reader) *ChildProcess {
+	return &ChildProcess{
+		stdin:  stdin,
+		stdout: bufio.NewReader(stdout),
+	}
+}
+
 // ReadEvent reads one JSON line from the child's stdout.
 func (c *ChildProcess) ReadEvent() (*ChildEvent, error) {
 	line, err := c.stdout.ReadString('\n')
@@ -323,7 +345,12 @@ func (c *ChildProcess) SendApprovalSafe(approved bool, reason string) error {
 }
 
 // Wait waits for the child process to exit and returns its error (if any).
+// A no-op returning nil for an attached child (see AttachChild) — there is
+// no local *exec.Cmd to wait on.
 func (c *ChildProcess) Wait() error {
+	if c.cmd == nil {
+		return nil
+	}
 	return c.cmd.Wait()
 }
 
@@ -347,8 +374,11 @@ func (c *ChildProcess) Wait() error {
 // live descendant of the child PID individually, via /proc parent-child
 // links rather than process-group membership, so it reaches a subprocess
 // regardless of which group it put itself in.
+// A no-op for an attached child (see AttachChild) — nil-guarded rather than
+// left to panic on c.cmd.Process, since there is no local *exec.Cmd here to
+// signal at all.
 func (c *ChildProcess) Kill() error {
-	if c.cmd.Process == nil {
+	if c.cmd == nil || c.cmd.Process == nil {
 		return nil
 	}
 	pid := c.cmd.Process.Pid

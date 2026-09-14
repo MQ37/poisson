@@ -57,6 +57,28 @@ whether a stale read is still trustworthy, so it re-fetches defensively.
   summary so the agent trusts recent reads instead of re-fetching.
 - Not scoped yet — flagging only.
 
+## `px orchestrate` (deferred out of v1)
+
+See `docs/orchestrator-plan.md` for the full design. Explicitly out of
+scope for the first shipped version:
+
+- **Multiple simultaneous frontends.** The `Frontend` interface supports
+  it (Discord/HTTP/web are "one new file, one line in a switch" by
+  design), but only Telegram is actually implemented and wired.
+- **Per-instance cost budget/cutoff.** Nothing currently stops one
+  instance from running up an unbounded bill; `/status` reports cost, it
+  doesn't cap it.
+- **Deeper instance-to-instance isolation review.** All instances share
+  the host's network namespace and kernel (see §5 in the plan doc) — the
+  tradeoff is documented and accepted for v1, not re-litigated here, but a
+  closer look (e.g. per-instance network namespaces) is worth revisiting
+  if the threat model changes.
+- **Credential-rotation mechanism.** `GenerateInstanceSecrets` copies
+  host credentials into each instance once, at `Create` time. There is no
+  `/rotate`-style admin path to rewrite every instance's `auth.json` after
+  the fact (e.g. after a suspected leak) — noted as a known gap in the
+  plan doc's own Step 15.
+
 ## Environment / infra
 
 ### Bash tool glitch: `fork/exec /usr/bin/bash: no such file or directory`

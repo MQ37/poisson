@@ -66,6 +66,9 @@ type BuildOptions struct {
 	// (headless callers, cost-eval, ...): such a command then just fails
 	// with a clear error instead of hanging or running unauthenticated.
 	SudoPasswordFn SudoPasswordFn
+	// NoSetTitle omits the set_title tool -- an orchestrator instance turn has
+	// no TUI window to rename; the tool is just dead weight in its tool list.
+	NoSetTitle bool
 }
 
 // BuildRegistry constructs the tool registry. A child (subagent) receives every
@@ -132,7 +135,9 @@ func BuildRegistry(opts BuildOptions) *Registry {
 		reg.Register(NewRecallTool(opts.Store))
 		reg.Register(NewListSessionsTool(opts.Store))
 		reg.Register(NewReadMessagesTool(opts.Store))
-		reg.Register(NewSetTitleTool(opts.Store))
+		if !opts.NoSetTitle {
+			reg.Register(NewSetTitleTool(opts.Store))
+		}
 	}
 	// Parent-only: a subagent must never receive the subagent tool, or it could
 	// spawn subagents without bound.
