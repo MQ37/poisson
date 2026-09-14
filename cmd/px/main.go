@@ -104,6 +104,14 @@ func main() {
 		return
 	}
 
+	// Sudo askpass relay mode — see sudo_askpass_relay.go and
+	// internal/tools/sudo_shim.go. Never invoked by a human; only ever
+	// exec'd by a real local sudo process reading SUDO_ASKPASS.
+	if len(os.Args) >= 3 && os.Args[1] == sudoAskpassRelayFlag {
+		runSudoAskpassRelay(os.Args[2])
+		return
+	}
+
 	opts, noSkills, cmdArgs := parseArgs(os.Args[1:])
 
 	// --print-json without -p is a user error, not silently ignored — it

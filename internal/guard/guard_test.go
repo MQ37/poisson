@@ -218,6 +218,70 @@ func TestSegments_BraceGroup(t *testing.T) {
 	}
 }
 
+// TestSegments_Heredoc locks down the fix for a false positive found in
+// practice: RequiresSudoPassword flagged a bare remote `sudo` sent over ssh
+// as its own fresh LOCAL segment, because the raw splitter had no notion of
+// heredoc syntax and split on every '\n' unconditionally — including ones
+// inside a heredoc body meant as stdin data for a different (often remote)
+// command entirely. See sudo_test.go for the RequiresSudoPassword-level
+// regression case this enables.
+func TestSegments_Heredoc(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  string
+		want []string
+	}{
+		{
+			"quoted delimiter, single command",
+			"ssh host <<'EOF'\nsudo apt update\nEOF",
+			[]string{"ssh host <<'EOF'"},
+		},
+		{
+			"bare delimiter",
+			"ssh host <<EOF\nsudo systemctl restart nginx\nEOF",
+			[]string{"ssh host <<EOF"},
+		},
+		{
+			"<<- strips leading tabs on the terminator only",
+			"ssh host <<-EOF\n\tsudo apt update\nEOF",
+			[]string{"ssh host <<-EOF"},
+		},
+		{
+			"real local command after the heredoc body still splits normally",
+			"cat <<'EOF'\nbody text\nEOF\nsudo whoami",
+			[]string{"cat <<'EOF'", "sudo whoami"},
+		},
+		{
+			"unrelated operators on the heredoc's own line still split",
+			"echo start; cat <<EOF\nbody\nEOF",
+			[]string{"echo start", "cat <<EOF"},
+		},
+		{
+			"here-string <<< is not a heredoc — no body to skip",
+			"grep foo <<<\"bar\"",
+			[]string{`grep foo <<<"bar"`},
+		},
+		{
+			"missing terminator swallows to end rather than mis-splitting",
+			"ssh host <<'EOF'\nsudo whoami\nnever closes",
+			[]string{"ssh host <<'EOF'"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Segments(tc.cmd)
+			if len(got) != len(tc.want) {
+				t.Fatalf("Segments(%q) = %v, want %v", tc.cmd, got, tc.want)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("Segments(%q)[%d] = %q, want %q", tc.cmd, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
 // TestClassify_RejectsUnclosedGroup locks down two fuzz-found variants of
 // the same bug class: a "{" or "(" that never closes (malformed/incomplete
 // input a real shell would itself reject as a syntax error, never

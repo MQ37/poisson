@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -158,6 +159,19 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		return ToolResult{Error: msg}, nil
 	}
 
+	// Determine timeout, and create a bounded child context — moved ahead
+	// of the sudo setup below so both the Tier 1 prompt and the Tier 2
+	// shim's own listener/prompt (which can fire well after this point,
+	// mid-exec) are cancelled by the same timeout as the command itself,
+	// instead of a prompt outliving a command that already timed out.
+	timeoutSec := 120
+	if in.Timeout > 0 {
+		timeoutSec = int(in.Timeout)
+	}
+	timeoutDur := time.Duration(timeoutSec) * time.Second
+	childCtx, cancel := context.WithTimeout(ctx, timeoutDur)
+	defer cancel()
+
 	// A bare sudo/pkexec has no controlling terminal to read a password
 	// from here (no tty allocated below, cmd.Stdin left nil). Get one
 	// through the same approval-adjacent prompt path as everything else
@@ -165,11 +179,12 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	// failing opaquely mid-exec — see SetSudoPasswordFn.
 	runCommand := in.Command
 	var askpassHelper *sudoAskpassHelper
+	var shim *sudoShim
 	if guard.RequiresSudoPassword(in.Command) {
 		if t.sudoPasswordFn == nil {
 			return ToolResult{Error: "command needs a sudo password but this session has no prompt for one available (headless mode, or sudo support not wired up)"}, nil
 		}
-		password, ok := t.sudoPasswordFn(ctx, in.Command, in.Description, dir)
+		password, ok := t.sudoPasswordFn(childCtx, in.Command, in.Description, dir)
 		if !ok {
 			return ToolResult{Error: "sudo password entry cancelled by user"}, nil
 		}
@@ -183,33 +198,45 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 		defer helper.cleanup()
 		askpassHelper = helper
 		runCommand = injectSudoAskpass(in.Command)
+	} else if t.sudoPasswordFn != nil {
+		// No textually-visible sudo — but one could still be hiding behind
+		// an alias, a Makefile recipe, a nested script, or (the bug this
+		// closes) a heredoc-delimited remote command run over ssh. Wire a
+		// PATH-shimmed "sudo" + on-demand askpass unconditionally instead
+		// of trying to extend the text scan to cover every such shape: see
+		// sudo_shim.go for the full design. Best-effort — a failure here
+		// (no local sudo binary, can't resolve this process's own
+		// executable) just means the command runs without this extra
+		// safety net, same as it always has for these shapes.
+		s, err := newSudoShim(childCtx, t.sudoPasswordFn, in.Command, in.Description, dir)
+		if err != nil {
+			log.Printf("sudo shim unavailable, continuing without it: %v", err)
+		} else {
+			defer s.close()
+			shim = s
+		}
 	}
-
-	// Determine timeout.
-	timeoutSec := 120
-	if in.Timeout > 0 {
-		timeoutSec = int(in.Timeout)
-	}
-	timeoutDur := time.Duration(timeoutSec) * time.Second
-
-	// Create a child context with timeout.
-	childCtx, cancel := context.WithTimeout(ctx, timeoutDur)
-	defer cancel()
 
 	cmd := exec.CommandContext(childCtx, "bash", "-c", runCommand)
 	if dir != "" {
 		cmd.Dir = dir
 	}
 	// cmd.Env left nil (falls back to os.Environ(), same as every other
-	// call — no persisted env from a prior call) UNLESS this call needed a
-	// sudo password, in which case SUDO_ASKPASS must point at the one-shot
-	// helper script above. The path is the only new thing a plain `env`
-	// inside the command would ever see — never the password itself (that
-	// only ever touches the 0600 file the script cats, never argv/env — see
-	// sudoAskpassHelper's own doc comment for the residual risk this
-	// doesn't close).
-	if askpassHelper != nil {
+	// call — no persisted env from a prior call) UNLESS this call wired a
+	// sudo password path: askpassHelper (Tier 1, textually-detected sudo)
+	// sets SUDO_ASKPASS alone, since injectSudoAskpass already rewrote the
+	// command text itself; shim (Tier 2) additionally prepends PATH, since
+	// nothing rewrote any command text for it to intercept an indirect
+	// sudo instead. Either way the only new thing a plain `env` inside the
+	// command would ever see is a path — never a password itself (that
+	// only ever touches a private same-uid file/socket, zeroed after use —
+	// see sudoAskpassHelper's and sudoShim's own doc comments for the
+	// residual risk neither fully closes).
+	switch {
+	case askpassHelper != nil:
 		cmd.Env = append(os.Environ(), "SUDO_ASKPASS="+askpassHelper.scriptPath)
+	case shim != nil:
+		cmd.Env = shim.buildEnv()
 	}
 	// Setsid (not just Setpgid) detaches the child from px's own controlling
 	// terminal entirely — it becomes both a new session and process group
