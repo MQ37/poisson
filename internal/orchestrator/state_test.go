@@ -30,6 +30,16 @@ func TestSaveLoadMeta_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadMeta: %v", err)
 	}
+	// time.Time's == compares the Location pointer too, which a JSON
+	// round-trip never preserves (UnmarshalJSON parses back a fixed-offset
+	// Location, not the original *time.Local) even when the wall-clock
+	// value is identical — Equal is the only correct comparison. Checked
+	// separately, then zeroed so the rest of the struct can still use a
+	// plain ==.
+	if !got.CreatedAt.Equal(want.CreatedAt) {
+		t.Errorf("CreatedAt = %v, want %v", got.CreatedAt, want.CreatedAt)
+	}
+	got.CreatedAt, want.CreatedAt = time.Time{}, time.Time{}
 	if got != want {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
