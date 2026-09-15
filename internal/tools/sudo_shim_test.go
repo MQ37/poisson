@@ -212,6 +212,63 @@ exec "$@"
 	}
 }
 
+// TestBashTool_SudoShim_PromptsOnceForMultipleSudoCalls pins the fix for
+// the annoying case: a script running several local sudo commands must
+// prompt the human once, not once per sudo invocation.
+func TestBashTool_SudoShim_PromptsOnceForMultipleSudoCalls(t *testing.T) {
+	useTestAskpassRelay(t)
+	fakeDir := t.TempDir()
+	fakeSudo := filepath.Join(fakeDir, "sudo")
+	script := `#!/bin/sh
+if [ "$1" != "-A" ] || [ "$2" != "-k" ]; then
+	echo "fake sudo: expected -A -k, got: $*" >&2
+	exit 1
+fi
+shift 2
+pw=$("$SUDO_ASKPASS")
+if [ "$pw" != "hunter2" ]; then
+	echo "fake sudo: wrong password" >&2
+	exit 1
+fi
+exec "$@"
+`
+	if err := os.WriteFile(fakeSudo, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake sudo: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", fakeDir+string(os.PathListSeparator)+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	dir := testutil.TempDir(t)
+	b := NewBashTool(dir, alwaysApprove)
+	askCount := 0
+	b.SetSudoPasswordFn(func(ctx context.Context, command, description, workdir string) ([]byte, bool) {
+		askCount++
+		return []byte("hunter2"), true
+	})
+
+	command := `sh -c 'sudo whoami && sudo whoami && sudo whoami'`
+	res, err := b.Execute(context.Background(), mustJSON(t, map[string]interface{}{
+		"command": command, "description": "hidden sudo, called three times",
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Error != "" {
+		t.Fatalf("unexpected error: %s", res.Error)
+	}
+	var out bashOutput
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.ExitCode != 0 {
+		t.Fatalf("command failed: exitCode=%d stdout=%q stderr=%q", out.ExitCode, out.Stdout, out.Stderr)
+	}
+	if askCount != 1 {
+		t.Errorf("sudoPasswordFn called %d times for 3 sudo invocations in one script, want 1", askCount)
+	}
+}
+
 // TestBashTool_SudoShim_NeverFiresForPlainCommand proves the shim stays
 // silent (never even asks) when the command never touches sudo at all —
 // exactly the "don't ask when it's not needed" requirement.

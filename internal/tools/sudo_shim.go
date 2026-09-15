@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // sudoShim is Tier 2 of the sudo-over-ssh fix: guard.RequiresSudoPassword's
@@ -59,6 +60,13 @@ type sudoShim struct {
 	command     string
 	description string
 	workdir     string
+
+	// mu guards cached: the first local sudo call to actually block on a
+	// password prompts the human and stores the answer here; every later
+	// one in the SAME shim (i.e. same BashTool.Execute call/script) reuses
+	// it instead of prompting again — see password's own doc comment.
+	mu     sync.Mutex
+	cached []byte
 }
 
 // newSudoShim resolves the real sudo binary and this process's own
@@ -120,9 +128,10 @@ func newSudoShim(ctx context.Context, ask SudoPasswordFn, command, description, 
 
 // serve accepts connections until the listener is closed (see close) — one
 // per local sudo invocation that actually needs a password. The shim
-// always adds "-k" to the real sudo call, so a command invoking sudo twice
-// gets prompted twice, same trade-off Tier 1 already makes (see
-// injectSudoAskpass's doc comment on why -k is deliberate).
+// always adds "-k" to the real sudo call so each one re-checks the
+// password against PAM (see injectSudoAskpass's doc comment on why -k is
+// deliberate), but password below answers the human only once per shim —
+// a script invoking sudo N times prompts once, not N times.
 func (s *sudoShim) serve(ctx context.Context) {
 	for {
 		conn, err := s.listener.Accept()
@@ -133,24 +142,39 @@ func (s *sudoShim) serve(ctx context.Context) {
 	}
 }
 
-// handle answers one relay connection: ask (same sudoPasswordFn, same
-// overlay UI, as Tier 1) blocks until the human answers or cancels. A
-// cancel writes nothing back — the relay's read hits EOF with an empty
-// password, sudo treats that as a failed/cancelled auth attempt and fails
-// cleanly, exactly like Tier 1's own cancel path already does.
+// handle answers one relay connection with password, then writes it back —
+// a cancel (password's ok == false) writes nothing, so the relay's read
+// hits EOF with an empty password and sudo treats that as a failed/
+// cancelled auth attempt, exactly like Tier 1's own cancel path already
+// does.
 func (s *sudoShim) handle(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
-	password, ok := s.ask(ctx, s.command, s.description, s.workdir)
+	password, ok := s.password(ctx)
 	if !ok {
 		return
 	}
-	defer func() {
-		for i := range password {
-			password[i] = 0 // best-effort zero, same caveat as sudoAskpassHelper's own doc comment
-		}
-	}()
 	conn.Write(password)
 	conn.Write([]byte("\n"))
+}
+
+// password returns this shim's sudo password, asking the human (via ask,
+// same overlay UI as Tier 1) at most once for the shim's whole lifetime —
+// one BashTool.Execute call. Concurrent callers block on mu behind the
+// first prompt rather than opening a second one; every caller after that
+// first prompt resolves just reads the cached answer. Cleared and zeroed
+// by close, never persisted past this one shim/command.
+func (s *sudoShim) password(ctx context.Context) ([]byte, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cached != nil {
+		return s.cached, true
+	}
+	password, ok := s.ask(ctx, s.command, s.description, s.workdir)
+	if !ok {
+		return nil, false
+	}
+	s.cached = password
+	return s.cached, true
 }
 
 // buildEnv returns the child process's full environment with PATH (the
@@ -172,11 +196,17 @@ func (s *sudoShim) buildEnv() []string {
 	return env
 }
 
-// close stops accepting new connections and removes every file this shim
-// created. Safe to call exactly once, via defer, regardless of whether
-// anything ever actually connected.
+// close stops accepting new connections, zeroes any cached password, and
+// removes every file this shim created. Safe to call exactly once, via
+// defer, regardless of whether anything ever actually connected.
 func (s *sudoShim) close() {
 	s.listener.Close()
+	s.mu.Lock()
+	for i := range s.cached {
+		s.cached[i] = 0 // best-effort zero, same caveat as sudoAskpassHelper's own doc comment
+	}
+	s.cached = nil
+	s.mu.Unlock()
 	if err := os.RemoveAll(s.dir); err != nil {
 		log.Printf("sudo shim cleanup: %v", err)
 	}
