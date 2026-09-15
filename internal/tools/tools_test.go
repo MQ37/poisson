@@ -1132,6 +1132,59 @@ func TestBashTool_CdWorkdirHint(t *testing.T) {
 	}
 }
 
+// TestBashTool_ScratchWorkdirHint verifies the sandbox nudge fires only for
+// a mutating command running outside the session's own root under a scratch
+// prefix (/tmp) — stays silent for read-only commands, and for any command
+// (mutating or not) at the session's own root, even when that root is
+// itself under /tmp (the worktree-under-/tmp convention).
+func TestBashTool_ScratchWorkdirHint(t *testing.T) {
+	sessionRoot := testutil.TempDir(t)
+	scratchDir := testutil.TempDir(t)
+	if err := os.WriteFile(filepath.Join(scratchDir, "f.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessionRoot, "f.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name    string
+		command string
+		workdir string
+		want    string // substring expected in the hint, or "" if none expected
+	}{
+		{"mutating_outside_root_hinted", "sed -i 's/hello/bye/' f.txt", scratchDir, "create_sandbox"},
+		{"readonly_outside_root_no_hint", "grep hello f.txt", scratchDir, ""},
+		{"mutating_at_session_root_no_hint", "sed -i 's/hello/bye/' f.txt", "", ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := NewBashTool(sessionRoot, func(context.Context, string, string, string) (bool, string) { return true, "" })
+			input := map[string]interface{}{"command": c.command, "description": "test"}
+			if c.workdir != "" {
+				input["workdir"] = c.workdir
+			}
+			res, _ := b.Execute(context.Background(), mustJSON(t, input))
+			if res.Error != "" {
+				t.Fatalf("command %q: unexpected error: %q", c.command, res.Error)
+			}
+			var out bashOutput
+			if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+				t.Fatalf("command %q: unmarshal: %v (res=%+v)", c.command, err, res)
+			}
+			if c.want == "" {
+				if strings.Contains(out.Hint, "create_sandbox") {
+					t.Errorf("command %q: unexpected scratch-workdir hint: %q", c.command, out.Hint)
+				}
+				return
+			}
+			if !strings.Contains(out.Hint, c.want) {
+				t.Errorf("command %q: hint = %q, want it to mention %q", c.command, out.Hint, c.want)
+			}
+		})
+	}
+}
+
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	r := NewRegistry()
 	w := NewWriteTool(testutil.TempDir(t), alwaysApprove)

@@ -297,6 +297,9 @@ func (t *BashTool) Execute(ctx context.Context, input json.RawMessage) (ToolResu
 	if h := dedicatedToolHint(in.Command); h != "" {
 		hints = append(hints, h)
 	}
+	if h := scratchWorkdirHint(in.Command, t.cwd, dir); h != "" {
+		hints = append(hints, h)
+	}
 
 	out := bashOutput{
 		Stdout:   sanitizeToolText(stdout.String()),
@@ -495,6 +498,69 @@ func dedicatedToolHint(command string) string {
 		}
 	}
 	return ""
+}
+
+// scratchWorkdirHint nudges toward a sandbox when a command runs somewhere
+// that looks like disposable scratch work sitting beside the real project —
+// under a scratch prefix (/tmp, /var/tmp, $TMPDIR) but outside the session's
+// own root — and the deterministic guard would not have auto-cleared it
+// (i.e. it needed an approval round-trip this call). A sandboxId call skips
+// the approval gate entirely already; this only fires on the plain host
+// path, where every one of these round-trips could have been avoided by
+// staging the same scratch dir in a sandbox once instead. Advisory only,
+// same as cdWorkdirHint/dedicatedToolHint — never blocks, the command has
+// already run by the time this is attached.
+//
+// Deliberately excludes anything under the session's own cwd: a worktree
+// checked out under /tmp (this repo's own convention for "work in a
+// worktree") is real, tracked project work, not improvised scratch space —
+// nudging every mutating command for an entire such session would be noise,
+// not signal.
+func scratchWorkdirHint(command, cwd, dir string) string {
+	if !isScratchDir(dir) || pathWithin(dir, cwd) {
+		return ""
+	}
+	if safe, _ := guard.ClassifyInDir(command, dir); safe {
+		return ""
+	}
+	return fmt.Sprintf("workdir %q looks like scratch work outside the project, and this command needed approval — consider create_sandbox once, then bash(sandboxId=...) here: no approval gate for the rest of that workspace.", dir)
+}
+
+// scratchDirPrefixes are filesystem roots treated as disposable-scratch
+// territory. os.TempDir() covers a non-default $TMPDIR; /tmp and /var/tmp
+// are included unconditionally since they're conventional scratch roots
+// even when $TMPDIR points elsewhere.
+func scratchDirPrefixes() []string {
+	prefixes := []string{"/tmp", "/var/tmp"}
+	if tmp := filepath.Clean(os.TempDir()); tmp != "/tmp" && tmp != "/var/tmp" {
+		prefixes = append(prefixes, tmp)
+	}
+	return prefixes
+}
+
+// isScratchDir reports whether dir sits under a scratch prefix.
+func isScratchDir(dir string) bool {
+	if dir == "" {
+		return false
+	}
+	clean := filepath.Clean(dir)
+	for _, prefix := range scratchDirPrefixes() {
+		if clean == prefix || strings.HasPrefix(clean, prefix+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathWithin reports whether dir is base itself or a descendant of it. Used
+// to exclude the session's own root (and anything under it) from
+// scratchWorkdirHint — an empty base never contains anything.
+func pathWithin(dir, base string) bool {
+	if base == "" {
+		return false
+	}
+	cleanDir, cleanBase := filepath.Clean(dir), filepath.Clean(base)
+	return cleanDir == cleanBase || strings.HasPrefix(cleanDir, cleanBase+string(filepath.Separator))
 }
 
 // resolveWorkdir picks the directory for one bash call: explicit workdir
