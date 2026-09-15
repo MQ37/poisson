@@ -102,6 +102,14 @@ and tested.
 
 ## 7. Cleanup
 
+- **Don't destroy preemptively.** A sandbox is cheap to keep running and
+  expensive to rebuild — a follow-up prompt, a `check-work` verifier, or the
+  next task in this session commonly reuses the same one, toolchains and
+  deps already installed. Destroying it the moment a step finishes just
+  forces the next step to reinstall everything from scratch. Keep it alive
+  for the rest of the session; destroy only when the user is clearly done
+  with that line of work (e.g. explicitly wrapping up, switching to an
+  unrelated project) or asks to clean up.
 - `sandbox_destroy` only kills the container. It **never** deletes the
   mounted directory — that's the agent's own workdir or worktree, not the
   sandbox's to dispose of.
