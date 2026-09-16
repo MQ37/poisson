@@ -273,6 +273,35 @@ func TestBuildSystemPromptCommentBrevity(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptBansJargon guards the anti-jargon rule added to
+// counter modern models reverting to fine-tuned corporate/abstraction-heavy
+// style under load (vague buzzwords, unexplained acronym shorthand like
+// CAS/AST/DAG) despite the general compression mantra.
+func TestBuildSystemPromptBansJargon(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "Ban vague abstraction-speak") {
+		t.Error("missing vague-buzzword ban (leverage/optimize/paradigm/etc.)")
+	}
+	if !strings.Contains(prompt, "CAS, AST, DAG") {
+		t.Error("missing unexplained-jargon-shorthand ban")
+	}
+}
+
+// TestBuildSystemPromptScannabilityAndQuestions guards two rules migrated
+// in from the host-level ~/.poisson/AGENTS.md (now removed there, so poisson
+// works identically for every user without needing that file): sparing
+// emoji headers as an exception to the no-decoration rule, and the
+// question-goes-last-under-a-bold-header protocol.
+func TestBuildSystemPromptScannabilityAndQuestions(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "functional markers, not decoration") {
+		t.Error("missing sparing-emoji-header exception to the no-decoration rule")
+	}
+	if !strings.Contains(prompt, "Put the question last, under a bold") {
+		t.Error("missing question-protocol rule (question last, bold header, Recommended option)")
+	}
+}
+
 func TestBuildSystemPromptAlwaysIncludesCavemanStyle(t *testing.T) {
 	// No config option gates this — it's always on, checked with the minimal
 	// options a caller could pass (no tools, no context, no skills).
