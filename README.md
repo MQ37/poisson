@@ -106,19 +106,27 @@ px                                                   # launch the TUI
 
 ## 🧰 Built-in skills
 
-Thirteen skills ship baked into the `px` binary — no setup, no config directory
-needed. The `skill` tool loads one by name (each is a `SKILL.md`) and works the
-same for subagents as it does in the main session: `code-quality`,
+Thirteen skills ship baked into the `px` binary, all under the `code/` topic
+group (`internal/skills/builtin/code/`) — no setup, no config directory
+needed. The `skill` tool loads one by bare name (each is a `SKILL.md`) and
+works the same for subagents as it does in the main session: `code-quality`,
 `code-review`, `tdd`, `feature-impact`, `review-pr`, `stacked-diff-review`,
 `check-work`, `council`, `grilling`, `create-issue`, `create-pr`, `sandbox`,
 `create-skill` — covering code review, TDD discipline, blast-radius impact
 analysis, independent self-verification, multi-persona critique, and issue/PR
 drafting.
 
-Add your own under `~/.poisson/skills/<name>/SKILL.md` — a user skill with the
-same name as a built-in one overrides it, so you can customize any of the
-thirteen without touching the binary. `/reload` rediscovers user skills without
-restarting.
+Skills nest one directory deep for topic grouping: `<name>/SKILL.md`
+(ungrouped) or `<group>/<name>/SKILL.md`. Group is purely organizational —
+it changes the directory and the system-prompt listing (grouped skills show
+as a bare-name line under one group description, instead of each carrying
+its own description), never lookup or invocation.
+
+Add your own under `~/.poisson/skills/<name>/SKILL.md` or
+`~/.poisson/skills/<group>/<name>/SKILL.md` — a user skill with the same
+name as a built-in one overrides it regardless of group, so you can
+customize any of the thirteen without touching the binary. `/reload`
+rediscovers user skills without restarting.
 
 ---
 

@@ -137,6 +137,62 @@ func TestDiscoverUserOverridesBuiltin(t *testing.T) {
 	}
 }
 
+func TestDiscoverGroupedSkill(t *testing.T) {
+	tmpHome := testutil.TempHome(t)
+
+	skillDir := filepath.Join(tmpHome, ".poisson", "skills", "mygroup", "my-skill")
+	os.MkdirAll(skillDir, 0o700)
+	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: \"Grouped skill\"\n---\nDo the thing."), 0o600)
+
+	skills, err := Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	var found *Skill
+	for i := range skills {
+		if skills[i].Name == "my-skill" {
+			found = &skills[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("my-skill not found in %+v", skills)
+	}
+	if found.Group != "mygroup" {
+		t.Errorf("group = %q, want mygroup", found.Group)
+	}
+	if found.Description != "Grouped skill" {
+		t.Errorf("description = %q", found.Description)
+	}
+}
+
+func TestDiscoverEmptyGroupDirIgnored(t *testing.T) {
+	tmpHome := testutil.TempHome(t)
+
+	os.MkdirAll(filepath.Join(tmpHome, ".poisson", "skills", "empty-group"), 0o700)
+
+	skills, err := Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(skills) != len(builtinSkills()) {
+		t.Errorf("empty group dir should add nothing, got %d skills", len(skills))
+	}
+}
+
+func TestBuiltinSkillsAreGrouped(t *testing.T) {
+	testutil.TempHome(t)
+
+	skills, err := Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	for _, s := range skills {
+		if s.Group == "" {
+			t.Errorf("builtin skill %q has no group, want one (builtin skills all live under a group dir today)", s.Name)
+		}
+	}
+}
+
 func TestBuiltinSkillsPresent(t *testing.T) {
 	testutil.TempHome(t)
 
@@ -180,6 +236,30 @@ func TestFormatSkillsForPrompt(t *testing.T) {
 	}
 	if !contains(result, "[title]") {
 		t.Errorf("missing argument-hint: %q", result)
+	}
+}
+
+func TestFormatSkillsForPromptGrouped(t *testing.T) {
+	skills := []Skill{
+		{Name: "code-review", Group: "code", Description: "General code review process"},
+		{Name: "tdd", Group: "code", Description: "Red-green-refactor discipline"},
+		{Name: "review", Description: "Review code"}, // ungrouped
+	}
+	result := FormatSkillsForPrompt(skills)
+	if !contains(result, "review: Review code") {
+		t.Errorf("ungrouped skill should keep its description: %q", result)
+	}
+	if !contains(result, "code/") {
+		t.Errorf("missing group header: %q", result)
+	}
+	if !contains(result, groupDescriptions["code"]) {
+		t.Errorf("missing group description: %q", result)
+	}
+	if !contains(result, "code-review, tdd") {
+		t.Errorf("grouped skills should be bare comma-joined names: %q", result)
+	}
+	if contains(result, "General code review process") {
+		t.Errorf("grouped skill must not carry its own description in the prompt: %q", result)
 	}
 }
 
