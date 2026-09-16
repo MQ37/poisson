@@ -106,15 +106,15 @@ px                                                   # launch the TUI
 
 ## 🧰 Built-in skills
 
-Thirteen skills ship baked into the `px` binary, all under the `code/` topic
+Fourteen skills ship baked into the `px` binary, all under the `code/` topic
 group (`internal/skills/builtin/code/`) — no setup, no config directory
 needed. The `skill` tool loads one by bare name (each is a `SKILL.md`) and
 works the same for subagents as it does in the main session: `code-quality`,
 `code-review`, `tdd`, `feature-impact`, `review-pr`, `stacked-diff-review`,
 `check-work`, `council`, `grilling`, `create-issue`, `create-pr`, `sandbox`,
-`create-skill` — covering code review, TDD discipline, blast-radius impact
-analysis, independent self-verification, multi-persona critique, and issue/PR
-drafting.
+`create-skill`, `ponytail` — covering code review, TDD discipline,
+blast-radius impact analysis, independent self-verification, multi-persona
+critique, issue/PR drafting, and shipping the smallest correct diff.
 
 Skills nest one directory deep for topic grouping: `<name>/SKILL.md`
 (ungrouped) or `<group>/<name>/SKILL.md`. Group is purely organizational —

@@ -199,7 +199,7 @@ func TestBuiltinSkillsPresent(t *testing.T) {
 	want := []string{
 		"check-work", "code-quality", "code-review", "council",
 		"create-issue", "create-pr", "create-skill", "feature-impact",
-		"grilling", "review-pr", "sandbox", "stacked-diff-review", "tdd",
+		"grilling", "ponytail", "review-pr", "sandbox", "stacked-diff-review", "tdd",
 	}
 	skills, err := Discover()
 	if err != nil {
