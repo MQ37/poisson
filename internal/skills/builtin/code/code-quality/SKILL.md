@@ -25,6 +25,7 @@ You are not paid by the line. Every abstraction, branch, parameter, dependency, 
 
 - **Delete before you add.** Removing code is progress. A diff that is net-negative and still passes is usually a good diff.
 - **Solve the problem in front of you**, not the six hypothetical ones you imagine. Speculative generality is the most expensive code there is.
+  > Real incident: a result-download endpoint shipped with a full streaming implementation — chunked reader loop, a hard byte ceiling, abort-not-truncate semantics — defending against a memory-exhaustion scale that didn't exist yet (one small result per request, no evidence of large ones). Simplified to a plain buffered fetch once questioned. Naming the actual current scale and building for *that* — not the scale a defensive instinct imagines — would have skipped writing it in the first place.
 - **A feature you don't build has no bugs, no tests, no docs, and no maintenance cost.** Push back on scope.
 - **Scope-cutting has a floor.** Input validation at trust boundaries, error handling that prevents data loss, security, and accessibility are never the corner you cut to shrink a diff — regardless of how minimal the rest of the change is.
 - **New coupling is a one-way door.** Sharing code, a schema, or a release cycle across repos, services, or teams binds their future changes together long after this diff merges. Flag it and get a nod on the approach before you build the full implementation — a big diff resting on an unconfirmed premise is a sunk cost the reviewer now has to unwind, not review.
@@ -85,6 +86,7 @@ The single highest-leverage move in programming is choosing the right data struc
 - **Name a boolean or predicate for its effect, not the condition it inspects.** This bites hardest on skip/exclude/negate flags — a name framed as an allow-list that's actually read as "skip when true" reads backwards from what it does. Read the call site out loud; if the sentence says the opposite of what runs, rename it.
 - **No fancy verbs that hide the concept** — `enrich`, `process`, `handle`, `transform`, `prepare`, `manage`. Say what actually happens: `appendTimestamp`, `parseHeader`, `retryOnce`.
 - **No vague nouns** — `data`, `info`, `obj`, `thing`, `config`, `manager`, `util`. Name the content.
+- **No single-letter variable names**, outside a conventional loop index (`i`, `j`, `k`) or a one-line lambda where the type is obvious at the call site. A destructured response body, a validated record, an error binding — name it for what it holds (`response`, `fields`, `error`), never `o`/`x`/`e`. If a name doesn't come to you in three seconds, that's a signal the surrounding code needs a clearer shape, not a shorter name.
 - **No `tmp` / `new` / `old` prefixes** unless the thing is genuinely temporary. They age into lies the moment a `newer` one appears.
 - **No magic literals.** Every literal with semantic meaning is a named constant. The name explains *what*, not the value (`MAX_RETRIES = 3`, never `THREE = 3`).
 - **Numeric constants carry their unit in the name** — `FLUSH_INTERVAL_MS`, `SESSION_TTL_SECONDS`, `MAX_PAYLOAD_BYTES`. A bare `TIMEOUT = 30` is a future incident.
@@ -164,6 +166,7 @@ This is the C programmer's discipline, and it applies everywhere, garbage collec
 - **Grep before you write.** Before adding a helper for a known job (build an address, parse a path, generate an ID, check a permission, deep-clone, log), search for the one that already exists. A ten-second search beats a thirty-minute review argument.
 - **A `@deprecated` marker on an existing helper is a signpost** to the new name — follow it instead of forking a third variant.
 - **Inline single-use helpers.** A helper earns its existence at 3+ call-sites or when it hides genuinely non-trivial logic. A five-line wrapper around one constructor, called once, is noise.
+  > Real incident: one PR shipped with over a dozen single-call-site functions and type aliases — a URL builder wrapping one template string, a response mapper duplicating a shared validator inline, a factory whose only body was `return new X(...)`, types named for exactly one function's parameter shape. All were caught only because the author was asked afterward to go looking for them. Check it *while writing* — every function/type you just added, right then: does it have 2+ real callers? If not, inline it before you move on, don't leave it for a cleanup pass that depends on someone remembering to ask.
 - **Don't fork a function just to re-shape its errors.** If a bulk routine already does the fetch-and-check work and a caller needs to know *why* one item failed, surface that through the bulk routine's return value — don't write a parallel single-item twin that redoes the same work.
 - **One validator per domain.** If a schema/validator already governs a kind of data, every write path uses it. A second, hand-rolled validator beside it guarantees the two will disagree.
 - **Recurse over nested data.** Any strip-secrets / mask / sanitize / clone that walks a structure must descend into nested objects and arrays. Top-level-only is a leak.
@@ -239,6 +242,8 @@ Walk these before you call it done.
 - [ ] It builds / lints / type-checks; every import resolves to something real.
 - [ ] I matched the local idiom; any new file mirrors an existing analog.
 - [ ] The diff is as small as it can be. Could I delete more and still pass?
+- [ ] Every function/type/const I just added — 2+ real callers, or inline it now, don't defer to a later cleanup pass.
+- [ ] No single-letter variables; no defensive/resilience machinery sized for a scale or failure mode that isn't real yet.
 - [ ] I can explain every line I added with no "magic" hand-waving.
 - [ ] Renamed, moved, or deleted something referenced by name elsewhere? Grepped the whole tree — code, docs, config, comments — not just what one linter happens to cover.
 - [ ] Any claim about how a tool, dependency, or published artifact behaves — including the *shape* of data it produces (ID formats, naming schemes, encodings) — is checked against the real thing, not assumed from a name or recalled from memory.

@@ -250,6 +250,24 @@ func TestBuildSystemPromptDefaultsToSandbox(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptSelfReviewGuideline guards the always-on nudge to
+// self-check code-quality basics before calling a change done (single-use
+// helpers, single-letter variables, unreal-scale defensive machinery) —
+// added after these recurred across a whole session's worth of implementation
+// work despite already being documented in the opt-in code-quality skill.
+func TestBuildSystemPromptSelfReviewGuideline(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "re-scan what you just wrote yourself") {
+		t.Error("missing self-review-before-done guideline")
+	}
+	if !strings.Contains(prompt, "2+ real callers") {
+		t.Error("missing single-use-helper-inlining reminder")
+	}
+	if !strings.Contains(prompt, "no single-letter variable names") {
+		t.Error("missing single-letter-variable ban")
+	}
+}
+
 // TestBuildSystemPromptStoicMantra guards the persona-level compression
 // mantra (10-words-beats-two-paragraphs), stated as identity, not just a
 // stylistic tip.

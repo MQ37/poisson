@@ -21,7 +21,9 @@ Lenses to scan in parallel:
 - **Orchestration and atomicity** — independent work serialized for no reason (should it run in parallel?); related updates that can leave state half-applied (should the change be more atomic?). Don't over-index on micro-optimization, but flag avoidable orchestration complexity that makes the implementation more brittle.
 - **Simplification** — don't stop at "this could be a bit cleaner." Actively search for the reframing that deletes a whole branch, helper, mode, or conditional layer rather than just tidying it — the restructuring that uses the existing architecture better and makes the change simpler, not just neater. Concretely, flag:
   - Dead or unreachable code: unused params, branches, imports, exports.
-  - Over-abstraction: a helper/wrapper/options bag for a single call site or a hypothetical future.
+  - Over-abstraction: a helper/wrapper/options bag for a single call site or a hypothetical future. Count real callers for every new function/type in the diff, not just the ones that look suspicious on a skim.
+  - Resilience/scale machinery (streaming, retry loops, ceilings, back-pressure) sized for a load or failure mode the diff's own description doesn't establish as real yet.
+  - Single-letter variable names outside a loop index — a destructured/validated value not named for what it holds.
   - Redundancy: a variable/method extracted once with no naming benefit; duplicated logic that could share a path.
   - Defensive code for impossible scenarios: checks for cases the type system or call graph already prevents (validate only at real trust boundaries).
   - Backwards-compat cruft with no live consumers: `// removed X`, unused re-exports, compat shims nobody calls.
