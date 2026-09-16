@@ -31,20 +31,6 @@ import (
 // (found scouting), well past the documented "8 max concurrent" ceiling.
 const maxConcurrentSubagents = 8
 
-// subagentJobTimeout bounds one async job's total lifetime — from the moment
-// it's spawned (including any time spent queued behind maxConcurrentSubagents)
-// to its own completion. Without this, SubagentTool.bgCtx being nil (falls
-// back to context.Background(), see its doc comment) meant a job could
-// never be cancelled short of the whole process exiting: a wedged provider
-// connection or a child blocked on an approval nobody answers held its
-// concurrency slot forever, and once enough jobs did that, every future
-// spawn queued behind them deadlocked too. 30 minutes comfortably covers a
-// real subagent task; a stuck one now fails with a clear "subagent
-// cancelled" result instead of hanging indefinitely. A var (not const), like
-// agent.midStreamErrorBackoff, so tests can shrink it instead of waiting out
-// the real duration.
-var subagentJobTimeout = 30 * time.Minute
-
 // subagentSlots is acquired before every subagent.Spawn and released only
 // once that child has been fully reaped (see Execute), so the combined
 // in-flight total across every batch/round — no matter how deeply nested —
@@ -237,14 +223,16 @@ func NewSubagentTool(cwd string, approvalFn SubagentApproval) *SubagentTool {
 }
 
 // staleTempDBAge is how old a subagent scratch DB (see dbPath in Execute)
-// must be before sweepStaleTempDBs considers it abandoned. Since
-// subagentJobTimeout now bounds every job's total lifetime to well under an
-// hour, anything older genuinely was never cleaned up — orphaned by a
+// must be before sweepStaleTempDBs considers it abandoned: orphaned by a
 // process that was SIGKILLed, crashed, or lost power before its owning
 // runJob goroutine's own deferred removeDBFiles ever ran (notably: the
 // ordinary SIGINT/SIGTERM/SIGHUP path itself, see lifecycle.go's os.Exit(1),
 // which does not wait for background job goroutines to finish their
-// cleanup before tearing the process down) — never a live job's own file.
+// cleanup before tearing the process down). Jobs have no time limit (see
+// jobCtx's doc comment in Execute), so this is a heuristic, not a
+// guarantee: a job that's actually making progress touches its DB every
+// turn, refreshing this mtime, so 24h of silence overwhelmingly means
+// abandoned rather than legitimately still running.
 const staleTempDBAge = 24 * time.Hour
 
 // sweepStaleTempDBs removes abandoned poisson-sub-*.db scratch databases (and
@@ -700,12 +688,16 @@ func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (Tool
 	if bgCtx == nil {
 		bgCtx = context.Background()
 	}
-	// jobCtx bounds this one job's total lifetime (see subagentJobTimeout) —
-	// cancelled early if bgCtx itself is (process shutdown), or once the
-	// deadline passes, or by job.cancel directly (a future kill tool).
-	// Stored on job before runJob starts so it's reachable the moment the
-	// job exists, not just once it's actually running.
-	jobCtx, jobCancel := context.WithTimeout(bgCtx, subagentJobTimeout)
+	// jobCtx has no time limit — a job runs until it finishes, is stopped via
+	// subagent_kill, or bgCtx itself is cancelled (process shutdown). A fixed
+	// 30-minute cap used to bound this; removed because a deep scouting task
+	// can legitimately run longer, and killing it mid-run loses all its work.
+	// Explicit decision: a wedged child (dead provider connection, an
+	// unanswered approval) now holds its concurrency slot forever instead of
+	// self-terminating — use subagent_kill on a job that's stopped making
+	// progress. Stored on job before runJob starts so it's reachable the
+	// moment the job exists, not just once it's actually running.
+	jobCtx, jobCancel := context.WithCancel(bgCtx)
 	job.mu.Lock()
 	job.cancel = jobCancel
 	job.mu.Unlock()
@@ -741,10 +733,11 @@ type subagentJob struct {
 	// SubagentTool.visibleToCurrentSession.
 	sessionID string
 	startedAt time.Time
-	// cancel stops this job's per-job timeout context (see subagentJobTimeout)
-	// early — set once, right after creation, never nil once runJob starts.
-	// Invoked by runJob's own cleanup, KillAll (see isTerminalJobStatus), and
-	// SubagentTool.KillJob/KillVisibleJobs (subagent_kill).
+	// cancel stops this job's context — set once, right after creation, never
+	// nil once runJob starts. Invoked by runJob's own cleanup, KillAll (see
+	// isTerminalJobStatus), and SubagentTool.KillJob/KillVisibleJobs
+	// (subagent_kill) — the only ways a job now ends before finishing on its
+	// own (no time limit, see jobCtx's doc comment in Execute).
 	cancel context.CancelFunc
 
 	mu sync.Mutex
@@ -984,10 +977,9 @@ func (t *SubagentTool) pruneJobsLocked() {
 // point — including turns long after the spawning call already returned.
 func (t *SubagentTool) runJob(ctx context.Context, job *subagentJob, spawnInput subagent.SpawnInput, dbPath, toolCallID string, hasToolCallID bool) {
 	defer removeDBFiles(dbPath)
-	// Release the per-job timeout context's timer on every exit path — ctx
-	// is this same job's WithTimeout child (see Execute), so this always
-	// stops it promptly instead of leaving it to fire on its own up to
-	// subagentJobTimeout later.
+	// Release ctx's resources on every exit path — ctx is this same job's
+	// WithCancel child (see Execute), so this always stops it promptly
+	// instead of leaving it attached to bgCtx until process shutdown.
 	defer func() {
 		job.mu.Lock()
 		cancel := job.cancel

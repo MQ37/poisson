@@ -220,8 +220,8 @@ func (s *scrollback) appendSubagentCard(id int64, providerCallID, name, task, mo
 // fetch it.
 //
 // killed takes priority over errMsg: an explicit subagent_kill sets the
-// same generic "subagent cancelled" res.Error an ordinary timeout or
-// shutdown cancellation would, but it's not a failure — the user asked for
+// same generic "subagent cancelled" res.Error an ordinary shutdown
+// cancellation would, but it's not a failure — the user asked for
 // it — so it gets its own neutral wording instead of being narrated as
 // "failed", which would otherwise bait the model into treating a
 // deliberate stop as something to investigate.
