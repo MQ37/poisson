@@ -107,14 +107,23 @@ func renderInline(s string) string {
 				if strings.HasPrefix(rest, "(") {
 					if paren := strings.Index(rest, ")"); paren > 1 {
 						url := rest[1:paren]
-						b.WriteString(underline + fgBlue)
-						b.WriteString(label)
-						b.WriteString(reset)
+						styledLabel := underline + fgBlue + label + reset
+						if isHyperlinkableURL(url) {
+							styledLabel = oscHyperlink(url, styledLabel)
+						}
+						b.WriteString(styledLabel)
 						b.WriteString(dim + " (" + url + ")" + reset)
 						i += close + 1 + paren + 1
 						continue
 					}
 				}
+			}
+		case strings.HasPrefix(s[i:], "file://"):
+			if end := bareURLEnd(s, i); end > i+len("file://") {
+				url := s[i:end]
+				b.WriteString(oscHyperlink(url, url))
+				i = end
+				continue
 			}
 		}
 		_, size := utf8.DecodeRuneInString(s[i:])
@@ -122,6 +131,51 @@ func renderInline(s string) string {
 		i += size
 	}
 	return b.String()
+}
+
+// isHyperlinkableURL allowlists the schemes safe to wrap in a clickable OSC 8
+// terminal hyperlink — file/http/https only, so a stray unusual scheme in
+// model-authored markdown never becomes something a terminal is asked to
+// treat as clickable.
+func isHyperlinkableURL(url string) bool {
+	return strings.HasPrefix(url, "file://") || strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://")
+}
+
+// oscHyperlink wraps label in an OSC 8 terminal hyperlink escape pointing at
+// url. Supporting terminals (kitty, iTerm2, wezterm, ...) render label as a
+// real clickable link, opening url via the OS's file/URL handler on click —
+// e.g. an agent-generated HTML report handed back as a file:// link becomes
+// one click away instead of a path the human has to open by hand.
+// Unsupported terminals ignore the escape and show label as plain text:
+// stripANSI (scrollback.go) already treats any OSC sequence as zero-width
+// for wrapping/selection/search, the same code path OSC 52 clipboard copy
+// already relies on, so this needs no new width-accounting anywhere.
+func oscHyperlink(url, label string) string {
+	return "\x1b]8;;" + url + "\x1b\\" + label + "\x1b]8;;\x1b\\"
+}
+
+// bareURLEnd finds where a bare (non-markdown-bracketed) URL starting at
+// s[start:] ends: scanned to the first whitespace/bracket/quote boundary,
+// then trimmed of trailing sentence punctuation (a closing period, a
+// sentence-ending "?"/"!", ...) a human would never intend as part of the
+// URL itself.
+func bareURLEnd(s string, start int) int {
+	end := start
+	for end < len(s) && !isURLBoundaryByte(s[end]) {
+		end++
+	}
+	for end > start && strings.ContainsRune(".;:!?", rune(s[end-1])) {
+		end--
+	}
+	return end
+}
+
+func isURLBoundaryByte(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', ')', ']', '"', '\'', '`', '<', '>', ',':
+		return true
+	}
+	return false
 }
 
 // wrapANSI wraps an ANSI-bearing string to width visible columns, breaking at

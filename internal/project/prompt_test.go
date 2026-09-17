@@ -332,6 +332,24 @@ func TestBuildSystemPromptAlwaysIncludesCavemanStyle(t *testing.T) {
 	}
 }
 
+// TestBuildSystemPromptFileLinkGuideline guards the guideline that tells the
+// model to hand back an openable file as a file:// link, not a bare path —
+// the TUI only turns the former into a clickable OSC 8 hyperlink (see
+// internal/tui/markdown.go's oscHyperlink), so the model has to actually
+// know to phrase it that way.
+func TestBuildSystemPromptFileLinkGuideline(t *testing.T) {
+	prompt := BuildSystemPrompt(BuildSystemPromptOptions{Cwd: "/test"})
+	if !strings.Contains(prompt, "file://<absolute-path>") {
+		t.Error("missing file:// link guideline")
+	}
+	if !strings.Contains(prompt, "never a bare path") {
+		t.Error("missing the never-a-bare-path rule")
+	}
+	if !strings.Contains(prompt, "`canvas` skill") {
+		t.Error("missing the pointer to the canvas skill")
+	}
+}
+
 // TestBuildSystemPromptRenderTagGuideline guards the <render> citation
 // widget guideline: the model must know the syntax exists (or it never
 // uses it, per the feature's own design — see internal/tui/render_tag.go),

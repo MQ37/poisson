@@ -41,6 +41,43 @@ func TestRenderInlineLink(t *testing.T) {
 	}
 }
 
+func TestRenderInlineLinkHyperlink(t *testing.T) {
+	full := renderInline("[report](file:///tmp/x.html)")
+	want := oscHyperlink("file:///tmp/x.html", underline+fgBlue+"report"+reset)
+	if !stringsContains(full, want) {
+		t.Fatalf("missing OSC 8 hyperlink wrapping: %q", full)
+	}
+}
+
+func TestRenderInlineLinkSkipsUnsafeScheme(t *testing.T) {
+	full := renderInline("[click](javascript:alert(1))")
+	if stringsContains(full, "\x1b]8;;") {
+		t.Fatalf("javascript: scheme must not become a clickable hyperlink: %q", full)
+	}
+}
+
+func TestRenderInlineBareFileURL(t *testing.T) {
+	full := renderInline("saved to file:///tmp/report.html for review")
+	want := oscHyperlink("file:///tmp/report.html", "file:///tmp/report.html")
+	if !stringsContains(full, want) {
+		t.Fatalf("missing bare-URL hyperlink: %q", full)
+	}
+	if !stringsContains(stripANSI(full), "saved to file:///tmp/report.html for review") {
+		t.Fatalf("plain text mangled: %q", stripANSI(full))
+	}
+}
+
+func TestRenderInlineBareFileURLTrimsTrailingPunctuation(t *testing.T) {
+	full := renderInline("open file:///tmp/x.html.")
+	want := oscHyperlink("file:///tmp/x.html", "file:///tmp/x.html")
+	if !stringsContains(full, want) {
+		t.Fatalf("trailing period should not be part of the URL: %q", full)
+	}
+	if !stringsContains(stripANSI(full), "file:///tmp/x.html.") {
+		t.Fatalf("trailing period should still appear in the plain text: %q", stripANSI(full))
+	}
+}
+
 func TestStyleMarkdownHeader(t *testing.T) {
 	got := styleMarkdownLine("## Title")
 	if !stringsContains(got, "Title") || !stringsContains(got, "\x1b[1m") {

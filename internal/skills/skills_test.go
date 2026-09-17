@@ -179,6 +179,14 @@ func TestDiscoverEmptyGroupDirIgnored(t *testing.T) {
 	}
 }
 
+// ungroupedBuiltinSkills lists builtin skills that deliberately live at the
+// top level instead of under a topic group — cross-cutting skills useful
+// regardless of what kind of task is running, not scoped to one workflow
+// family the way everything under code/ is.
+var ungroupedBuiltinSkills = map[string]bool{
+	"canvas": true,
+}
+
 func TestBuiltinSkillsAreGrouped(t *testing.T) {
 	testutil.TempHome(t)
 
@@ -187,8 +195,8 @@ func TestBuiltinSkillsAreGrouped(t *testing.T) {
 		t.Fatalf("Discover: %v", err)
 	}
 	for _, s := range skills {
-		if s.Group == "" {
-			t.Errorf("builtin skill %q has no group, want one (builtin skills all live under a group dir today)", s.Name)
+		if s.Group == "" && !ungroupedBuiltinSkills[s.Name] {
+			t.Errorf("builtin skill %q has no group, want one (or add it to ungroupedBuiltinSkills if that's deliberate)", s.Name)
 		}
 	}
 }
@@ -197,7 +205,7 @@ func TestBuiltinSkillsPresent(t *testing.T) {
 	testutil.TempHome(t)
 
 	want := []string{
-		"check-work", "code-quality", "code-review", "council",
+		"canvas", "check-work", "code-quality", "code-review", "council",
 		"create-issue", "create-pr", "create-skill", "feature-impact",
 		"grilling", "ponytail", "review-pr", "sandbox", "stacked-diff-review", "tdd",
 	}

@@ -94,6 +94,11 @@ px                                                   # launch the TUI
   `ref="<commit-or-branch>"` cites a git ref instead of the working tree.
   A citation that fails to resolve (bad path/ref) gets a couple of automatic,
   visibly-marked retries in the same turn before the answer is considered done.
+- **Clickable `file://`/`http(s)://` links** — any such link in a reply
+  (markdown `[label](url)` or a bare URL) renders as a real OSC 8 terminal
+  hyperlink; supporting terminals (kitty, iTerm2, wezterm, ...) open it on
+  click instead of you copying a path out and opening it by hand. Pairs with
+  the `canvas` skill below for HTML reports.
 - **Message queueing** — type while the agent works; sent at the next turn
   boundary instead of waiting for the whole turn to finish.
 - **`px orchestrate`** — run persistent, isolated, headless poisson
@@ -106,15 +111,19 @@ px                                                   # launch the TUI
 
 ## 🧰 Built-in skills
 
-Fourteen skills ship baked into the `px` binary, all under the `code/` topic
-group (`internal/skills/builtin/code/`) — no setup, no config directory
-needed. The `skill` tool loads one by bare name (each is a `SKILL.md`) and
-works the same for subagents as it does in the main session: `code-quality`,
-`code-review`, `tdd`, `feature-impact`, `review-pr`, `stacked-diff-review`,
-`check-work`, `council`, `grilling`, `create-issue`, `create-pr`, `sandbox`,
+Fifteen skills ship baked into the `px` binary — no setup, no config
+directory needed. The `skill` tool loads one by bare name (each is a
+`SKILL.md`) and works the same for subagents as it does in the main session.
+Fourteen live under the `code/` topic group
+(`internal/skills/builtin/code/`): `code-quality`, `code-review`, `tdd`,
+`feature-impact`, `review-pr`, `stacked-diff-review`, `check-work`,
+`council`, `grilling`, `create-issue`, `create-pr`, `sandbox`,
 `create-skill`, `ponytail` — covering code review, TDD discipline,
 blast-radius impact analysis, independent self-verification, multi-persona
 critique, issue/PR drafting, and shipping the smallest correct diff.
+`canvas` (`internal/skills/builtin/canvas/`) is ungrouped, since building a
+self-contained HTML report/dashboard instead of a markdown wall applies to
+any task, not just code.
 
 Skills nest one directory deep for topic grouping: `<name>/SKILL.md`
 (ungrouped) or `<group>/<name>/SKILL.md`. Group is purely organizational —
