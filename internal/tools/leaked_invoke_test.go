@@ -185,3 +185,38 @@ func TestParseLeakedInvokes(t *testing.T) {
 		}
 	})
 }
+
+// TestParseLeakedInvokes_RealSubagentToolGarbledShapeRecoversAsSpawn guards
+// against a regression found scouting the subagent action-merge: unlike
+// TestParseLeakedInvokes above (which uses schemaStubTool, not real
+// registered tools), this exercises the ACTUAL *SubagentTool's Schema() —
+// schemaPrimaryField needs its top-level "required" array to know "task" is
+// the field a garbled "subagent" leak should recover into. Merging
+// subagent_status/result/kill's action field in dropped that array
+// entirely at first (action is only conditionally required, so there was
+// no single obvious "required" list) — silently breaking this recovery
+// path for real, since nothing else in the test suite exercises a real
+// tool's own Schema() through ParseLeakedInvokes.
+func TestParseLeakedInvokes_RealSubagentToolGarbledShapeRecoversAsSpawn(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(NewSubagentTool(".", alwaysApproveSubagent))
+
+	text := "<invoke>\n" + paramOpen + "subagent\">explore the checkout flow\n</invoke>"
+	cleaned, calls := ParseLeakedInvokes(text, reg)
+	if len(calls) != 1 {
+		t.Fatalf("got %d calls, want 1: %+v", len(calls), calls)
+	}
+	if calls[0].Name != "subagent" {
+		t.Errorf("Name = %q, want subagent", calls[0].Name)
+	}
+	var in map[string]string
+	if err := json.Unmarshal(calls[0].Input, &in); err != nil {
+		t.Fatalf("unmarshal input: %v", err)
+	}
+	if in["task"] != "explore the checkout flow" {
+		t.Errorf("input = %+v, want task recovered from the garbled leak's value", in)
+	}
+	if cleaned != "" {
+		t.Errorf("cleaned = %q, want the recovered block fully stripped", cleaned)
+	}
+}

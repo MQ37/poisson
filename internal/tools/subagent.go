@@ -534,9 +534,24 @@ func (t *SubagentTool) Schema() json.RawMessage {
 			"effort": {"type": "string", "enum": ["low", "medium", "high", "xhigh", "max"], "description": "spawn: override effort for this subagent only. Default: inherit the main session's effort."},
 			"jobId": {"type": "string", "description": "status/result/kill: job ID from a prior spawn ack. status: omit to list every job. kill: omit only when all=true."},
 			"all": {"type": "boolean", "description": "kill: stop every non-finished job this session has spawned instead of a single one."}
-		}
+		},
+		"required": ["task"]
 	}`)
 }
+
+// Note: "task" is schema-required even though it's meaningless for
+// action=status/result/kill — nothing in this codebase enforces JSON
+// Schema's "required" at the field level (validateToolInput only checks
+// submitted field NAMES against the schema's declared properties, never
+// which ones are present; each action's own Execute path enforces its own
+// real requirements, e.g. executeSpawn's "task is required" check). This
+// entry exists for schemaPrimaryField (leaked_invoke.go): a garbled leaked
+// invoke naming just "subagent" as its sole parameter recovers as a spawn
+// with that value as task — the same recovery this schema gave before
+// status/result/kill were merged in, restored here rather than silently
+// dropped. Spawn is still the overwhelmingly common action and the
+// default when action is omitted, so this remains the right fallback
+// interpretation for an ambiguous garbled leak.
 
 func (t *SubagentTool) Execute(ctx context.Context, input json.RawMessage) (ToolResult, error) {
 	var action struct {
