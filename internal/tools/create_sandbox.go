@@ -93,7 +93,7 @@ func (t *CreateSandboxTool) Execute(ctx context.Context, input json.RawMessage) 
 		desc := describeSandboxRequest(hostPath, in.Mounts, in.Env)
 		approved, reason := false, ""
 		if t.approvalFn != nil {
-			approved, reason = t.approvalFn(ctx, desc, "create_sandbox requests host directory access", t.cwd)
+			approved, reason = t.approvalFn(ctx, desc, "sandbox create requests host directory access", t.cwd)
 		}
 		if !approved {
 			msg := "sandbox creation rejected by user"
@@ -129,7 +129,7 @@ func (t *CreateSandboxTool) Execute(ctx context.Context, input json.RawMessage) 
 // being requested — never just "mounts requested: yes".
 func describeSandboxRequest(hostPath string, mounts []sandbox.Mount, env []string) string {
 	var b strings.Builder
-	b.WriteString("create_sandbox")
+	b.WriteString("sandbox create")
 	if hostPath != "" {
 		fmt.Fprintf(&b, " --workspace %s:/workspace:rw", hostPath)
 	}

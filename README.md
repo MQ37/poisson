@@ -79,11 +79,12 @@ px                                                   # launch the TUI
   `config.toml` to let them spawn on each other with no prompt — both sides
   of the pair must be listed, and trust skips only the popup, never the
   configured-provider and known-model checks.
-- **Podman sandboxes** — `create_sandbox` gives an isolated container;
-  `bash` calls passing its `sandboxId` skip the approval gate entirely — the
-  container is the boundary. Managed from any session via `sandbox_cp`/
-  `sandbox_destroy`/`list_sandboxes` or `/sandbox ls`/`kill`. Requires
-  `podman`. ([details](docs/sandbox-plan.md))
+- **Podman sandboxes** — one `sandbox` tool, dispatched by `action`:
+  `create` gives an isolated container (`bash` calls passing its
+  `sandboxId` then skip the approval gate entirely — the container is the
+  boundary); `cp`/`destroy`/`resurrect`/`list` manage it from any session,
+  or via `/sandbox ls`/`kill`. Requires `podman`.
+  ([details](docs/sandbox-plan.md))
 - **Sessions in SQLite** — every message/tool/API call persisted, FTS5
   full-text search, resume any session, auto-compaction when context fills up.
 - **Exact cost & tokens**, live in the status bar and `/cost`, plus live

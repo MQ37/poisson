@@ -456,11 +456,11 @@ func cmdClassifierModel(h commandHost, args []string) error {
 	return nil
 }
 
-// cmdSandbox is the human-facing equivalent of the agent's own
-// list_sandboxes/sandbox_destroy tools — /sandbox ls, /sandbox kill <id>.
-// Looks the actual tool instances up on the registry and calls Execute
-// directly (same pattern Agent.ExpediteSubagents uses for "subagent"),
-// reusing their exact tested logic instead of duplicating it.
+// cmdSandbox is the human-facing equivalent of the agent's own sandbox
+// tool's list/destroy actions — /sandbox ls, /sandbox kill <id>. Looks the
+// actual tool instance up on the registry and calls Execute directly (same
+// pattern Agent.ExpediteSubagents uses for "subagent"), reusing its exact
+// tested logic instead of duplicating it.
 func cmdSandbox(h commandHost, args []string) error {
 	reg := h.Agent().Tools()
 	if reg == nil {
@@ -498,12 +498,13 @@ type sandboxListEntry struct {
 }
 
 func cmdSandboxLs(h commandHost, reg *tools.Registry) error {
-	t, ok := reg.Get("list_sandboxes")
+	t, ok := reg.Get("sandbox")
 	if !ok {
 		h.Out(styleSystem, "sandboxing is not available in this session")
 		return nil
 	}
-	res, err := t.Execute(context.Background(), nil)
+	input, _ := json.Marshal(map[string]string{"action": "list"})
+	res, err := t.Execute(context.Background(), input)
 	if err != nil {
 		h.Out(styleError, "list sandboxes: "+err.Error())
 		return nil
@@ -542,12 +543,12 @@ func cmdSandboxLs(h commandHost, reg *tools.Registry) error {
 }
 
 func cmdSandboxKill(h commandHost, reg *tools.Registry, id string) error {
-	t, ok := reg.Get("sandbox_destroy")
+	t, ok := reg.Get("sandbox")
 	if !ok {
 		h.Out(styleSystem, "sandboxing is not available in this session")
 		return nil
 	}
-	input, _ := json.Marshal(map[string]string{"sandboxId": id})
+	input, _ := json.Marshal(map[string]string{"action": "destroy", "sandboxId": id})
 	res, err := t.Execute(context.Background(), input)
 	if err != nil {
 		h.Out(styleError, "kill sandbox: "+err.Error())

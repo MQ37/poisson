@@ -136,45 +136,52 @@ func TestBuildRegistry_Child(t *testing.T) {
 }
 
 // TestBuildRegistry_NoSandboxManager_OmitsSandboxTools confirms a normal
-// session with no sandbox support configured doesn't even offer
-// create_sandbox/sandbox_cp/sandbox_destroy — reduces hallucination
-// surface rather than exposing tools that would just error every time.
+// session with no sandbox support configured doesn't even offer the
+// sandbox tool — reduces hallucination surface rather than exposing a tool
+// that would just error every time.
 func TestBuildRegistry_NoSandboxManager_OmitsSandboxTools(t *testing.T) {
 	dir := testutil.TempDir(t)
 	reg := BuildRegistry(BuildOptions{Cwd: dir})
-	for _, name := range []string{"create_sandbox", "sandbox_cp", "sandbox_destroy", "list_sandboxes"} {
-		if _, ok := reg.Get(name); ok {
-			t.Errorf("registry with no SandboxManager should not have %q", name)
-		}
+	if _, ok := reg.Get("sandbox"); ok {
+		t.Error("registry with no SandboxManager should not have \"sandbox\"")
 	}
 }
 
-// TestBuildRegistry_WithSandboxManager_ParentGetsAllSandboxTools confirms a
-// parent session with sandboxing enabled gets all three tools.
-func TestBuildRegistry_WithSandboxManager_ParentGetsAllSandboxTools(t *testing.T) {
+// TestBuildRegistry_WithSandboxManager_ParentGetsAllSandboxActions confirms
+// a parent session with sandboxing enabled gets the sandbox tool with
+// action=create available (allowCreate=true).
+func TestBuildRegistry_WithSandboxManager_ParentGetsAllSandboxActions(t *testing.T) {
 	dir := testutil.TempDir(t)
 	reg := BuildRegistry(BuildOptions{Cwd: dir, SandboxManager: sandbox.NewManager(sandbox.NewFakeDriver())})
-	for _, name := range []string{"create_sandbox", "sandbox_cp", "sandbox_destroy", "list_sandboxes"} {
-		if _, ok := reg.Get(name); !ok {
-			t.Errorf("parent registry with SandboxManager missing %q", name)
-		}
+	tool, ok := reg.Get("sandbox")
+	if !ok {
+		t.Fatal("parent registry with SandboxManager missing \"sandbox\"")
+	}
+	st, ok := tool.(*SandboxTool)
+	if !ok || !st.allowCreate {
+		t.Error("parent registry's sandbox tool should allow action=create")
 	}
 }
 
-// TestBuildRegistry_WithSandboxManager_ChildOmitsCreateSandbox: a subagent
+// TestBuildRegistry_WithSandboxManager_ChildOmitsCreateAction: a subagent
 // may only use sandboxes its parent explicitly authorized (see
-// docs/sandbox-plan.md's subagent allow-list), never mint its own —
-// create_sandbox must be parent-only, same as the subagent tool itself.
-func TestBuildRegistry_WithSandboxManager_ChildOmitsCreateSandbox(t *testing.T) {
+// docs/sandbox-plan.md's subagent allow-list), never mint its own — the
+// sandbox tool's action=create must be parent-only, same as the subagent
+// tool itself.
+func TestBuildRegistry_WithSandboxManager_ChildOmitsCreateAction(t *testing.T) {
 	dir := testutil.TempDir(t)
 	reg := BuildRegistry(BuildOptions{Cwd: dir, Child: true, SandboxManager: sandbox.NewManager(sandbox.NewFakeDriver())})
-	if _, ok := reg.Get("create_sandbox"); ok {
-		t.Error("child registry must never expose create_sandbox (would let a subagent mint sandboxes unbounded)")
+	tool, ok := reg.Get("sandbox")
+	if !ok {
+		t.Fatal("child registry with SandboxManager missing \"sandbox\"")
 	}
-	for _, name := range []string{"sandbox_cp", "sandbox_destroy", "list_sandboxes"} {
-		if _, ok := reg.Get(name); !ok {
-			t.Errorf("child registry with SandboxManager missing %q", name)
-		}
+	st, ok := tool.(*SandboxTool)
+	if !ok || st.allowCreate {
+		t.Error("child registry's sandbox tool must not allow action=create (would let a subagent mint sandboxes unbounded)")
+	}
+	res, _ := st.Execute(context.Background(), mustJSON(t, map[string]interface{}{"action": "create"}))
+	if res.Error == "" {
+		t.Error("child registry's sandbox tool must reject action=create even if a model sends it despite the schema")
 	}
 }
 

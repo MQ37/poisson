@@ -193,8 +193,8 @@ func TestInteg_ParallelSubagentsRunConcurrently(t *testing.T) {
 
 // TestInteg_GatedToolsRunSequentially is the regression guard for the
 // approval-ordering bug: two tool calls whose names are in
-// approvalGatedTools (here "bash" and "create_sandbox", standing in for the
-// reported bash-then-create_sandbox scenario) must never run concurrently —
+// approvalGatedTools (here "bash" and "sandbox", standing in for the
+// reported bash-then-sandbox scenario) must never run concurrently —
 // the second must not even start until the first's Execute has fully
 // returned. Two approval-gated calls dispatched concurrently could
 // otherwise show their human-approval prompts out of the model's
@@ -208,18 +208,18 @@ func TestInteg_GatedToolsRunSequentially(t *testing.T) {
 	}
 
 	prov := provider.NewFakeProvider("fake", []provider.Model{{ID: "m", ContextWindow: 8192}})
-	prov.SetResponses(twoToolTurn("bash", "create_sandbox", "done"))
+	prov.SetResponses(twoToolTurn("bash", "sandbox", "done"))
 
 	var firstDone atomic.Bool
 	secondSawFirstDone := make(chan bool, 1)
 
 	reg := tools.NewRegistry()
 	reg.Register(barrierTool{name: "bash", run: func(ctx context.Context) (tools.ToolResult, error) {
-		time.Sleep(20 * time.Millisecond) // gives "create_sandbox" a real chance to start early if it wrongly could
+		time.Sleep(20 * time.Millisecond) // gives "sandbox" a real chance to start early if it wrongly could
 		firstDone.Store(true)
 		return tools.ToolResult{Content: "BASH_DONE"}, nil
 	}})
-	reg.Register(barrierTool{name: "create_sandbox", run: func(ctx context.Context) (tools.ToolResult, error) {
+	reg.Register(barrierTool{name: "sandbox", run: func(ctx context.Context) (tools.ToolResult, error) {
 		secondSawFirstDone <- firstDone.Load()
 		return tools.ToolResult{Content: "SANDBOX_DONE"}, nil
 	}})
@@ -238,10 +238,10 @@ func TestInteg_GatedToolsRunSequentially(t *testing.T) {
 	select {
 	case saw := <-secondSawFirstDone:
 		if !saw {
-			t.Error("create_sandbox started before bash finished — gated calls ran concurrently, want strictly sequential")
+			t.Error("sandbox started before bash finished — gated calls ran concurrently, want strictly sequential")
 		}
 	default:
-		t.Fatal("create_sandbox never ran")
+		t.Fatal("sandbox never ran")
 	}
 }
 
@@ -419,7 +419,7 @@ func TestInteg_ToolDispatchCapsConcurrency(t *testing.T) {
 // TestInteg_TopLevelGatedCallSerializesAgainstNestedBatchGatedCall is the
 // regression guard for the reopened-one-level-down half of the approval-
 // ordering bug: a top-level gated call (bash) and a top-level `batch` call
-// that merely WRAPS a gated call (create_sandbox) must still serialize
+// that merely WRAPS a gated call (sandbox) must still serialize
 // against each other, even though "batch" itself is not in
 // approvalGatedTools. Before isGatedCall taught the dispatch loop to look
 // inside a batch call's nested tools, the batch call went through the
@@ -429,7 +429,7 @@ func TestInteg_ToolDispatchCapsConcurrency(t *testing.T) {
 func TestInteg_TopLevelGatedCallSerializesAgainstNestedBatchGatedCall(t *testing.T) {
 	batchInput, err := json.Marshal(map[string]interface{}{
 		"calls": []map[string]interface{}{
-			{"tool": "create_sandbox", "input": map[string]string{}},
+			{"tool": "sandbox", "input": map[string]string{}},
 		},
 	})
 	if err != nil {
@@ -453,7 +453,7 @@ func TestInteg_TopLevelGatedCallSerializesAgainstNestedBatchGatedCall(t *testing
 		bashDone.Store(true)
 		return tools.ToolResult{Content: "BASH_DONE"}, nil
 	}})
-	e.reg.Register(barrierTool{name: "create_sandbox", run: func(ctx context.Context) (tools.ToolResult, error) {
+	e.reg.Register(barrierTool{name: "sandbox", run: func(ctx context.Context) (tools.ToolResult, error) {
 		sawBashDone <- bashDone.Load()
 		return tools.ToolResult{Content: "SANDBOX_DONE"}, nil
 	}})
@@ -464,10 +464,10 @@ func TestInteg_TopLevelGatedCallSerializesAgainstNestedBatchGatedCall(t *testing
 	select {
 	case saw := <-sawBashDone:
 		if !saw {
-			t.Error("nested create_sandbox (inside batch) started before top-level bash finished — batch bypassed the gated walker")
+			t.Error("nested sandbox (inside batch) started before top-level bash finished — batch bypassed the gated walker")
 		}
 	default:
-		t.Fatal("nested create_sandbox never ran")
+		t.Fatal("nested sandbox never ran")
 	}
 }
 
@@ -483,8 +483,8 @@ func TestInteg_GatedCallSerializesAgainstOddlyCasedNestedBatchCall(t *testing.T)
 		"calls": []map[string]interface{}{
 			// Oddly cased, no mcp_ prefix — not what stripWireToolPrefix
 			// alone would normalize; only CanonicalToolName's full
-			// lowercase fallback resolves this to "create_sandbox".
-			{"tool": "Create_Sandbox", "input": map[string]string{}},
+			// lowercase fallback resolves this to "sandbox".
+			{"tool": "Sandbox", "input": map[string]string{}},
 		},
 	})
 	if err != nil {
@@ -508,7 +508,7 @@ func TestInteg_GatedCallSerializesAgainstOddlyCasedNestedBatchCall(t *testing.T)
 		bashDone.Store(true)
 		return tools.ToolResult{Content: "BASH_DONE"}, nil
 	}})
-	e.reg.Register(barrierTool{name: "create_sandbox", run: func(ctx context.Context) (tools.ToolResult, error) {
+	e.reg.Register(barrierTool{name: "sandbox", run: func(ctx context.Context) (tools.ToolResult, error) {
 		sawBashDone <- bashDone.Load()
 		return tools.ToolResult{Content: "SANDBOX_DONE"}, nil
 	}})
@@ -519,10 +519,10 @@ func TestInteg_GatedCallSerializesAgainstOddlyCasedNestedBatchCall(t *testing.T)
 	select {
 	case saw := <-sawBashDone:
 		if !saw {
-			t.Error("nested oddly-cased \"Create_Sandbox\" (inside batch) started before top-level bash finished — CanonicalToolName fallback not applied")
+			t.Error("nested oddly-cased \"Sandbox\" (inside batch) started before top-level bash finished — CanonicalToolName fallback not applied")
 		}
 	default:
-		t.Fatal("nested Create_Sandbox call never ran")
+		t.Fatal("nested Sandbox call never ran")
 	}
 }
 

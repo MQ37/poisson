@@ -1,5 +1,15 @@
 # Sandbox Plan
 
+> **Update (tool consolidation):** the five tools this doc describes
+> (`create_sandbox`, `sandbox_cp`, `sandbox_destroy`, `sandbox_resurrect`,
+> `list_sandboxes`) were later merged into one `sandbox` tool dispatched by
+> an `action` field (`internal/tools/sandbox.go`) — cuts five tool
+> name+description+schema blocks from every session's first-call context
+> down to one, with no change in underlying behavior (each action's logic
+> is untouched, just no longer registered as its own top-level tool). Read
+> every `create_sandbox`/`sandbox_cp`/etc. reference below as
+> `sandbox(action=create)`/`sandbox(action=cp)`/etc.
+
 Podman-backed sandbox execution for `bash`, replacing the dead `sandbox
 bool` scaffolding (`BuildOptions.Sandbox`, per-tool `sandbox bool` param,
 and the already-dead `POISSON_SANDBOX`/`IS_SANDBOX` env-var history) with

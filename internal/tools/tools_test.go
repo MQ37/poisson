@@ -1153,7 +1153,7 @@ func TestBashTool_ScratchWorkdirHint(t *testing.T) {
 		workdir string
 		want    string // substring expected in the hint, or "" if none expected
 	}{
-		{"mutating_outside_root_hinted", "sed -i 's/hello/bye/' f.txt", scratchDir, "create_sandbox"},
+		{"mutating_outside_root_hinted", "sed -i 's/hello/bye/' f.txt", scratchDir, "action=create"},
 		{"readonly_outside_root_no_hint", "grep hello f.txt", scratchDir, ""},
 		{"mutating_at_session_root_no_hint", "sed -i 's/hello/bye/' f.txt", "", ""},
 	}
@@ -1173,7 +1173,7 @@ func TestBashTool_ScratchWorkdirHint(t *testing.T) {
 				t.Fatalf("command %q: unmarshal: %v (res=%+v)", c.command, err, res)
 			}
 			if c.want == "" {
-				if strings.Contains(out.Hint, "create_sandbox") {
+				if strings.Contains(out.Hint, "action=create") {
 					t.Errorf("command %q: unexpected scratch-workdir hint: %q", c.command, out.Hint)
 				}
 				return

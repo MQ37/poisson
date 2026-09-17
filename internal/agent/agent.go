@@ -138,10 +138,10 @@ type OutputEvent struct {
 
 // Agent runs the turn loop for a single session.
 type Agent struct {
-	store      *store.Store
-	provider   provider.Provider
-	tools      *tools.Registry
-	config     *config.Config
+	store    *store.Store
+	provider provider.Provider
+	tools    *tools.Registry
+	config   *config.Config
 	// sessionIDStore holds the active session id. An atomic.Pointer, not a
 	// plain string: SwitchSession (input goroutine, /new and /resume) writes
 	// it while an async subagent job's completion goroutine (long after its
@@ -149,9 +149,9 @@ type Agent struct {
 	// it concurrently via SessionID() — a data race otherwise.
 	sessionIDStore atomic.Pointer[string]
 	outputChan     chan OutputEvent
-	approvalFn func(ctx context.Context, command, description, workdir string) (bool, string)
-	model      string
-	effort     string
+	approvalFn     func(ctx context.Context, command, description, workdir string) (bool, string)
+	model          string
+	effort         string
 
 	// classifierModels overrides which model rates bash-command risk (see
 	// risk.go), keyed by provider ID so switching provider back and forth
@@ -980,24 +980,30 @@ const maxRenderTagRetries = 2
 const maxConcurrentToolCalls = 8
 
 // approvalGatedTools are tool names whose Execute asks for approval as
-// (essentially) the first thing it does: bash's risk gate, edit/write/
-// sandbox_cp's sensitive-path gate, create_sandbox's mount/env gate. Every
-// one of these funnels through the same single-flight TUI.Approve call (see
-// its doc comment), which has no ordering guarantee across concurrent
-// goroutines — a plain sync.Mutex hands out its lock in whatever order the
-// Go scheduler happens to wake blocked goroutines, not necessarily the
-// model's submission order. Two gated calls dispatched concurrently can
-// therefore show their approval prompts (and run) out of order — e.g. a
-// `create_sandbox` call submitted after a `bash` call prompting/finishing
-// first, even though the sandbox may depend on the bash command. The
-// dispatch loop below pulls these out of the concurrent pool and runs them
-// one at a time, in submission order, so two of them can never be in flight
-// together — the race is structurally impossible rather than merely
-// unlikely. Every other tool call keeps full concurrency.
+// (essentially) the first thing it does: bash's risk gate, edit/write's
+// sensitive-path gate, sandbox's create (mount/env) and cp (sensitive-path)
+// gates. Every one of these funnels through the same single-flight
+// TUI.Approve call (see its doc comment), which has no ordering guarantee
+// across concurrent goroutines — a plain sync.Mutex hands out its lock in
+// whatever order the Go scheduler happens to wake blocked goroutines, not
+// necessarily the model's submission order. Two gated calls dispatched
+// concurrently can therefore show their approval prompts (and run) out of
+// order — e.g. a `sandbox` create call submitted after a `bash` call
+// prompting/finishing first, even though the sandbox may depend on the bash
+// command. The dispatch loop below pulls these out of the concurrent pool
+// and runs them one at a time, in submission order, so two of them can
+// never be in flight together — the race is structurally impossible rather
+// than merely unlikely. Every other tool call keeps full concurrency.
+//
+// sandbox is listed whole (not just its create/cp actions) for the same
+// reason as batch.go's mutatingTools: this map keys off tool name only, so
+// destroy/resurrect/list are conservatively pulled into the serial walker
+// too even though they never reach an approval prompt — a small, accepted
+// concurrency cost for a rare, near-instant operation.
 //
 // subagent deliberately is NOT here, despite also being able to trigger a
 // human approval prompt (relayed from a gated call the child itself runs,
-// e.g. its own bash): unlike bash/edit/write/create_sandbox, a subagent's
+// e.g. its own bash): unlike bash/edit/write/sandbox, a subagent's
 // approval_request can arrive at any arbitrary point during its run — a
 // child agent loop that may take minutes — not near the start of Execute.
 // There was never a real "submission order" relationship between a
@@ -1011,11 +1017,10 @@ const maxConcurrentToolCalls = 8
 // set only sharpens it into a submission-order guarantee for the tools
 // whose approval timing is otherwise racy at the top level.
 var approvalGatedTools = map[string]bool{
-	"bash":           true,
-	"edit":           true,
-	"write":          true,
-	"create_sandbox": true,
-	"sandbox_cp":     true,
+	"bash":    true,
+	"edit":    true,
+	"write":   true,
+	"sandbox": true,
 }
 
 // isGatedCall reports whether tc must go through the sequential gated
@@ -1024,7 +1029,7 @@ var approvalGatedTools = map[string]bool{
 // batch.go's own mutatingTools set independently forces any such batch to
 // run its nested calls serially once Execute starts — this check is what
 // keeps that same batch call from itself racing another top-level gated
-// call (e.g. a plain `bash` submitted alongside a `batch{create_sandbox}`)
+// call (e.g. a plain `bash` submitted alongside a `batch{sandbox}`)
 // through the two different dispatch paths simultaneously. Without it, the
 // top-level partitioning below only ever sees "batch", never what's inside,
 // and the ordering guarantee approvalGatedTools exists for would hold

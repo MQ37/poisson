@@ -133,7 +133,7 @@ func TestBashTool_SandboxedExecFailurePropagates(t *testing.T) {
 // TestBashTool_SandboxedOwnedStoppedGivesResurrectHint covers the
 // same-process case: this Manager still owns the sandbox locally (it
 // created it earlier), but the container has since stopped (MarkDead) —
-// the error must nudge toward sandbox_resurrect, not a generic Exec
+// the error must nudge toward action=resurrect, not a generic Exec
 // failure.
 func TestBashTool_SandboxedOwnedStoppedGivesResurrectHint(t *testing.T) {
 	dir := testutil.TempDir(t)
@@ -153,8 +153,8 @@ func TestBashTool_SandboxedOwnedStoppedGivesResurrectHint(t *testing.T) {
 		"description": "echo",
 		"sandboxId":   sb.ID,
 	}))
-	if res.Error == "" || !strings.Contains(res.Error, "sandbox_resurrect") {
-		t.Fatalf("error = %q, want it to nudge toward sandbox_resurrect", res.Error)
+	if res.Error == "" || !strings.Contains(res.Error, "action=resurrect") {
+		t.Fatalf("error = %q, want it to nudge toward action=resurrect", res.Error)
 	}
 }
 
@@ -162,7 +162,7 @@ func TestBashTool_SandboxedOwnedStoppedGivesResurrectHint(t *testing.T) {
 // scenario itself: a fresh session (as if px restarted) never created this
 // sandbox, but discovery can see it — stopped — by exact name. The error
 // must distinguish this from a plain "not found" and nudge toward
-// sandbox_resurrect.
+// action=resurrect.
 func TestBashTool_SandboxedDiscoveredStoppedGivesResurrectHint(t *testing.T) {
 	dir := testutil.TempDir(t)
 	driver := sandbox.NewFakeDriver()
@@ -183,8 +183,8 @@ func TestBashTool_SandboxedDiscoveredStoppedGivesResurrectHint(t *testing.T) {
 		"description": "echo",
 		"sandboxId":   sb.ID,
 	}))
-	if res.Error == "" || !strings.Contains(res.Error, "sandbox_resurrect") {
-		t.Fatalf("error = %q, want it to nudge toward sandbox_resurrect", res.Error)
+	if res.Error == "" || !strings.Contains(res.Error, "action=resurrect") {
+		t.Fatalf("error = %q, want it to nudge toward action=resurrect", res.Error)
 	}
 }
 
@@ -211,7 +211,7 @@ func TestBashTool_SandboxedStoppedWithoutDiscoveryStaysGeneric(t *testing.T) {
 		"description": "echo",
 		"sandboxId":   sb.ID,
 	}))
-	if res.Error == "" || strings.Contains(res.Error, "sandbox_resurrect") {
+	if res.Error == "" || strings.Contains(res.Error, "action=resurrect") {
 		t.Fatalf("error = %q, want the generic not-found message with no resurrect hint", res.Error)
 	}
 	if !strings.Contains(res.Error, "not found") {
@@ -243,8 +243,8 @@ func TestBatch_SandboxedBashOnStoppedContainerGivesResurrectHint(t *testing.T) {
 	if res.Error != "" {
 		t.Fatalf("batch error: %s", res.Error)
 	}
-	if !strings.Contains(res.Content, "sandbox_resurrect") {
-		t.Errorf("batch step output = %q, want it to nudge toward sandbox_resurrect", res.Content)
+	if !strings.Contains(res.Content, "action=resurrect") {
+		t.Errorf("batch step output = %q, want it to nudge toward action=resurrect", res.Content)
 	}
 }
 

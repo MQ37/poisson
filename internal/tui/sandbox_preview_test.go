@@ -12,12 +12,12 @@ import (
 // human approval prompt exists to show in full. name/hostPath must come
 // through as plain text with the path intact.
 func TestCreateSandboxPreviewShowsFullHostPath(t *testing.T) {
-	input := []byte(`{"name":"test-ondrej-sojka-docker","hostPath":"/home/mq/workdir/apify/hiring/hiring-ai-ondrej-sojka"}`)
+	input := []byte(`{"action":"create","name":"test-ondrej-sojka-docker","hostPath":"/home/mq/workdir/apify/hiring/hiring-ai-ondrej-sojka"}`)
 	want := "test-ondrej-sojka-docker — /home/mq/workdir/apify/hiring/hiring-ai-ondrej-sojka"
-	if got := toolInputPreview("create_sandbox", input); got != want {
+	if got := toolInputPreview("sandbox", input); got != want {
 		t.Errorf("preview = %q, want %q", got, want)
 	}
-	if got := toolCollapsedReason("create_sandbox", input); got != want {
+	if got := toolCollapsedReason("sandbox", input); got != want {
 		t.Errorf("card preview = %q, want %q", got, want)
 	}
 }
@@ -25,9 +25,9 @@ func TestCreateSandboxPreviewShowsFullHostPath(t *testing.T) {
 // TestCreateSandboxPreviewIncludesMounts: extra mounts (beyond hostPath) are
 // part of what human approval is granting, so they belong in the preview too.
 func TestCreateSandboxPreviewIncludesMounts(t *testing.T) {
-	input := []byte(`{"name":"s","hostPath":"/a","mounts":[{"hostPath":"/b","containerPath":"/c"}]}`)
+	input := []byte(`{"action":"create","name":"s","hostPath":"/a","mounts":[{"hostPath":"/b","containerPath":"/c"}]}`)
 	want := "s — /a +/b"
-	if got := toolInputPreview("create_sandbox", input); got != want {
+	if got := toolInputPreview("sandbox", input); got != want {
 		t.Errorf("preview = %q, want %q", got, want)
 	}
 }
@@ -35,8 +35,8 @@ func TestCreateSandboxPreviewIncludesMounts(t *testing.T) {
 // TestCreateSandboxPreviewNameOnly: a sandbox with no hostPath/mounts (no
 // workspace) still shows its name instead of falling back to raw JSON.
 func TestCreateSandboxPreviewNameOnly(t *testing.T) {
-	input := []byte(`{"name":"isolated"}`)
-	if got, want := toolInputPreview("create_sandbox", input), "isolated"; got != want {
+	input := []byte(`{"action":"create","name":"isolated"}`)
+	if got, want := toolInputPreview("sandbox", input), "isolated"; got != want {
 		t.Errorf("preview = %q, want %q", got, want)
 	}
 }
@@ -45,28 +45,28 @@ func TestCreateSandboxPreviewNameOnly(t *testing.T) {
 // hostPath -> workspacePath, "out" reads the reverse, matching the tool's
 // own semantics rather than always printing hostPath first.
 func TestSandboxCpPreviewShowsBothPaths(t *testing.T) {
-	in := []byte(`{"sandboxId":"s","direction":"in","hostPath":"/host/data","workspacePath":"data"}`)
-	if got, want := toolInputPreview("sandbox_cp", in), "/host/data → data"; got != want {
+	in := []byte(`{"action":"cp","sandboxId":"s","direction":"in","hostPath":"/host/data","workspacePath":"data"}`)
+	if got, want := toolInputPreview("sandbox", in), "/host/data → data"; got != want {
 		t.Errorf("in preview = %q, want %q", got, want)
 	}
-	out := []byte(`{"sandboxId":"s","direction":"out","hostPath":"/host/data","workspacePath":"data"}`)
-	if got, want := toolInputPreview("sandbox_cp", out), "data → /host/data"; got != want {
+	out := []byte(`{"action":"cp","sandboxId":"s","direction":"out","hostPath":"/host/data","workspacePath":"data"}`)
+	if got, want := toolInputPreview("sandbox", out), "data → /host/data"; got != want {
 		t.Errorf("out preview = %q, want %q", got, want)
 	}
 }
 
 // TestToolInputPreviewFullDropsCaps is a regression test: the collapsed
-// preview intentionally caps every field (e.g. create_sandbox's mount list
-// at 200 bytes) to fit one line, but toolInputPreviewFull backs the
-// expanded body — expanding a card must show the whole value, not the same
-// capped text with the "..." moved further out.
+// preview intentionally caps every field (e.g. create's mount list at 200
+// bytes) to fit one line, but toolInputPreviewFull backs the expanded body
+// — expanding a card must show the whole value, not the same capped text
+// with the "..." moved further out.
 func TestToolInputPreviewFullDropsCaps(t *testing.T) {
 	longPath := "/host/" + strings.Repeat("a", 300)
-	capped := []byte(`{"name":"s","hostPath":"` + longPath + `"}`)
-	if got := toolInputPreview("create_sandbox", capped); strings.Contains(got, longPath) {
+	capped := []byte(`{"action":"create","name":"s","hostPath":"` + longPath + `"}`)
+	if got := toolInputPreview("sandbox", capped); strings.Contains(got, longPath) {
 		t.Fatalf("collapsed preview unexpectedly contains the full long path: %q", got)
 	}
-	full := toolInputPreviewFull("create_sandbox", capped)
+	full := toolInputPreviewFull("sandbox", capped)
 	if !strings.Contains(full, longPath) {
 		t.Errorf("full preview = %q, want it to contain the untruncated path %q", full, longPath)
 	}

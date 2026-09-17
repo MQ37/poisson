@@ -588,11 +588,11 @@ func (t ctxBarrierTool) Execute(ctx context.Context, _ json.RawMessage) (ToolRes
 
 // TestBatch_ApprovalGatedToolsForceSerial is the regression guard for
 // closing the approval-ordering race one level down inside batch's own
-// dispatch: a batch made only of bash/create_sandbox/sandbox_cp calls (no
-// edit/write/subagent present) must still run them one at a time, in
-// calls[] order — before mutatingTools included these three, such a batch
-// went through the concurrent path, letting two calls each independently
-// reach TUI.Approve() with no ordering guarantee.
+// dispatch: a batch made only of bash/sandbox calls (no edit/write/subagent
+// present) must still run them one at a time, in calls[] order — before
+// mutatingTools included these, such a batch went through the concurrent
+// path, letting two calls each independently reach TUI.Approve() with no
+// ordering guarantee.
 func TestBatch_ApprovalGatedToolsForceSerial(t *testing.T) {
 	reg := NewRegistry()
 	var firstDone bool
@@ -600,12 +600,12 @@ func TestBatch_ApprovalGatedToolsForceSerial(t *testing.T) {
 	sawFirstDoneWhenSecondRan := false
 
 	reg.Register(barrierStepTool{name: "bash", run: func() {
-		time.Sleep(20 * time.Millisecond) // gives create_sandbox a real chance to start early if it wrongly could
+		time.Sleep(20 * time.Millisecond) // gives sandbox a real chance to start early if it wrongly could
 		mu.Lock()
 		firstDone = true
 		mu.Unlock()
 	}})
-	reg.Register(barrierStepTool{name: "create_sandbox", run: func() {
+	reg.Register(barrierStepTool{name: "sandbox", run: func() {
 		mu.Lock()
 		sawFirstDoneWhenSecondRan = firstDone
 		mu.Unlock()
@@ -616,7 +616,7 @@ func TestBatch_ApprovalGatedToolsForceSerial(t *testing.T) {
 	_, err := bt.Execute(context.Background(), mustJSON(t, map[string]interface{}{
 		"calls": []map[string]interface{}{
 			{"tool": "bash", "input": map[string]string{}},
-			{"tool": "create_sandbox", "input": map[string]string{}},
+			{"tool": "sandbox", "input": map[string]string{}},
 		},
 	}))
 	if err != nil {
@@ -626,7 +626,7 @@ func TestBatch_ApprovalGatedToolsForceSerial(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if !sawFirstDoneWhenSecondRan {
-		t.Error("create_sandbox started before bash finished — approval-gated batch calls ran concurrently, want strictly sequential")
+		t.Error("sandbox started before bash finished — approval-gated batch calls ran concurrently, want strictly sequential")
 	}
 }
 

@@ -64,7 +64,7 @@ func (t *BashTool) SetSandboxManager(mgr *sandbox.Manager) {
 func (t *BashTool) Name() string { return "bash" }
 
 func (t *BashTool) Description() string {
-	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n still runs (not refused) but comes back with a hint nudging you to 'read' next time — skips the approval gate, supports offset/limit. For several independent tool ops in one step use batch (not a bash pipeline of the same). Every call is stateless — cd/export do not carry to the next call; pass workdir explicitly whenever you need a non-default directory. Optional sandboxId runs the command inside that sandbox container instead of the host, with no approval gate at all — the sandbox's own isolation is the safety boundary; read/write/edit/grep/glob still take a plain host path (from create_sandbox's result), not a sandboxId."
+	return "Execute a bash command. 'description' (REQUIRED) must be a short one-line purpose explaining what the command does — the user sees it in approval prompts for gated commands. A deterministic guard auto-approves read-only, side-effect-free commands (ls, cat, grep/rg, find, git status/diff/log, ...) with no approval step at all; gated commands classified as low risk by the LLM also run automatically; medium/high/unknown require human approval. Prefer dedicated tools when they cover the job: read (not cat/head/tail/sed -n), grep (not rg/grep for content search), glob (not find -name), edit/write (not sed -i/awk redirect). Plain cat/head/tail/sed -n still runs (not refused) but comes back with a hint nudging you to 'read' next time — skips the approval gate, supports offset/limit. For several independent tool ops in one step use batch (not a bash pipeline of the same). Every call is stateless — cd/export do not carry to the next call; pass workdir explicitly whenever you need a non-default directory. Optional sandboxId runs the command inside that sandbox container instead of the host, with no approval gate at all — the sandbox's own isolation is the safety boundary; read/write/edit/grep/glob still take a plain host path (from sandbox(action=create)'s result), not a sandboxId."
 }
 
 func (t *BashTool) Schema() json.RawMessage {
@@ -75,7 +75,7 @@ func (t *BashTool) Schema() json.RawMessage {
     "description": { "type": "string", "description": "Short description of what the command does" },
     "workdir": { "type": "string", "description": "Working directory for this call (default: session cwd). Absolute or relative to session cwd. Does not persist to later calls." },
     "timeout": { "type": "integer", "description": "Timeout in seconds (default: 120)" },
-    "sandboxId": { "type": "string", "description": "Run inside this sandbox container instead of on the host — no approval gate. Must be a real, running sandbox name — this session's own create_sandbox result, or one found via list_sandboxes (sandboxes are visible/usable across every session on this host, not scoped to the one that created them). If list_sandboxes shows it with running=false (e.g. after a restart), call sandbox_resurrect on it first. workdir is then a path inside the container (default: its own default directory), not a host path." }
+    "sandboxId": { "type": "string", "description": "Run inside this sandbox container instead of on the host — no approval gate. Must be a real, running sandbox name — this session's own sandbox(action=create) result, or one found via sandbox(action=list) (sandboxes are visible/usable across every session on this host, not scoped to the one that created them). If sandbox(action=list) shows it with running=false (e.g. after a restart), call sandbox(action=resurrect) on it first. workdir is then a path inside the container (default: its own default directory), not a host path." }
   },
   "required": ["command", "description"]
 }`)
@@ -324,19 +324,19 @@ func (t *BashTool) executeSandboxed(ctx context.Context, in bashInput) (ToolResu
 	}
 	// A stopped-but-not-destroyed sandbox (e.g. after a poisson restart)
 	// deserves a specific nudge, not the generic not-found — the model
-	// otherwise has no way to know sandbox_resurrect exists for exactly
-	// this case, and might waste a create_sandbox call rebuilding a
+	// otherwise has no way to know sandbox(action=resurrect) exists for
+	// exactly this case, and might waste a create call rebuilding a
 	// container it already had. Covers a call routed through batch too:
 	// batch dispatches into this same registered "bash" tool, no separate
 	// check needed there.
 	if !t.sandboxMgr.Owns(in.SandboxID) {
 		if t.sandboxMgr.DiagnoseStopped(ctx, in.SandboxID) {
-			return ToolResult{Error: fmt.Sprintf("sandbox %q exists but is stopped (e.g. after a restart or crash) — call sandbox_resurrect with this sandboxId first, then retry", in.SandboxID)}, nil
+			return ToolResult{Error: fmt.Sprintf("sandbox %q exists but is stopped (e.g. after a restart or crash) — call sandbox(action=resurrect) with this sandboxId first, then retry", in.SandboxID)}, nil
 		}
 		return ToolResult{Error: fmt.Sprintf("sandbox %q not found — it may belong to a different session, have been destroyed, or never existed", in.SandboxID)}, nil
 	}
 	if alive, err := t.sandboxMgr.Alive(ctx, in.SandboxID); err == nil && !alive {
-		return ToolResult{Error: fmt.Sprintf("sandbox %q is stopped — call sandbox_resurrect with this sandboxId first, then retry", in.SandboxID)}, nil
+		return ToolResult{Error: fmt.Sprintf("sandbox %q is stopped — call sandbox(action=resurrect) with this sandboxId first, then retry", in.SandboxID)}, nil
 	}
 
 	timeoutSec := 120
@@ -523,7 +523,7 @@ func scratchWorkdirHint(command, cwd, dir string) string {
 	if safe, _ := guard.ClassifyInDir(command, dir); safe {
 		return ""
 	}
-	return fmt.Sprintf("workdir %q looks like scratch work outside the project, and this command needed approval — consider create_sandbox once, then bash(sandboxId=...) here: no approval gate for the rest of that workspace.", dir)
+	return fmt.Sprintf("workdir %q looks like scratch work outside the project, and this command needed approval — consider sandbox(action=create) once, then bash(sandboxId=...) here: no approval gate for the rest of that workspace.", dir)
 }
 
 // scratchDirPrefixes are filesystem roots treated as disposable-scratch

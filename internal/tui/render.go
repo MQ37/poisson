@@ -198,23 +198,29 @@ func toolInputPreviewCapped(toolName string, input []byte, cap func(string, int)
 			}
 			return cap(in.Name, 80)
 		}
-	case "create_sandbox":
-		if s := createSandboxPreview(input, cap); s != "" {
-			return s
-		}
-	case "sandbox_cp":
-		var in struct {
+	case "sandbox":
+		var action struct {
+			Action        string `json:"action"`
 			Direction     string `json:"direction"`
 			HostPath      string `json:"hostPath"`
 			WorkspacePath string `json:"workspacePath"`
 		}
-		if json.Unmarshal(input, &in) == nil && in.HostPath != "" {
-			arrow := "→"
-			left, right := in.HostPath, in.WorkspacePath
-			if in.Direction == "out" {
-				left, right = in.WorkspacePath, in.HostPath
+		if json.Unmarshal(input, &action) == nil {
+			switch action.Action {
+			case "create":
+				if s := createSandboxPreview(input, cap); s != "" {
+					return s
+				}
+			case "cp":
+				if action.HostPath != "" {
+					arrow := "→"
+					left, right := action.HostPath, action.WorkspacePath
+					if action.Direction == "out" {
+						left, right = action.WorkspacePath, action.HostPath
+					}
+					return cap(fmt.Sprintf("%s %s %s", left, arrow, right), 200)
+				}
 			}
-			return cap(fmt.Sprintf("%s %s %s", left, arrow, right), 200)
 		}
 	}
 	return cap(strings.TrimSpace(string(input)), 80)

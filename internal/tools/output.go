@@ -65,11 +65,10 @@ func sweepStaleSpillFiles() {
 //     individually per sub-call.
 //   - read_messages/recall replay another session's already-persisted
 //     (already-scrubbed-on-write) history.
-//   - glob/list_sandboxes/list_sessions/set_title/create_sandbox/sandbox_cp/
-//     sandbox_destroy/sandbox_resurrect return filenames or short status
-//     text with no external payload (create_sandbox separately redacts env
-//     values to "<redacted>" before they ever reach ToolResult, see
-//     create_sandbox.go).
+//   - glob/list_sessions/set_title/sandbox return filenames or short status
+//     text with no external payload (sandbox's create action separately
+//     redacts env values to "<redacted>" before they ever reach ToolResult,
+//     see create_sandbox.go).
 //
 // Deliberately a denylist, not an allowlist: any tool not listed here keeps
 // today's default (scrubbed), matching RedactSecrets' documented
@@ -77,22 +76,18 @@ func sweepStaleSpillFiles() {
 // fetches external content is protected automatically and has to be added
 // here on purpose to opt out.
 var noRedactionTools = map[string]bool{
-	"write":             true,
-	"subagent":          true,
-	"subagent_result":   true,
-	"subagent_status":   true,
-	"subagent_kill":     true,
-	"batch":             true,
-	"read_messages":     true,
-	"recall":            true,
-	"glob":              true,
-	"list_sandboxes":    true,
-	"list_sessions":     true,
-	"set_title":         true,
-	"create_sandbox":    true,
-	"sandbox_cp":        true,
-	"sandbox_destroy":   true,
-	"sandbox_resurrect": true,
+	"write":           true,
+	"subagent":        true,
+	"subagent_result": true,
+	"subagent_status": true,
+	"subagent_kill":   true,
+	"batch":           true,
+	"read_messages":   true,
+	"recall":          true,
+	"glob":            true,
+	"list_sessions":   true,
+	"set_title":       true,
+	"sandbox":         true,
 }
 
 // TrimToolResult bounds tool output and scrubs secret-shaped substrings out

@@ -138,10 +138,10 @@ type batchInput struct {
 
 // mutatingTools force serial execution when present in the batch.
 //
-// bash, create_sandbox and sandbox_cp are approval-gated the same way edit/
-// write are (see agent.go's approvalGatedTools) — each independently
-// reaches TUI.Approve(), which is single-flight but has no ordering guarantee
-// across concurrent goroutines. Without these three here, a batch made of
+// bash and sandbox are approval-gated the same way edit/write are (see
+// agent.go's approvalGatedTools) — each independently reaches
+// TUI.Approve(), which is single-flight but has no ordering guarantee
+// across concurrent goroutines. Without these here, a batch made of
 // e.g. two bash calls (no edit/write present) would dispatch them
 // through the concurrent path below, each hitting the approval prompt in
 // whatever order the Go scheduler happens to wake them — the exact race
@@ -150,25 +150,33 @@ type batchInput struct {
 // closes that: every approval-gated tool this package knows about is
 // mutating for batch's purposes, gated or actually-mutating alike.
 //
+// sandbox is listed whole, not just its create/cp actions (the only two
+// that actually reach an approval prompt) — batch dispatches by tool name
+// alone, without parsing a nested call's own action field, so destroy/
+// resurrect/list actions are conservatively serialized too. Those three
+// were never performance-sensitive in a batch (rare, near-instant, no
+// approval prompt to race), so this only trades a little potential
+// concurrency for not having to teach batch about one tool's internal
+// action shape.
+//
 // subagent deliberately is NOT here (same reasoning as agent.go's
 // approvalGatedTools, which also dropped it): its own approval prompt, if
 // any, is relayed from the child at an arbitrary point during a run that
 // may take minutes, not near the start of Execute — there's no real
 // "submission order" relationship to protect, unlike bash/edit/write/
-// create_sandbox/sandbox_cp which ask immediately. This one was the second
-// half of the "only the first scout's turns move" bug: a model that can
-// only emit one tool_use per turn has no way to spawn N parallel subagents
-// except by wrapping them all in a single `batch` call, so having subagent
-// here forced every batched scout to run one at a time regardless of the
+// sandbox which ask immediately. This one was the second half of the
+// "only the first scout's turns move" bug: a model that can only emit one
+// tool_use per turn has no way to spawn N parallel subagents except by
+// wrapping them all in a single `batch` call, so having subagent here
+// forced every batched scout to run one at a time regardless of the
 // top-level fix in agent.go's approvalGatedTools (which only ever sees the
 // single top-level "batch" tool_use, never what's nested inside it). See
 // TestBatch_ParallelSubagentsRunConcurrently.
 var mutatingTools = map[string]bool{
-	"edit":           true,
-	"write":          true,
-	"bash":           true,
-	"create_sandbox": true,
-	"sandbox_cp":     true,
+	"edit":    true,
+	"write":   true,
+	"bash":    true,
+	"sandbox": true,
 }
 
 type batchStepOut struct {
