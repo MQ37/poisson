@@ -1,5 +1,15 @@
 # Async Subagent Plan
 
+> **Update (tool consolidation):** `subagent_status`, `subagent_result`, and
+> `subagent_kill` — described below as three separate tools — were later
+> merged into the `subagent` tool itself, dispatched by an `action` field
+> (`internal/tools/subagent.go`: action=spawn/status/result/kill; spawn is
+> the default when action is omitted, for backward compatibility). Same
+> underlying job-registry logic, just one registered tool name instead of
+> four. Read every `subagent_status`/`subagent_result`/`subagent_kill`
+> reference below as `subagent(action=status)`/`subagent(action=result)`/
+> `subagent(action=kill)`.
+
 Rework `subagent` from a blocking tool call into a spawn/poll/retrieve job:
 model calls `subagent`, gets a job ID back immediately, keeps working (or
 lets the turn end and the user keep chatting) while the child runs in the

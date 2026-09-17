@@ -42,7 +42,7 @@ func TestHandleEvent_SubagentCompletionBeforeAck(t *testing.T) {
 		Type:              agent.OutputToolResult,
 		ToolName:          "subagent",
 		ToolCallID:        "call-1",
-		ToolResultContent: `Subagent "scout" spawned as job sub-a1b2c3d4. It runs in the background — use subagent_status to check progress, subagent_result to retrieve the final output once done.`,
+		ToolResultContent: `Subagent "scout" spawned as job sub-a1b2c3d4. It runs in the background — use action=status to check progress, action=result to retrieve the final output once done.`,
 	})
 	doneAfterLateAck := tui.scroll.blocks[0].meta.ToolDone
 	tui.mu.Unlock()
@@ -73,7 +73,7 @@ func TestActiveToolsNotDoubleDecrementedBySubagentCompletion(t *testing.T) {
 
 	tui.handleEvent(agent.OutputEvent{
 		Type: agent.OutputToolResult, ToolName: "subagent", ToolCallID: "call-1",
-		ToolResultContent: `Subagent "scout" spawned as job sub-x. It runs in the background — use subagent_status to check progress, subagent_result to retrieve the final output once done.`,
+		ToolResultContent: `Subagent "scout" spawned as job sub-x. It runs in the background — use action=status to check progress, action=result to retrieve the final output once done.`,
 	})
 	tui.markAfterEvent(agent.OutputEvent{Type: agent.OutputToolResult, ToolName: "subagent", ToolCallID: "call-1"})
 	if tui.activeTools != 0 {

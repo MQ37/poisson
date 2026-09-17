@@ -215,11 +215,11 @@ func (s *scrollback) appendSubagentCard(id int64, providerCallID, name, task, mo
 // subagentDoneNotificationText builds the nudge injected into the main
 // conversation when an async subagent job finishes (see
 // docs/async-subagent-plan.md phase 3 and TUI.injectSubagentDoneNotification)
-// — a nudge, not the result itself, so subagent_result's one-shot retrieval
+// — a nudge, not the result itself, so action=result's one-shot retrieval
 // contract stays meaningful: the model decides whether/when to actually
 // fetch it.
 //
-// killed takes priority over errMsg: an explicit subagent_kill sets the
+// killed takes priority over errMsg: an explicit action=kill sets the
 // same generic "subagent cancelled" res.Error an ordinary shutdown
 // cancellation would, but it's not a failure — the user asked for
 // it — so it gets its own neutral wording instead of being narrated as
@@ -230,9 +230,9 @@ func subagentDoneNotificationText(jobID, errMsg string, killed bool) string {
 		return fmt.Sprintf("[Subagent job %s was killed.]", jobID)
 	}
 	if errMsg != "" {
-		return fmt.Sprintf("[Subagent job %s failed — call subagent_result to see the error.]", jobID)
+		return fmt.Sprintf("[Subagent job %s failed — call action=result to see the error.]", jobID)
 	}
-	return fmt.Sprintf("[Subagent job %s finished — call subagent_result to retrieve its output.]", jobID)
+	return fmt.Sprintf("[Subagent job %s finished — call action=result to retrieve its output.]", jobID)
 }
 
 // subagentAckJobIDRe extracts the async job id from the subagent tool's

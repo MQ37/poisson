@@ -18,7 +18,7 @@ import (
 // past process shutdown. This is the only automatic way a job now ends
 // before it finishes on its own — jobs have no per-job time limit (see
 // jobCtx's doc comment in subagent.go's Execute) — besides an explicit
-// subagent_kill.
+// action=kill.
 func TestBackgroundContextCancelTerminatesRunningJob(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("sh not available")

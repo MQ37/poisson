@@ -246,7 +246,11 @@ func (t *BatchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 		if err != nil && res.Error == "" {
 			res.Error = err.Error()
 		}
-		if name == "subagent" && hasOuterID && t.subagentDoneFn != nil {
+		// Only a real spawn gets a pre-rendered live widget (see agent.go's
+		// batch-nested pre-render loop) — a status/result/kill call folds
+		// into the aggregate batch output like any other tool, same as
+		// before these were merged into one tool name.
+		if name == "subagent" && IsSubagentSpawnAction(c.Input) && hasOuterID && t.subagentDoneFn != nil {
 			t.subagentDoneFn(BatchCallID(outerID, i), res)
 		}
 		label := fmt.Sprintf("%d. %s", i+1, name)
@@ -284,7 +288,7 @@ func (t *BatchTool) Execute(ctx context.Context, input json.RawMessage) (ToolRes
 						// ever emitted for it. runOne fires this same
 						// callback on every real completion; a cancelled,
 						// never-started call needs the identical signal.
-						if name == "subagent" && hasOuterID && t.subagentDoneFn != nil {
+						if name == "subagent" && IsSubagentSpawnAction(in.Calls[j].Input) && hasOuterID && t.subagentDoneFn != nil {
 							t.subagentDoneFn(BatchCallID(outerID, j), ToolResult{Error: "cancelled"})
 						}
 					}

@@ -57,7 +57,7 @@ func sweepStaleSpillFiles() {
 // containing "x-secret: dummy" swapped for the redaction marker) with no
 // leak they could otherwise catch:
 //   - write's Content is "wrote <path>", never the bytes written.
-//   - subagent/subagent_result/subagent_status/subagent_kill relay a child's
+//   - subagent (every action: spawn/status/result/kill) relays a child's
 //     own synthesized report; anything the child actually read or ran
 //     already passed through this same guard inside the child's own
 //     Registry.Execute before it ever reached the child's context.
@@ -76,18 +76,15 @@ func sweepStaleSpillFiles() {
 // fetches external content is protected automatically and has to be added
 // here on purpose to opt out.
 var noRedactionTools = map[string]bool{
-	"write":           true,
-	"subagent":        true,
-	"subagent_result": true,
-	"subagent_status": true,
-	"subagent_kill":   true,
-	"batch":           true,
-	"read_messages":   true,
-	"recall":          true,
-	"glob":            true,
-	"list_sessions":   true,
-	"set_title":       true,
-	"sandbox":         true,
+	"write":         true,
+	"subagent":      true,
+	"batch":         true,
+	"read_messages": true,
+	"recall":        true,
+	"glob":          true,
+	"list_sessions": true,
+	"set_title":     true,
+	"sandbox":       true,
 }
 
 // TrimToolResult bounds tool output and scrubs secret-shaped substrings out

@@ -128,7 +128,7 @@ func TestHydrateCompletesWidgetWhenJobNoLongerKnown(t *testing.T) {
 	_, _, a, sid := hydrateSubagentEnv(t)
 	st := a.Store()
 
-	ack := `Subagent "scout" spawned as job sub-does-not-exist. It runs in the background — use subagent_status to check progress, subagent_result to retrieve the final output once done.`
+	ack := `Subagent "scout" spawned as job sub-does-not-exist. It runs in the background — use action=status to check progress, action=result to retrieve the final output once done.`
 	appendSubagentAckMessages(t, st, sid, "call-1", ack)
 
 	tui := newTUI(a, sid, nil)

@@ -585,6 +585,49 @@ func TestInteg_BatchedSubagentGetsOwnStartAndDoneEvents(t *testing.T) {
 	}
 }
 
+// TestInteg_BatchedSubagentStatusGetsNoPreRenderedWidget is the counterpart
+// to TestInteg_BatchedSubagentGetsOwnStartAndDoneEvents: a nested subagent
+// call with action=status (not a spawn) must NOT get the synthetic
+// OutputToolStart/pre-rendered widget treatment — it folds into the
+// aggregate batch output like any other tool, exactly as it did before
+// subagent/action=status/action=result/action=kill were merged into
+// one tool name. Only IsSubagentSpawnAction's check on the nested call's own
+// input (not just its tool name) tells these two cases apart.
+func TestInteg_BatchedSubagentStatusGetsNoPreRenderedWidget(t *testing.T) {
+	batchInput, err := json.Marshal(map[string]interface{}{
+		"calls": []map[string]interface{}{
+			{"tool": "subagent", "input": map[string]string{"action": "status", "jobId": "sub-xyz"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := []provider.StreamEvent{
+		{Type: provider.EventToolUseStart, ToolCall: &provider.ToolCall{ID: "call_batch", Name: "batch", Input: batchInput}},
+		{Type: provider.EventToolUseStop, ToolCall: &provider.ToolCall{ID: "call_batch", Name: "batch", Input: batchInput}},
+		{Type: provider.EventDone, Usage: &provider.Usage{InputTokens: 10, OutputTokens: 5}},
+	}
+	e := newIntegEnv(t, [][]provider.StreamEvent{turn, provider.FakeTextResponse("done", nil)})
+
+	e.reg.Register(barrierTool{name: "subagent", run: func(ctx context.Context) (tools.ToolResult, error) {
+		return tools.ToolResult{Content: "no subagent jobs spawned yet"}, nil
+	}})
+	e.reg.Register(tools.NewBatchTool(e.reg))
+	tools.BindBatchSubagentDone(e.reg, e.agent.CompleteBatchedSubagent)
+
+	events := e.send("run it")
+
+	wantID := tools.BatchCallID("call_batch", 0)
+	for _, ev := range events {
+		if ev.Type == OutputToolStart && ev.ToolCallID == wantID {
+			t.Fatalf("action=status nested in batch got a pre-rendered widget start event, want none: %+v", ev)
+		}
+		if ev.Type == OutputToolResult && ev.ToolCallID == wantID {
+			t.Fatalf("action=status nested in batch got a synthetic done event, want none: %+v", ev)
+		}
+	}
+}
+
 // TestInteg_PanickingToolDoesNotCrashTurn covers the crash traced back from a
 // subagent session that died with a bare "EOF" reaching its parent, with zero
 // information about why — one tool call panicked (registry.Execute, agent.go's

@@ -8,7 +8,7 @@ import (
 )
 
 func TestSubagentJobIDFromAck(t *testing.T) {
-	jobID, ok := subagentJobIDFromAck(`Subagent "scout" spawned as job sub-a1b2c3d4. It runs in the background — use subagent_status to check progress, subagent_result to retrieve the final output once done.`)
+	jobID, ok := subagentJobIDFromAck(`Subagent "scout" spawned as job sub-a1b2c3d4. It runs in the background — use action=status to check progress, action=result to retrieve the final output once done.`)
 	if !ok || jobID != "sub-a1b2c3d4" {
 		t.Fatalf("got (%q, %v), want (sub-a1b2c3d4, true)", jobID, ok)
 	}
@@ -70,7 +70,7 @@ func TestCompleteSubagentCard_BatchedCallSameAckThenFinalPattern(t *testing.T) {
 	s := newScrollback(1024)
 	s.appendSubagentCard(1, "call-outer.0", "scout", "look around", "anthropic/claude-opus-5")
 
-	ack := `Subagent "scout" spawned as job sub-batched1. It runs in the background — use subagent_status to check progress, subagent_result to retrieve the final output once done.`
+	ack := `Subagent "scout" spawned as job sub-batched1. It runs in the background — use action=status to check progress, action=result to retrieve the final output once done.`
 	jobID, ok := subagentJobIDFromAck(ack)
 	if !ok {
 		t.Fatal("ack not recognized")
@@ -112,7 +112,7 @@ func TestHandleEvent_SubagentAckThenRealCompletion(t *testing.T) {
 		Type:              agent.OutputToolResult,
 		ToolName:          "subagent",
 		ToolCallID:        "call-1",
-		ToolResultContent: `Subagent "scout" spawned as job sub-a1b2c3d4. It runs in the background — use subagent_status to check progress, subagent_result to retrieve the final output once done.`,
+		ToolResultContent: `Subagent "scout" spawned as job sub-a1b2c3d4. It runs in the background — use action=status to check progress, action=result to retrieve the final output once done.`,
 	})
 	tui.mu.Unlock()
 

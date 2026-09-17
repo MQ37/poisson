@@ -307,9 +307,12 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		}
 	case agent.OutputToolStart:
 		t.scroll.finalizeThinking()
-		if ev.ToolName == "subagent" {
-			// Subagents render as a compact widget, never a full tool card, and
-			// their internal steps never touch the main conversation.
+		if ev.ToolName == "subagent" && tools.IsSubagentSpawnAction(ev.ToolInput) {
+			// A real spawn renders as a compact widget, never a full tool
+			// card, and its internal steps never touch the main
+			// conversation. A status/result/kill call on the same tool name
+			// falls through to the ordinary appendToolCall path below —
+			// it's a normal synchronous call, not a long-running job.
 			id := t.nextToolID
 			t.nextToolID++
 			name, task, modelOv, effortOv := subagentTaskFromInput(ev.ToolInput)
@@ -326,23 +329,30 @@ func (t *TUI) handleEvent(ev agent.OutputEvent) {
 		t.scroll.updateSubagentProgress(ev.ToolCallID, ev.SubagentTurns, ev.ContextTokens, ev.ContextWindow, ev.SubagentTokensPerSec, ev.Text)
 	case agent.OutputToolResult:
 		if ev.ToolName == "subagent" {
-			// Every LIVE subagent call's own tool_result is now just an
-			// immediate spawn ack (see docs/async-subagent-plan.md) — the
-			// generic per-tool dispatch that fires this event unconditionally
-			// for every tool call has no idea that's different from a real
-			// result. An ack updates the widget with its job id (shown in
-			// subagent_status) and leaves it running; the REAL completion no
-			// longer arrives here at all (see OutputSubagentJobResult below)
-			// — the one case that still reaches this branch with non-ack
-			// content is a batched call cancelled before it ever ran (see
-			// batch.go's runOne), which never gets a job id and must
-			// complete by its own tool-call id directly.
+			// A LIVE spawn's own tool_result is now just an immediate spawn
+			// ack (see docs/async-subagent-plan.md) — the generic per-tool
+			// dispatch that fires this event unconditionally for every tool
+			// call has no idea that's different from a real result. An ack
+			// updates the widget with its job id (shown in action=status)
+			// and leaves it running; the REAL completion no longer arrives
+			// here at all (see OutputSubagentJobResult below) — the one
+			// case that still reaches this branch with non-ack content is a
+			// batched spawn cancelled before it ever ran (see batch.go's
+			// runOne), which never gets a job id and must complete by its
+			// own tool-call id directly.
 			if jobID, ok := subagentJobIDFromAck(ev.ToolResultContent); ok {
 				t.scroll.setSubagentJobID(ev.ToolCallID, jobID)
 				break
 			}
-			t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0)
-			break
+			// completeSubagentCard only matches an actual subagent-card
+			// block (a real spawn) — a status/result/kill call was never
+			// rendered as one (see OutputToolStart above), so this reports
+			// false for it rather than silently no-op'ing: fall through to
+			// the ordinary tool-card completion below instead of leaving
+			// its card spinning forever.
+			if t.scroll.completeSubagentCard(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, 0) {
+				break
+			}
 		}
 		t.scroll.completeToolCall(ev.ToolCallID, ev.ToolResultContent, ev.ToolError, ev.HumanApproval, 0)
 	case agent.OutputSubagentJobResult:

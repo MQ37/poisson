@@ -146,13 +146,10 @@ func BuildRegistry(opts BuildOptions) *Registry {
 		}
 		subagentTool.SetAuth(opts.Auth)
 		subagentTool.SetCrossProviderApprovalFn(crossProviderApproval)
+		// action=status/result/kill dispatch to the same job registry
+		// action=spawn writes into — see docs/async-subagent-plan.md — all
+		// four are one registered tool (internal/tools/subagent.go).
 		reg.Register(subagentTool)
-		// subagent_status/subagent_result/subagent_kill all act on the same
-		// job registry the subagent tool above just spawned into — see
-		// docs/async-subagent-plan.md.
-		reg.Register(NewSubagentStatusTool(subagentTool))
-		reg.Register(NewSubagentResultTool(subagentTool))
-		reg.Register(NewSubagentKillTool(subagentTool))
 	}
 	// batch last so it can dispatch into every tool already registered.
 	// Denied inside batch: batch itself (no recursion) — bash and subagent
@@ -270,7 +267,7 @@ func BindSubagentBackgroundContext(reg *Registry, ctx context.Context) {
 // subagent tool (see SubagentTool.sessionIDFn) — every job spawned after
 // this call records which session spawned it, so a later `/new`/`/resume`
 // away from that session can't leak the job's completion (notify) or
-// visibility (subagent_status/subagent_result) into the new one.
+// visibility (action=status/action=result) into the new one.
 func BindSubagentSession(reg *Registry, fn func() string) {
 	withSubagentTool(reg, func(st *SubagentTool) { st.SetSessionIDFn(fn) })
 }

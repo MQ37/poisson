@@ -129,7 +129,7 @@ type OutputEvent struct {
 	ThinkingRedacted       bool // thinking (opaque redacted block)
 
 	// SubagentKilled reports whether a finished async subagent job ended
-	// via an explicit subagent_kill rather than an ordinary completion,
+	// via an explicit action=kill rather than an ordinary completion,
 	// timeout, or shutdown cancellation (both of the latter also carry a
 	// non-empty ToolError) — the cue subagentDoneNotificationText uses to
 	// avoid narrating a deliberate kill as a failure.
@@ -1580,17 +1580,23 @@ roundLoop:
 				ToolCallID: tc.ID,
 				ToolInput:  tc.Input,
 			})
-			// A subagent nested inside a batch call otherwise never gets its
-			// own start/progress/done events — those normally come from the
-			// per-call dispatch path below, which batch bypasses by running
-			// its nested calls internally (see tools.BatchTool.Execute). Pre-
-			// render one widget per nested subagent here, keyed by the same
-			// synthetic ID batch.go threads into that call's context, so the
-			// TUI's existing subagent-widget handling (already keyed only on
-			// ToolName=="subagent") picks it up with no changes on that side.
+			// A subagent spawn nested inside a batch call otherwise never
+			// gets its own start/progress/done events — those normally come
+			// from the per-call dispatch path below, which batch bypasses by
+			// running its nested calls internally (see
+			// tools.BatchTool.Execute). Pre-render one widget per nested
+			// spawn here, keyed by the same synthetic ID batch.go threads
+			// into that call's context, so the TUI's existing subagent-
+			// widget handling (ToolName=="subagent" AND action==spawn, see
+			// tui/agent_io.go) picks it up with no further changes.
 			if tc.Name == "batch" {
 				for i, spec := range tools.ParseBatchCalls(tc.Input) {
-					if spec.Tool != "subagent" {
+					// A status/result/kill call folds into the aggregate
+					// batch output like any other tool (no separate widget)
+					// — only a real spawn gets pre-rendered here, matching
+					// how these four looked before being merged into one
+					// tool name.
+					if spec.Tool != "subagent" || !tools.IsSubagentSpawnAction(spec.Input) {
 						continue
 					}
 					a.sendEvent(OutputEvent{

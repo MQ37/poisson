@@ -19,7 +19,7 @@ func TestSubagentDoneNotificationText(t *testing.T) {
 }
 
 // TestSubagentDoneNotificationText_Killed is the regression test for the
-// bug where an explicit subagent_kill was narrated to the main agent as a
+// bug where an explicit action=kill was narrated to the main agent as a
 // failure — killed jobs carry the same generic "subagent cancelled"
 // errMsg an ordinary timeout/shutdown cancellation does, but killed must
 // win and produce neutral wording, not "failed".

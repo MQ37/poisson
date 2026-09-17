@@ -144,12 +144,11 @@ printf '{"type":"done","success":true}\n'
 	}
 }
 
-// --- subagent_status ---
+// --- action=status ---
 
 func TestSubagentStatus_NoJobs(t *testing.T) {
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
-	status := NewSubagentStatusTool(tool)
-	res, err := status.Execute(context.Background(), json.RawMessage(`{}`))
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"status"}`))
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
@@ -160,8 +159,7 @@ func TestSubagentStatus_NoJobs(t *testing.T) {
 
 func TestSubagentStatus_UnknownJobID(t *testing.T) {
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
-	status := NewSubagentStatusTool(tool)
-	res, err := status.Execute(context.Background(), json.RawMessage(`{"jobId":"sub-nonexistent"}`))
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"status","jobId":"sub-nonexistent"}`))
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
@@ -172,20 +170,19 @@ func TestSubagentStatus_UnknownJobID(t *testing.T) {
 
 func TestSubagentStatus_ListsAndDescribesFinishedJob(t *testing.T) {
 	tool, jobID := newDoneSubagentJob(t)
-	status := NewSubagentStatusTool(tool)
 
-	listRes, err := status.Execute(context.Background(), json.RawMessage(`{}`))
+	listRes, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"status"}`))
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
 	if !strings.Contains(listRes.Content, jobID) || !strings.Contains(listRes.Content, "done") {
 		t.Fatalf("list content = %q, want it to mention job %s as done", listRes.Content, jobID)
 	}
-	if !strings.Contains(listRes.Content, "ready — call subagent_result") {
+	if !strings.Contains(listRes.Content, "ready — call action=result") {
 		t.Fatalf("list content = %q, want the ready-to-retrieve hint before retrieval", listRes.Content)
 	}
 
-	oneRes, err := status.Execute(context.Background(), mustJSON(t, map[string]string{"jobId": jobID}))
+	oneRes, err := tool.Execute(context.Background(), mustJSON(t, map[string]string{"action": "status", "jobId": jobID}))
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
@@ -194,12 +191,11 @@ func TestSubagentStatus_ListsAndDescribesFinishedJob(t *testing.T) {
 	}
 }
 
-// --- subagent_result ---
+// --- action=result ---
 
 func TestSubagentResult_UnknownJobID(t *testing.T) {
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
-	result := NewSubagentResultTool(tool)
-	res, err := result.Execute(context.Background(), json.RawMessage(`{"jobId":"sub-nonexistent"}`))
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"result","jobId":"sub-nonexistent"}`))
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
@@ -210,8 +206,7 @@ func TestSubagentResult_UnknownJobID(t *testing.T) {
 
 func TestSubagentResult_MissingJobID(t *testing.T) {
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
-	result := NewSubagentResultTool(tool)
-	res, err := result.Execute(context.Background(), json.RawMessage(`{}`))
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"result"}`))
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
@@ -252,9 +247,8 @@ printf '{"type":"done","success":true}\n'
 	// background goroutine's own Spawn call can race the fixture's teardown.
 	waitForJobSpawned(t, tool, jobID, 2*time.Second)
 
-	result := NewSubagentResultTool(tool)
 	start := time.Now()
-	res, err := result.Execute(context.Background(), mustJSON(t, map[string]string{"jobId": jobID}))
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]string{"action": "result", "jobId": jobID}))
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
@@ -263,15 +257,14 @@ printf '{"type":"done","success":true}\n'
 		t.Fatalf("error = %q, want a still-running message", res.Error)
 	}
 	if elapsed > 500*time.Millisecond {
-		t.Fatalf("subagent_result took %v, want it to return immediately instead of blocking on the running job", elapsed)
+		t.Fatalf("action=result took %v, want it to return immediately instead of blocking on the running job", elapsed)
 	}
 }
 
 func TestSubagentResult_RetrievesOnceThenErrors(t *testing.T) {
 	tool, jobID := newDoneSubagentJob(t)
-	result := NewSubagentResultTool(tool)
 
-	first, err := result.Execute(context.Background(), mustJSON(t, map[string]string{"jobId": jobID}))
+	first, err := tool.Execute(context.Background(), mustJSON(t, map[string]string{"action": "result", "jobId": jobID}))
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
@@ -282,7 +275,7 @@ func TestSubagentResult_RetrievesOnceThenErrors(t *testing.T) {
 		t.Fatalf("first retrieval content = %q, want the full result text", first.Content)
 	}
 
-	second, err := result.Execute(context.Background(), mustJSON(t, map[string]string{"jobId": jobID}))
+	second, err := tool.Execute(context.Background(), mustJSON(t, map[string]string{"action": "result", "jobId": jobID}))
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}
@@ -290,10 +283,9 @@ func TestSubagentResult_RetrievesOnceThenErrors(t *testing.T) {
 		t.Fatalf("second retrieval = %+v, want an already-retrieved error", second)
 	}
 
-	// subagent_status must still describe the job as retrieved, not
-	// silently forget it happened.
-	status := NewSubagentStatusTool(tool)
-	statusRes, err := status.Execute(context.Background(), mustJSON(t, map[string]string{"jobId": jobID}))
+	// action=status must still describe the job as retrieved, not silently
+	// forget it happened.
+	statusRes, err := tool.Execute(context.Background(), mustJSON(t, map[string]string{"action": "status", "jobId": jobID}))
 	if err != nil {
 		t.Fatalf("Execute returned a Go error: %v", err)
 	}

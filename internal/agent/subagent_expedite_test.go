@@ -19,8 +19,8 @@ import (
 // jobIDFromAckForTest extracts the async job id from the subagent tool's
 // spawn ack — a package-local copy of tools' own (unexported, cross-package
 // inaccessible) jobIDFromAck test helper, since these tests exercise the
-// real SubagentTool/SubagentStatusTool/SubagentResultTool from outside
-// package tools, the same way production code does.
+// real SubagentTool from outside package tools, the same way production
+// code does.
 var subagentAckJobIDRe = regexp.MustCompile(`spawned as job (\S+)\.`)
 
 func jobIDFromAckForTest(t *testing.T, content string) string {
@@ -32,27 +32,28 @@ func jobIDFromAckForTest(t *testing.T, content string) string {
 	return m[1]
 }
 
-// jobResultForTest polls subagent_status until jobID is done/error, then
-// retrieves it via subagent_result — the only way to observe a job's
-// outcome from outside package tools (SubagentTool's job map is
-// unexported), matching how the model itself would actually do it.
-func jobResultForTest(t *testing.T, statusTool, resultTool provider.Tool, jobID string) tools.ToolResult {
+// jobResultForTest polls action=status until jobID is done/error, then
+// retrieves it via action=result — the only way to observe a job's outcome
+// from outside package tools (SubagentTool's job map is unexported),
+// matching how the model itself would actually do it.
+func jobResultForTest(t *testing.T, st provider.Tool, jobID string) tools.ToolResult {
 	t.Helper()
-	input := json.RawMessage(fmt.Sprintf(`{"jobId":%q}`, jobID))
+	statusInput := json.RawMessage(fmt.Sprintf(`{"action":"status","jobId":%q}`, jobID))
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		res, err := statusTool.Execute(context.Background(), input)
+		res, err := st.Execute(context.Background(), statusInput)
 		if err != nil {
-			t.Fatalf("subagent_status returned a Go error: %v", err)
+			t.Fatalf("action=status returned a Go error: %v", err)
 		}
 		if strings.Contains(res.Content, "status: done") || strings.Contains(res.Content, "status: error") {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	res, err := resultTool.Execute(context.Background(), input)
+	resultInput := json.RawMessage(fmt.Sprintf(`{"action":"result","jobId":%q}`, jobID))
+	res, err := st.Execute(context.Background(), resultInput)
 	if err != nil {
-		t.Fatalf("subagent_result returned a Go error: %v", err)
+		t.Fatalf("action=result returned a Go error: %v", err)
 	}
 	return res
 }
@@ -80,7 +81,7 @@ func TestExpediteSubagentsNoSubagentToolRegistered(t *testing.T) {
 //
 // Execute itself now only returns an async spawn ack (see
 // docs/async-subagent-plan.md) — the outcome is observed via
-// subagent_status/subagent_result instead, the same way a model actually
+// action=status/action=result instead, the same way a model actually
 // would. An earlier version of this test read Execute's own return value
 // directly, which the async rework silently turned into a false-positive
 // pass: Execute returns almost instantly regardless of whether expedite
@@ -114,8 +115,6 @@ printf '{"type":"done","success":true}\n'
 		func() string { return "" },
 	)
 	e.reg.Register(st)
-	statusTool := tools.NewSubagentStatusTool(st)
-	resultTool := tools.NewSubagentResultTool(st)
 
 	res, err := st.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
 	if err != nil {
@@ -145,14 +144,14 @@ printf '{"type":"done","success":true}\n'
 	}
 
 	// jobResultForTest's own polling loop is the real assertion: it only
-	// returns once subagent_status reports "done" (or errors after 5s) — the
+	// returns once action=status reports "done" (or errors after 5s) — the
 	// child's "tool_result" event type is a no-op in runJob's event switch
 	// (never captured into the job's output text, same as before this
 	// file's rewrite), so there is no "expedited" substring to look for
 	// downstream. Reaching "done" at all proves the child's blocking stdin
 	// read actually unblocked because of the expedite signal, not that it
 	// hung until this test's own deadline gave up.
-	final := jobResultForTest(t, statusTool, resultTool, jobID)
+	final := jobResultForTest(t, st, jobID)
 	if final.Error != "" {
 		t.Fatalf("job reported an error: %q", final.Error)
 	}
@@ -193,8 +192,6 @@ func TestKillSubagentsReachesLiveChild(t *testing.T) {
 		func() string { return "" },
 	)
 	e.reg.Register(st)
-	statusTool := tools.NewSubagentStatusTool(st)
-	resultTool := tools.NewSubagentResultTool(st)
 
 	res, err := st.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
 	if err != nil {
@@ -208,16 +205,16 @@ func TestKillSubagentsReachesLiveChild(t *testing.T) {
 	// bug) — a polling loop that calls KillSubagents itself would cancel
 	// this job's context before the child ever gets a chance to actually
 	// spawn and go live, since "queued" already counts as non-terminal.
-	// Poll subagent_status instead (side-effect-free) until the child is
+	// Poll action=status instead (side-effect-free) until the child is
 	// confirmed live, then call KillSubagents exactly once — matching how
 	// it's actually used in production (TUI.prepareShutdownLocked, a single
 	// one-shot call at process exit).
-	statusInput := json.RawMessage(fmt.Sprintf(`{"jobId":%q}`, jobID))
+	statusInput := json.RawMessage(fmt.Sprintf(`{"action":"status","jobId":%q}`, jobID))
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		res, err := statusTool.Execute(context.Background(), statusInput)
+		res, err := st.Execute(context.Background(), statusInput)
 		if err != nil {
-			t.Fatalf("subagent_status returned a Go error: %v", err)
+			t.Fatalf("action=status returned a Go error: %v", err)
 		}
 		if strings.Contains(res.Content, "status: running") {
 			break
@@ -230,7 +227,7 @@ func TestKillSubagentsReachesLiveChild(t *testing.T) {
 		t.Fatal("KillSubagents() never signalled the live child")
 	}
 
-	final := jobResultForTest(t, statusTool, resultTool, jobID)
+	final := jobResultForTest(t, st, jobID)
 	if final.Error == "" {
 		t.Fatalf("job result = %+v, want an error — the child was killed, not left to finish its 30s sleep", final)
 	}

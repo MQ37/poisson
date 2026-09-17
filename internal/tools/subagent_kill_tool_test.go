@@ -20,7 +20,6 @@ func TestSubagentKillTerminatesLiveChild(t *testing.T) {
 
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	tool.SetRuntime(func() string { return "anthropic" }, func() string { return "claude-opus-5" }, func() string { return "" })
-	kill := NewSubagentKillTool(tool)
 
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
 	if err != nil || res.Error != "" {
@@ -29,9 +28,9 @@ func TestSubagentKillTerminatesLiveChild(t *testing.T) {
 	jobID := jobIDFromAck(t, res.Content)
 	waitForJobSpawned(t, tool, jobID, 2*time.Second)
 
-	killRes, err := kill.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
+	killRes, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"kill","jobId":"`+jobID+`"}`))
 	if err != nil || killRes.Error != "" {
-		t.Fatalf("subagent_kill: res=%+v err=%v", killRes, err)
+		t.Fatalf("action=kill: res=%+v err=%v", killRes, err)
 	}
 
 	job := waitForJob(t, tool, jobID, 2*time.Second)
@@ -49,7 +48,6 @@ func TestSubagentKillAllKillsEveryVisibleJob(t *testing.T) {
 
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	tool.SetRuntime(func() string { return "anthropic" }, func() string { return "claude-opus-5" }, func() string { return "" })
-	kill := NewSubagentKillTool(tool)
 
 	const n = 3
 	jobIDs := make([]string, n)
@@ -62,9 +60,9 @@ func TestSubagentKillAllKillsEveryVisibleJob(t *testing.T) {
 		waitForJobSpawned(t, tool, jobIDs[i], 2*time.Second)
 	}
 
-	killRes, err := kill.Execute(context.Background(), json.RawMessage(`{"all":true}`))
+	killRes, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"kill","all":true}`))
 	if err != nil || killRes.Error != "" {
-		t.Fatalf("subagent_kill all: res=%+v err=%v", killRes, err)
+		t.Fatalf("action=kill all: res=%+v err=%v", killRes, err)
 	}
 	if !strings.Contains(killRes.Content, "3") {
 		t.Fatalf("kill-all result = %q, want it to report 3 jobs killed", killRes.Content)
@@ -79,9 +77,9 @@ func TestSubagentKillAllKillsEveryVisibleJob(t *testing.T) {
 }
 
 // TestSubagentKillSkipsJobsFromAnotherSession proves session scoping: a job
-// spawned under one session is invisible to subagent_kill once the "current
+// spawned under one session is invisible to action=kill once the "current
 // session" has moved on — kill-by-id reads as not-found, and all:true kills
-// nothing, matching subagent_status/subagent_result's own scoping.
+// nothing, matching action=status/action=result's own scoping.
 func TestSubagentKillSkipsJobsFromAnotherSession(t *testing.T) {
 	scriptPath := fakeSleepingChildScript(t, t.TempDir(), "fake-child-otherssn.sh")
 	restore := subagent.SetLookupExecutableForTest(scriptPath)
@@ -92,7 +90,6 @@ func TestSubagentKillSkipsJobsFromAnotherSession(t *testing.T) {
 	t.Cleanup(func() { tool.KillAll() }) // the child this test spawns is deliberately never killed by name below
 	current := "session-a"
 	tool.SetSessionIDFn(func() string { return current })
-	kill := NewSubagentKillTool(tool)
 
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
 	if err != nil || res.Error != "" {
@@ -103,17 +100,17 @@ func TestSubagentKillSkipsJobsFromAnotherSession(t *testing.T) {
 
 	current = "session-b"
 
-	killRes, err := kill.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
+	killRes, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"kill","jobId":"`+jobID+`"}`))
 	if err != nil {
-		t.Fatalf("subagent_kill returned a Go error: %v", err)
+		t.Fatalf("action=kill returned a Go error: %v", err)
 	}
 	if killRes.Error == "" {
 		t.Fatal("expected \"no such subagent job\" for a job spawned under a different session")
 	}
 
-	allRes, err := kill.Execute(context.Background(), json.RawMessage(`{"all":true}`))
+	allRes, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"kill","all":true}`))
 	if err != nil || allRes.Error != "" {
-		t.Fatalf("subagent_kill all: res=%+v err=%v", allRes, err)
+		t.Fatalf("action=kill all: res=%+v err=%v", allRes, err)
 	}
 	if !strings.Contains(allRes.Content, "0") {
 		t.Fatalf("kill-all from a different session = %q, want it to report 0 killed", allRes.Content)
@@ -133,11 +130,10 @@ func TestSubagentKillSkipsJobsFromAnotherSession(t *testing.T) {
 // already reached a terminal state cannot be killed again.
 func TestSubagentKillRejectsFinishedJob(t *testing.T) {
 	tool, jobID := newDoneSubagentJob(t)
-	kill := NewSubagentKillTool(tool)
 
-	res, err := kill.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`))
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"kill","jobId":"`+jobID+`"}`))
 	if err != nil {
-		t.Fatalf("subagent_kill returned a Go error: %v", err)
+		t.Fatalf("action=kill returned a Go error: %v", err)
 	}
 	if res.Error == "" {
 		t.Fatal("expected an error killing an already-finished job")
@@ -148,8 +144,7 @@ func TestSubagentKillRejectsFinishedJob(t *testing.T) {
 // TestSubagentKillRejectsBothJobIdAndAll cover the input-validation guards.
 func TestSubagentKillRequiresJobIdOrAll(t *testing.T) {
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
-	kill := NewSubagentKillTool(tool)
-	res, err := kill.Execute(context.Background(), json.RawMessage(`{}`))
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"kill"}`))
 	if err != nil {
 		t.Fatalf("returned a Go error: %v", err)
 	}
@@ -160,8 +155,7 @@ func TestSubagentKillRequiresJobIdOrAll(t *testing.T) {
 
 func TestSubagentKillRejectsBothJobIdAndAll(t *testing.T) {
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
-	kill := NewSubagentKillTool(tool)
-	res, err := kill.Execute(context.Background(), json.RawMessage(`{"jobId":"sub-x","all":true}`))
+	res, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"kill","jobId":"sub-x","all":true}`))
 	if err != nil {
 		t.Fatalf("returned a Go error: %v", err)
 	}
@@ -171,7 +165,7 @@ func TestSubagentKillRejectsBothJobIdAndAll(t *testing.T) {
 }
 
 // TestSubagentKillResultRetrievableOnce proves a killed job's partial output
-// is still fetchable via subagent_result exactly once, same as any other
+// is still fetchable via action=result exactly once, same as any other
 // finished job.
 func TestSubagentKillResultRetrievableOnce(t *testing.T) {
 	scriptPath := fakeSleepingChildScript(t, t.TempDir(), "fake-child-kill-result.sh")
@@ -180,8 +174,6 @@ func TestSubagentKillResultRetrievableOnce(t *testing.T) {
 
 	tool := NewSubagentTool(".", alwaysApproveSubagent)
 	tool.SetRuntime(func() string { return "anthropic" }, func() string { return "claude-opus-5" }, func() string { return "" })
-	kill := NewSubagentKillTool(tool)
-	result := NewSubagentResultTool(tool)
 
 	res, err := tool.Execute(context.Background(), json.RawMessage(`{"task":"do something"}`))
 	if err != nil || res.Error != "" {
@@ -190,28 +182,28 @@ func TestSubagentKillResultRetrievableOnce(t *testing.T) {
 	jobID := jobIDFromAck(t, res.Content)
 	waitForJobSpawned(t, tool, jobID, 2*time.Second)
 
-	if _, err := kill.Execute(context.Background(), json.RawMessage(`{"jobId":"`+jobID+`"}`)); err != nil {
-		t.Fatalf("subagent_kill: %v", err)
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"action":"kill","jobId":"`+jobID+`"}`)); err != nil {
+		t.Fatalf("action=kill: %v", err)
 	}
 	waitForJob(t, tool, jobID, 2*time.Second)
 
-	input := json.RawMessage(`{"jobId":"` + jobID + `"}`)
+	input := json.RawMessage(`{"action":"result","jobId":"` + jobID + `"}`)
 	// The first retrieve must succeed as a retrieve — its content reports the
 	// kill itself ("subagent cancelled", the same generic exit reason ctx
 	// cancellation always produces), which is expected: killing is not a
 	// successful completion. What matters is that it doesn't say "already
 	// retrieved" or "still running".
-	first, err := result.Execute(context.Background(), input)
+	first, err := tool.Execute(context.Background(), input)
 	if err != nil {
-		t.Fatalf("subagent_result returned a Go error: %v", err)
+		t.Fatalf("action=result returned a Go error: %v", err)
 	}
 	if strings.Contains(first.Error, "already retrieved") || strings.Contains(first.Error, "still") {
-		t.Fatalf("first subagent_result after kill = %+v, want a retrievable result", first)
+		t.Fatalf("first action=result after kill = %+v, want a retrievable result", first)
 	}
 
-	second, err := result.Execute(context.Background(), input)
+	second, err := tool.Execute(context.Background(), input)
 	if err != nil {
-		t.Fatalf("subagent_result returned a Go error: %v", err)
+		t.Fatalf("action=result returned a Go error: %v", err)
 	}
 	if second.Error == "" {
 		t.Fatal("expected the one-shot guard to reject a second retrieve after kill")

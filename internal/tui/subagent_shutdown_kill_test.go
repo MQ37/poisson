@@ -16,7 +16,7 @@ import (
 // registry and spawns one real fake-child process stuck in a long sleep —
 // standing in for a subagent mid-run (e.g. its own long bash command) when
 // px itself is asked to shut down. Returns the tool so a test can inspect
-// live-child count via a fresh subagent_status call if needed.
+// live-child count via a fresh action=status call if needed.
 func spawnLiveSleepingSubagent(t *testing.T, e *tuiIntegEnv) *tools.SubagentTool {
 	t.Helper()
 	if _, err := exec.LookPath("sh"); err != nil {

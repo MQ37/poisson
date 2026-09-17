@@ -794,6 +794,51 @@ func TestTUIInteg_SubagentWidgetFailure(t *testing.T) {
 	}
 }
 
+// TestTUIInteg_SubagentActionStatusRendersAsOrdinaryToolCard is the core
+// regression this merge (create_sandbox family precedent, subagent family
+// follow-up — see the feature-impact scout on ToolName=="subagent") exists
+// to prove: a status/result/kill call shares the "subagent" tool name with a
+// real spawn, but must render as a plain tool card — never the live-progress
+// widget — and must actually complete (not spin forever) when its result
+// arrives. Before the action-aware gating in tui/agent_io.go, this call
+// would have wrongly gotten appendSubagentCard's widget treatment purely
+// from ToolName=="subagent", with no way to ever complete it (there is no
+// job to finish — action=status is instant).
+func TestTUIInteg_SubagentActionStatusRendersAsOrdinaryToolCard(t *testing.T) {
+	e := newTUIIntegEnv(t, nil)
+	e.feedEvent(agent.OutputEvent{
+		Type:       agent.OutputToolStart,
+		ToolName:   "subagent",
+		ToolCallID: "call_status",
+		ToolInput:  mustJSONTUI(t, map[string]string{"action": "status", "jobId": "sub-xyz"}),
+	})
+
+	if e.firstBlockOfKind(blockSubagent) != -1 {
+		t.Fatal("action=status must not render the live-progress subagent widget")
+	}
+	if e.firstBlockOfKind(blockToolCall) == -1 {
+		t.Fatal("action=status must render as an ordinary tool card")
+	}
+	if e.blockMeta(0).ToolDone {
+		t.Fatal("card should still be running before its result arrives")
+	}
+
+	e.feedEvent(agent.OutputEvent{
+		Type:              agent.OutputToolResult,
+		ToolName:          "subagent",
+		ToolCallID:        "call_status",
+		ToolResultContent: "no subagent jobs spawned yet",
+	})
+
+	meta := e.blockMeta(0)
+	if !meta.ToolDone {
+		t.Fatal("action=status card never completed — it would spin forever with the pre-fix routing")
+	}
+	if meta.ToolError != "" {
+		t.Errorf("unexpected error: %q", meta.ToolError)
+	}
+}
+
 // TestTUIInteg_SubagentDoesNotPolluteConversation verifies that a subagent
 // widget and a normal assistant turn coexist: the widget is a single compact
 // block and regular tools still render as tool cards.
